@@ -18,12 +18,32 @@ afterEach(() => {
 });
 
 describe("database", () => {
+  it("registers projects", () => {
+    const project = database.registerProject({
+      key: "octomynd",
+      name: "Octomynd",
+      path: tempDir,
+      defaultBranch: "main"
+    });
+
+    expect(project.key).toBe("octomynd");
+    expect(project.name).toBe("Octomynd");
+    expect(database.listProjects()).toHaveLength(1);
+  });
+
   it("creates and lists tasks", () => {
-    const task = database.createTask("test telegram integration");
+    database.registerProject({
+      key: "octomynd",
+      path: tempDir
+    });
+
+    const task = database.createTask("test telegram integration", "telegram", "octomynd");
 
     expect(task.id).toBeGreaterThan(0);
+    expect(task.projectKey).toBe("octomynd");
     expect(task.status).toBe("queued");
     expect(database.listTasks()).toHaveLength(1);
+    expect(database.listTasksByProject("octomynd")).toHaveLength(1);
   });
 
   it("stores events", () => {

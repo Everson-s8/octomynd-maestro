@@ -4,6 +4,7 @@ import path from "node:path";
 export type MaestroConfig = {
   projectName: string;
   databasePath: string;
+  worktreesPath: string;
   telegram: {
     botToken: string;
     allowedUserId: string | null;
@@ -17,6 +18,7 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
   return {
     projectName: env.MAESTRO_PROJECT_NAME?.trim() || "octomynd-maestro",
     databasePath: path.resolve(cwd, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
+    worktreesPath: path.resolve(cwd, env.MAESTRO_WORKTREES_PATH?.trim() || ".maestro/worktrees"),
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",
       allowedUserId: normalizeOptional(env.TELEGRAM_ALLOWED_USER_ID)

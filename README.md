@@ -36,10 +36,22 @@ npm test
 ## Telegram Commands
 
 - `/start` shows the bot introduction.
+- `/help` shows available commands.
 - `/status` shows daemon status and recent activity.
-- `/task <text>` creates a local task.
+- `/projects` lists registered projects.
+- `/project_add <key> <repo-path>` registers a local Git project.
+- `/task @<key> <text>` creates a local task for a project.
 - `/queue` lists recent tasks.
+- `/queue @<key>` lists recent tasks for a project.
 - Any plain text message is saved as feedback.
+
+Example:
+
+```text
+/project_add octomynd C:\Users\evers\OneDrive\Imagens\TCC\octomynd_publish
+/task @octomynd melhorar resposta fora de contexto
+/queue @octomynd
+```
 
 ## Local Data
 

@@ -1,6 +1,7 @@
-import { Bot, Context } from "grammy";
+import { Bot } from "grammy";
 import { MaestroConfig } from "../config.js";
-import { MaestroDatabase, TaskRecord } from "../db.js";
+import { MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
+import { createProjectTask, parseProjectTaskInput, registerProject } from "../orchestrator.js";
 
 export function createTelegramBot(config: MaestroConfig, database: MaestroDatabase) {
   const bot = new Bot(config.telegram.botToken);
@@ -30,16 +31,19 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       username: ctx.from?.username ?? null
     });
 
-    await ctx.reply(
-      [
-        "Octomynd Maestro esta online.",
-        "",
-        "Comandos:",
-        "/status - ver estado atual",
-        "/task <texto> - criar uma task local",
-        "/queue - listar tasks recentes"
-      ].join("\n")
-    );
+    await ctx.reply(formatHelp());
+  });
+
+  bot.command("help", async (ctx) => {
+    database.addEvent({
+      source: "telegram",
+      type: "command.help",
+      text: "/help",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null
+    });
+
+    await ctx.reply(formatHelp());
   });
 
   bot.command("status", async (ctx) => {
@@ -54,36 +58,109 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
     await ctx.reply(formatStatus(config.projectName, database));
   });
 
-  bot.command("task", async (ctx) => {
-    const text = parseTaskText(ctx.message?.text ?? "");
-    if (!text) {
-      await ctx.reply("Use: /task descrever a demanda");
+  bot.command("projects", async (ctx) => {
+    database.addEvent({
+      source: "telegram",
+      type: "command.projects",
+      text: "/projects",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null
+    });
+
+    await ctx.reply(formatProjects(database.listProjects()));
+  });
+
+  bot.command("project_add", async (ctx) => {
+    const input = parseProjectAddText(ctx.message?.text ?? "");
+    if (!input) {
+      await ctx.reply("Use: /project_add chave caminho-do-repo");
       return;
     }
 
-    const task = database.createTask(text, "telegram");
+    const result = registerProject(database, input);
+    if (!result.ok) {
+      await ctx.reply(["Projeto nao cadastrado.", ...result.errors].join("\n"));
+      return;
+    }
+
+    database.addEvent({
+      source: "telegram",
+      type: "project.registered",
+      text: result.project.key,
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: {
+        projectKey: result.project.key,
+        defaultBranch: result.project.defaultBranch,
+        warnings: result.warnings
+      }
+    });
+
+    const lines = [
+      `Projeto ${result.project.key} cadastrado.`,
+      `Nome: ${result.project.name}`,
+      `Branch padrao: ${result.project.defaultBranch}`
+    ];
+
+    if (result.warnings.length > 0) {
+      lines.push("", ...result.warnings);
+    }
+
+    await ctx.reply(lines.join("\n"));
+  });
+
+  bot.command("task", async (ctx) => {
+    const taskInput = parseProjectTaskInput(parseTaskText(ctx.message?.text ?? ""));
+    if (!taskInput.text) {
+      await ctx.reply("Use: /task @projeto descrever a demanda");
+      return;
+    }
+
+    const project = taskInput.projectKey
+      ? database.findProjectByKey(taskInput.projectKey)
+      : database.getDefaultProject();
+
+    if (!project) {
+      await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
+      return;
+    }
+
+    const task = createProjectTask(database, taskInput.text, project.key);
     database.addEvent({
       source: "telegram",
       type: "task.created",
-      text,
+      text: taskInput.text,
       userId: String(ctx.from?.id ?? ""),
       username: ctx.from?.username ?? null,
-      taskId: task.id
+      taskId: task.id,
+      metadata: {
+        projectKey: project.key
+      }
     });
 
-    await ctx.reply(`Task #${task.id} criada.\nStatus: ${task.status}\nDemanda: ${task.text}`);
+    await ctx.reply(
+      [
+        `Task #${task.id} criada.`,
+        `Projeto: ${project.key}`,
+        `Estado: ${task.status}`,
+        `Demanda: ${task.text}`
+      ].join("\n")
+    );
   });
 
   bot.command("queue", async (ctx) => {
+    const projectKey = parseQueueProjectKey(ctx.message?.text ?? "");
     database.addEvent({
       source: "telegram",
       type: "command.queue",
       text: "/queue",
       userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey }
     });
 
-    await ctx.reply(formatQueue(database.listTasks(10)));
+    const tasks = projectKey ? database.listTasksByProject(projectKey, 10) : database.listTasks(10);
+    await ctx.reply(formatQueue(tasks));
   });
 
   bot.on("message:text", async (ctx) => {
@@ -97,7 +174,7 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
         userId: String(ctx.from?.id ?? ""),
         username: ctx.from?.username ?? null
       });
-      await ctx.reply("Comando nao reconhecido. Use /status, /task ou /queue.");
+      await ctx.reply("Comando nao reconhecido. Use /help.");
       return;
     }
 
@@ -119,6 +196,28 @@ export function parseTaskText(messageText: string): string {
   return messageText.replace(/^\/task(?:@\w+)?\s*/i, "").trim();
 }
 
+export function parseProjectAddText(
+  messageText: string
+): { key: string; path: string; defaultBranch?: string } | null {
+  const text = messageText.replace(/^\/project_add(?:@\w+)?\s*/i, "").trim();
+  const match = text.match(/^([a-z0-9][a-z0-9_-]{1,48})\s+(.+)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    key: match[1].toLowerCase(),
+    path: match[2].trim()
+  };
+}
+
+export function parseQueueProjectKey(messageText: string): string | null {
+  const text = messageText.replace(/^\/queue(?:@\w+)?\s*/i, "").trim();
+  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 export function isUserAllowed(userId: number | undefined, allowedUserId: string | null): boolean {
   if (!allowedUserId) {
     return true;
@@ -129,15 +228,29 @@ export function isUserAllowed(userId: number | undefined, allowedUserId: string 
 export function formatStatus(projectName: string, database: MaestroDatabase): string {
   const counts = database.countTasksByStatus();
   const lastEvent = database.getLastEvent();
+  const projects = database.listProjects();
 
   return [
     `Maestro: online`,
-    `Projeto: ${projectName}`,
+    `Workspace: ${projectName}`,
+    `Projetos: ${projects.length}`,
     `Tasks queued: ${counts.queued ?? 0}`,
+    `Tasks planning: ${counts.planning ?? 0}`,
+    `Tasks awaiting_human: ${counts.awaiting_human ?? 0}`,
     `Tasks done: ${counts.done ?? 0}`,
     `Tasks failed: ${counts.failed ?? 0}`,
     `Ultimo evento: ${lastEvent ? `${lastEvent.type} em ${lastEvent.createdAt}` : "nenhum"}`
   ].join("\n");
+}
+
+export function formatProjects(projects: ProjectRecord[]): string {
+  if (projects.length === 0) {
+    return "Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.";
+  }
+
+  return projects
+    .map((project) => `${project.key} -> ${project.name} (${project.defaultBranch})`)
+    .join("\n");
 }
 
 export function formatQueue(tasks: TaskRecord[]): string {
@@ -146,8 +259,22 @@ export function formatQueue(tasks: TaskRecord[]): string {
   }
 
   return tasks
-    .map((task) => `#${task.id} [${task.status}] ${truncate(task.text, 120)}`)
+    .map((task) => `#${task.id} ${task.projectKey ? `@${task.projectKey} ` : ""}[${task.status}] ${truncate(task.text, 120)}`)
     .join("\n");
+}
+
+function formatHelp(): string {
+  return [
+    "Octomynd Maestro esta online.",
+    "",
+    "Comandos:",
+    "/status - ver estado atual",
+    "/projects - listar projetos",
+    "/project_add chave caminho-do-repo - cadastrar projeto",
+    "/task @projeto texto - criar task",
+    "/queue - listar tasks recentes",
+    "/queue @projeto - listar tasks do projeto"
+  ].join("\n");
 }
 
 function truncate(text: string, maxLength: number): string {
