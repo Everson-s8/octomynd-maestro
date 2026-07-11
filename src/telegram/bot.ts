@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
-import { createProjectTask, parseProjectTaskInput, registerProject } from "../orchestrator.js";
+import { createProjectTask, parseProjectTaskInput, prepareTask, registerProject } from "../orchestrator.js";
 
 export function createTelegramBot(config: MaestroConfig, database: MaestroDatabase) {
   const bot = new Bot(config.telegram.botToken);
@@ -163,6 +163,50 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
     await ctx.reply(formatQueue(tasks));
   });
 
+  bot.command("prepare", async (ctx) => {
+    const taskId = parseTaskId(ctx.message?.text ?? "", "prepare");
+    if (!taskId) {
+      await ctx.reply("Use: /prepare 2");
+      return;
+    }
+
+    const result = prepareTask(database, taskId, config.worktreesPath);
+    if (!result.ok) {
+      database.addEvent({
+        source: "telegram",
+        type: "task.prepare_failed",
+        text: result.errors.join("\n"),
+        userId: String(ctx.from?.id ?? ""),
+        username: ctx.from?.username ?? null,
+        taskId
+      });
+      await ctx.reply(["Prepare falhou.", ...result.errors].join("\n"));
+      return;
+    }
+
+    database.addEvent({
+      source: "telegram",
+      type: "task.prepared",
+      text: result.branchName,
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      taskId: result.task.id,
+      metadata: {
+        branchName: result.branchName,
+        worktreePath: result.worktreePath
+      }
+    });
+
+    await ctx.reply(
+      [
+        `Task #${result.task.id} preparada.`,
+        `Estado: ${result.task.status}`,
+        `Branch: ${result.branchName}`,
+        `Worktree: ${result.worktreePath}`
+      ].join("\n")
+    );
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
 
@@ -216,6 +260,12 @@ export function parseQueueProjectKey(messageText: string): string | null {
   const text = messageText.replace(/^\/queue(?:@\w+)?\s*/i, "").trim();
   const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
   return match ? match[1].toLowerCase() : null;
+}
+
+export function parseTaskId(messageText: string, command: string): number | null {
+  const regex = new RegExp(`^/${command}(?:@\\w+)?\\s+(\\d+)\\s*$`, "i");
+  const match = messageText.match(regex);
+  return match ? Number(match[1]) : null;
 }
 
 export function isUserAllowed(userId: number | undefined, allowedUserId: string | null): boolean {
@@ -272,6 +322,7 @@ function formatHelp(): string {
     "/projects - listar projetos",
     "/project_add chave caminho-do-repo - cadastrar projeto",
     "/task @projeto texto - criar task",
+    "/prepare id - criar branch/worktree local",
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto"
   ].join("\n");

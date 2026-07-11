@@ -4,6 +4,7 @@ import {
   isUserAllowed,
   parseProjectAddText,
   parseQueueProjectKey,
+  parseTaskId,
   parseTaskText
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
@@ -37,6 +38,12 @@ describe("telegram helpers", () => {
     expect(parseQueueProjectKey("/queue @octomynd")).toBe("octomynd");
     expect(parseQueueProjectKey("/queue octomynd")).toBe("octomynd");
     expect(parseQueueProjectKey("/queue")).toBeNull();
+  });
+
+  it("parses task ids", () => {
+    expect(parseTaskId("/prepare 42", "prepare")).toBe(42);
+    expect(parseTaskId("/prepare@OctomyndMaestroBot 42", "prepare")).toBe(42);
+    expect(parseTaskId("/prepare nope", "prepare")).toBeNull();
   });
 
   it("checks allowed users", () => {

@@ -46,6 +46,13 @@ export type TaskRecord = {
   updatedAt: string;
 };
 
+export type TaskWorktreeUpdate = {
+  id: number;
+  status: TaskStatus;
+  branchName: string;
+  worktreePath: string;
+};
+
 export type EventRecord = {
   id: number;
   source: string;
@@ -94,6 +101,14 @@ export function createDatabase(databasePath: string) {
       path = excluded.path,
       default_branch = excluded.default_branch,
       updated_at = excluded.updated_at
+  `);
+  const updateTaskWorktreeStatement = db.prepare(`
+    UPDATE tasks
+    SET status = @status,
+        branch_name = @branchName,
+        worktree_path = @worktreePath,
+        updated_at = @now
+    WHERE id = @id
   `);
 
   return {
@@ -146,6 +161,12 @@ export function createDatabase(databasePath: string) {
         throw new Error(`Task not found: ${id}`);
       }
       return mapTask(row);
+    },
+
+    updateTaskWorktree(input: TaskWorktreeUpdate): TaskRecord {
+      const now = new Date().toISOString();
+      updateTaskWorktreeStatement.run({ ...input, now });
+      return this.getTask(input.id);
     },
 
     listTasks(limit = 10): TaskRecord[] {
