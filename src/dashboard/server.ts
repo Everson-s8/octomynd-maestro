@@ -3,7 +3,7 @@ import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase } from "../db.js";
-import { createProjectTask } from "../orchestrator.js";
+import { createProjectTask, prepareTask } from "../orchestrator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 
 export type DashboardServerOptions = {
@@ -81,6 +81,35 @@ async function routeRequest(
       metadata: { projectKey: project.key }
     });
     sendJson(response, 201, { task });
+    return;
+  }
+
+  const prepareMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/prepare$/);
+  if (request.method === "POST" && prepareMatch) {
+    const taskId = Number(prepareMatch[1]);
+    const result = prepareTask(options.database, taskId, options.config.worktreesPath);
+    if (!result.ok) {
+      options.database.addEvent({
+        source: "dashboard",
+        type: "task.prepare_failed",
+        text: result.errors.join("\n"),
+        taskId
+      });
+      sendJson(response, 409, { error: "task_prepare_failed", details: result.errors });
+      return;
+    }
+
+    options.database.addEvent({
+      source: "dashboard",
+      type: "task.prepared",
+      text: result.branchName,
+      taskId,
+      metadata: {
+        branchName: result.branchName,
+        worktreePath: result.worktreePath
+      }
+    });
+    sendJson(response, 200, { task: result.task });
     return;
   }
 

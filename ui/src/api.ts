@@ -90,3 +90,15 @@ export async function createTask(input: { projectKey: string; text: string }) {
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }
+
+export async function prepareTask(taskId: number) {
+  const response = await fetch(`/api/tasks/${taskId}/prepare`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      details?: string[];
+    };
+    throw new Error(payload.details?.join(" ") || payload.error || "Não foi possível preparar a task.");
+  }
+  return response.json() as Promise<{ task: DashboardTask }>;
+}

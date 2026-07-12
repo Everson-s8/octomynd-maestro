@@ -6,6 +6,7 @@ import {
   DashboardProject,
   DashboardTask,
   fetchDashboard,
+  prepareTask,
   TaskStatus
 } from "./api";
 
@@ -43,6 +44,7 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeView, setActiveView] = useState("overview");
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
 
   const refresh = useCallback(async (showActivity = false) => {
     const controller = new AbortController();
@@ -71,6 +73,7 @@ export default function App() {
       .filter((task) => !["done", "failed"].includes(task.status))
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
   }, [data]);
+  const selectedTask = data?.tasks.find((task) => task.id === selectedTaskId) ?? null;
 
   if (!data && !error) {
     return <LoadingScreen />;
@@ -93,7 +96,7 @@ export default function App() {
           <div className="dashboard-grid" id="overview">
             <HeroConsole data={data} />
             <SummaryStrip data={data} />
-            <TaskBoard tasks={activeTasks} />
+            <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
             <AgentDock agents={data.agents} />
             <ProjectDeck projects={data.projects} />
             <EventStream events={data.events} />
@@ -107,6 +110,13 @@ export default function App() {
         onClose={() => setTaskPanelOpen(false)}
         onCreated={async () => {
           setTaskPanelOpen(false);
+          await refresh(true);
+        }}
+      />
+      <TaskDetail
+        task={selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+        onPrepared={async () => {
           await refresh(true);
         }}
       />
@@ -242,20 +252,20 @@ function SummaryStrip({ data }: { data: DashboardData }) {
   );
 }
 
-function TaskBoard({ tasks }: { tasks: DashboardTask[] }) {
+function TaskBoard({ tasks, onOpenTask }: { tasks: DashboardTask[]; onOpenTask: (taskId: number) => void }) {
   return (
     <section className="panel task-board" id="tasks" aria-labelledby="tasks-title">
       <SectionHeader eyebrow="Execução" title="Fluxo de tasks" meta={`${tasks.length} visíveis`} />
       <div className="task-list">
         {tasks.length === 0 ? (
           <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
-        ) : tasks.slice(0, 8).map((task) => <TaskRow task={task} key={task.id} />)}
+        ) : tasks.slice(0, 8).map((task) => <TaskRow task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)}
       </div>
     </section>
   );
 }
 
-function TaskRow({ task }: { task: DashboardTask }) {
+function TaskRow({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) {
   return (
     <article className="task-row">
       <span className={`status-rail status-${task.status}`} />
@@ -269,7 +279,7 @@ function TaskRow({ task }: { task: DashboardTask }) {
         <span><i style={{ width: `${statusProgress(task.status)}%` }} /></span>
         <small>{statusProgress(task.status)}%</small>
       </div>
-      <span className="row-action" aria-hidden="true"><Icon name="arrow" /></span>
+      <button className="row-action" aria-label={`Abrir task ${task.id}`} onClick={onOpen}><Icon name="arrow" /></button>
     </article>
   );
 }
@@ -412,6 +422,82 @@ function TaskComposer({
             {submitting ? "Criando..." : "Criar task"}<Icon name="arrow" />
           </button>
         </form>
+      </aside>
+    </div>
+  );
+}
+
+function TaskDetail({
+  task,
+  onClose,
+  onPrepared
+}: {
+  task: DashboardTask | null;
+  onClose: () => void;
+  onPrepared: () => Promise<void>;
+}) {
+  const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const open = task !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  if (!task) return null;
+  const taskId = task.id;
+
+  async function handlePrepare() {
+    setPreparing(true);
+    setError(null);
+    try {
+      await prepareTask(taskId);
+      await onPrepared();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Não foi possível preparar a task.");
+    } finally {
+      setPreparing(false);
+    }
+  }
+
+  const canPrepare = task.status === "queued" && !task.worktreePath;
+
+  return (
+    <div className="detail-backdrop is-open" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <aside className="task-detail" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+        <button className="composer-close" onClick={onClose} aria-label="Fechar detalhes"><Icon name="close" /></button>
+        <span className="task-detail-id">task #{String(task.id).padStart(2, "0")}</span>
+        <StatusPill status={task.status} />
+        <h2 id="task-detail-title">{task.text}</h2>
+        <div className="detail-project"><span>@{task.projectKey ?? "inbox"}</span><strong>{task.projectName ?? "Sem projeto"}</strong></div>
+
+        <dl className="detail-metadata">
+          <div><dt>Origem</dt><dd>{task.source}</dd></div>
+          <div><dt>Criada</dt><dd>{formatRelative(task.createdAt)}</dd></div>
+          <div><dt>Branch</dt><dd>{task.branchName ?? "ainda não criada"}</dd></div>
+          <div><dt>Worktree</dt><dd>{task.worktreePath ? compactPath(task.worktreePath) : "aguardando preparo"}</dd></div>
+        </dl>
+
+        <div className="detail-flow">
+          <span className="is-done">01 <strong>Capturada</strong></span>
+          <span className={task.status !== "queued" ? "is-done" : "is-current"}>02 <strong>Preparada</strong></span>
+          <span className={task.status === "implementing" ? "is-current" : ""}>03 <strong>Executando</strong></span>
+          <span className={task.status === "done" ? "is-done" : ""}>04 <strong>Concluída</strong></span>
+        </div>
+
+        {error ? <p className="detail-error">{error}</p> : null}
+        <button className="detail-primary" disabled={!canPrepare || preparing} onClick={() => void handlePrepare()}>
+          <span>{preparing ? "Preparando..." : canPrepare ? "Preparar worktree" : task.worktreePath ? "Worktree preparada" : "Ação indisponível"}</span>
+          <Icon name={canPrepare ? "arrow" : "shield"} />
+        </button>
+        <p className="detail-footnote">A preparação cria branch e diretório isolados. Nenhum agente executa código nesta etapa.</p>
       </aside>
     </div>
   );

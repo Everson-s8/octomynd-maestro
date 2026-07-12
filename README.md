@@ -49,8 +49,8 @@ npm run dev:platform
 - Typecheck: `npm run typecheck:ui`
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
-além de criar tasks locais como `queued`. Ela não executa uma task automaticamente:
-o gate humano continua explícito.
+além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
+isolada. Ela não executa uma task automaticamente: o gate humano continua explícito.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 

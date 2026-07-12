@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
+import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MaestroConfig } from "../src/config.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
@@ -9,20 +10,28 @@ import { createDashboardServer } from "../src/dashboard/server.js";
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
 
 let tempDir: string;
+let projectDir: string;
 let database: MaestroDatabase;
-
-const config: MaestroConfig = {
-  projectName: "maestro-test",
-  databasePath: "",
-  worktreesPath: "",
-  dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
-  telegram: { botToken: "test-token", allowedUserId: "123" }
-};
+let config: MaestroConfig;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-dashboard-"));
+  projectDir = path.join(tempDir, "boo-project");
+  fs.mkdirSync(projectDir);
+  runGit(["init", "-b", "master"], projectDir);
+  fs.writeFileSync(path.join(projectDir, "README.md"), "# Boo test\n");
+  runGit(["add", "README.md"], projectDir);
+  runGit(["-c", "user.name=Maestro Test", "-c", "user.email=maestro@test.local", "commit", "-m", "Initial"], projectDir);
+
+  config = {
+    projectName: "maestro-test",
+    databasePath: path.join(tempDir, "maestro.db"),
+    worktreesPath: path.join(tempDir, "worktrees"),
+    dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
+    telegram: { botToken: "test-token", allowedUserId: "123" }
+  };
   database = createDatabase(path.join(tempDir, "maestro.db"));
-  database.registerProject({ key: "boo", name: "Boo", path: tempDir, defaultBranch: "master" });
+  database.registerProject({ key: "boo", name: "Boo", path: projectDir, defaultBranch: "master" });
   database.createTask("testar dashboard", "telegram", "boo");
 });
 
@@ -61,8 +70,26 @@ describe("dashboard", () => {
       expect(taskResponse.status).toBe(201);
       expect(database.listTasksByProject("boo")).toHaveLength(2);
       expect(database.getLastEvent()?.source).toBe("dashboard");
+
+      const createdTask = database.listTasksByProject("boo")[0];
+      const prepareResponse = await fetch(
+        `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/prepare`,
+        { method: "POST" }
+      );
+      expect(prepareResponse.status).toBe(200);
+      const preparedTask = database.getTask(createdTask.id);
+      expect(preparedTask.status).toBe("planning");
+      expect(preparedTask.worktreePath).toContain(path.join("worktrees", "boo"));
+      expect(fs.existsSync(preparedTask.worktreePath!)).toBe(true);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
 });
+
+function runGit(args: string[], cwd: string) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || "git test setup failed");
+  }
+}
