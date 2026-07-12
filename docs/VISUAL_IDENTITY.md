@@ -56,3 +56,5 @@ clareza de uma ferramenta operacional.
 - Nenhum token ou ID privado entra no payload visual.
 - A UI cria tasks como `queued`; executar continua sendo uma ação explícita.
 - Estados críticos dependem também de texto/ícone, nunca somente de cor.
+- Revisões do Claude usam modo `plan` e ferramentas somente de leitura.
+- Sucesso, falha e autenticação pendente ficam auditáveis por task.

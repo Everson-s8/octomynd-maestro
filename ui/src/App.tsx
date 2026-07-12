@@ -5,8 +5,11 @@ import {
   DashboardEvent,
   DashboardProject,
   DashboardTask,
+  fetchTaskReviews,
   fetchDashboard,
   prepareTask,
+  requestClaudeReview,
+  TaskReview,
   TaskStatus
 } from "./api";
 
@@ -437,7 +440,9 @@ function TaskDetail({
   onPrepared: () => Promise<void>;
 }) {
   const [preparing, setPreparing] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviews, setReviews] = useState<TaskReview[]>([]);
   const open = task !== null;
 
   useEffect(() => {
@@ -448,6 +453,15 @@ function TaskDetail({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!task) return;
+    let active = true;
+    void fetchTaskReviews(task.id)
+      .then((items) => { if (active) setReviews(items); })
+      .catch(() => { if (active) setReviews([]); });
+    return () => { active = false; };
+  }, [task]);
 
   if (!task) return null;
   const taskId = task.id;
@@ -462,6 +476,21 @@ function TaskDetail({
       setError(requestError instanceof Error ? requestError.message : "Não foi possível preparar a task.");
     } finally {
       setPreparing(false);
+    }
+  }
+
+  async function handleClaudeReview() {
+    setReviewing(true);
+    setError(null);
+    try {
+      await requestClaudeReview(taskId);
+      setReviews(await fetchTaskReviews(taskId));
+      await onPrepared();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A revisão do Claude falhou.");
+      setReviews(await fetchTaskReviews(taskId).catch(() => []));
+    } finally {
+      setReviewing(false);
     }
   }
 
@@ -498,6 +527,25 @@ function TaskDetail({
           <Icon name={canPrepare ? "arrow" : "shield"} />
         </button>
         <p className="detail-footnote">A preparação cria branch e diretório isolados. Nenhum agente executa código nesta etapa.</p>
+
+        <div className="review-section">
+          <div><span>Revisão externa</span><strong>Claude design review</strong></div>
+          <button
+            className="review-action"
+            disabled={!task.worktreePath || reviewing}
+            onClick={() => void handleClaudeReview()}
+          >
+            {reviewing ? "Claude está analisando..." : task.worktreePath ? "Pedir revisão" : "Prepare a worktree primeiro"}
+            <Icon name="spark" />
+          </button>
+          {reviews.map((review) => (
+            <article className={`review-card review-${review.status}`} key={review.id}>
+              <header><span>Claude · #{review.id}</span><time>{formatRelative(review.createdAt)}</time></header>
+              <strong>{review.status === "completed" ? "Revisão concluída" : review.status === "auth_required" ? "Autenticação necessária" : "Revisão falhou"}</strong>
+              <p>{review.content || review.error}</p>
+            </article>
+          ))}
+        </div>
       </aside>
     </div>
   );
@@ -588,7 +636,9 @@ function humanizeEvent(value: string): string {
     "command.projects": "Projetos consultados",
     "command.queue": "Fila consultada",
     "command.start": "Bot iniciado",
-    "feedback.received": "Feedback recebido"
+    "feedback.received": "Feedback recebido",
+    "task.reviewed": "Revisão do Claude concluída",
+    "task.review_failed": "Revisão do Claude falhou"
   };
   return labels[value] ?? value.replaceAll(".", " · ").replaceAll("_", " ");
 }

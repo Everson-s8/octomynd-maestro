@@ -75,6 +75,26 @@ export type EventInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type TaskReviewStatus = "completed" | "auth_required" | "failed";
+
+export type TaskReviewRecord = {
+  id: number;
+  taskId: number;
+  provider: string;
+  status: TaskReviewStatus;
+  content: string;
+  error: string | null;
+  createdAt: string;
+};
+
+export type TaskReviewInput = {
+  taskId: number;
+  provider: string;
+  status: TaskReviewStatus;
+  content?: string;
+  error?: string | null;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -109,6 +129,10 @@ export function createDatabase(databasePath: string) {
         worktree_path = @worktreePath,
         updated_at = @now
     WHERE id = @id
+  `);
+  const addTaskReviewStatement = db.prepare(`
+    INSERT INTO task_reviews (task_id, provider, status, content, error, created_at)
+    VALUES (@taskId, @provider, @status, @content, @error, @now)
   `);
 
   return {
@@ -225,6 +249,33 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?")
         .all(limit) as EventRow[];
       return rows.map(mapEvent);
+    },
+
+    addTaskReview(input: TaskReviewInput): TaskReviewRecord {
+      const result = addTaskReviewStatement.run({
+        taskId: input.taskId,
+        provider: input.provider,
+        status: input.status,
+        content: input.content ?? "",
+        error: input.error ?? null,
+        now: new Date().toISOString()
+      });
+      return this.getTaskReview(Number(result.lastInsertRowid));
+    },
+
+    getTaskReview(id: number): TaskReviewRecord {
+      const row = db.prepare("SELECT * FROM task_reviews WHERE id = ?").get(id) as TaskReviewRow | undefined;
+      if (!row) {
+        throw new Error(`Task review not found: ${id}`);
+      }
+      return mapTaskReview(row);
+    },
+
+    listTaskReviews(taskId: number, limit = 10): TaskReviewRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM task_reviews WHERE task_id = ? ORDER BY id DESC LIMIT ?")
+        .all(taskId, limit) as TaskReviewRow[];
+      return rows.map(mapTaskReview);
     }
   };
 }
@@ -264,6 +315,17 @@ function migrate(db: Database.Database) {
       task_id INTEGER,
       created_at TEXT NOT NULL,
       metadata_json TEXT NOT NULL DEFAULT '{}',
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      error TEXT,
+      created_at TEXT NOT NULL,
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
   `);
@@ -307,6 +369,16 @@ type EventRow = {
   task_id: number | null;
   created_at: string;
   metadata_json: string;
+};
+
+type TaskReviewRow = {
+  id: number;
+  task_id: number;
+  provider: string;
+  status: TaskReviewStatus;
+  content: string;
+  error: string | null;
+  created_at: string;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -369,6 +441,18 @@ function mapEvent(row: EventRow): EventRecord {
     taskId: row.task_id,
     createdAt: row.created_at,
     metadata: JSON.parse(row.metadata_json || "{}") as Record<string, unknown>
+  };
+}
+
+function mapTaskReview(row: TaskReviewRow): TaskReviewRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    provider: row.provider,
+    status: row.status,
+    content: row.content,
+    error: row.error,
+    createdAt: row.created_at
   };
 }
 

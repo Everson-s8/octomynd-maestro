@@ -52,7 +52,17 @@ describe("dashboard", () => {
   });
 
   it("serves the dashboard API and creates a queued task", async () => {
-    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      claudeReviewer: async () => ({
+        status: "completed",
+        content: "Aprovado com ajustes de contraste.",
+        error: null,
+        durationMs: 42
+      })
+    });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
 
@@ -81,6 +91,21 @@ describe("dashboard", () => {
       expect(preparedTask.status).toBe("planning");
       expect(preparedTask.worktreePath).toContain(path.join("worktrees", "boo"));
       expect(fs.existsSync(preparedTask.worktreePath!)).toBe(true);
+
+      const reviewResponse = await fetch(
+        `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/reviews/claude`,
+        { method: "POST" }
+      );
+      expect(reviewResponse.status).toBe(201);
+      expect(database.listTaskReviews(createdTask.id)[0].content).toContain("contraste");
+
+      const reviewsResponse = await fetch(
+        `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/reviews`
+      );
+      expect(reviewsResponse.status).toBe(200);
+      const reviewsPayload = await reviewsResponse.json() as { reviews: Array<{ provider: string }> };
+      expect(reviewsPayload.reviews[0].provider).toBe("claude");
+      expect(database.getLastEvent()?.type).toBe("task.reviewed");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

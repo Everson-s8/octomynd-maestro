@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase } from "../db.js";
 import { createProjectTask, prepareTask } from "../orchestrator.js";
@@ -10,6 +11,7 @@ export type DashboardServerOptions = {
   config: MaestroConfig;
   database: MaestroDatabase;
   staticRoot?: string;
+  claudeReviewer?: ClaudeReviewer;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -110,6 +112,59 @@ async function routeRequest(
       }
     });
     sendJson(response, 200, { task: result.task });
+    return;
+  }
+
+  const reviewsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/reviews$/);
+  if (request.method === "GET" && reviewsMatch) {
+    const taskId = Number(reviewsMatch[1]);
+    try {
+      options.database.getTask(taskId);
+    } catch {
+      sendJson(response, 404, { error: "task_not_found" });
+      return;
+    }
+    sendJson(response, 200, { reviews: options.database.listTaskReviews(taskId) });
+    return;
+  }
+
+  const claudeReviewMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/reviews\/claude$/);
+  if (request.method === "POST" && claudeReviewMatch) {
+    const taskId = Number(claudeReviewMatch[1]);
+    let task;
+    try {
+      task = options.database.getTask(taskId);
+    } catch {
+      sendJson(response, 404, { error: "task_not_found" });
+      return;
+    }
+
+    if (!task.projectKey || !task.worktreePath) {
+      sendJson(response, 409, { error: "task_worktree_required" });
+      return;
+    }
+
+    const project = options.database.getProjectByKey(task.projectKey);
+    const reviewer = options.claudeReviewer ?? reviewTaskWithClaude;
+    const result = await reviewer(task, project);
+    const review = options.database.addTaskReview({
+      taskId,
+      provider: "claude",
+      status: result.status,
+      content: result.content,
+      error: result.error
+    });
+
+    options.database.addEvent({
+      source: "claude",
+      type: result.status === "completed" ? "task.reviewed" : "task.review_failed",
+      text: result.status === "completed" ? `Claude review #${review.id}` : result.error ?? "Claude review failed",
+      taskId,
+      metadata: { reviewId: review.id, status: result.status, durationMs: result.durationMs }
+    });
+
+    const statusCode = result.status === "completed" ? 201 : result.status === "auth_required" ? 503 : 500;
+    sendJson(response, statusCode, { review });
     return;
   }
 

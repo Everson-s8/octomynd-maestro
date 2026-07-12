@@ -50,7 +50,9 @@ npm run dev:platform
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
-isolada. Ela não executa uma task automaticamente: o gate humano continua explícito.
+isolada. Uma task preparada pode solicitar uma revisão read-only ao Claude; o
+resultado ou erro de autenticação fica persistido no SQLite e visível na telemetria.
+Ela não executa uma task automaticamente: o gate humano continua explícito.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 

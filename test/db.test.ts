@@ -61,4 +61,18 @@ describe("database", () => {
     expect(database.getLastEvent()?.type).toBe("task.created");
     expect(database.listEvents()).toHaveLength(1);
   });
+
+  it("stores auditable task reviews", () => {
+    const task = database.createTask("review visual platform");
+    const review = database.addTaskReview({
+      taskId: task.id,
+      provider: "claude",
+      status: "completed",
+      content: "Aprovado com ajustes."
+    });
+
+    expect(review.provider).toBe("claude");
+    expect(review.status).toBe("completed");
+    expect(database.listTaskReviews(task.id)).toEqual([review]);
+  });
 });

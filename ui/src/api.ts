@@ -70,6 +70,16 @@ export type DashboardData = {
   }>;
 };
 
+export type TaskReview = {
+  id: number;
+  taskId: number;
+  provider: string;
+  status: "completed" | "auth_required" | "failed";
+  content: string;
+  error: string | null;
+  createdAt: string;
+};
+
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
   const response = await fetch("/api/dashboard", { signal });
   if (!response.ok) {
@@ -101,4 +111,25 @@ export async function prepareTask(taskId: number) {
     throw new Error(payload.details?.join(" ") || payload.error || "Não foi possível preparar a task.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
+}
+
+export async function fetchTaskReviews(taskId: number): Promise<TaskReview[]> {
+  const response = await fetch(`/api/tasks/${taskId}/reviews`);
+  if (!response.ok) {
+    throw new Error("Não foi possível carregar as revisões da task.");
+  }
+  const payload = await response.json() as { reviews: TaskReview[] };
+  return payload.reviews;
+}
+
+export async function requestClaudeReview(taskId: number): Promise<TaskReview> {
+  const response = await fetch(`/api/tasks/${taskId}/reviews/claude`, { method: "POST" });
+  const payload = await response.json() as { review?: TaskReview; error?: string };
+  if (!response.ok) {
+    throw new Error(payload.review?.error || payload.error || "A revisão do Claude falhou.");
+  }
+  if (!payload.review) {
+    throw new Error("Claude não retornou uma revisão válida.");
+  }
+  return payload.review;
 }
