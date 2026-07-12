@@ -9,11 +9,13 @@ import {
   DashboardTask,
   fetchTaskReviews,
   fetchDashboard,
+  GoalRun,
   ImprovementCategory,
   ImprovementProposal,
   ImprovementRisk,
   prepareTask,
   requestClaudeReview,
+  startTaskGoal,
   TaskReview,
   TaskStatus
 } from "./api";
@@ -82,6 +84,7 @@ export default function App() {
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
   }, [data]);
   const selectedTask = data?.tasks.find((task) => task.id === selectedTaskId) ?? null;
+  const selectedGoal = data?.goals.find((goal) => goal.taskId === selectedTaskId) ?? null;
 
   if (!data && !error) {
     return <LoadingScreen />;
@@ -124,6 +127,7 @@ export default function App() {
       />
       <TaskDetail
         task={selectedTask}
+        goal={selectedGoal}
         onClose={() => setSelectedTaskId(null)}
         onPrepared={async () => {
           await refresh(true);
@@ -541,15 +545,18 @@ function TaskComposer({
 
 function TaskDetail({
   task,
+  goal,
   onClose,
   onPrepared
 }: {
   task: DashboardTask | null;
+  goal: GoalRun | null;
   onClose: () => void;
   onPrepared: () => Promise<void>;
 }) {
   const [preparing, setPreparing] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [startingGoal, setStartingGoal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviews, setReviews] = useState<TaskReview[]>([]);
   const open = task !== null;
@@ -603,6 +610,19 @@ function TaskDetail({
     }
   }
 
+  async function handleStartGoal() {
+    setStartingGoal(true);
+    setError(null);
+    try {
+      await startTaskGoal(taskId);
+      await onPrepared();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A goal nao pode ser iniciada.");
+    } finally {
+      setStartingGoal(false);
+    }
+  }
+
   const canPrepare = task.status === "queued" && !task.worktreePath;
 
   return (
@@ -636,6 +656,32 @@ function TaskDetail({
           <Icon name={canPrepare ? "arrow" : "shield"} />
         </button>
         <p className="detail-footnote">A preparação cria branch e diretório isolados. Nenhum agente executa código nesta etapa.</p>
+
+        <div className="goal-section">
+          <div><span>Execucao persistente</span><strong>Goal autonoma</strong></div>
+          <p>O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem atualizar a task manualmente.</p>
+          <button
+            className="goal-action"
+            disabled={!task.worktreePath || goal?.status === "running" || startingGoal || task.status === "done"}
+            onClick={() => void handleStartGoal()}
+          >
+            {startingGoal
+              ? "Iniciando goal..."
+              : goal?.status === "running"
+                ? `Rodando ${goal.currentPhase} · ${goal.stepCount}/${goal.maxSteps}`
+                : task.worktreePath
+                  ? "Iniciar goal"
+                  : "Prepare a worktree primeiro"}
+            <Icon name="pulse" />
+          </button>
+          {goal ? (
+            <div className={`goal-state goal-${goal.status}`}>
+              <span>goal #{goal.id} · {goal.status}</span>
+              <strong>{goal.currentPhase} · passo {goal.stepCount}/{goal.maxSteps}</strong>
+              {goal.lastError ? <small>{goal.lastError}</small> : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className="review-section">
           <div><span>Revisão externa</span><strong>Claude design review</strong></div>

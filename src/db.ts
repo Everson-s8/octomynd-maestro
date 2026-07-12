@@ -124,6 +124,37 @@ export type ImprovementProposalInput = {
   source?: string;
 };
 
+export type GoalRunStatus = "running" | "completed" | "blocked" | "failed";
+export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
+export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed";
+
+export type GoalRunRecord = {
+  id: number;
+  taskId: number;
+  status: GoalRunStatus;
+  currentPhase: GoalPhase;
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
+export type GoalStepRecord = {
+  id: number;
+  runId: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalStepStatus;
+  summary: string;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -179,6 +210,43 @@ export function createDatabase(databasePath: string) {
         decision_note = @decisionNote,
         decided_at = @now
     WHERE id = @id AND status = 'candidate'
+  `);
+  const updateTaskStatusStatement = db.prepare(`
+    UPDATE tasks SET status = @status, updated_at = @now WHERE id = @id
+  `);
+  const createGoalRunStatement = db.prepare(`
+    INSERT INTO goal_runs (
+      task_id, status, current_phase, step_count, max_steps, last_error,
+      created_at, updated_at, finished_at
+    )
+    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, @now, @now, NULL)
+  `);
+  const updateGoalRunStatement = db.prepare(`
+    UPDATE goal_runs
+    SET status = @status,
+        current_phase = @currentPhase,
+        step_count = @stepCount,
+        last_error = @lastError,
+        updated_at = @now,
+        finished_at = @finishedAt
+    WHERE id = @id
+  `);
+  const createGoalStepStatement = db.prepare(`
+    INSERT INTO goal_steps (
+      run_id, phase, provider, status, summary, output, error, duration_ms,
+      created_at, finished_at
+    )
+    VALUES (@runId, @phase, @provider, 'running', '', '', NULL, NULL, @now, NULL)
+  `);
+  const finishGoalStepStatement = db.prepare(`
+    UPDATE goal_steps
+    SET status = @status,
+        summary = @summary,
+        output = @output,
+        error = @error,
+        duration_ms = @durationMs,
+        finished_at = @now
+    WHERE id = @id
   `);
 
   return {
@@ -237,6 +305,12 @@ export function createDatabase(databasePath: string) {
       const now = new Date().toISOString();
       updateTaskWorktreeStatement.run({ ...input, now });
       return this.getTask(input.id);
+    },
+
+    updateTaskStatus(id: number, status: TaskStatus): TaskRecord {
+      this.getTask(id);
+      updateTaskStatusStatement.run({ id, status, now: new Date().toISOString() });
+      return this.getTask(id);
     },
 
     listTasks(limit = 10): TaskRecord[] {
@@ -374,6 +448,94 @@ export function createDatabase(databasePath: string) {
         throw new Error(`Improvement proposal ${id} is no longer awaiting a decision.`);
       }
       return this.getImprovementProposal(id);
+    },
+
+    createGoalRun(taskId: number, maxSteps = 12): GoalRunRecord {
+      this.getTask(taskId);
+      const active = db
+        .prepare("SELECT * FROM goal_runs WHERE task_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+        .get(taskId) as GoalRunRow | undefined;
+      if (active) {
+        throw new Error(`Task #${taskId} already has an active goal run.`);
+      }
+      const now = new Date().toISOString();
+      const result = createGoalRunStatement.run({ taskId, maxSteps, now });
+      return this.getGoalRun(Number(result.lastInsertRowid));
+    },
+
+    getGoalRun(id: number): GoalRunRecord {
+      const row = db.prepare("SELECT * FROM goal_runs WHERE id = ?").get(id) as GoalRunRow | undefined;
+      if (!row) {
+        throw new Error(`Goal run not found: ${id}`);
+      }
+      return mapGoalRun(row);
+    },
+
+    listGoalRuns(limit = 30): GoalRunRecord[] {
+      const rows = db.prepare("SELECT * FROM goal_runs ORDER BY id DESC LIMIT ?").all(limit) as GoalRunRow[];
+      return rows.map(mapGoalRun);
+    },
+
+    updateGoalRun(input: {
+      id: number;
+      status: GoalRunStatus;
+      currentPhase: GoalPhase;
+      stepCount: number;
+      lastError?: string | null;
+    }): GoalRunRecord {
+      this.getGoalRun(input.id);
+      const now = new Date().toISOString();
+      updateGoalRunStatement.run({
+        ...input,
+        lastError: input.lastError ?? null,
+        now,
+        finishedAt: input.status === "running" ? null : now
+      });
+      return this.getGoalRun(input.id);
+    },
+
+    createGoalStep(runId: number, phase: GoalPhase, provider: string): GoalStepRecord {
+      this.getGoalRun(runId);
+      const result = createGoalStepStatement.run({
+        runId,
+        phase,
+        provider,
+        now: new Date().toISOString()
+      });
+      return this.getGoalStep(Number(result.lastInsertRowid));
+    },
+
+    getGoalStep(id: number): GoalStepRecord {
+      const row = db.prepare("SELECT * FROM goal_steps WHERE id = ?").get(id) as GoalStepRow | undefined;
+      if (!row) {
+        throw new Error(`Goal step not found: ${id}`);
+      }
+      return mapGoalStep(row);
+    },
+
+    finishGoalStep(input: {
+      id: number;
+      status: Exclude<GoalStepStatus, "running">;
+      summary: string;
+      output?: string;
+      error?: string | null;
+      durationMs: number;
+    }): GoalStepRecord {
+      this.getGoalStep(input.id);
+      finishGoalStepStatement.run({
+        ...input,
+        output: input.output ?? "",
+        error: input.error ?? null,
+        now: new Date().toISOString()
+      });
+      return this.getGoalStep(input.id);
+    },
+
+    listGoalSteps(runId: number): GoalStepRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM goal_steps WHERE run_id = ? ORDER BY id ASC")
+        .all(runId) as GoalStepRow[];
+      return rows.map(mapGoalStep);
     }
   };
 }
@@ -441,6 +603,35 @@ function migrate(db: Database.Database) {
       created_at TEXT NOT NULL,
       decided_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS goal_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      current_phase TEXT NOT NULL,
+      step_count INTEGER NOT NULL DEFAULT 0,
+      max_steps INTEGER NOT NULL DEFAULT 12,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS goal_steps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      output TEXT NOT NULL DEFAULT '',
+      error TEXT,
+      duration_ms INTEGER,
+      created_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id)
+    );
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -507,6 +698,33 @@ type ImprovementProposalRow = {
   decision_note: string | null;
   created_at: string;
   decided_at: string | null;
+};
+
+type GoalRunRow = {
+  id: number;
+  task_id: number;
+  status: GoalRunStatus;
+  current_phase: GoalPhase;
+  step_count: number;
+  max_steps: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+type GoalStepRow = {
+  id: number;
+  run_id: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalStepStatus;
+  summary: string;
+  output: string;
+  error: string | null;
+  duration_ms: number | null;
+  created_at: string;
+  finished_at: string | null;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -627,6 +845,37 @@ function mapImprovementProposal(row: ImprovementProposalRow): ImprovementProposa
     decisionNote: row.decision_note,
     createdAt: row.created_at,
     decidedAt: row.decided_at
+  };
+}
+
+function mapGoalRun(row: GoalRunRow): GoalRunRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    status: row.status,
+    currentPhase: row.current_phase,
+    stepCount: row.step_count,
+    maxSteps: row.max_steps,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    finishedAt: row.finished_at
+  };
+}
+
+function mapGoalStep(row: GoalStepRow): GoalStepRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    phase: row.phase,
+    provider: row.provider,
+    status: row.status,
+    summary: row.summary,
+    output: row.output,
+    error: row.error,
+    durationMs: row.duration_ms,
+    createdAt: row.created_at,
+    finishedAt: row.finished_at
   };
 }
 

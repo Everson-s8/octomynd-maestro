@@ -1,7 +1,12 @@
+import path from "node:path";
+import { ClaudeProvider } from "./agents/claude.js";
+import { CodexProvider } from "./agents/codex.js";
+import { AgentRegistry } from "./agents/registry.js";
 import { loadConfig, validateRuntimeConfig } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { startDashboardServer } from "./dashboard/server.js";
+import { GoalCoordinator } from "./goals/coordinator.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -14,9 +19,15 @@ if (errors.length > 0) {
 }
 
 const database = createDatabase(config.databasePath);
+const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
+const goalCoordinator = new GoalCoordinator(
+  database,
+  agentRegistry,
+  path.join(path.dirname(config.databasePath), "runs")
+);
 const bot = createTelegramBot(config, database);
 const dashboardServer = config.dashboard.enabled
-  ? await startDashboardServer({ config, database })
+  ? await startDashboardServer({ config, database, goalCoordinator })
   : null;
 
 bot.catch((error) => {

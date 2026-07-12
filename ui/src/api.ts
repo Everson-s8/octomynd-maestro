@@ -58,18 +58,33 @@ export type DashboardData = {
     queuedTasks: number;
     humanGates: number;
     improvementCandidates: number;
+    activeGoals: number;
     completedTasks: number;
   };
   projects: DashboardProject[];
   tasks: DashboardTask[];
   events: DashboardEvent[];
   improvements: ImprovementProposal[];
+  goals: GoalRun[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";
     label: string;
     state: "ready" | "attention" | "offline";
     detail: string;
   }>;
+};
+
+export type GoalRun = {
+  id: number;
+  taskId: number;
+  status: "running" | "completed" | "blocked" | "failed";
+  currentPhase: "planning" | "implementing" | "testing" | "reviewing";
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
 };
 
 export type ImprovementCategory = "skill" | "memory" | "routing" | "policy" | "integration";
@@ -190,4 +205,17 @@ export async function decideImprovement(
     throw new Error(payload.details || payload.error || "Nao foi possivel decidir a proposta.");
   }
   return payload.improvement;
+}
+
+export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<GoalRun> {
+  const response = await fetch(`/api/tasks/${taskId}/goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ maxSteps })
+  });
+  const payload = await response.json() as { run?: GoalRun; error?: string; details?: string };
+  if (!response.ok || !payload.run) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel iniciar a goal.");
+  }
+  return payload.run;
 }

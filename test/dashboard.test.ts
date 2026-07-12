@@ -4,10 +4,13 @@ import path from "node:path";
 import { AddressInfo } from "node:net";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AgentRegistry } from "../src/agents/registry.js";
+import { AgentProvider } from "../src/agents/types.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
+import { GoalCoordinator } from "../src/goals/coordinator.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -48,6 +51,7 @@ describe("dashboard", () => {
     expect(snapshot.summary.queuedTasks).toBe(1);
     expect(snapshot.projects[0].key).toBe("boo");
     expect(snapshot.summary.improvementCandidates).toBe(0);
+    expect(snapshot.summary.activeGoals).toBe(0);
     expect(JSON.stringify(snapshot)).not.toContain("test-token");
     expect(JSON.stringify(snapshot)).not.toContain('"123"');
   });
@@ -57,6 +61,11 @@ describe("dashboard", () => {
       config,
       database,
       staticRoot: tempDir,
+      goalCoordinator: new GoalCoordinator(
+        database,
+        new AgentRegistry([successfulGoalProvider]),
+        path.join(tempDir, "runs")
+      ),
       claudeReviewer: async () => ({
         status: "completed",
         content: "Aprovado com ajustes de contraste.",
@@ -137,6 +146,20 @@ describe("dashboard", () => {
       expect(decisionResponse.status).toBe(200);
       expect(database.getImprovementProposal(improvementPayload.improvement.id).status).toBe("approved");
       expect(database.getLastEvent()?.type).toBe("improvement.approved");
+
+      const goalResponse = await fetch(
+        `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/goal`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ maxSteps: 8 })
+        }
+      );
+      expect(goalResponse.status).toBe(202);
+      const goalPayload = await goalResponse.json() as { run: { id: number } };
+      await waitFor(() => database.getGoalRun(goalPayload.run.id).status !== "running");
+      expect(database.getGoalRun(goalPayload.run.id).status).toBe("completed");
+      expect(database.getTask(createdTask.id).status).toBe("done");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -148,4 +171,28 @@ function runGit(args: string[], cwd: string) {
   if (result.status !== 0) {
     throw new Error(result.stderr || result.stdout || "git test setup failed");
   }
+}
+
+const successfulGoalProvider: AgentProvider = {
+  id: "codex",
+  label: "Codex test",
+  capabilities: new Set(["planning", "coding", "testing", "reviewing"]),
+  health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
+  execute: async (request) => ({
+    outcome: "completed",
+    summary: `${request.phase} completed`,
+    output: "ok",
+    error: null,
+    durationMs: 1,
+    retryable: false
+  })
+};
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for goal completion.");
 }

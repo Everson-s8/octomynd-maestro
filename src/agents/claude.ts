@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
+import { AgentExecutionRequest, AgentExecutionResult, AgentHealth, AgentProvider } from "./types.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -11,6 +12,42 @@ export type ClaudeReviewResult = {
 };
 
 export type ClaudeReviewer = (task: TaskRecord, project: ProjectRecord) => Promise<ClaudeReviewResult>;
+
+export class ClaudeProvider implements AgentProvider {
+  readonly id = "claude" as const;
+  readonly label = "Claude";
+  readonly capabilities = new Set(["reviewing"] as const);
+
+  async health(): Promise<AgentHealth> {
+    return resolveClaudeCliEntry()
+      ? { state: "ready", detail: "Claude CLI disponivel", checkedAt: new Date().toISOString() }
+      : { state: "offline", detail: "Claude CLI nao encontrado", checkedAt: new Date().toISOString() };
+  }
+
+  async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
+    const result = await reviewTaskWithClaude(request.task, request.project);
+    if (result.status !== "completed") {
+      return {
+        outcome: "failed",
+        summary: result.error || "Claude review failed.",
+        output: "",
+        error: result.error,
+        durationMs: result.durationMs,
+        retryable: result.status === "auth_required"
+      };
+    }
+
+    const requestsChanges = /reprovado|aprovado com ajustes|mudancas? solicitadas?/i.test(result.content);
+    return {
+      outcome: requestsChanges ? "changes_requested" : "completed",
+      summary: requestsChanges ? "Claude solicitou ajustes concretos." : "Claude aprovou a etapa.",
+      output: result.content,
+      error: null,
+      durationMs: result.durationMs,
+      retryable: false
+    };
+  }
+}
 
 export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
   const startedAt = Date.now();

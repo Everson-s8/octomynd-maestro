@@ -10,6 +10,7 @@ import {
   MaestroDatabase
 } from "../db.js";
 import { createProjectTask, prepareTask } from "../orchestrator.js";
+import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 
 export type DashboardServerOptions = {
@@ -17,6 +18,7 @@ export type DashboardServerOptions = {
   database: MaestroDatabase;
   staticRoot?: string;
   claudeReviewer?: ClaudeReviewer;
+  goalCoordinator?: GoalCoordinator;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -211,6 +213,39 @@ async function routeRequest(
       return;
     }
     sendJson(response, 200, { reviews: options.database.listTaskReviews(taskId) });
+    return;
+  }
+
+  const goalStartMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/goal$/);
+  if (request.method === "POST" && goalStartMatch) {
+    if (!options.goalCoordinator) {
+      sendJson(response, 503, { error: "goal_runner_unavailable" });
+      return;
+    }
+    const taskId = Number(goalStartMatch[1]);
+    const body = await readJsonBody(request);
+    const requestedMaxSteps = typeof body.maxSteps === "number" ? body.maxSteps : 12;
+    const maxSteps = Math.min(30, Math.max(4, Math.trunc(requestedMaxSteps)));
+    try {
+      const run = options.goalCoordinator.start(taskId, maxSteps);
+      sendJson(response, 202, { run });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown goal start error";
+      const status = message.includes("not found") ? 404 : 409;
+      sendJson(response, status, { error: "goal_start_failed", details: message });
+    }
+    return;
+  }
+
+  const goalMatch = url.pathname.match(/^\/api\/goals\/(\d+)$/);
+  if (request.method === "GET" && goalMatch) {
+    const runId = Number(goalMatch[1]);
+    try {
+      const run = options.database.getGoalRun(runId);
+      sendJson(response, 200, { run, steps: options.database.listGoalSteps(run.id) });
+    } catch {
+      sendJson(response, 404, { error: "goal_run_not_found" });
+    }
     return;
   }
 

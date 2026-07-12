@@ -70,6 +70,14 @@ A governanca esta separada da persona:
 - `docs/HERMES_APPLIED_STUDY.md`: conclusoes do estudo e elementos priorizados;
 - uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar seguranca.
 
+## Goal autonoma
+
+Uma task preparada pode iniciar uma execucao persistente pelo painel. O Maestro avanca sozinho por
+planejamento, implementacao, testes e revisao. Quando a revisao pede ajustes, o fluxo retorna para
+implementacao sem exigir que o usuario atualize a task. O estado e cada etapa ficam no SQLite.
+
+O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
+
 ## Telegram Commands
 
 - `/start` shows the bot introduction.
