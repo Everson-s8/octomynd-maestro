@@ -92,6 +92,8 @@ export class CodexProvider implements AgentProvider {
     if (processResult.exitCode !== 0) {
       const quota = /usage limit|rate limit|quota|credits/i.test(combined);
       const authentication = /401|authentication|login required|credentials/i.test(combined);
+      if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
+      if (authentication) this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
       return {
         outcome: "failed",
         summary: quota ? "Codex sem cota disponivel." : authentication ? "Codex requer autenticacao." : "Codex falhou.",
@@ -108,6 +110,7 @@ export class CodexProvider implements AgentProvider {
         summary: string;
         details: string;
       };
+      this.cacheHealth("ready", "Codex CLI disponivel", 30_000);
       return {
         outcome: parsed.outcome,
         summary: parsed.summary.trim(),
@@ -124,6 +127,11 @@ export class CodexProvider implements AgentProvider {
         combined
       );
     }
+  }
+
+  private cacheHealth(state: AgentHealth["state"], detail: string, ttlMs: number) {
+    this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
+    this.healthExpiresAt = Date.now() + ttlMs;
   }
 }
 

@@ -124,7 +124,7 @@ export type ImprovementProposalInput = {
   source?: string;
 };
 
-export type GoalRunStatus = "running" | "completed" | "blocked" | "failed";
+export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed";
 export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
 export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed";
 
@@ -453,7 +453,7 @@ export function createDatabase(databasePath: string) {
     createGoalRun(taskId: number, maxSteps = 12): GoalRunRecord {
       this.getTask(taskId);
       const active = db
-        .prepare("SELECT * FROM goal_runs WHERE task_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+        .prepare("SELECT * FROM goal_runs WHERE task_id = ? AND status IN ('running', 'waiting_provider') ORDER BY id DESC LIMIT 1")
         .get(taskId) as GoalRunRow | undefined;
       if (active) {
         throw new Error(`Task #${taskId} already has an active goal run.`);
@@ -489,7 +489,7 @@ export function createDatabase(databasePath: string) {
         ...input,
         lastError: input.lastError ?? null,
         now,
-        finishedAt: input.status === "running" ? null : now
+        finishedAt: ["running", "waiting_provider"].includes(input.status) ? null : now
       });
       return this.getGoalRun(input.id);
     },

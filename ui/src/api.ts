@@ -77,7 +77,7 @@ export type DashboardData = {
 export type GoalRun = {
   id: number;
   taskId: number;
-  status: "running" | "completed" | "blocked" | "failed";
+  status: "running" | "waiting_provider" | "completed" | "blocked" | "failed";
   currentPhase: "planning" | "implementing" | "testing" | "reviewing";
   stepCount: number;
   maxSteps: number;

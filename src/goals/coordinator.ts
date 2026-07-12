@@ -4,11 +4,13 @@ import { runTaskGoal } from "./runner.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, Promise<GoalRunRecord>>();
+  private readonly retryTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly database: MaestroDatabase,
     private readonly registry: AgentRegistry,
-    private readonly artifactsRoot: string
+    private readonly artifactsRoot: string,
+    private readonly retryDelayMs = 15 * 60_000
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -20,21 +22,70 @@ export class GoalCoordinator {
     if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
     const run = this.database.createGoalRun(taskId, maxSteps);
-
-    const promise = runTaskGoal(this.database, this.registry, taskId, {
-      artifactsRoot: this.artifactsRoot,
-      maxSteps,
-      existingRun: run
-    });
-    this.active.set(taskId, promise);
-    void promise.then(
-      () => this.active.delete(taskId),
-      () => this.active.delete(taskId)
-    );
+    this.execute(run);
     return run;
+  }
+
+  resume(runId: number): GoalRunRecord {
+    const run = this.database.getGoalRun(runId);
+    if (run.status !== "waiting_provider") {
+      throw new Error(`Goal #${runId} is not waiting for a provider.`);
+    }
+    if (this.active.has(run.taskId)) return run;
+    this.execute(run);
+    return run;
+  }
+
+  recoverWaitingRuns(): number {
+    const waiting = this.database.listGoalRuns(500).filter((run) => run.status === "waiting_provider");
+    for (const run of waiting) this.scheduleRetry(run);
+    return waiting.length;
+  }
+
+  shutdown() {
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
   }
 
   isActive(taskId: number): boolean {
     return this.active.has(taskId);
+  }
+
+  private execute(run: GoalRunRecord) {
+    const existingTimer = this.retryTimers.get(run.id);
+    if (existingTimer) clearTimeout(existingTimer);
+    this.retryTimers.delete(run.id);
+    const promise = runTaskGoal(this.database, this.registry, run.taskId, {
+      artifactsRoot: this.artifactsRoot,
+      maxSteps: run.maxSteps,
+      existingRun: run
+    });
+    this.active.set(run.taskId, promise);
+    void promise.then(
+      (result) => {
+        this.active.delete(run.taskId);
+        if (result.status === "waiting_provider") this.scheduleRetry(result);
+      },
+      () => this.active.delete(run.taskId)
+    );
+  }
+
+  private scheduleRetry(run: GoalRunRecord) {
+    if (this.retryTimers.has(run.id)) return;
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(run.id);
+      try {
+        this.resume(run.id);
+      } catch (error) {
+        this.database.addEvent({
+          source: "maestro",
+          type: "goal.resume_failed",
+          text: error instanceof Error ? error.message : "Unknown goal resume error.",
+          taskId: run.taskId,
+          metadata: { runId: run.id }
+        });
+      }
+    }, this.retryDelayMs);
+    this.retryTimers.set(run.id, timer);
   }
 }

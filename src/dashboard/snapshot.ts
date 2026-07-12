@@ -35,7 +35,7 @@ export function buildDashboardSnapshot(
       queuedTasks: counts.queued ?? 0,
       humanGates: (counts.awaiting_human ?? 0) + (improvementCounts.candidate ?? 0),
       improvementCandidates: improvementCounts.candidate ?? 0,
-      activeGoals: goals.filter((goal) => goal.status === "running").length,
+      activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
     projects: projects.map((project) => ({

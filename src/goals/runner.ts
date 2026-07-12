@@ -35,15 +35,16 @@ export async function runTaskGoal(
   if (!task.worktreePath) throw new Error(`Task #${task.id} must be prepared before starting a goal.`);
   const project = database.getProjectByKey(task.projectKey);
   const run = options.existingRun ?? database.createGoalRun(task.id, options.maxSteps ?? 12);
+  const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
-  let phase: GoalPhase = "planning";
-  let stepCount = 0;
+  let phase: GoalPhase = run.currentPhase;
+  let stepCount = run.stepCount;
   let excluded = new Set<AgentProviderId>();
 
   database.addEvent({
     source: "maestro",
-    type: "goal.started",
-    text: `Goal #${run.id} started for task #${task.id}`,
+    type: isResume ? "goal.resumed" : "goal.started",
+    text: `Goal #${run.id} ${isResume ? "resumed" : "started"} for task #${task.id}`,
     taskId: task.id,
     metadata: { runId: run.id, maxSteps: run.maxSteps }
   });
@@ -62,7 +63,7 @@ export async function runTaskGoal(
       const routed = await registry.route(CAPABILITIES[phase], excluded);
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
-        return finishRun(database, currentRun, "blocked", phase, stepCount, error, task.id);
+        return pauseRun(database, currentRun, phase, stepCount, error, task.id);
       }
 
       const goalStep = database.createGoalStep(run.id, phase, routed.provider.id);
@@ -84,7 +85,8 @@ export async function runTaskGoal(
         previousSteps: database.listGoalSteps(run.id),
         artifactsRoot: path.resolve(options.artifactsRoot)
       });
-      stepCount += 1;
+      const countsTowardBudget = !(result.outcome === "failed" && result.retryable);
+      if (countsTowardBudget) stepCount += 1;
       database.finishGoalStep({
         id: goalStep.id,
         status: result.outcome as Exclude<GoalStepStatus, "running">,
@@ -113,6 +115,16 @@ export async function runTaskGoal(
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
         if (fallback) continue;
+        if (result.retryable) {
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            result.error || result.summary,
+            task.id
+          );
+        }
         return finishRun(database, currentRun, "failed", phase, stepCount, result.error || result.summary, task.id);
       }
       if (result.outcome === "changes_requested") {
@@ -175,6 +187,32 @@ export async function runTaskGoal(
       task.id
     );
   }
+}
+
+function pauseRun(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase,
+  stepCount: number,
+  error: string,
+  taskId: number
+): GoalRunRecord {
+  database.updateTaskStatus(taskId, "waiting_quota");
+  const paused = database.updateGoalRun({
+    id: run.id,
+    status: "waiting_provider",
+    currentPhase: phase,
+    stepCount,
+    lastError: error
+  });
+  database.addEvent({
+    source: "maestro",
+    type: "goal.waiting_provider",
+    text: error,
+    taskId,
+    metadata: { runId: run.id, phase, stepCount }
+  });
+  return paused;
 }
 
 function nextPhaseAfter(phase: GoalPhase): GoalPhase | null {

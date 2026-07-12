@@ -6,12 +6,12 @@ import {
 } from "./types.js";
 
 const ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
-  planning: ["openai", "claude", "codex"],
-  coding: ["codex", "openai", "claude"],
-  testing: ["codex", "openai", "claude"],
-  reviewing: ["claude", "openai", "codex"],
-  research: ["openai", "claude", "codex"],
-  conversation: ["openai", "claude", "codex"]
+  planning: ["claude", "codex"],
+  coding: ["codex", "claude"],
+  testing: ["codex", "claude"],
+  reviewing: ["claude", "codex"],
+  research: ["claude", "codex"],
+  conversation: ["claude", "codex"]
 };
 
 export type RoutedAgent = {

@@ -3,6 +3,9 @@
 Chat-first local orchestrator for Codex, Claude and GitHub workflows, com uma
 central visual local para acompanhar projetos, fila, agentes e eventos.
 
+O Maestro usa as autenticacoes dos CLIs Codex e Claude. Ele nao requer
+`OPENAI_API_KEY` nem cria faturamento separado da OpenAI API.
+
 This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
 
 ## Requirements
@@ -50,9 +53,10 @@ npm run dev:platform
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
-isolada. Uma task preparada pode solicitar uma revisão read-only ao Claude; o
-resultado ou erro de autenticação fica persistido no SQLite e visível na telemetria.
-Ela não executa uma task automaticamente: o gate humano continua explícito.
+isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,
+implementacao, testes e revisao. Codex e Claude sao roteados por capacidade; quando
+ambos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
+retomado automaticamente sem perder os passos concluidos.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 

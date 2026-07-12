@@ -11,6 +11,7 @@ import {
   AgentProviderId
 } from "../src/agents/types.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
 
 let tempDir: string;
@@ -88,20 +89,59 @@ describe("goal runner", () => {
         ? { outcome: "failed", summary: "quota", output: "", error: "quota", durationMs: 1, retryable: true }
         : completed("Codex step")
     );
-    const openai = new FakeProvider("openai", ["coding"], () => completed("OpenAI fallback"));
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude fallback"));
 
     const run = await runTaskGoal(
       database,
-      new AgentRegistry([codex, openai]),
+      new AgentRegistry([codex, claude]),
       task.id,
       { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 8 }
     );
 
     expect(run.status).toBe("completed");
+    expect(run.stepCount).toBe(4);
     const implementationProviders = database.listGoalSteps(run.id)
       .filter((step) => step.phase === "implementing")
       .map((step) => step.provider);
-    expect(implementationProviders).toEqual(["codex", "openai"]);
+    expect(implementationProviders).toEqual(["codex", "claude"]);
+  });
+
+  it("waits for quota and resumes the same goal automatically", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "resume", path: projectDir });
+    const task = database.createTask("resume after quota", "dashboard", "resume");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    let codingAttempts = 0;
+    const codex = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "implementing" && codingAttempts++ === 0) {
+          return { outcome: "failed", summary: "quota", output: "", error: "quota", durationMs: 1, retryable: true };
+        }
+        return completed("available");
+      }
+    );
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([codex]),
+      path.join(tempDir, "artifacts"),
+      20
+    );
+
+    const run = coordinator.start(task.id, 8);
+    await waitFor(() => database.getGoalRun(run.id).status === "completed");
+
+    expect(database.getTask(task.id).status).toBe("done");
+    expect(database.getGoalRun(run.id).stepCount).toBe(4);
+    expect(database.listGoalSteps(run.id)).toHaveLength(5);
+    expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
+    coordinator.shutdown();
   });
 });
 
@@ -136,4 +176,13 @@ function completed(summary: string): AgentExecutionResult {
     durationMs: 1,
     retryable: false
   };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for goal state.");
 }

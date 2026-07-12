@@ -662,13 +662,15 @@ function TaskDetail({
           <p>O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem atualizar a task manualmente.</p>
           <button
             className="goal-action"
-            disabled={!task.worktreePath || goal?.status === "running" || startingGoal || task.status === "done"}
+            disabled={!task.worktreePath || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || task.status === "done"}
             onClick={() => void handleStartGoal()}
           >
             {startingGoal
               ? "Iniciando goal..."
               : goal?.status === "running"
                 ? `Rodando ${goal.currentPhase} · ${goal.stepCount}/${goal.maxSteps}`
+                : goal?.status === "waiting_provider"
+                  ? `Aguardando provider · ${goal.stepCount}/${goal.maxSteps}`
                 : task.worktreePath
                   ? "Iniciar goal"
                   : "Prepare a worktree primeiro"}

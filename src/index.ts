@@ -25,6 +25,7 @@ const goalCoordinator = new GoalCoordinator(
   agentRegistry,
   path.join(path.dirname(config.databasePath), "runs")
 );
+const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const bot = createTelegramBot(config, database);
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({ config, database, goalCoordinator })
@@ -43,6 +44,9 @@ console.log(config.telegram.allowedUserId ? "Telegram access: restricted." : "Te
 if (dashboardServer) {
   console.log(`Dashboard: http://${config.dashboard.host}:${config.dashboard.port}`);
 }
+if (recoveredGoals > 0) {
+  console.log(`Goals waiting for providers: ${recoveredGoals}. Automatic retry scheduled.`);
+}
 
 void bot.start({
   onStart: (botInfo) => {
@@ -53,6 +57,7 @@ void bot.start({
 function shutdown() {
   console.log("Stopping Maestro.");
   bot.stop();
+  goalCoordinator.shutdown();
   if (dashboardServer) {
     dashboardServer.close(() => database.close());
   } else {

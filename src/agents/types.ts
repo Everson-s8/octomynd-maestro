@@ -1,6 +1,6 @@
 import { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db.js";
 
-export type AgentProviderId = "openai" | "codex" | "claude";
+export type AgentProviderId = "codex" | "claude";
 export type AgentCapability = "planning" | "coding" | "testing" | "reviewing" | "research" | "conversation";
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed";

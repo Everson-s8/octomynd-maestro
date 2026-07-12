@@ -12,6 +12,10 @@ planning
   -> reviewing
        -> completed
        -> changes_requested -> implementing
+
+Any phase can enter `waiting_provider` when both local providers are unavailable, unauthenticated,
+or out of quota. The coordinator persists the run and retries it automatically without creating a
+new goal or losing the completed steps.
 ```
 
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
@@ -23,15 +27,19 @@ Providers advertise capabilities. The registry selects a ready provider using th
 
 | Capability | Preferred order |
 | --- | --- |
-| planning | OpenAI, Claude, Codex |
-| coding | Codex, OpenAI, Claude |
-| testing | Codex, OpenAI, Claude |
-| reviewing | Claude, OpenAI, Codex |
-| research | OpenAI, Claude, Codex |
-| conversation | OpenAI, Claude, Codex |
+| planning | Claude, Codex |
+| coding | Codex, Claude |
+| testing | Codex, Claude |
+| reviewing | Claude, Codex |
+| research | Claude, Codex |
+| conversation | Claude, Codex |
 
 If a provider fails, the runner excludes it for that phase and tries the next ready provider. A
-review that returns `changes_requested` sends the goal back to implementation automatically.
+review that returns `changes_requested` sends the goal back to implementation automatically. If
+the available providers report a retryable quota or authentication condition, the task becomes
+`waiting_quota`, the goal becomes `waiting_provider`, and the same run is resumed later.
+Retryable provider failures are recorded as attempts but do not consume the goal's semantic step
+budget.
 
 ## Current providers
 
@@ -40,7 +48,10 @@ review that returns `changes_requested` sends the goal back to implementation au
   JSON schema and artifacts are stored under `.maestro/runs/`.
 - **Claude**: real read-only review adapter. Authentication failure is classified as retryable so
   routing can fall back.
-- **OpenAI API**: provider contract and routing slot are ready; API execution is the next connection.
+
+The Maestro does not use the OpenAI API and does not require `OPENAI_API_KEY`. Codex uses the user's
+existing Codex/ChatGPT authentication, while Claude uses its own installed CLI authentication. Each
+service can still enforce the limits of the user's plan.
 
 ## Safety boundaries
 
@@ -59,4 +70,5 @@ GET  /api/goals/:runId
 ```
 
 The task detail panel starts a goal once. The coordinator continues it in the background and the
-dashboard refresh shows phase, step count, completion, blocker, or failure.
+dashboard refresh shows phase, step count, provider wait, completion, blocker, or failure. Waiting
+runs are recovered after a Maestro restart and scheduled for retry.

@@ -319,7 +319,7 @@ a { color: inherit; text-decoration: none; }
 .goal-action { display: flex; align-items: center; justify-content: space-between; min-height: 50px; padding: 0 15px; color: var(--ink); background: var(--lime); border-radius: 13px; font-size: .68rem; font-weight: 850; }
 .goal-action:hover:not(:disabled) { background: var(--cyan); }.goal-action:disabled { color: rgba(255,255,255,.38); cursor: not-allowed; background: rgba(255,255,255,.07); }
 .goal-state { display: grid; gap: 5px; padding: 13px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); border-left: 3px solid var(--goal-color); border-radius: 11px; }
-.goal-running { --goal-color: var(--cyan); }.goal-completed { --goal-color: var(--success); }.goal-blocked, .goal-failed { --goal-color: var(--danger); }
+.goal-running { --goal-color: var(--cyan); }.goal-waiting_provider { --goal-color: #ffb83d; }.goal-completed { --goal-color: var(--success); }.goal-blocked, .goal-failed { --goal-color: var(--danger); }
 .goal-state span { color: rgba(255,255,255,.38); font-family: var(--mono); font-size: .48rem; text-transform: uppercase; }
 .goal-state strong { font-size: .65rem; }.goal-state small { color: #ffadb2; font-size: .55rem; line-height: 1.45; }
 .review-section { display: grid; gap: 12px; padding-top: 28px; margin-top: 28px; border-top: 1px solid rgba(255,255,255,.1); }
