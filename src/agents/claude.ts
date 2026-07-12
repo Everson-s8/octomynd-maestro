@@ -13,20 +13,35 @@ export type ClaudeReviewResult = {
 
 export type ClaudeReviewer = (task: TaskRecord, project: ProjectRecord) => Promise<ClaudeReviewResult>;
 
+type ClaudeCliCommand = {
+  command: string;
+  argsPrefix: string[];
+};
+
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
   readonly capabilities = new Set(["reviewing"] as const);
+  private cachedHealth: AgentHealth | null = null;
+  private healthExpiresAt = 0;
 
   async health(): Promise<AgentHealth> {
-    return resolveClaudeCliEntry()
+    if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
+    const health: AgentHealth = resolveClaudeCliCommand()
       ? { state: "ready", detail: "Claude CLI disponivel", checkedAt: new Date().toISOString() }
       : { state: "offline", detail: "Claude CLI nao encontrado", checkedAt: new Date().toISOString() };
+    this.cacheHealth(health, 30_000);
+    return health;
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const result = await reviewTaskWithClaude(request.task, request.project);
     if (result.status !== "completed") {
+      this.cacheHealth({
+        state: result.status === "auth_required" ? "auth_required" : "offline",
+        detail: result.error || "Claude indisponivel",
+        checkedAt: new Date().toISOString()
+      }, result.status === "auth_required" ? 60_000 : 30_000);
       return {
         outcome: "failed",
         summary: result.error || "Claude review failed.",
@@ -37,6 +52,11 @@ export class ClaudeProvider implements AgentProvider {
       };
     }
 
+    this.cacheHealth({
+      state: "ready",
+      detail: "Claude CLI autenticado",
+      checkedAt: new Date().toISOString()
+    }, 30_000);
     const requestsChanges = /reprovado|aprovado com ajustes|mudancas? solicitadas?/i.test(result.content);
     return {
       outcome: requestsChanges ? "changes_requested" : "completed",
@@ -47,14 +67,19 @@ export class ClaudeProvider implements AgentProvider {
       retryable: false
     };
   }
+
+  private cacheHealth(health: AgentHealth, ttlMs: number) {
+    this.cachedHealth = health;
+    this.healthExpiresAt = Date.now() + ttlMs;
+  }
 }
 
 export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
   const startedAt = Date.now();
   const cwd = task.worktreePath || project.path;
-  const cliEntry = resolveClaudeCliEntry();
+  const cli = resolveClaudeCliCommand();
 
-  if (!cliEntry) {
+  if (!cli) {
     return {
       status: "failed",
       content: "",
@@ -73,7 +98,7 @@ export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
   }
 
   const args = [
-    cliEntry,
+    ...cli.argsPrefix,
     "--print",
     buildClaudeReviewPrompt(task, project),
     "--permission-mode",
@@ -85,7 +110,7 @@ export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
     "--no-session-persistence"
   ];
 
-  const result = await runProcess(process.execPath, args, cwd, 180_000);
+  const result = await runProcess(cli.command, args, cwd, 180_000);
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
   if (result.exitCode === 0 && result.stdout.trim()) {
@@ -97,12 +122,12 @@ export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
     };
   }
 
-  const authenticationFailed = /401|authentication|credentials/i.test(errorText);
+  const authenticationFailed = isClaudeAuthenticationError(errorText);
   return {
     status: authenticationFailed ? "auth_required" : "failed",
     content: "",
     error: authenticationFailed
-      ? "Claude Code precisa ser reautenticado antes da revisão."
+      ? "Claude Code precisa ser reautenticado antes da revisao."
       : errorText || "Claude review failed without output.",
     durationMs: Date.now() - startedAt
   };
@@ -125,16 +150,31 @@ export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord
   ].join("\n");
 }
 
-function resolveClaudeCliEntry(): string | null {
-  const candidates = [
+export function buildClaudeCliCommand(cliEntry: string): ClaudeCliCommand {
+  return cliEntry.toLowerCase().endsWith(".js")
+    ? { command: process.execPath, argsPrefix: [cliEntry] }
+    : { command: cliEntry, argsPrefix: [] };
+}
+
+export function isClaudeAuthenticationError(errorText: string): boolean {
+  return /401|authentication|credentials|not logged in|please run \/login|sign in/i.test(errorText);
+}
+
+function resolveClaudeCliCommand(): ClaudeCliCommand | null {
+  const roots = [
     process.env.APPDATA
-      ? path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+      ? path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code")
       : "",
     process.env.NPM_CONFIG_PREFIX
-      ? path.join(process.env.NPM_CONFIG_PREFIX, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+      ? path.join(process.env.NPM_CONFIG_PREFIX, "node_modules", "@anthropic-ai", "claude-code")
       : ""
   ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+  const candidates = roots.flatMap((root) => [
+    path.join(root, "bin", "claude.exe"),
+    path.join(root, "cli.js")
+  ]);
+  const cliEntry = candidates.find((candidate) => fs.existsSync(candidate));
+  return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
 }
 
 function runProcess(command: string, args: string[], cwd: string, timeoutMs: number) {
