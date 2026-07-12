@@ -7,6 +7,7 @@ import { createDatabase } from "./db.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { startDashboardServer } from "./dashboard/server.js";
 import { GoalCoordinator } from "./goals/coordinator.js";
+import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -23,7 +24,9 @@ const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider
 const goalCoordinator = new GoalCoordinator(
   database,
   agentRegistry,
-  path.join(path.dirname(config.databasePath), "runs")
+  path.join(path.dirname(config.databasePath), "runs"),
+  15 * 60_000,
+  deliverGoalToDraftPullRequest
 );
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const bot = createTelegramBot(config, database);

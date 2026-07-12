@@ -106,6 +106,42 @@ describe("goal runner", () => {
     expect(implementationProviders).toEqual(["codex", "claude"]);
   });
 
+  it("delivers an approved goal to a draft pull request and leaves merge as the human gate", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "delivery", path: projectDir });
+    const task = database.createTask("ship reviewed changes", "dashboard", "delivery");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-delivery",
+      worktreePath: worktreeDir
+    });
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("approved")
+    );
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 6,
+      delivery: async () => ({
+        commitSha: "abc123",
+        pullRequestUrl: "https://github.com/example/repo/pull/7",
+        branchName: "maestro/task-delivery"
+      })
+    });
+
+    expect(run.status).toBe("completed");
+    expect(run.commitSha).toBe("abc123");
+    expect(run.pullRequestUrl).toBe("https://github.com/example/repo/pull/7");
+    expect(database.getTask(task.id).status).toBe("awaiting_human");
+    expect(database.listEvents().some((event) => event.type === "goal.delivered")).toBe(true);
+  });
+
   it("waits for quota and resumes the same goal automatically", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");

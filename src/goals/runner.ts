@@ -8,6 +8,7 @@ import {
 } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentProviderId } from "../agents/types.js";
+import { GoalDeliveryHandler } from "./delivery.js";
 
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
 const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
@@ -21,6 +22,7 @@ export type GoalRunnerOptions = {
   artifactsRoot: string;
   maxSteps?: number;
   existingRun?: GoalRunRecord;
+  delivery?: GoalDeliveryHandler;
   onProgress?: (run: GoalRunRecord) => void;
 };
 
@@ -146,9 +148,46 @@ export async function runTaskGoal(
 
       const nextPhase = nextPhaseAfter(phase);
       if (!nextPhase) {
-        database.updateTaskStatus(task.id, "done");
+        let deliveredRun = currentRun;
+        if (options.delivery) {
+          database.updateTaskStatus(task.id, "awaiting_human");
+          database.addEvent({
+            source: "maestro",
+            type: "goal.delivery_started",
+            text: `Delivering goal #${run.id} to a draft pull request.`,
+            taskId: task.id,
+            metadata: { runId: run.id }
+          });
+          try {
+            const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
+            deliveredRun = database.updateGoalDelivery({
+              id: run.id,
+              commitSha: delivery.commitSha,
+              pullRequestUrl: delivery.pullRequestUrl
+            });
+            database.addEvent({
+              source: "maestro",
+              type: "goal.delivered",
+              text: `Draft pull request created for goal #${run.id}.`,
+              taskId: task.id,
+              metadata: { runId: run.id, ...delivery }
+            });
+          } catch (error) {
+            return finishRun(
+              database,
+              currentRun,
+              "blocked",
+              phase,
+              stepCount,
+              error instanceof Error ? error.message : "Unknown goal delivery error.",
+              task.id
+            );
+          }
+        } else {
+          database.updateTaskStatus(task.id, "done");
+        }
         const completed = database.updateGoalRun({
-          id: run.id,
+          id: deliveredRun.id,
           status: "completed",
           currentPhase: phase,
           stepCount

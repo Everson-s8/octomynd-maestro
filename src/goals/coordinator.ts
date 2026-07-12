@@ -1,6 +1,7 @@
 import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase } from "../db.js";
 import { runTaskGoal } from "./runner.js";
+import { GoalDeliveryHandler } from "./delivery.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, Promise<GoalRunRecord>>();
@@ -10,7 +11,8 @@ export class GoalCoordinator {
     private readonly database: MaestroDatabase,
     private readonly registry: AgentRegistry,
     private readonly artifactsRoot: string,
-    private readonly retryDelayMs = 15 * 60_000
+    private readonly retryDelayMs = 15 * 60_000,
+    private readonly delivery?: GoalDeliveryHandler
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -58,7 +60,8 @@ export class GoalCoordinator {
     const promise = runTaskGoal(this.database, this.registry, run.taskId, {
       artifactsRoot: this.artifactsRoot,
       maxSteps: run.maxSteps,
-      existingRun: run
+      existingRun: run,
+      delivery: this.delivery
     });
     this.active.set(run.taskId, promise);
     void promise.then(

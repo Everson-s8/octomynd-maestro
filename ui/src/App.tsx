@@ -662,7 +662,7 @@ function TaskDetail({
           <p>O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem atualizar a task manualmente.</p>
           <button
             className="goal-action"
-            disabled={!task.worktreePath || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || task.status === "done"}
+            disabled={!task.worktreePath || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || ["done", "awaiting_human"].includes(task.status)}
             onClick={() => void handleStartGoal()}
           >
             {startingGoal
@@ -671,8 +671,10 @@ function TaskDetail({
                 ? `Rodando ${goal.currentPhase} · ${goal.stepCount}/${goal.maxSteps}`
                 : goal?.status === "waiting_provider"
                   ? `Aguardando provider · ${goal.stepCount}/${goal.maxSteps}`
-                : task.worktreePath
-                  ? "Iniciar goal"
+                : task.status === "awaiting_human" && goal?.pullRequestUrl
+                  ? "Draft PR aguardando merge"
+                  : task.worktreePath
+                    ? "Iniciar goal"
                   : "Prepare a worktree primeiro"}
             <Icon name="pulse" />
           </button>
@@ -681,6 +683,9 @@ function TaskDetail({
               <span>goal #{goal.id} · {goal.status}</span>
               <strong>{goal.currentPhase} · passo {goal.stepCount}/{goal.maxSteps}</strong>
               {goal.lastError ? <small>{goal.lastError}</small> : null}
+              {goal.pullRequestUrl ? (
+                <a href={goal.pullRequestUrl} target="_blank" rel="noreferrer">Abrir draft PR</a>
+              ) : null}
             </div>
           ) : null}
         </div>

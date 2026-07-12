@@ -136,6 +136,8 @@ export type GoalRunRecord = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -229,6 +231,13 @@ export function createDatabase(databasePath: string) {
         last_error = @lastError,
         updated_at = @now,
         finished_at = @finishedAt
+    WHERE id = @id
+  `);
+  const updateGoalDeliveryStatement = db.prepare(`
+    UPDATE goal_runs
+    SET commit_sha = @commitSha,
+        pull_request_url = @pullRequestUrl,
+        updated_at = @now
     WHERE id = @id
   `);
   const createGoalStepStatement = db.prepare(`
@@ -494,6 +503,19 @@ export function createDatabase(databasePath: string) {
       return this.getGoalRun(input.id);
     },
 
+    updateGoalDelivery(input: {
+      id: number;
+      commitSha: string;
+      pullRequestUrl: string | null;
+    }): GoalRunRecord {
+      this.getGoalRun(input.id);
+      updateGoalDeliveryStatement.run({
+        ...input,
+        now: new Date().toISOString()
+      });
+      return this.getGoalRun(input.id);
+    },
+
     createGoalStep(runId: number, phase: GoalPhase, provider: string): GoalStepRecord {
       this.getGoalRun(runId);
       const result = createGoalStepStatement.run({
@@ -612,6 +634,8 @@ function migrate(db: Database.Database) {
       step_count INTEGER NOT NULL DEFAULT 0,
       max_steps INTEGER NOT NULL DEFAULT 12,
       last_error TEXT,
+      commit_sha TEXT,
+      pull_request_url TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       finished_at TEXT,
@@ -637,6 +661,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
 }
 
 type ProjectRow = {
@@ -708,6 +734,8 @@ type GoalRunRow = {
   step_count: number;
   max_steps: number;
   last_error: string | null;
+  commit_sha: string | null;
+  pull_request_url: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -857,6 +885,8 @@ function mapGoalRun(row: GoalRunRow): GoalRunRecord {
     stepCount: row.step_count,
     maxSteps: row.max_steps,
     lastError: row.last_error,
+    commitSha: row.commit_sha,
+    pullRequestUrl: row.pull_request_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     finishedAt: row.finished_at

@@ -82,6 +82,8 @@ export type GoalRun = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;

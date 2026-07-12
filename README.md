@@ -57,6 +57,8 @@ isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,
 implementacao, testes e revisao. Codex e Claude sao roteados por capacidade; quando
 ambos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
 retomado automaticamente sem perder os passos concluidos.
+Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
+draft PR. O merge continua sendo a decisao humana importante.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 

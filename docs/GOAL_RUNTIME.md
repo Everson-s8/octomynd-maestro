@@ -10,13 +10,13 @@ planning
   -> implementing
   -> testing
   -> reviewing
-       -> completed
+       -> delivery -> completed + awaiting_human
        -> changes_requested -> implementing
+```
 
 Any phase can enter `waiting_provider` when both local providers are unavailable, unauthenticated,
 or out of quota. The coordinator persists the run and retries it automatically without creating a
 new goal or losing the completed steps.
-```
 
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
@@ -61,6 +61,16 @@ service can still enforce the limits of the user's plan.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
 - Goal artifacts, database, logs, environment files, and credentials remain ignored by Git.
 - Completion means all phases succeeded; a planning or implementation response alone cannot finish a goal.
+- Workers never publish directly. After review succeeds, the deterministic delivery layer scans for
+  secrets, creates a commit, pushes the isolated task branch, and opens a draft pull request.
+- Merge is never automatic. A delivered task remains `awaiting_human` with the draft PR URL.
+
+## Governed delivery
+
+Delivery is intentionally outside the LLM worker. It is deterministic and idempotent: a retry can
+continue from an existing task commit if push or PR creation failed. The secret guard blocks env
+files, credential filenames, private keys, and common provider token formats before staging.
+GitHub publication requires an authenticated `gh` CLI. The pull request is always created as draft.
 
 ## Dashboard API
 
@@ -71,4 +81,5 @@ GET  /api/goals/:runId
 
 The task detail panel starts a goal once. The coordinator continues it in the background and the
 dashboard refresh shows phase, step count, provider wait, completion, blocker, or failure. Waiting
-runs are recovered after a Maestro restart and scheduled for retry.
+runs are recovered after a Maestro restart and scheduled for retry. Delivered goals expose their
+commit SHA and draft pull request URL.
