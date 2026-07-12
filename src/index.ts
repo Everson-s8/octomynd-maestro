@@ -8,6 +8,7 @@ import { createTelegramBot } from "./telegram/bot.js";
 import { startDashboardServer } from "./dashboard/server.js";
 import { GoalCoordinator } from "./goals/coordinator.js";
 import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
+import { createTelegramGoalNotifier } from "./telegram/notifications.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -21,15 +22,21 @@ if (errors.length > 0) {
 
 const database = createDatabase(config.databasePath);
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
+const bot = createTelegramBot(config, database);
+const goalNotifier = createTelegramGoalNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const goalCoordinator = new GoalCoordinator(
   database,
   agentRegistry,
   path.join(path.dirname(config.databasePath), "runs"),
   15 * 60_000,
-  deliverGoalToDraftPullRequest
+  deliverGoalToDraftPullRequest,
+  goalNotifier
 );
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
-const bot = createTelegramBot(config, database);
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({ config, database, goalCoordinator })
   : null;

@@ -64,6 +64,8 @@ service can still enforce the limits of the user's plan.
 - Workers never publish directly. After review succeeds, the deterministic delivery layer scans for
   secrets, creates a commit, pushes the isolated task branch, and opens a draft pull request.
 - Merge is never automatic. A delivered task remains `awaiting_human` with the draft PR URL.
+- The Maestro Telegram gateway proactively notifies the restricted user when the draft PR is ready.
+  Managed projects do not need to implement Telegram unless their own product explicitly requires it.
 
 ## Governed delivery
 

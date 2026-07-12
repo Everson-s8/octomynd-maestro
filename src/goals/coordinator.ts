@@ -2,6 +2,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
+import { GoalNotificationHandler } from "../telegram/notifications.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, Promise<GoalRunRecord>>();
@@ -12,7 +13,8 @@ export class GoalCoordinator {
     private readonly registry: AgentRegistry,
     private readonly artifactsRoot: string,
     private readonly retryDelayMs = 15 * 60_000,
-    private readonly delivery?: GoalDeliveryHandler
+    private readonly delivery?: GoalDeliveryHandler,
+    private readonly notify?: GoalNotificationHandler
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -67,7 +69,21 @@ export class GoalCoordinator {
     void promise.then(
       (result) => {
         this.active.delete(run.taskId);
-        if (result.status === "waiting_provider") this.scheduleRetry(result);
+        if (result.status === "waiting_provider") {
+          this.scheduleRetry(result);
+          return;
+        }
+        if (this.notify && ["completed", "blocked", "failed"].includes(result.status)) {
+          void this.notify(result).catch((error) => {
+            this.database.addEvent({
+              source: "maestro",
+              type: "goal.notification_failed",
+              text: error instanceof Error ? error.message : "Unknown goal notification error.",
+              taskId: result.taskId,
+              metadata: { runId: result.id, status: result.status }
+            });
+          });
+        }
       },
       () => this.active.delete(run.taskId)
     );

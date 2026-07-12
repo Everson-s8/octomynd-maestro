@@ -10,7 +10,7 @@ import {
   AgentProvider,
   AgentProviderId
 } from "../src/agents/types.js";
-import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { createDatabase, GoalRunRecord, MaestroDatabase } from "../src/db.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
 
@@ -177,6 +177,48 @@ describe("goal runner", () => {
     expect(database.listGoalSteps(run.id)).toHaveLength(5);
     expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
     expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
+    coordinator.shutdown();
+  });
+
+  it("notifies once when a delivered goal is ready for review", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "boo", path: projectDir });
+    const task = database.createTask("ship Telegram test", "dashboard", "boo");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-telegram",
+      worktreePath: worktreeDir
+    });
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("approved")
+    );
+    const notifications: GoalRunRecord[] = [];
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts"),
+      20,
+      async () => ({
+        commitSha: "abc123",
+        pullRequestUrl: "https://github.com/example/boo/pull/1",
+        branchName: "maestro/task-telegram"
+      }),
+      async (run) => {
+        notifications.push(run);
+      }
+    );
+
+    const run = coordinator.start(task.id, 6);
+    await waitFor(() => notifications.length === 1);
+
+    expect(notifications[0].id).toBe(run.id);
+    expect(notifications[0].pullRequestUrl).toBe("https://github.com/example/boo/pull/1");
     coordinator.shutdown();
   });
 });

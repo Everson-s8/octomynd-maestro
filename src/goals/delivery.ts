@@ -64,7 +64,11 @@ export function createGoalDeliveryHandler(
         throw new Error(`Goal #${run.id} has no staged changes to deliver.`);
       }
       if (staged.exitCode !== 1) requireGit(staged, "inspect staged changes");
-      requireGit(runGitSafe(["commit", "-m", message], task.worktreePath), "commit goal changes");
+      requireGit(runGitSafe([
+        "-c", "user.name=Octomynd Maestro",
+        "-c", "user.email=octomynd-maestro@users.noreply.github.com",
+        "commit", "-m", message
+      ], task.worktreePath), "commit goal changes");
     } else {
       const lastSubject = requireGit(
         runGitSafe(["log", "-1", "--pretty=%s"], task.worktreePath),

@@ -8,6 +8,10 @@ O Maestro usa as autenticacoes dos CLIs Codex e Claude. Ele nao requer
 
 This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
 
+Telegram belongs to the Maestro gateway, not to every managed project. Projects only need their own
+Telegram integration when that is an explicit product requirement. When a goal opens a draft pull
+request, the Maestro sends the restricted Telegram user a review notification with the public PR URL.
+
 ## Requirements
 
 - Node.js 20.17+ for local development. Node 24 is the target for future CI.
@@ -95,6 +99,9 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/queue` lists recent tasks.
 - `/queue @<key>` lists recent tasks for a project.
 - Any plain text message is saved as feedback.
+
+Final goal notifications are proactive: completed goals with a draft PR send a concise review request.
+The notification excludes local worktree paths, credentials and private Telegram identifiers.
 
 Example:
 
