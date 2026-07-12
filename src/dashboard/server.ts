@@ -7,11 +7,13 @@ import {
   ImprovementCategory,
   ImprovementRisk,
   ImprovementStatus,
+  HumanReviewDecision,
   MaestroDatabase
 } from "../db.js";
 import { createProjectTask, prepareTask } from "../orchestrator.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
+import { ReviewCoordinator } from "../reviews/coordinator.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -19,6 +21,7 @@ export type DashboardServerOptions = {
   staticRoot?: string;
   claudeReviewer?: ClaudeReviewer;
   goalCoordinator?: GoalCoordinator;
+  reviewCoordinator?: ReviewCoordinator;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -62,6 +65,63 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
     sendJson(response, 200, buildDashboardSnapshot(options.config, options.database));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/review-queue") {
+    if (!options.reviewCoordinator) {
+      sendJson(response, 503, { error: "review_coordinator_unavailable" });
+      return;
+    }
+    sendJson(response, 200, { reviews: options.reviewCoordinator.list() });
+    return;
+  }
+
+  const reviewItemMatch = url.pathname.match(/^\/api\/review-queue\/(\d+)$/);
+  if (request.method === "GET" && reviewItemMatch) {
+    if (!options.reviewCoordinator) {
+      sendJson(response, 503, { error: "review_coordinator_unavailable" });
+      return;
+    }
+    try {
+      sendJson(response, 200, { review: options.reviewCoordinator.get(Number(reviewItemMatch[1])) });
+    } catch (error) {
+      sendJson(response, 404, {
+        error: "review_not_found",
+        details: error instanceof Error ? error.message : "Unknown review error"
+      });
+    }
+    return;
+  }
+
+  const reviewDecisionMatch = url.pathname.match(/^\/api\/review-queue\/(\d+)\/decision$/);
+  if (request.method === "POST" && reviewDecisionMatch) {
+    if (!options.reviewCoordinator) {
+      sendJson(response, 503, { error: "review_coordinator_unavailable" });
+      return;
+    }
+    const body = await readJsonBody(request);
+    const decision = readEnum(body.decision, ["approved", "changes_requested", "rejected"]);
+    const note = readString(body.note);
+    if (!decision || !note) {
+      sendJson(response, 400, { error: "decision_and_justification_are_required" });
+      return;
+    }
+    try {
+      const result = await options.reviewCoordinator.decide(
+        Number(reviewDecisionMatch[1]),
+        decision as HumanReviewDecision,
+        note,
+        "dashboard"
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown review decision error";
+      sendJson(response, /not found/i.test(message) ? 404 : 409, {
+        error: "review_decision_failed",
+        details: message
+      });
+    }
     return;
   }
 

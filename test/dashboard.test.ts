@@ -54,6 +54,20 @@ describe("dashboard", () => {
     expect(snapshot.summary.activeGoals).toBe(0);
     expect(JSON.stringify(snapshot)).not.toContain("test-token");
     expect(JSON.stringify(snapshot)).not.toContain('"123"');
+    expect(JSON.stringify(snapshot)).not.toContain(tempDir);
+
+    const task = database.listTasks()[0];
+    const fakeSecret = `sk-proj-${"a".repeat(48)}`;
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: `maestro/${fakeSecret}`,
+      worktreePath: tempDir
+    });
+    const protectedSnapshot = JSON.stringify(buildDashboardSnapshot(config, database));
+    expect(protectedSnapshot).not.toContain(fakeSecret);
+    expect(protectedSnapshot).not.toContain(tempDir);
+    expect(protectedSnapshot).not.toContain("worktreePath");
   });
 
   it("serves the dashboard API and creates a queued task", async () => {

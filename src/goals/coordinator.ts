@@ -40,6 +40,24 @@ export class GoalCoordinator {
     return run;
   }
 
+  requestChanges(runId: number): GoalRunRecord {
+    const run = this.database.getGoalRun(runId);
+    if (this.active.has(run.taskId)) {
+      throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
+    }
+    const reopened = this.database.reopenGoalRun(runId);
+    this.database.updateTaskStatus(reopened.taskId, "changes_requested");
+    this.database.addEvent({
+      source: "human",
+      type: "goal.changes_requested",
+      text: `Goal #${runId} returned to implementation.`,
+      taskId: reopened.taskId,
+      metadata: { runId }
+    });
+    this.execute(reopened);
+    return reopened;
+  }
+
   recoverWaitingRuns(): number {
     const waiting = this.database.listGoalRuns(500).filter((run) => run.status === "waiting_provider");
     for (const run of waiting) this.scheduleRetry(run);

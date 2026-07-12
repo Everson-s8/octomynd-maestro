@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 import {
   createImprovement,
   createTask,
+  decideHumanReview,
   decideImprovement,
   DashboardData,
   DashboardEvent,
@@ -10,11 +11,13 @@ import {
   fetchTaskReviews,
   fetchDashboard,
   GoalRun,
+  HumanReviewDecision,
   ImprovementCategory,
   ImprovementProposal,
   ImprovementRisk,
   prepareTask,
   requestClaudeReview,
+  ReviewQueueItem,
   startTaskGoal,
   TaskReview,
   TaskStatus
@@ -28,6 +31,8 @@ const taskStatusLabels: Record<TaskStatus, string> = {
   reviewing: "revisando",
   changes_requested: "ajustes pedidos",
   awaiting_human: "aprovação humana",
+  ready_to_merge: "pronta para merge",
+  rejected: "rejeitada",
   waiting_quota: "aguardando cota",
   blocked: "bloqueada",
   failed: "falhou",
@@ -41,10 +46,12 @@ const statusOrder: TaskStatus[] = [
   "planning",
   "queued",
   "awaiting_human",
+  "ready_to_merge",
   "waiting_quota",
   "changes_requested",
   "blocked",
   "failed",
+  "rejected",
   "done"
 ];
 
@@ -80,7 +87,7 @@ export default function App() {
   const activeTasks = useMemo(() => {
     if (!data) return [];
     return [...data.tasks]
-      .filter((task) => !["done", "failed"].includes(task.status))
+      .filter((task) => !["done", "failed", "rejected"].includes(task.status))
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
   }, [data]);
   const selectedTask = data?.tasks.find((task) => task.id === selectedTaskId) ?? null;
@@ -107,6 +114,7 @@ export default function App() {
           <div className="dashboard-grid" id="overview">
             <HeroConsole data={data} />
             <SummaryStrip data={data} />
+            <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
             <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
             <AgentDock agents={data.agents} />
             <ProjectDeck projects={data.projects} />
@@ -141,6 +149,7 @@ function Sidebar({ activeView, onChange }: { activeView: string; onChange: (view
   const links = [
     ["overview", "Visão geral", "grid"],
     ["tasks", "Fluxo de tasks", "pulse"],
+    ["reviews", "Aguardando revisão", "hand"],
     ["projects", "Projetos", "folder"],
     ["learning", "Aprendizado", "spark"],
     ["events", "Eventos", "timeline"]
@@ -212,7 +221,7 @@ function Topbar({
 }
 
 function HeroConsole({ data }: { data: DashboardData }) {
-  const leadTask = data.tasks.find((task) => !["done", "failed"].includes(task.status));
+  const leadTask = data.tasks.find((task) => !["done", "failed", "rejected"].includes(task.status));
   return (
     <section className="hero-console panel" aria-labelledby="hero-title">
       <div className="hero-grid" aria-hidden="true" />
@@ -262,6 +271,123 @@ function SummaryStrip({ data }: { data: DashboardData }) {
           <strong>{value}</strong>
         </article>
       ))}
+    </section>
+  );
+}
+
+function HumanReviewQueue({
+  reviews,
+  onChanged
+}: {
+  reviews: ReviewQueueItem[];
+  onChanged: () => Promise<unknown>;
+}) {
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(reviews[0]?.runId ?? null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState<HumanReviewDecision | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (reviews.length === 0) setSelectedRunId(null);
+    else if (!reviews.some((item) => item.runId === selectedRunId)) setSelectedRunId(reviews[0].runId);
+  }, [reviews, selectedRunId]);
+
+  const selected = reviews.find((item) => item.runId === selectedRunId) ?? reviews[0] ?? null;
+  const hasHighAlert = selected?.securityAlerts.some((alert) => alert.severity === "high") ?? false;
+
+  async function decide(decision: HumanReviewDecision) {
+    if (!selected || note.trim().length < 4) return;
+    setBusy(decision);
+    setError(null);
+    try {
+      await decideHumanReview(selected.runId, decision, note.trim());
+      setNote("");
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A decisão não foi registrada.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="panel human-review-queue" id="reviews" aria-labelledby="reviews-title">
+      <SectionHeader eyebrow="Human gate" title="Aguardando revisão" meta={`${reviews.length} pendente(s)`} />
+      {reviews.length === 0 ? (
+        <EmptyState icon="shield" title="Nenhum PR esperando" text="Novos draft PRs revisados pelos agentes aparecem aqui." />
+      ) : (
+        <div className="review-workbench">
+          <div className="review-inbox" role="list" aria-label="Pull requests aguardando revisão">
+            {reviews.map((item) => (
+              <button
+                className={`review-inbox-item ${item.runId === selected?.runId ? "is-selected" : ""}`}
+                key={item.runId}
+                onClick={() => { setSelectedRunId(item.runId); setNote(""); setError(null); }}
+              >
+                <span>@{item.projectKey} · task #{item.taskId}</span>
+                <strong>{item.demand}</strong>
+                <small>{item.changedFiles.length} arquivo(s) · {item.agents.join(" + ") || "sem agente"}</small>
+              </button>
+            ))}
+          </div>
+          {selected ? (
+            <article className="review-evidence">
+              <header>
+                <div><span>Goal #{selected.runId}</span><h3>{selected.demand}</h3></div>
+                <span className={`review-security-state ${hasHighAlert ? "is-danger" : "is-safe"}`}>
+                  {hasHighAlert ? "alerta de segurança" : "guard passou"}
+                </span>
+              </header>
+              <p className="review-summary">{selected.summary}</p>
+              <div className="review-facts">
+                <div><span>Projeto</span><strong>@{selected.projectKey}</strong></div>
+                <div><span>Agentes</span><strong>{selected.agents.join(", ") || "nenhum"}</strong></div>
+                <div><span>Commit</span><strong>{selected.commitSha?.slice(0, 8) ?? "pendente"}</strong></div>
+                <div><span>Testes</span><strong>{selected.tests.length} etapa(s)</strong></div>
+              </div>
+              <div className="review-evidence-grid">
+                <div>
+                  <h4>Arquivos alterados</h4>
+                  <ul>{selected.changedFiles.length > 0
+                    ? selected.changedFiles.map((file) => <li key={file}><code>{file}</code></li>)
+                    : <li>Nenhum arquivo identificado.</li>}</ul>
+                </div>
+                <div>
+                  <h4>Testes executados</h4>
+                  <ul>{selected.tests.length > 0
+                    ? selected.tests.map((test, index) => <li key={`${test.provider}-${index}`}><strong>{test.status}</strong> · {test.summary}</li>)
+                    : <li>Nenhuma etapa de teste registrada.</li>}</ul>
+                </div>
+              </div>
+              <div className="review-alerts">
+                {selected.securityAlerts.map((alert, index) => (
+                  <div className={`review-alert alert-${alert.severity}`} key={`${alert.code}-${index}`}>
+                    <Icon name={alert.severity === "info" ? "shield" : "warning"} />
+                    <span><strong>{alert.message}</strong>{alert.file ? <code>{alert.file}</code> : null}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="review-links">
+                <a href={selected.diffUrl} target="_blank" rel="noreferrer">Abrir diff <Icon name="arrow" /></a>
+                <a href={selected.pullRequestUrl} target="_blank" rel="noreferrer">Abrir PR no GitHub <Icon name="arrow" /></a>
+              </div>
+              <label className="review-note">
+                Justificativa da decisão
+                <textarea value={note} onChange={(event) => setNote(event.target.value)} minLength={4} maxLength={1200} placeholder="Registre por que aprovar, ajustar ou rejeitar." />
+              </label>
+              {error ? <p className="review-decision-error">{error}</p> : null}
+              <div className="review-decision-actions">
+                <button className="decision-reject" disabled={busy !== null || note.trim().length < 4} onClick={() => void decide("rejected")}>Rejeitar</button>
+                <button className="decision-changes" disabled={busy !== null || note.trim().length < 4} onClick={() => void decide("changes_requested")}>Solicitar ajustes</button>
+                <button className="decision-approve" disabled={busy !== null || note.trim().length < 4 || hasHighAlert} onClick={() => void decide("approved")}>
+                  {busy === "approved" ? "Aprovando..." : "Aprovar para merge"}
+                </button>
+              </div>
+              <small className="review-merge-note">A aprovação marca o PR como pronto. O Maestro nunca executa o merge automaticamente.</small>
+            </article>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }
@@ -329,7 +455,7 @@ function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
               <span><strong>{project.taskCount}</strong> total</span>
               <span><strong>{project.defaultBranch}</strong> branch</span>
             </div>
-            <small className="project-path" title={project.path}>{compactPath(project.path)}</small>
+            <small className="project-path">Repositório local protegido</small>
           </article>
         ))}
       </div>
@@ -623,7 +749,7 @@ function TaskDetail({
     }
   }
 
-  const canPrepare = task.status === "queued" && !task.worktreePath;
+  const canPrepare = task.status === "queued" && !task.worktreePrepared;
 
   return (
     <div className="detail-backdrop is-open" onMouseDown={(event) => {
@@ -640,7 +766,7 @@ function TaskDetail({
           <div><dt>Origem</dt><dd>{task.source}</dd></div>
           <div><dt>Criada</dt><dd>{formatRelative(task.createdAt)}</dd></div>
           <div><dt>Branch</dt><dd>{task.branchName ?? "ainda não criada"}</dd></div>
-          <div><dt>Worktree</dt><dd>{task.worktreePath ? compactPath(task.worktreePath) : "aguardando preparo"}</dd></div>
+          <div><dt>Worktree</dt><dd>{task.worktreePrepared ? "isolada e preparada" : "aguardando preparo"}</dd></div>
         </dl>
 
         <div className="detail-flow">
@@ -652,7 +778,7 @@ function TaskDetail({
 
         {error ? <p className="detail-error">{error}</p> : null}
         <button className="detail-primary" disabled={!canPrepare || preparing} onClick={() => void handlePrepare()}>
-          <span>{preparing ? "Preparando..." : canPrepare ? "Preparar worktree" : task.worktreePath ? "Worktree preparada" : "Ação indisponível"}</span>
+          <span>{preparing ? "Preparando..." : canPrepare ? "Preparar worktree" : task.worktreePrepared ? "Worktree preparada" : "Ação indisponível"}</span>
           <Icon name={canPrepare ? "arrow" : "shield"} />
         </button>
         <p className="detail-footnote">A preparação cria branch e diretório isolados. Nenhum agente executa código nesta etapa.</p>
@@ -662,7 +788,7 @@ function TaskDetail({
           <p>O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem atualizar a task manualmente.</p>
           <button
             className="goal-action"
-            disabled={!task.worktreePath || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || ["done", "awaiting_human"].includes(task.status)}
+            disabled={!task.worktreePrepared || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || ["done", "awaiting_human", "ready_to_merge", "rejected"].includes(task.status)}
             onClick={() => void handleStartGoal()}
           >
             {startingGoal
@@ -673,7 +799,7 @@ function TaskDetail({
                   ? `Aguardando provider · ${goal.stepCount}/${goal.maxSteps}`
                 : task.status === "awaiting_human" && goal?.pullRequestUrl
                   ? "Draft PR aguardando merge"
-                  : task.worktreePath
+                : task.worktreePrepared
                     ? "Iniciar goal"
                   : "Prepare a worktree primeiro"}
             <Icon name="pulse" />
@@ -694,10 +820,10 @@ function TaskDetail({
           <div><span>Revisão externa</span><strong>Claude design review</strong></div>
           <button
             className="review-action"
-            disabled={!task.worktreePath || reviewing}
+            disabled={!task.worktreePrepared || reviewing}
             onClick={() => void handleClaudeReview()}
           >
-            {reviewing ? "Claude está analisando..." : task.worktreePath ? "Pedir revisão" : "Prepare a worktree primeiro"}
+            {reviewing ? "Claude está analisando..." : task.worktreePrepared ? "Pedir revisão" : "Prepare a worktree primeiro"}
             <Icon name="spark" />
           </button>
           {reviews.map((review) => (
@@ -767,7 +893,7 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
 }
 
 function statusProgress(status: TaskStatus): number {
-  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, waiting_quota: 36, blocked: 42, failed: 100, done: 100 }[status];
+  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, blocked: 42, failed: 100, rejected: 100, done: 100 }[status];
 }
 
 function formatRelative(value: string): string {
@@ -779,12 +905,6 @@ function formatRelative(value: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `há ${hours}h`;
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(value));
-}
-
-function compactPath(value: string): string {
-  const normalized = value.replaceAll("\\", "/");
-  const parts = normalized.split("/");
-  return parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : normalized;
 }
 
 function humanizeEvent(value: string): string {

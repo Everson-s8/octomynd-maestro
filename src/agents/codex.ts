@@ -164,6 +164,7 @@ function buildPrompt(request: AgentExecutionRequest): string {
     "",
     "Historico resumido das etapas:",
     previous,
+    ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
     "",
     "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."
   ].join("\n");

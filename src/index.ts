@@ -9,6 +9,8 @@ import { startDashboardServer } from "./dashboard/server.js";
 import { GoalCoordinator } from "./goals/coordinator.js";
 import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
 import { createTelegramGoalNotifier } from "./telegram/notifications.js";
+import { createTelegramReviewNotifier } from "./telegram/notifications.js";
+import { ReviewCoordinator } from "./reviews/coordinator.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -36,9 +38,20 @@ const goalCoordinator = new GoalCoordinator(
   deliverGoalToDraftPullRequest,
   goalNotifier
 );
+const reviewNotifier = createTelegramReviewNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const reviewCoordinator = new ReviewCoordinator(
+  database,
+  goalCoordinator,
+  undefined,
+  reviewNotifier
+);
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
-  ? await startDashboardServer({ config, database, goalCoordinator })
+  ? await startDashboardServer({ config, database, goalCoordinator, reviewCoordinator })
   : null;
 
 bot.catch((error) => {

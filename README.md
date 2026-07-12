@@ -64,6 +64,21 @@ retomado automaticamente sem perder os passos concluidos.
 Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
 draft PR. O merge continua sendo a decisao humana importante.
 
+## Fila de revisao humana
+
+Draft PRs entregues aparecem em **Aguardando revisao** com projeto, demanda, agentes,
+resumo do review, arquivos relativos, testes e o resultado do secret guard. A pessoa
+responsavel registra uma justificativa e escolhe:
+
+- **Aprovar para merge**: usa `gh pr ready`; nunca executa merge.
+- **Solicitar ajustes**: devolve o PR para draft e reabre o mesmo goal em implementacao,
+  incluindo a justificativa no contexto do agente.
+- **Rejeitar**: fecha o PR sem merge e encerra a task como rejeitada.
+
+Todas as decisoes ficam no SQLite e geram eventos e notificacoes do Telegram. Segredos,
+IDs privados e caminhos locais sao removidos do payload visual; justificativas contendo
+segredo ou caminho privado sao bloqueadas antes de persistencia ou envio.
+
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 
 ## Aprendizado seguro

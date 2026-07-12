@@ -66,6 +66,13 @@ service can still enforce the limits of the user's plan.
 - Merge is never automatic. A delivered task remains `awaiting_human` with the draft PR URL.
 - The Maestro Telegram gateway proactively notifies the restricted user when the draft PR is ready.
   Managed projects do not need to implement Telegram unless their own product explicitly requires it.
+- The dashboard review queue exposes only sanitized evidence: relative changed files, providers,
+  test-step summaries, security alerts, commit and public GitHub URLs.
+- Human review decisions require a justification and are stored in `human_reviews`.
+- `approved` marks the GitHub PR ready and moves the task to `ready_to_merge`; merge remains manual.
+- `changes_requested` returns the PR to draft and reopens the same goal at `implementing`, with the
+  sanitized human justification added to the worker context.
+- `rejected` closes the PR without merging and moves the task to `rejected`.
 
 ## Governed delivery
 

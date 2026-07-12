@@ -9,7 +9,10 @@ import {
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
 import { formatGoalNotification } from "../src/telegram/notifications.js";
-import { GoalRunRecord, TaskRecord } from "../src/db.js";
+import { createTelegramReviewNotifier } from "../src/telegram/notifications.js";
+import { createDatabase, GoalRunRecord, TaskRecord } from "../src/db.js";
+import { MaestroConfig } from "../src/config.js";
+import { ReviewQueueItem } from "../src/reviews/evidence.js";
 
 describe("telegram helpers", () => {
   it("parses task text", () => {
@@ -68,7 +71,70 @@ describe("telegram helpers", () => {
     expect(message).not.toContain("C:\\Users");
     expect(message).not.toContain("token");
   });
+
+  it("sends review decisions without exposing the private chat id", async () => {
+    const database = createDatabase(":memory:");
+    try {
+      database.registerProject({ key: "boo", path: process.cwd() });
+      const task = database.createTask("review", "dashboard", "boo");
+      const run = database.createGoalRun(task.id);
+      const decision = database.addHumanReview({
+        runId: run.id,
+        decision: "approved",
+        note: "Diff e testes revisados."
+      });
+      const sent: Array<{ chatId: string; text: string }> = [];
+      const notifier = createTelegramReviewNotifier(
+        telegramConfig(),
+        database,
+        async (chatId, text) => sent.push({ chatId, text })
+      );
+
+      await notifier!(reviewItem(task.id, run.id), decision);
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0].chatId).toBe("private-chat-id");
+      expect(sent[0].text).toContain("pronta para merge");
+      expect(sent[0].text).not.toContain("private-chat-id");
+      expect(sent[0].text).not.toContain("bot-token");
+      expect(database.getLastEvent()?.type).toBe("review.notification_sent");
+    } finally {
+      database.close();
+    }
+  });
 });
+
+function telegramConfig(): MaestroConfig {
+  return {
+    projectName: "test",
+    databasePath: ":memory:",
+    worktreesPath: "worktrees",
+    dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
+    telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
+  };
+}
+
+function reviewItem(taskId: number, runId: number): ReviewQueueItem {
+  return {
+    runId,
+    taskId,
+    projectKey: "boo",
+    projectName: "Boo",
+    demand: "review",
+    status: "approved",
+    summary: "approved",
+    agents: ["codex"],
+    changedFiles: ["src/test.ts"],
+    tests: [],
+    securityAlerts: [],
+    pullRequestUrl: "https://github.com/example/boo/pull/1",
+    diffUrl: "https://github.com/example/boo/pull/1/files",
+    commitSha: "abc123",
+    createdAt: "2026-07-12T12:00:00.000Z",
+    updatedAt: "2026-07-12T12:01:00.000Z",
+    decisions: []
+  };
+}
 
 function goalRun(): GoalRunRecord {
   return {

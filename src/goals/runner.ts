@@ -9,6 +9,7 @@ import {
 import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentProviderId } from "../agents/types.js";
 import { GoalDeliveryHandler } from "./delivery.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
 const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
@@ -85,6 +86,7 @@ export async function runTaskGoal(
         task: database.getTask(task.id),
         project,
         previousSteps: database.listGoalSteps(run.id),
+        humanFeedback: latestChangeRequest(database, run.id),
         artifactsRoot: path.resolve(options.artifactsRoot)
       });
       const countsTowardBudget = !(result.outcome === "failed" && result.retryable);
@@ -226,6 +228,11 @@ export async function runTaskGoal(
       task.id
     );
   }
+}
+
+function latestChangeRequest(database: MaestroDatabase, runId: number): string | null {
+  const review = database.getLatestHumanReview(runId);
+  return review?.decision === "changes_requested" ? redactSensitiveText(review.note) : null;
 }
 
 function pauseRun(

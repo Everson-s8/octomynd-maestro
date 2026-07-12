@@ -193,7 +193,7 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       taskId: result.task.id,
       metadata: {
         branchName: result.branchName,
-        worktreePath: result.worktreePath
+        worktreePrepared: true
       }
     });
 
@@ -202,7 +202,7 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
         `Task #${result.task.id} preparada.`,
         `Estado: ${result.task.status}`,
         `Branch: ${result.branchName}`,
-        `Worktree: ${result.worktreePath}`
+        "Worktree isolada preparada."
       ].join("\n")
     );
   });

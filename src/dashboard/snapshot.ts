@@ -1,5 +1,7 @@
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, TaskRecord } from "../db.js";
+import { listReviewQueue } from "../reviews/evidence.js";
+import { redactSensitiveText, sanitizePublicMetadata } from "../security/redaction.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -20,6 +22,7 @@ export function buildDashboardSnapshot(
   const goals = database.listGoalRuns(30);
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
+  const reviewQueue = listReviewQueue(database);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -33,7 +36,7 @@ export function buildDashboardSnapshot(
       projects: projects.length,
       activeTasks: tasks.filter(isActiveTask).length,
       queuedTasks: counts.queued ?? 0,
-      humanGates: (counts.awaiting_human ?? 0) + (improvementCounts.candidate ?? 0),
+      humanGates: reviewQueue.length + (counts.ready_to_merge ?? 0) + (improvementCounts.candidate ?? 0),
       improvementCandidates: improvementCounts.candidate ?? 0,
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
@@ -42,7 +45,6 @@ export function buildDashboardSnapshot(
       id: project.id,
       key: project.key,
       name: project.name,
-      path: project.path,
       defaultBranch: project.defaultBranch,
       taskCount: tasks.filter((task) => task.projectKey === project.key).length,
       activeTaskCount: tasks.filter(
@@ -53,11 +55,11 @@ export function buildDashboardSnapshot(
       id: task.id,
       projectKey: task.projectKey,
       projectName: task.projectName,
-      text: task.text,
+      text: redactSensitiveText(task.text),
       status: task.status,
       source: task.source,
-      branchName: task.branchName,
-      worktreePath: task.worktreePath,
+      branchName: task.branchName ? redactSensitiveText(task.branchName) : null,
+      worktreePrepared: Boolean(task.worktreePath),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt
     })),
@@ -65,13 +67,21 @@ export function buildDashboardSnapshot(
       id: event.id,
       source: event.source,
       type: event.type,
-      text: event.text,
+      text: redactSensitiveText(event.text),
       taskId: event.taskId,
       createdAt: event.createdAt,
-      metadata: event.metadata
+      metadata: sanitizePublicMetadata(event.metadata)
     })),
-    improvements,
-    goals,
+    improvements: improvements.map((item) => ({
+      ...item,
+      title: redactSensitiveText(item.title),
+      rationale: redactSensitiveText(item.rationale),
+      proposedChange: redactSensitiveText(item.proposedChange),
+      evidence: item.evidence.map(redactSensitiveText),
+      decisionNote: item.decisionNote ? redactSensitiveText(item.decisionNote) : null
+    })),
+    goals: goals.map((goal) => ({ ...goal, lastError: goal.lastError ? redactSensitiveText(goal.lastError) : null })),
+    reviewQueue,
     agents
   };
 }
@@ -100,5 +110,5 @@ function defaultAgentPresence(config: MaestroConfig): AgentPresence[] {
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return !["done", "failed", "blocked"].includes(task.status);
+  return !["done", "failed", "blocked", "rejected"].includes(task.status);
 }

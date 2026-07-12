@@ -6,6 +6,8 @@ export type TaskStatus =
   | "reviewing"
   | "changes_requested"
   | "awaiting_human"
+  | "ready_to_merge"
+  | "rejected"
   | "waiting_quota"
   | "blocked"
   | "failed"
@@ -19,7 +21,7 @@ export type DashboardTask = {
   status: TaskStatus;
   source: string;
   branchName: string | null;
-  worktreePath: string | null;
+  worktreePrepared: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -28,7 +30,6 @@ export type DashboardProject = {
   id: number;
   key: string;
   name: string;
-  path: string;
   defaultBranch: string;
   taskCount: number;
   activeTaskCount: number;
@@ -66,6 +67,7 @@ export type DashboardData = {
   events: DashboardEvent[];
   improvements: ImprovementProposal[];
   goals: GoalRun[];
+  reviewQueue: ReviewQueueItem[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";
     label: string;
@@ -116,6 +118,43 @@ export type TaskReview = {
   content: string;
   error: string | null;
   createdAt: string;
+};
+
+export type HumanReviewDecision = "approved" | "changes_requested" | "rejected";
+
+export type HumanReview = {
+  id: number;
+  runId: number;
+  taskId: number;
+  decision: HumanReviewDecision;
+  note: string;
+  source: string;
+  createdAt: string;
+};
+
+export type ReviewQueueItem = {
+  runId: number;
+  taskId: number;
+  projectKey: string;
+  projectName: string;
+  demand: string;
+  status: "pending" | HumanReviewDecision;
+  summary: string;
+  agents: string[];
+  changedFiles: string[];
+  tests: Array<{ provider: string; status: string; summary: string; durationMs: number | null }>;
+  securityAlerts: Array<{
+    severity: "info" | "warning" | "high";
+    code: string;
+    message: string;
+    file: string | null;
+  }>;
+  pullRequestUrl: string;
+  diffUrl: string;
+  commitSha: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decisions: HumanReview[];
 };
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
@@ -220,4 +259,25 @@ export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<Goal
     throw new Error(payload.details || payload.error || "Nao foi possivel iniciar a goal.");
   }
   return payload.run;
+}
+
+export async function decideHumanReview(
+  runId: number,
+  decision: HumanReviewDecision,
+  note: string
+): Promise<ReviewQueueItem> {
+  const response = await fetch(`/api/review-queue/${runId}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, note })
+  });
+  const payload = await response.json() as {
+    item?: ReviewQueueItem;
+    error?: string;
+    details?: string;
+  };
+  if (!response.ok || !payload.item) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel registrar a decisao.");
+  }
+  return payload.item;
 }

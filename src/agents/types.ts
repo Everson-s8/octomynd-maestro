@@ -19,6 +19,7 @@ export type AgentExecutionRequest = {
   task: TaskRecord;
   project: ProjectRecord;
   previousSteps: GoalStepRecord[];
+  humanFeedback?: string | null;
   artifactsRoot: string;
 };
 

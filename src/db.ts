@@ -10,6 +10,8 @@ export type TaskStatus =
   | "reviewing"
   | "changes_requested"
   | "awaiting_human"
+  | "ready_to_merge"
+  | "rejected"
   | "waiting_quota"
   | "blocked"
   | "failed"
@@ -157,6 +159,18 @@ export type GoalStepRecord = {
   finishedAt: string | null;
 };
 
+export type HumanReviewDecision = "approved" | "changes_requested" | "rejected";
+
+export type HumanReviewRecord = {
+  id: number;
+  runId: number;
+  taskId: number;
+  decision: HumanReviewDecision;
+  note: string;
+  source: string;
+  createdAt: string;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -256,6 +270,20 @@ export function createDatabase(databasePath: string) {
         duration_ms = @durationMs,
         finished_at = @now
     WHERE id = @id
+  `);
+  const addHumanReviewStatement = db.prepare(`
+    INSERT INTO human_reviews (run_id, task_id, decision, note, source, created_at)
+    VALUES (@runId, @taskId, @decision, @note, @source, @now)
+  `);
+  const reopenGoalRunStatement = db.prepare(`
+    UPDATE goal_runs
+    SET status = 'running',
+        current_phase = 'implementing',
+        max_steps = MAX(max_steps, step_count + 4),
+        last_error = NULL,
+        updated_at = @now,
+        finished_at = NULL
+    WHERE id = @id AND status = 'completed'
   `);
 
   return {
@@ -516,6 +544,15 @@ export function createDatabase(databasePath: string) {
       return this.getGoalRun(input.id);
     },
 
+    reopenGoalRun(id: number): GoalRunRecord {
+      this.getGoalRun(id);
+      const result = reopenGoalRunStatement.run({ id, now: new Date().toISOString() });
+      if (result.changes === 0) {
+        throw new Error(`Goal #${id} is not completed and cannot be reopened.`);
+      }
+      return this.getGoalRun(id);
+    },
+
     createGoalStep(runId: number, phase: GoalPhase, provider: string): GoalStepRecord {
       this.getGoalRun(runId);
       const result = createGoalStepStatement.run({
@@ -558,6 +595,49 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM goal_steps WHERE run_id = ? ORDER BY id ASC")
         .all(runId) as GoalStepRow[];
       return rows.map(mapGoalStep);
+    },
+
+    addHumanReview(input: {
+      runId: number;
+      decision: HumanReviewDecision;
+      note: string;
+      source?: string;
+    }): HumanReviewRecord {
+      const run = this.getGoalRun(input.runId);
+      const note = input.note.trim();
+      if (!note) throw new Error("Human review justification is required.");
+      if (!["approved", "changes_requested", "rejected"].includes(input.decision)) {
+        throw new Error(`Unsupported human review decision: ${input.decision}`);
+      }
+      const result = addHumanReviewStatement.run({
+        runId: run.id,
+        taskId: run.taskId,
+        decision: input.decision,
+        note,
+        source: input.source?.trim() || "dashboard",
+        now: new Date().toISOString()
+      });
+      return this.getHumanReview(Number(result.lastInsertRowid));
+    },
+
+    getHumanReview(id: number): HumanReviewRecord {
+      const row = db.prepare("SELECT * FROM human_reviews WHERE id = ?").get(id) as HumanReviewRow | undefined;
+      if (!row) throw new Error(`Human review not found: ${id}`);
+      return mapHumanReview(row);
+    },
+
+    listHumanReviews(runId?: number, limit = 50): HumanReviewRecord[] {
+      const rows = runId === undefined
+        ? db.prepare("SELECT * FROM human_reviews ORDER BY id DESC LIMIT ?").all(limit)
+        : db.prepare("SELECT * FROM human_reviews WHERE run_id = ? ORDER BY id DESC LIMIT ?").all(runId, limit);
+      return (rows as HumanReviewRow[]).map(mapHumanReview);
+    },
+
+    getLatestHumanReview(runId: number): HumanReviewRecord | null {
+      const row = db
+        .prepare("SELECT * FROM human_reviews WHERE run_id = ? ORDER BY id DESC LIMIT 1")
+        .get(runId) as HumanReviewRow | undefined;
+      return row ? mapHumanReview(row) : null;
     }
   };
 }
@@ -656,6 +736,18 @@ function migrate(db: Database.Database) {
       finished_at TEXT,
       FOREIGN KEY (run_id) REFERENCES goal_runs(id)
     );
+
+    CREATE TABLE IF NOT EXISTS human_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      decision TEXT NOT NULL,
+      note TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -753,6 +845,16 @@ type GoalStepRow = {
   duration_ms: number | null;
   created_at: string;
   finished_at: string | null;
+};
+
+type HumanReviewRow = {
+  id: number;
+  run_id: number;
+  task_id: number;
+  decision: HumanReviewDecision;
+  note: string;
+  source: string;
+  created_at: string;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -906,6 +1008,18 @@ function mapGoalStep(row: GoalStepRow): GoalStepRecord {
     durationMs: row.duration_ms,
     createdAt: row.created_at,
     finishedAt: row.finished_at
+  };
+}
+
+function mapHumanReview(row: HumanReviewRow): HumanReviewRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    taskId: row.task_id,
+    decision: row.decision,
+    note: row.note,
+    source: row.source,
+    createdAt: row.created_at
   };
 }
 

@@ -102,4 +102,24 @@ describe("database", () => {
       "no longer awaiting a decision"
     );
   });
+
+  it("stores human review decisions and reopens completed goals", () => {
+    const task = database.createTask("review me");
+    const run = database.createGoalRun(task.id, 4);
+    database.updateGoalRun({ id: run.id, status: "completed", currentPhase: "reviewing", stepCount: 4 });
+
+    const review = database.addHumanReview({
+      runId: run.id,
+      decision: "changes_requested",
+      note: "Add an integration test."
+    });
+    const reopened = database.reopenGoalRun(run.id);
+
+    expect(review.taskId).toBe(task.id);
+    expect(database.getLatestHumanReview(run.id)).toEqual(review);
+    expect(reopened.status).toBe("running");
+    expect(reopened.currentPhase).toBe("implementing");
+    expect(reopened.maxSteps).toBe(8);
+    expect(reopened.finishedAt).toBeNull();
+  });
 });
