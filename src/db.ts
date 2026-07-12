@@ -218,6 +218,13 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM events ORDER BY id DESC LIMIT 1")
         .get() as EventRow | undefined;
       return row ? mapEvent(row) : null;
+    },
+
+    listEvents(limit = 40): EventRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?")
+        .all(limit) as EventRow[];
+      return rows.map(mapEvent);
     }
   };
 }

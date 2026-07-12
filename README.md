@@ -1,6 +1,7 @@
 # Octomynd Maestro
 
-Chat-first local orchestrator for Codex, Claude and GitHub workflows.
+Chat-first local orchestrator for Codex, Claude and GitHub workflows, com uma
+central visual local para acompanhar projetos, fila, agentes e eventos.
 
 This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
 
@@ -30,8 +31,28 @@ TELEGRAM_ALLOWED_USER_ID=optional-your-telegram-user-id
 ```powershell
 npm run smoke
 npm run dev
+npm run dev:platform
 npm test
 ```
+
+## Plataforma visual
+
+O dashboard usa dados reais do SQLite e permanece restrito ao computador local.
+
+```powershell
+npm run dev:platform
+```
+
+- UI: `http://127.0.0.1:4788`
+- API local: `http://127.0.0.1:4787`
+- Build: `npm run build:ui`
+- Typecheck: `npm run typecheck:ui`
+
+A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
+além de criar tasks locais como `queued`. Ela não executa uma task automaticamente:
+o gate humano continua explícito.
+
+A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 
 ## Telegram Commands
 
@@ -63,3 +84,5 @@ The local SQLite database is stored at `.maestro/maestro.db` by default. The fol
 - The bot does not print the Telegram token.
 - Local database and logs are ignored.
 - If `TELEGRAM_ALLOWED_USER_ID` is set, other users are blocked.
+- O dashboard valida o host e aceita apenas `127.0.0.1` ou `localhost`.
+- Tokens e IDs privados do Telegram não entram no payload da interface.

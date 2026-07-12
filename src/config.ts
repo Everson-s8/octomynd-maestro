@@ -5,6 +5,11 @@ export type MaestroConfig = {
   projectName: string;
   databasePath: string;
   worktreesPath: string;
+  dashboard: {
+    enabled: boolean;
+    host: string;
+    port: number;
+  };
   telegram: {
     botToken: string;
     allowedUserId: string | null;
@@ -19,6 +24,11 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     projectName: env.MAESTRO_PROJECT_NAME?.trim() || "octomynd-maestro",
     databasePath: path.resolve(cwd, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
     worktreesPath: path.resolve(cwd, env.MAESTRO_WORKTREES_PATH?.trim() || ".maestro/worktrees"),
+    dashboard: {
+      enabled: normalizeBoolean(env.MAESTRO_DASHBOARD_ENABLED, true),
+      host: env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1",
+      port: normalizePort(env.MAESTRO_DASHBOARD_PORT, 4787)
+    },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",
       allowedUserId: normalizeOptional(env.TELEGRAM_ALLOWED_USER_ID)
@@ -37,10 +47,26 @@ export function validateRuntimeConfig(config: MaestroConfig): string[] {
     errors.push("TELEGRAM_ALLOWED_USER_ID must contain only digits.");
   }
 
+  if (config.dashboard.host !== "127.0.0.1" && config.dashboard.host !== "localhost") {
+    errors.push("MAESTRO_DASHBOARD_HOST must stay local: use 127.0.0.1 or localhost.");
+  }
+
   return errors;
 }
 
 function normalizeOptional(value: string | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function normalizeBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (!value?.trim()) {
+    return fallback;
+  }
+  return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
+}
+
+function normalizePort(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
 }

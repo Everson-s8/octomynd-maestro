@@ -8,6 +8,11 @@ describe("config", () => {
     expect(config.projectName).toBe("octomynd-maestro");
     expect(config.telegram.botToken).toBe("");
     expect(config.telegram.allowedUserId).toBeNull();
+    expect(config.dashboard).toEqual({
+      enabled: true,
+      host: "127.0.0.1",
+      port: 4787
+    });
   });
 
   it("validates missing token", () => {
@@ -23,5 +28,16 @@ describe("config", () => {
     });
 
     expect(validateRuntimeConfig(config)).toContain("TELEGRAM_ALLOWED_USER_ID must contain only digits.");
+  });
+
+  it("keeps the dashboard bound to the local machine", () => {
+    const config = loadConfig(process.cwd(), {
+      TELEGRAM_BOT_TOKEN: "configured",
+      MAESTRO_DASHBOARD_HOST: "0.0.0.0"
+    });
+
+    expect(validateRuntimeConfig(config)).toContain(
+      "MAESTRO_DASHBOARD_HOST must stay local: use 127.0.0.1 or localhost."
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { loadConfig, validateRuntimeConfig } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createTelegramBot } from "./telegram/bot.js";
+import { startDashboardServer } from "./dashboard/server.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -14,6 +15,9 @@ if (errors.length > 0) {
 
 const database = createDatabase(config.databasePath);
 const bot = createTelegramBot(config, database);
+const dashboardServer = config.dashboard.enabled
+  ? await startDashboardServer({ config, database })
+  : null;
 
 bot.catch((error) => {
   console.error("Telegram bot error:", error.error instanceof Error ? error.error.message : "unknown error");
@@ -25,6 +29,9 @@ process.once("SIGTERM", shutdown);
 console.log(`Starting Maestro for ${config.projectName}.`);
 console.log("Telegram token loaded: yes.");
 console.log(config.telegram.allowedUserId ? "Telegram access: restricted." : "Telegram access: unrestricted.");
+if (dashboardServer) {
+  console.log(`Dashboard: http://${config.dashboard.host}:${config.dashboard.port}`);
+}
 
 void bot.start({
   onStart: (botInfo) => {
@@ -35,5 +42,9 @@ void bot.start({
 function shutdown() {
   console.log("Stopping Maestro.");
   bot.stop();
-  database.close();
+  if (dashboardServer) {
+    dashboardServer.close(() => database.close());
+  } else {
+    database.close();
+  }
 }

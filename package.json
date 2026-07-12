@@ -9,6 +9,11 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:api": "tsx watch src/dashboard/server-entry.ts",
+    "dev:ui": "vite --config ui/vite.config.ts",
+    "dev:platform": "concurrently -k -n api,ui -c magenta,cyan \"npm:dev:api\" \"npm:dev:ui\"",
+    "build:ui": "vite build --config ui/vite.config.ts",
+    "typecheck:ui": "tsc --noEmit -p ui/tsconfig.json",
     "smoke": "tsx src/smoke.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -16,13 +21,20 @@
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
-    "grammy": "^1.35.0"
+    "grammy": "^1.35.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.14",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "concurrently": "^9.2.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
+    "vite": "^6.2.7",
     "vitest": "^3.0.8"
   }
 }

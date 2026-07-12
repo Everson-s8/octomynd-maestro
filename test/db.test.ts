@@ -59,5 +59,6 @@ describe("database", () => {
     expect(event.id).toBeGreaterThan(0);
     expect(event.taskId).toBe(task.id);
     expect(database.getLastEvent()?.type).toBe("task.created");
+    expect(database.listEvents()).toHaveLength(1);
   });
 });
