@@ -3,7 +3,12 @@ import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
-import { MaestroDatabase } from "../db.js";
+import {
+  ImprovementCategory,
+  ImprovementRisk,
+  ImprovementStatus,
+  MaestroDatabase
+} from "../db.js";
 import { createProjectTask, prepareTask } from "../orchestrator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 
@@ -55,6 +60,87 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
     sendJson(response, 200, buildDashboardSnapshot(options.config, options.database));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/improvements") {
+    sendJson(response, 200, { improvements: options.database.listImprovementProposals() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/improvements") {
+    const body = await readJsonBody(request);
+    const category = readEnum(body.category, ["skill", "memory", "routing", "policy", "integration"]);
+    const risk = readEnum(body.risk, ["low", "medium", "high"]);
+    const title = readString(body.title);
+    const rationale = readString(body.rationale);
+    const proposedChange = readString(body.proposedChange);
+    const evidence = Array.isArray(body.evidence)
+      ? body.evidence.filter((item): item is string => typeof item === "string")
+      : [];
+
+    if (!category || !risk || !title || !rationale || !proposedChange || evidence.length === 0) {
+      sendJson(response, 400, { error: "invalid_improvement_proposal" });
+      return;
+    }
+
+    try {
+      const improvement = options.database.createImprovementProposal({
+        category: category as ImprovementCategory,
+        title,
+        rationale,
+        proposedChange,
+        evidence,
+        risk: risk as ImprovementRisk,
+        source: "dashboard"
+      });
+      options.database.addEvent({
+        source: "maestro",
+        type: "improvement.proposed",
+        text: improvement.title,
+        metadata: { improvementId: improvement.id, risk: improvement.risk, category: improvement.category }
+      });
+      sendJson(response, 201, { improvement });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: "invalid_improvement_proposal",
+        details: error instanceof Error ? error.message : "Unknown validation error"
+      });
+    }
+    return;
+  }
+
+  const improvementDecisionMatch = url.pathname.match(/^\/api\/improvements\/(\d+)\/decision$/);
+  if (request.method === "POST" && improvementDecisionMatch) {
+    const improvementId = Number(improvementDecisionMatch[1]);
+    const body = await readJsonBody(request);
+    const status = readEnum(body.status, ["approved", "rejected"]);
+    const decisionNote = readString(body.decisionNote) || null;
+    if (!status) {
+      sendJson(response, 400, { error: "approved_or_rejected_status_required" });
+      return;
+    }
+
+    try {
+      const improvement = options.database.decideImprovementProposal(
+        improvementId,
+        status as Exclude<ImprovementStatus, "candidate">,
+        decisionNote
+      );
+      options.database.addEvent({
+        source: "human",
+        type: `improvement.${improvement.status}`,
+        text: improvement.title,
+        metadata: { improvementId: improvement.id, decisionNote: improvement.decisionNote }
+      });
+      sendJson(response, 200, { improvement });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown decision error";
+      sendJson(response, message.includes("not found") ? 404 : 409, {
+        error: "improvement_decision_failed",
+        details: message
+      });
+    }
     return;
   }
 
@@ -191,6 +277,14 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
     return {};
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readEnum(value: unknown, options: readonly string[]): string | null {
+  return typeof value === "string" && options.includes(value) ? value : null;
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {

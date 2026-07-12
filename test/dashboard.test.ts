@@ -47,6 +47,7 @@ describe("dashboard", () => {
     expect(snapshot.summary.projects).toBe(1);
     expect(snapshot.summary.queuedTasks).toBe(1);
     expect(snapshot.projects[0].key).toBe("boo");
+    expect(snapshot.summary.improvementCandidates).toBe(0);
     expect(JSON.stringify(snapshot)).not.toContain("test-token");
     expect(JSON.stringify(snapshot)).not.toContain('"123"');
   });
@@ -106,6 +107,36 @@ describe("dashboard", () => {
       const reviewsPayload = await reviewsResponse.json() as { reviews: Array<{ provider: string }> };
       expect(reviewsPayload.reviews[0].provider).toBe("claude");
       expect(database.getLastEvent()?.type).toBe("task.reviewed");
+
+      const improvementResponse = await fetch(`http://127.0.0.1:${port}/api/improvements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: "integration",
+          title: "Harden Telegram delivery retries",
+          rationale: "Two task traces show the same transient failure.",
+          proposedChange: "Add a bounded retry policy with an auditable failure event.",
+          evidence: ["task:3", "event:12"],
+          risk: "medium"
+        })
+      });
+      expect(improvementResponse.status).toBe(201);
+      const improvementPayload = await improvementResponse.json() as {
+        improvement: { id: number; status: string };
+      };
+      expect(improvementPayload.improvement.status).toBe("candidate");
+
+      const decisionResponse = await fetch(
+        `http://127.0.0.1:${port}/api/improvements/${improvementPayload.improvement.id}/decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "approved", decisionNote: "Implement with tests." })
+        }
+      );
+      expect(decisionResponse.status).toBe(200);
+      expect(database.getImprovementProposal(improvementPayload.improvement.id).status).toBe("approved");
+      expect(database.getLastEvent()?.type).toBe("improvement.approved");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

@@ -75,4 +75,31 @@ describe("database", () => {
     expect(review.status).toBe("completed");
     expect(database.listTaskReviews(task.id)).toEqual([review]);
   });
+
+  it("keeps improvement proposals pending until a human decision", () => {
+    const proposal = database.createImprovementProposal({
+      category: "skill",
+      title: "Reuse Telegram retry procedure",
+      rationale: "The same recovery sequence succeeded in two integration tasks.",
+      proposedChange: "Create a reusable Telegram delivery troubleshooting skill.",
+      evidence: ["task:3", "review:7"],
+      risk: "medium",
+      source: "background-review"
+    });
+
+    expect(proposal.status).toBe("candidate");
+    expect(proposal.evidence).toEqual(["task:3", "review:7"]);
+    expect(database.countImprovementProposalsByStatus()).toEqual({ candidate: 1 });
+
+    const approved = database.decideImprovementProposal(
+      proposal.id,
+      "approved",
+      "Implement in an isolated worktree."
+    );
+    expect(approved.status).toBe("approved");
+    expect(approved.decisionNote).toContain("isolated worktree");
+    expect(() => database.decideImprovementProposal(proposal.id, "rejected")).toThrow(
+      "no longer awaiting a decision"
+    );
+  });
 });

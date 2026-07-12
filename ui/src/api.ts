@@ -57,17 +57,38 @@ export type DashboardData = {
     activeTasks: number;
     queuedTasks: number;
     humanGates: number;
+    improvementCandidates: number;
     completedTasks: number;
   };
   projects: DashboardProject[];
   tasks: DashboardTask[];
   events: DashboardEvent[];
+  improvements: ImprovementProposal[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";
     label: string;
     state: "ready" | "attention" | "offline";
     detail: string;
   }>;
+};
+
+export type ImprovementCategory = "skill" | "memory" | "routing" | "policy" | "integration";
+export type ImprovementRisk = "low" | "medium" | "high";
+export type ImprovementStatus = "candidate" | "approved" | "rejected";
+
+export type ImprovementProposal = {
+  id: number;
+  category: ImprovementCategory;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  evidence: string[];
+  risk: ImprovementRisk;
+  source: string;
+  status: ImprovementStatus;
+  decisionNote: string | null;
+  createdAt: string;
+  decidedAt: string | null;
 };
 
 export type TaskReview = {
@@ -132,4 +153,41 @@ export async function requestClaudeReview(taskId: number): Promise<TaskReview> {
     throw new Error("Claude não retornou uma revisão válida.");
   }
   return payload.review;
+}
+
+export async function createImprovement(input: {
+  category: ImprovementCategory;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  evidence: string[];
+  risk: ImprovementRisk;
+}): Promise<ImprovementProposal> {
+  const response = await fetch("/api/improvements", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as { improvement?: ImprovementProposal; error?: string; details?: string };
+  if (!response.ok || !payload.improvement) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel registrar a proposta.");
+  }
+  return payload.improvement;
+}
+
+export async function decideImprovement(
+  improvementId: number,
+  status: Extract<ImprovementStatus, "approved" | "rejected">,
+  decisionNote = ""
+): Promise<ImprovementProposal> {
+  const response = await fetch(`/api/improvements/${improvementId}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, decisionNote })
+  });
+  const payload = await response.json() as { improvement?: ImprovementProposal; error?: string; details?: string };
+  if (!response.ok || !payload.improvement) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel decidir a proposta.");
+  }
+  return payload.improvement;
 }

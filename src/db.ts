@@ -95,6 +95,35 @@ export type TaskReviewInput = {
   error?: string | null;
 };
 
+export type ImprovementCategory = "skill" | "memory" | "routing" | "policy" | "integration";
+export type ImprovementRisk = "low" | "medium" | "high";
+export type ImprovementStatus = "candidate" | "approved" | "rejected";
+
+export type ImprovementProposalRecord = {
+  id: number;
+  category: ImprovementCategory;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  evidence: string[];
+  risk: ImprovementRisk;
+  source: string;
+  status: ImprovementStatus;
+  decisionNote: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export type ImprovementProposalInput = {
+  category: ImprovementCategory;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  evidence: string[];
+  risk: ImprovementRisk;
+  source?: string;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -133,6 +162,23 @@ export function createDatabase(databasePath: string) {
   const addTaskReviewStatement = db.prepare(`
     INSERT INTO task_reviews (task_id, provider, status, content, error, created_at)
     VALUES (@taskId, @provider, @status, @content, @error, @now)
+  `);
+  const addImprovementProposalStatement = db.prepare(`
+    INSERT INTO improvement_proposals (
+      category, title, rationale, proposed_change, evidence_json, risk, source,
+      status, decision_note, created_at, decided_at
+    )
+    VALUES (
+      @category, @title, @rationale, @proposedChange, @evidenceJson, @risk, @source,
+      'candidate', NULL, @now, NULL
+    )
+  `);
+  const decideImprovementProposalStatement = db.prepare(`
+    UPDATE improvement_proposals
+    SET status = @status,
+        decision_note = @decisionNote,
+        decided_at = @now
+    WHERE id = @id AND status = 'candidate'
   `);
 
   return {
@@ -276,6 +322,58 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM task_reviews WHERE task_id = ? ORDER BY id DESC LIMIT ?")
         .all(taskId, limit) as TaskReviewRow[];
       return rows.map(mapTaskReview);
+    },
+
+    createImprovementProposal(input: ImprovementProposalInput): ImprovementProposalRecord {
+      const proposal = normalizeImprovementProposal(input);
+      const result = addImprovementProposalStatement.run({
+        ...proposal,
+        evidenceJson: JSON.stringify(proposal.evidence),
+        now: new Date().toISOString()
+      });
+      return this.getImprovementProposal(Number(result.lastInsertRowid));
+    },
+
+    getImprovementProposal(id: number): ImprovementProposalRecord {
+      const row = db
+        .prepare("SELECT * FROM improvement_proposals WHERE id = ?")
+        .get(id) as ImprovementProposalRow | undefined;
+      if (!row) {
+        throw new Error(`Improvement proposal not found: ${id}`);
+      }
+      return mapImprovementProposal(row);
+    },
+
+    listImprovementProposals(limit = 40): ImprovementProposalRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM improvement_proposals ORDER BY id DESC LIMIT ?")
+        .all(limit) as ImprovementProposalRow[];
+      return rows.map(mapImprovementProposal);
+    },
+
+    countImprovementProposalsByStatus(): Record<string, number> {
+      const rows = db
+        .prepare("SELECT status, COUNT(*) as count FROM improvement_proposals GROUP BY status")
+        .all() as Array<{ status: string; count: number }>;
+      return Object.fromEntries(rows.map((row) => [row.status, row.count]));
+    },
+
+    decideImprovementProposal(
+      id: number,
+      status: Exclude<ImprovementStatus, "candidate">,
+      decisionNote?: string | null
+    ): ImprovementProposalRecord {
+      this.getImprovementProposal(id);
+      const result = decideImprovementProposalStatement.run({
+        id,
+        status,
+        decisionNote: decisionNote?.trim() || null,
+        now: new Date().toISOString()
+      });
+      if (result.changes === 0) {
+        throw new Error(`Improvement proposal ${id} is no longer awaiting a decision.`);
+      }
+      return this.getImprovementProposal(id);
     }
   };
 }
@@ -327,6 +425,21 @@ function migrate(db: Database.Database) {
       error TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS improvement_proposals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      title TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      proposed_change TEXT NOT NULL,
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      risk TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'candidate',
+      decision_note TEXT,
+      created_at TEXT NOT NULL,
+      decided_at TEXT
     );
   `);
 
@@ -381,6 +494,21 @@ type TaskReviewRow = {
   created_at: string;
 };
 
+type ImprovementProposalRow = {
+  id: number;
+  category: ImprovementCategory;
+  title: string;
+  rationale: string;
+  proposed_change: string;
+  evidence_json: string;
+  risk: ImprovementRisk;
+  source: string;
+  status: ImprovementStatus;
+  decision_note: string | null;
+  created_at: string;
+  decided_at: string | null;
+};
+
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
@@ -399,6 +527,35 @@ function normalizeProjectInput(input: ProjectInput) {
     name: input.name?.trim() || key,
     path: path.resolve(input.path.trim()),
     defaultBranch: input.defaultBranch?.trim() || "main"
+  };
+}
+
+function normalizeImprovementProposal(input: ImprovementProposalInput): ImprovementProposalInput & { source: string } {
+  const category = input.category;
+  const risk = input.risk;
+  if (!["skill", "memory", "routing", "policy", "integration"].includes(category)) {
+    throw new Error(`Unsupported improvement category: ${category}`);
+  }
+  if (!["low", "medium", "high"].includes(risk)) {
+    throw new Error(`Unsupported improvement risk: ${risk}`);
+  }
+
+  const title = input.title.trim();
+  const rationale = input.rationale.trim();
+  const proposedChange = input.proposedChange.trim();
+  const evidence = input.evidence.map((item) => item.trim()).filter(Boolean);
+  if (title.length < 4 || rationale.length < 8 || proposedChange.length < 8 || evidence.length === 0) {
+    throw new Error("Improvement proposals require a title, rationale, proposed change and evidence.");
+  }
+
+  return {
+    category,
+    title,
+    rationale,
+    proposedChange,
+    evidence,
+    risk,
+    source: input.source?.trim() || "dashboard"
   };
 }
 
@@ -453,6 +610,23 @@ function mapTaskReview(row: TaskReviewRow): TaskReviewRecord {
     content: row.content,
     error: row.error,
     createdAt: row.created_at
+  };
+}
+
+function mapImprovementProposal(row: ImprovementProposalRow): ImprovementProposalRecord {
+  return {
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    rationale: row.rationale,
+    proposedChange: row.proposed_change,
+    evidence: JSON.parse(row.evidence_json || "[]") as string[],
+    risk: row.risk,
+    source: row.source,
+    status: row.status,
+    decisionNote: row.decision_note,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at
   };
 }
 

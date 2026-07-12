@@ -56,6 +56,20 @@ Ela não executa uma task automaticamente: o gate humano continua explícito.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 
+## Aprendizado seguro
+
+O painel inclui um laboratorio de propostas de melhoria inspirado no ciclo de
+aprendizado do Hermes Agent. Cada candidata registra categoria, justificativa,
+mudanca proposta, evidencias, risco e origem. O usuario pode aprovar ou rejeitar,
+mas **aprovar nao aplica a mudanca automaticamente**: apenas autoriza uma futura
+task isolada com testes e revisao.
+
+A governanca esta separada da persona:
+
+- `docs/MAESTRO_CONSTITUTION.md`: principios protegidos que agentes nao podem editar;
+- `docs/HERMES_APPLIED_STUDY.md`: conclusoes do estudo e elementos priorizados;
+- uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar seguranca.
+
 ## Telegram Commands
 
 - `/start` shows the bot introduction.

@@ -16,7 +16,9 @@ export function buildDashboardSnapshot(
   const projects = database.listProjects();
   const tasks = database.listTasks(80);
   const events = database.listEvents(40);
+  const improvements = database.listImprovementProposals(40);
   const counts = database.countTasksByStatus();
+  const improvementCounts = database.countImprovementProposalsByStatus();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -30,7 +32,8 @@ export function buildDashboardSnapshot(
       projects: projects.length,
       activeTasks: tasks.filter(isActiveTask).length,
       queuedTasks: counts.queued ?? 0,
-      humanGates: counts.awaiting_human ?? 0,
+      humanGates: (counts.awaiting_human ?? 0) + (improvementCounts.candidate ?? 0),
+      improvementCandidates: improvementCounts.candidate ?? 0,
       completedTasks: counts.done ?? 0
     },
     projects: projects.map((project) => ({
@@ -65,6 +68,7 @@ export function buildDashboardSnapshot(
       createdAt: event.createdAt,
       metadata: event.metadata
     })),
+    improvements,
     agents
   };
 }
