@@ -14,6 +14,7 @@ import { createTelegramGoalProgressNotifier, createTelegramReviewSyncNotifier } 
 import { ReviewCoordinator } from "./reviews/coordinator.js";
 import { BacklogAutopilot } from "./backlog/autopilot.js";
 import { FeatureCoordinator } from "./features/coordinator.js";
+import { FeatureAssemblyCoordinator } from "./features/assembly.js";
 import { createTelegramFeatureNotifier } from "./telegram/notifications.js";
 
 const config = loadConfig();
@@ -84,12 +85,14 @@ const featureCoordinator = new FeatureCoordinator(
   undefined,
   featureNotifier
 );
+const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(database, config.worktreesPath);
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath
 });
 reviewCoordinator.start();
 featureCoordinator.start();
+featureAssemblyCoordinator.start();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({
@@ -134,6 +137,7 @@ function shutdown() {
   backlogAutopilot.shutdown();
   reviewCoordinator.shutdown();
   featureCoordinator.shutdown();
+  featureAssemblyCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
     dashboardServer.close(() => database.close());
