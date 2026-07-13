@@ -40,6 +40,7 @@ export type FeatureStatus =
 export type DashboardFeature = {
   id: number;
   projectKey: string;
+  featurePlanId: number | null;
   name: string;
   objective: string;
   status: FeatureStatus;

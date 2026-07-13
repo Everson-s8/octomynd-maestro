@@ -120,6 +120,7 @@ export function buildDashboardSnapshot(
     features: features.map((feature) => ({
       id: feature.id,
       projectKey: feature.projectKey,
+      featurePlanId: feature.featurePlanId,
       name: redactSensitiveText(feature.name),
       objective: truncateForDisplay(redactSensitiveText(feature.objective), EVENT_TEXT_MAX_LENGTH),
       status: feature.status,
