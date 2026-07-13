@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GoalRunRecord, ProjectRecord, TaskRecord } from "../src/db.js";
 import { createGoalDeliveryHandler, scanGoalChangesForSecrets } from "../src/goals/delivery.js";
+import { formatSecretScanFinding, scanWorktreePathsForSecrets } from "../src/security/secrets.js";
 
 let tempDir: string;
 
@@ -18,7 +19,10 @@ afterEach(() => {
 
 describe("goal delivery guard", () => {
   it("allows ordinary source files", () => {
-    fs.writeFileSync(path.join(tempDir, "feature.ts"), "export const ready = true;\n");
+    fs.writeFileSync(
+      path.join(tempDir, "feature.ts"),
+      'export const branch = "maestro/task-10-melhorar-a-telemetria-operacional";\n'
+    );
     expect(scanGoalChangesForSecrets(tempDir, ["feature.ts"])).toEqual([]);
   });
 
@@ -30,6 +34,10 @@ describe("goal delivery guard", () => {
     );
 
     expect(scanGoalChangesForSecrets(tempDir, [".env.local", "bad.txt"])).toEqual([
+      ".env.local: sensitive filename",
+      "bad.txt: secret-shaped content"
+    ]);
+    expect(scanWorktreePathsForSecrets(tempDir, [".env.local", "bad.txt"]).map(formatSecretScanFinding)).toEqual([
       ".env.local: sensitive filename",
       "bad.txt: secret-shaped content"
     ]);

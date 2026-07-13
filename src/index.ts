@@ -12,6 +12,9 @@ import { createTelegramGoalNotifier } from "./telegram/notifications.js";
 import { createTelegramReviewNotifier } from "./telegram/notifications.js";
 import { createTelegramGoalProgressNotifier, createTelegramReviewSyncNotifier } from "./telegram/notifications.js";
 import { ReviewCoordinator } from "./reviews/coordinator.js";
+import { BacklogAutopilot } from "./backlog/autopilot.js";
+import { FeatureCoordinator } from "./features/coordinator.js";
+import { createTelegramFeatureNotifier } from "./telegram/notifications.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -25,7 +28,12 @@ if (errors.length > 0) {
 
 const database = createDatabase(config.databasePath);
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
-const bot = createTelegramBot(config, database);
+let goalCoordinator!: GoalCoordinator;
+let backlogAutopilot!: BacklogAutopilot;
+const bot = createTelegramBot(config, database, {
+  cancelTask: (taskId) => goalCoordinator.cancel(taskId),
+  autopilotStatus: () => backlogAutopilot?.snapshot() ?? null
+});
 const goalNotifier = createTelegramGoalNotifier(
   config,
   database,
@@ -36,7 +44,7 @@ const goalProgressNotifier = createTelegramGoalProgressNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
-const goalCoordinator = new GoalCoordinator(
+goalCoordinator = new GoalCoordinator(
   database,
   agentRegistry,
   path.join(path.dirname(config.databasePath), "runs"),
@@ -55,6 +63,11 @@ const reviewSyncNotifier = createTelegramReviewSyncNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const featureNotifier = createTelegramFeatureNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
@@ -62,11 +75,31 @@ const reviewCoordinator = new ReviewCoordinator(
   reviewNotifier,
   reviewSyncNotifier
 );
+const featureCoordinator = new FeatureCoordinator(
+  database,
+  agentRegistry,
+  path.join(path.dirname(config.databasePath), "feature-runs"),
+  undefined,
+  featureNotifier
+);
+backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
+  ...config.autopilot,
+  worktreesRoot: config.worktreesPath
+});
 void reviewCoordinator.reconcile(true);
+featureCoordinator.start();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
-  ? await startDashboardServer({ config, database, goalCoordinator, reviewCoordinator })
+  ? await startDashboardServer({
+    config,
+    database,
+    goalCoordinator,
+    reviewCoordinator,
+    featureCoordinator,
+    backlogAutopilot
+  })
   : null;
+backlogAutopilot.start();
 
 bot.catch((error) => {
   console.error("Telegram bot error:", error.error instanceof Error ? error.error.message : "unknown error");
@@ -84,6 +117,7 @@ if (dashboardServer) {
 if (recoveredGoals > 0) {
   console.log(`Goals waiting for providers: ${recoveredGoals}. Automatic retry scheduled.`);
 }
+console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
 
 void bot.start({
   onStart: (botInfo) => {
@@ -94,6 +128,8 @@ void bot.start({
 function shutdown() {
   console.log("Stopping Maestro.");
   bot.stop();
+  backlogAutopilot.shutdown();
+  featureCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
     dashboardServer.close(() => database.close());

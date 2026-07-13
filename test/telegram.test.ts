@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   formatQueue,
+  formatStatus,
+  executeCancelCommand,
   isUserAllowed,
   parseProjectAddText,
   parseQueueProjectKey,
@@ -68,6 +70,40 @@ describe("telegram helpers", () => {
     expect(formatQueue([])).toBe("Fila vazia.");
   });
 
+  it("executes the Telegram cancel command through the runtime handler", () => {
+    const calls: number[] = [];
+    const message = executeCancelCommand("/cancel 42", (taskId) => {
+      calls.push(taskId);
+      return { ...taskRecord(), id: taskId, status: "cancelled" };
+    });
+
+    expect(calls).toEqual([42]);
+    expect(message).toBe("Task #42 cancelada. Estado: cancelled.");
+    expect(executeCancelCommand("/cancel nope", () => taskRecord())).toBe("Use: /cancel 2");
+  });
+
+  it("includes governed autopilot capacity in status", () => {
+    const database = createDatabase(":memory:");
+    try {
+      const status = formatStatus("maestro", database, null, {
+        enabled: true,
+        state: "idle",
+        maxConcurrentGoals: 1,
+        pollIntervalMs: 30_000,
+        runningGoals: 0,
+        waitingProviderGoals: 2,
+        queuedTasks: 3,
+        lastAction: "queue_empty",
+        lastTickAt: null
+      });
+
+      expect(status).toContain("Autopilot: idle");
+      expect(status).toContain("waiting_provider: 2");
+    } finally {
+      database.close();
+    }
+  });
+
   it("formats a review notification without local paths or credentials", () => {
     const message = formatGoalNotification(goalRun(), taskRecord());
 
@@ -76,6 +112,21 @@ describe("telegram helpers", () => {
     expect(message).toContain("https://github.com/example/boo/pull/1");
     expect(message).not.toContain("C:\\Users");
     expect(message).not.toContain("token");
+  });
+
+  it("redacts secrets and local paths from the failure reason it sends", () => {
+    const fakeSecret = `sk-ant-${"a".repeat(24)}`;
+    const failedRun: GoalRunRecord = {
+      ...goalRun(),
+      status: "failed",
+      lastError: `Codex (implementing): erro desconhecido. Key ${fakeSecret} at C:\\Users\\evers\\worktree`
+    };
+
+    const message = formatGoalNotification(failedRun, taskRecord());
+
+    expect(message).toContain("requer atencao");
+    expect(message).not.toContain(fakeSecret);
+    expect(message).not.toContain("C:\\Users\\evers");
   });
 
   it("sends review decisions without exposing the private chat id", async () => {
@@ -139,6 +190,7 @@ function telegramConfig(): MaestroConfig {
     databasePath: ":memory:",
     worktreesPath: "worktrees",
     dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
+    autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
   };
 }
@@ -155,6 +207,11 @@ function reviewItem(taskId: number, runId: number): ReviewQueueItem {
     agents: ["codex"],
     changedFiles: ["src/test.ts"],
     tests: [],
+    changeSafetyGate: {
+      status: "passed",
+      code: "secret_scan_passed",
+      message: "Verificacao de segredos concluida sem alertas."
+    },
     securityAlerts: [],
     pullRequestUrl: "https://github.com/example/boo/pull/1",
     diffUrl: "https://github.com/example/boo/pull/1/files",

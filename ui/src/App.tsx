@@ -244,6 +244,7 @@ function HeroConsole({ data }: { data: DashboardData }) {
           <span>{data.summary.activeTasks} tasks ativas</span>
           <span>{data.summary.projects} projetos locais</span>
           <span>acesso {data.daemon.access === "restricted" ? "restrito" : "aberto"}</span>
+          <span>autopilot {data.autopilot.enabled ? data.autopilot.state : "desligado"}</span>
         </div>
       </div>
       <div className="hero-visual">
@@ -257,7 +258,11 @@ function HeroConsole({ data }: { data: DashboardData }) {
       <div className="hero-now">
         <span>Agora no Maestro</span>
         <strong>{leadTask ? `#${leadTask.id} · ${leadTask.text}` : "Fila livre para a próxima missão"}</strong>
-        <small>{leadTask ? `${leadTask.projectKey ?? "sem projeto"} · ${taskStatusLabels[leadTask.status]}` : "Crie uma task pelo painel ou Telegram"}</small>
+        <small>{leadTask
+          ? `${leadTask.projectKey ?? "sem projeto"} · ${taskStatusLabels[leadTask.status]}`
+          : data.autopilot.enabled
+            ? "Autopilot aguardando a próxima task válida"
+            : "Crie uma task pelo painel ou Telegram"}</small>
       </div>
     </section>
   );
@@ -301,7 +306,12 @@ function HumanReviewQueue({
   }, [reviews, selectedRunId]);
 
   const selected = reviews.find((item) => item.runId === selectedRunId) ?? reviews[0] ?? null;
-  const hasHighAlert = selected?.securityAlerts.some((alert) => alert.severity === "high") ?? false;
+  const changeSafetyGate = selected?.changeSafetyGate ?? {
+    status: "passed" as const,
+    code: "secret_scan_passed",
+    message: "Verificacao de segredos concluida sem alertas."
+  };
+  const isChangeSafetyPassed = changeSafetyGate.status === "passed";
 
   async function decide(decision: HumanReviewDecision) {
     if (!selected || note.trim().length < 4) return;
@@ -342,8 +352,8 @@ function HumanReviewQueue({
             <article className="review-evidence">
               <header>
                 <div><span>Goal #{selected.runId}</span><h3>{selected.demand}</h3></div>
-                <span className={`review-security-state ${hasHighAlert ? "is-danger" : "is-safe"}`}>
-                  {hasHighAlert ? "alerta de segurança" : "guard passou"}
+                <span className={`review-security-state ${changeSafetyGateClass(changeSafetyGate.status)}`}>
+                  {changeSafetyGateLabel(changeSafetyGate.status)}
                 </span>
               </header>
               <p className="review-summary">{selected.summary}</p>
@@ -387,7 +397,12 @@ function HumanReviewQueue({
               <div className="review-decision-actions">
                 <button className="decision-reject" disabled={busy !== null || note.trim().length < 4} onClick={() => void decide("rejected")}>Rejeitar</button>
                 <button className="decision-changes" disabled={busy !== null || note.trim().length < 4} onClick={() => void decide("changes_requested")}>Solicitar ajustes</button>
-                <button className="decision-approve" disabled={busy !== null || note.trim().length < 4 || hasHighAlert} onClick={() => void decide("approved")}>
+                <button
+                  className="decision-approve"
+                  disabled={busy !== null || note.trim().length < 4 || !isChangeSafetyPassed}
+                  title={!isChangeSafetyPassed ? changeSafetyGate.message : undefined}
+                  onClick={() => void decide("approved")}
+                >
                   {busy === "approved" ? "Aprovando..." : "Aprovar para merge"}
                 </button>
               </div>
@@ -900,6 +915,22 @@ function TaskDetail({
 
 function SectionHeader({ eyebrow, title, meta }: { eyebrow: string; title: string; meta?: string }) {
   return <header className="section-header"><div><span>{eyebrow}</span><h2>{title}</h2></div>{meta ? <small>{meta}</small> : null}</header>;
+}
+
+function changeSafetyGateClass(status: ReviewQueueItem["changeSafetyGate"]["status"]): string {
+  return {
+    passed: "is-safe",
+    blocked: "is-danger",
+    unavailable: "is-warning"
+  }[status];
+}
+
+function changeSafetyGateLabel(status: ReviewQueueItem["changeSafetyGate"]["status"]): string {
+  return {
+    passed: "guard passou",
+    blocked: "alerta de segurança",
+    unavailable: "verificação indisponível"
+  }[status];
 }
 
 function StatusPill({ status }: { status: TaskStatus }) {

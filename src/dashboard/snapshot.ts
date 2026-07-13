@@ -1,7 +1,8 @@
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, TaskRecord } from "../db.js";
 import { listReviewQueue } from "../reviews/evidence.js";
-import { redactSensitiveText, sanitizePublicMetadata } from "../security/redaction.js";
+import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
+import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -13,10 +14,13 @@ export type AgentPresence = {
   phase?: string;
 };
 
+const EVENT_TEXT_MAX_LENGTH = 500;
+
 export function buildDashboardSnapshot(
   config: MaestroConfig,
   database: MaestroDatabase,
-  agents?: AgentPresence[]
+  agents?: AgentPresence[],
+  autopilot?: BacklogAutopilotSnapshot
 ) {
   const projects = database.listProjects();
   const tasks = database.listTasks(80);
@@ -26,6 +30,7 @@ export function buildDashboardSnapshot(
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
   const reviewQueue = listReviewQueue(database);
+  const features = database.listFeatures(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -34,6 +39,17 @@ export function buildDashboardSnapshot(
       state: "online" as const,
       access: config.telegram.allowedUserId ? "restricted" : "unrestricted",
       dashboardHost: config.dashboard.host
+    },
+    autopilot: autopilot ?? {
+      enabled: config.autopilot.enabled,
+      state: config.autopilot.enabled ? "idle" as const : "disabled" as const,
+      maxConcurrentGoals: config.autopilot.maxConcurrentGoals,
+      pollIntervalMs: config.autopilot.pollIntervalMs,
+      runningGoals: goals.filter((goal) => goal.status === "running").length,
+      waitingProviderGoals: goals.filter((goal) => goal.status === "waiting_provider").length,
+      queuedTasks: counts.queued ?? 0,
+      lastAction: "snapshot_only",
+      lastTickAt: null
     },
     summary: {
       projects: projects.length,
@@ -79,7 +95,7 @@ export function buildDashboardSnapshot(
       id: event.id,
       source: event.source,
       type: event.type,
-      text: redactSensitiveText(event.text),
+      text: truncateForDisplay(redactSensitiveText(event.text), EVENT_TEXT_MAX_LENGTH),
       taskId: event.taskId,
       createdAt: event.createdAt,
       metadata: sanitizePublicMetadata(event.metadata)
@@ -92,7 +108,32 @@ export function buildDashboardSnapshot(
       evidence: item.evidence.map(redactSensitiveText),
       decisionNote: item.decisionNote ? redactSensitiveText(item.decisionNote) : null
     })),
-    goals: goals.map((goal) => ({ ...goal, lastError: goal.lastError ? redactSensitiveText(goal.lastError) : null })),
+    goals: goals.map((goal) => ({
+      ...goal,
+      lastError: goal.lastError
+        ? truncateForDisplay(redactSensitiveText(goal.lastError), EVENT_TEXT_MAX_LENGTH)
+        : null
+    })),
+    features: features.map((feature) => ({
+      id: feature.id,
+      projectKey: feature.projectKey,
+      name: redactSensitiveText(feature.name),
+      objective: truncateForDisplay(redactSensitiveText(feature.objective), EVENT_TEXT_MAX_LENGTH),
+      status: feature.status,
+      branchName: redactSensitiveText(feature.branchName),
+      pullRequestUrl: feature.pullRequestUrl,
+      reviewerProvider: feature.reviewerProvider,
+      reviewSummary: feature.reviewSummary
+        ? truncateForDisplay(redactSensitiveText(feature.reviewSummary), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      lastError: feature.lastError
+        ? truncateForDisplay(redactSensitiveText(feature.lastError), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      itemCount: database.listFeatureItems(feature.id).length,
+      mergedAt: feature.mergedAt,
+      createdAt: feature.createdAt,
+      updatedAt: feature.updatedAt
+    })),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)
   };

@@ -172,6 +172,58 @@ export type HumanReviewRecord = {
   createdAt: string;
 };
 
+export type FeatureStatus =
+  | "draft"
+  | "waiting_checks"
+  | "reviewing"
+  | "waiting_provider"
+  | "changes_requested"
+  | "merging"
+  | "completed"
+  | "failed";
+
+export type FeatureRecord = {
+  id: number;
+  projectId: number;
+  projectKey: string;
+  projectName: string;
+  name: string;
+  objective: string;
+  status: FeatureStatus;
+  branchName: string;
+  worktreePath: string;
+  pullRequestUrl: string;
+  reviewerProvider: string | null;
+  reviewSummary: string | null;
+  reviewedHeadSha: string | null;
+  lastError: string | null;
+  mergedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeatureItemStatus = "included" | "completed" | "cleanup_pending";
+
+export type FeatureItemRecord = {
+  id: number;
+  featureId: number;
+  taskId: number;
+  pullRequestUrl: string;
+  branchName: string;
+  status: FeatureItemStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeatureInput = {
+  projectKey: string;
+  name: string;
+  objective: string;
+  branchName: string;
+  worktreePath: string;
+  pullRequestUrl: string;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -287,9 +339,44 @@ export function createDatabase(databasePath: string) {
         finished_at = NULL
     WHERE id = @id AND status = 'completed'
   `);
+  const createFeatureStatement = db.prepare(`
+    INSERT INTO features (
+      project_id, name, objective, status, branch_name, worktree_path,
+      pull_request_url, reviewer_provider, review_summary, reviewed_head_sha,
+      last_error, merged_at, created_at, updated_at
+    )
+    VALUES (
+      @projectId, @name, @objective, 'draft', @branchName, @worktreePath,
+      @pullRequestUrl, NULL, NULL, NULL, NULL, NULL, @now, @now
+    )
+  `);
+  const updateFeatureStatement = db.prepare(`
+    UPDATE features
+    SET status = @status,
+        reviewer_provider = @reviewerProvider,
+        review_summary = @reviewSummary,
+        reviewed_head_sha = @reviewedHeadSha,
+        last_error = @lastError,
+        merged_at = @mergedAt,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const addFeatureItemStatement = db.prepare(`
+    INSERT INTO feature_items (
+      feature_id, task_id, pull_request_url, branch_name, status, created_at, updated_at
+    )
+    VALUES (@featureId, @taskId, @pullRequestUrl, @branchName, 'included', @now, @now)
+  `);
+  const updateFeatureItemStatusStatement = db.prepare(`
+    UPDATE feature_items SET status = @status, updated_at = @now WHERE id = @id
+  `);
 
   return {
     close: () => db.close(),
+
+    withTransaction<T>(fn: () => T): T {
+      return db.transaction(fn)();
+    },
 
     registerProject(input: ProjectInput): ProjectRecord {
       const now = new Date().toISOString();
@@ -660,6 +747,110 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM human_reviews WHERE run_id = ? ORDER BY id DESC LIMIT 1")
         .get(runId) as HumanReviewRow | undefined;
       return row ? mapHumanReview(row) : null;
+    },
+
+    createFeature(input: FeatureInput): FeatureRecord {
+      const project = this.getProjectByKey(input.projectKey);
+      const name = input.name.trim();
+      const objective = input.objective.trim();
+      const branchName = input.branchName.trim();
+      const worktreePath = path.resolve(input.worktreePath.trim());
+      const pullRequestUrl = input.pullRequestUrl.trim();
+      if (!name || !objective || !branchName || !pullRequestUrl) {
+        throw new Error("Feature requires name, objective, branch, worktree and pull request.");
+      }
+      const existing = this.findFeatureByPullRequestUrl(pullRequestUrl);
+      if (existing) return existing;
+      const now = new Date().toISOString();
+      const result = createFeatureStatement.run({
+        projectId: project.id,
+        name,
+        objective,
+        branchName,
+        worktreePath,
+        pullRequestUrl,
+        now
+      });
+      return this.getFeature(Number(result.lastInsertRowid));
+    },
+
+    getFeature(id: number): FeatureRecord {
+      const row = db.prepare(featureSelectSql("WHERE features.id = ?")).get(id) as FeatureRow | undefined;
+      if (!row) throw new Error(`Feature not found: ${id}`);
+      return mapFeature(row);
+    },
+
+    findFeatureByPullRequestUrl(pullRequestUrl: string): FeatureRecord | null {
+      const row = db
+        .prepare(featureSelectSql("WHERE features.pull_request_url = ?"))
+        .get(pullRequestUrl) as FeatureRow | undefined;
+      return row ? mapFeature(row) : null;
+    },
+
+    listFeatures(limit = 30): FeatureRecord[] {
+      const rows = db
+        .prepare(featureSelectSql("ORDER BY features.id DESC LIMIT ?"))
+        .all(limit) as FeatureRow[];
+      return rows.map(mapFeature);
+    },
+
+    updateFeature(input: {
+      id: number;
+      status: FeatureStatus;
+      reviewerProvider?: string | null;
+      reviewSummary?: string | null;
+      reviewedHeadSha?: string | null;
+      lastError?: string | null;
+      mergedAt?: string | null;
+    }): FeatureRecord {
+      const feature = this.getFeature(input.id);
+      updateFeatureStatement.run({
+        id: feature.id,
+        status: input.status,
+        reviewerProvider: input.reviewerProvider === undefined ? feature.reviewerProvider : input.reviewerProvider,
+        reviewSummary: input.reviewSummary === undefined ? feature.reviewSummary : input.reviewSummary,
+        reviewedHeadSha: input.reviewedHeadSha === undefined ? feature.reviewedHeadSha : input.reviewedHeadSha,
+        lastError: input.lastError === undefined ? feature.lastError : input.lastError,
+        mergedAt: input.mergedAt === undefined ? feature.mergedAt : input.mergedAt,
+        now: new Date().toISOString()
+      });
+      return this.getFeature(feature.id);
+    },
+
+    addFeatureItem(input: {
+      featureId: number;
+      taskId: number;
+      pullRequestUrl: string;
+      branchName: string;
+    }): FeatureItemRecord {
+      this.getFeature(input.featureId);
+      this.getTask(input.taskId);
+      const existing = db.prepare(
+        "SELECT * FROM feature_items WHERE feature_id = ? AND task_id = ?"
+      ).get(input.featureId, input.taskId) as FeatureItemRow | undefined;
+      if (existing) return mapFeatureItem(existing);
+      const now = new Date().toISOString();
+      const result = addFeatureItemStatement.run({ ...input, now });
+      return this.getFeatureItem(Number(result.lastInsertRowid));
+    },
+
+    getFeatureItem(id: number): FeatureItemRecord {
+      const row = db.prepare("SELECT * FROM feature_items WHERE id = ?").get(id) as FeatureItemRow | undefined;
+      if (!row) throw new Error(`Feature item not found: ${id}`);
+      return mapFeatureItem(row);
+    },
+
+    listFeatureItems(featureId: number): FeatureItemRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM feature_items WHERE feature_id = ? ORDER BY id ASC")
+        .all(featureId) as FeatureItemRow[];
+      return rows.map(mapFeatureItem);
+    },
+
+    updateFeatureItemStatus(id: number, status: FeatureItemStatus): FeatureItemRecord {
+      this.getFeatureItem(id);
+      updateFeatureItemStatusStatement.run({ id, status, now: new Date().toISOString() });
+      return this.getFeatureItem(id);
     }
   };
 }
@@ -770,6 +961,39 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (run_id) REFERENCES goal_runs(id),
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
+
+    CREATE TABLE IF NOT EXISTS features (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      objective TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      branch_name TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      pull_request_url TEXT NOT NULL UNIQUE,
+      reviewer_provider TEXT,
+      review_summary TEXT,
+      reviewed_head_sha TEXT,
+      last_error TEXT,
+      merged_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      pull_request_url TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'included',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(feature_id, task_id),
+      FOREIGN KEY (feature_id) REFERENCES features(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -877,6 +1101,37 @@ type HumanReviewRow = {
   note: string;
   source: string;
   created_at: string;
+};
+
+type FeatureRow = {
+  id: number;
+  project_id: number;
+  project_key: string;
+  project_name: string;
+  name: string;
+  objective: string;
+  status: FeatureStatus;
+  branch_name: string;
+  worktree_path: string;
+  pull_request_url: string;
+  reviewer_provider: string | null;
+  review_summary: string | null;
+  reviewed_head_sha: string | null;
+  last_error: string | null;
+  merged_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeatureItemRow = {
+  id: number;
+  feature_id: number;
+  task_id: number;
+  pull_request_url: string;
+  branch_name: string;
+  status: FeatureItemStatus;
+  created_at: string;
+  updated_at: string;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -1043,6 +1298,52 @@ function mapHumanReview(row: HumanReviewRow): HumanReviewRecord {
     source: row.source,
     createdAt: row.created_at
   };
+}
+
+function mapFeature(row: FeatureRow): FeatureRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name,
+    name: row.name,
+    objective: row.objective,
+    status: row.status,
+    branchName: row.branch_name,
+    worktreePath: row.worktree_path,
+    pullRequestUrl: row.pull_request_url,
+    reviewerProvider: row.reviewer_provider,
+    reviewSummary: row.review_summary,
+    reviewedHeadSha: row.reviewed_head_sha,
+    lastError: row.last_error,
+    mergedAt: row.merged_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFeatureItem(row: FeatureItemRow): FeatureItemRecord {
+  return {
+    id: row.id,
+    featureId: row.feature_id,
+    taskId: row.task_id,
+    pullRequestUrl: row.pull_request_url,
+    branchName: row.branch_name,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function featureSelectSql(suffix = ""): string {
+  return `
+    SELECT features.*,
+           projects.key AS project_key,
+           projects.name AS project_name
+    FROM features
+    JOIN projects ON projects.id = features.project_id
+    ${suffix}
+  `;
 }
 
 function taskSelectSql(suffix: string): string {

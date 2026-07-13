@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -33,6 +34,8 @@ export class CodexProvider implements AgentProvider {
   readonly capabilities = CODEX_CAPABILITIES;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+
+  constructor(private readonly executionTimeoutMs = 20 * 60_000) {}
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -67,9 +70,7 @@ export class CodexProvider implements AgentProvider {
     const outputPath = path.join(artifactDir, "result.json");
     fs.writeFileSync(schemaPath, JSON.stringify(RESULT_SCHEMA, null, 2), "utf8");
 
-    const sandbox = request.capability === "coding" || request.capability === "testing"
-      ? "workspace-write"
-      : "read-only";
+    const sandbox = codexSandboxForCapability(request.capability);
     const args = [
       cliEntry,
       "exec",
@@ -87,7 +88,15 @@ export class CodexProvider implements AgentProvider {
       "-"
     ];
 
-    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), 20 * 60_000, request.signal);
+    const processResult = await runAgentProcess({
+      command: process.execPath,
+      args,
+      cwd,
+      stdin: buildPrompt(request),
+      timeoutMs: this.executionTimeoutMs,
+      signal: request.signal,
+      env: buildRestrictedAgentEnvironment()
+    });
     if (processResult.aborted) {
       return {
         outcome: "cancelled",
@@ -100,17 +109,18 @@ export class CodexProvider implements AgentProvider {
     }
     const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
-      const quota = /usage limit|rate limit|quota|credits/i.test(combined);
-      const authentication = /401|authentication|login required|credentials/i.test(combined);
-      if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
-      if (authentication) this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
+      const category = classifyFailure(combined, processResult.timedOut);
+      const retryable = isRetryableFailureCategory(category);
+      const summary = buildFailureSummary(this.label, request.phase, category);
+      if (category === "quota") this.cacheHealth("quota", summary, 10 * 60_000);
+      if (category === "auth_required") this.cacheHealth("auth_required", summary, 10 * 60_000);
       return {
         outcome: "failed",
-        summary: quota ? "Codex sem cota disponivel." : authentication ? "Codex requer autenticacao." : "Codex falhou.",
+        summary,
         output: combined,
-        error: combined || "Codex terminou sem resposta.",
-        durationMs: Date.now() - startedAt,
-        retryable: quota || authentication
+        error: combined || summary,
+        durationMs: processResult.durationMs,
+        retryable
       };
     }
 
@@ -130,11 +140,13 @@ export class CodexProvider implements AgentProvider {
         retryable: false
       };
     } catch (error) {
+      const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
       return failure(
-        `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`,
+        buildFailureSummary(this.label, request.phase, "unknown"),
         startedAt,
         false,
-        combined
+        combined || detail,
+        detail
       );
     }
   }
@@ -147,6 +159,18 @@ export class CodexProvider implements AgentProvider {
 
 export function buildCodexGoalPrompt(request: AgentExecutionRequest): string {
   return buildPrompt(request);
+}
+
+export function codexSandboxForCapability(capability: AgentExecutionRequest["capability"]): "read-only" | "workspace-write" {
+  return capability === "coding" || capability === "testing" ? "workspace-write" : "read-only";
+}
+
+export function isCodexQuotaError(errorText: string): boolean {
+  return /usage limit|rate limit|quota|credits/i.test(errorText);
+}
+
+export function isCodexAuthenticationError(errorText: string): boolean {
+  return /401|authentication|login required|credentials/i.test(errorText);
 }
 
 function buildPrompt(request: AgentExecutionRequest): string {
@@ -192,53 +216,16 @@ function resolveCodexCliEntry(): string | null {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
-function runProcess(
-  command: string,
-  args: string[],
-  cwd: string,
-  stdin: string,
-  timeoutMs: number,
-  signal?: AbortSignal
-) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    const onAbort = () => {
-      aborted = true;
-      child.kill();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => child.kill(), timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout = appendBounded(stdout, chunk); });
-    child.stderr.on("data", (chunk: string) => { stderr = appendBounded(stderr, chunk); });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
-    });
-    child.on("close", (exitCode) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode, stdout, stderr, aborted });
-    });
-    child.stdin.end(stdin);
-    if (signal?.aborted) onAbort();
-  });
-}
-
-function appendBounded(current: string, chunk: string): string {
-  const next = current + chunk;
-  return next.length <= 2_000_000 ? next : next.slice(-2_000_000);
-}
-
-function failure(error: string, startedAt: number, retryable: boolean, output = ""): AgentExecutionResult {
+function failure(
+  summary: string,
+  startedAt: number,
+  retryable: boolean,
+  output = "",
+  error = summary
+): AgentExecutionResult {
   return {
     outcome: "failed",
-    summary: error,
+    summary,
     output,
     error,
     durationMs: Date.now() - startedAt,

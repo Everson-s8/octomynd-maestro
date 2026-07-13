@@ -3,6 +3,7 @@ import { GoalRunRecord, MaestroDatabase, TaskRecord } from "../db.js";
 import type { ReviewDecisionNotifier, ReviewSyncNotifier } from "../reviews/coordinator.js";
 import type { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import type { FeatureCompletion, FeatureNotificationHandler } from "../features/coordinator.js";
 
 export type GoalNotificationHandler = (run: GoalRunRecord) => Promise<void>;
 export type GoalProgressNotificationHandler = (run: GoalRunRecord, providerId: AgentProviderId) => Promise<void>;
@@ -95,7 +96,7 @@ export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord): st
     `Task #${task.id} requer atencao.`,
     `Projeto: ${project}`,
     `Goal #${run.id}: ${run.status}`,
-    run.lastError ? `Motivo: ${truncate(run.lastError, 240)}` : "Consulte o dashboard para detalhes."
+    run.lastError ? `Motivo: ${truncate(redactSensitiveText(run.lastError), 240)}` : "Consulte o dashboard para detalhes."
   ].join("\n");
 }
 
@@ -160,6 +161,48 @@ export function createTelegramReviewSyncNotifier(
       metadata: { runId: item.runId, state }
     });
   };
+}
+
+export function createTelegramFeatureNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): FeatureNotificationHandler | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (completion) => {
+    await sendMessage(chatId, formatFeatureCompletionNotification(completion));
+    database.addEvent({
+      source: "telegram",
+      type: "feature.notification_sent",
+      text: `Feature #${completion.feature.id} completion notification sent.`,
+      metadata: {
+        featureId: completion.feature.id,
+        taskCount: completion.items.length,
+        cleanupPending: completion.items.filter((item) => item.cleanup === "pending").length
+      }
+    });
+  };
+}
+
+export function formatFeatureCompletionNotification(completion: FeatureCompletion): string {
+  const feature = completion.feature;
+  const work = completion.items.map(({ item, task, cleanup }) => (
+    `- Task #${task.id} | ${item.branchName} | PR ${item.pullRequestUrl} | cleanup ${cleanup}`
+  ));
+  return truncate([
+    `✅ Feature concluida: ${feature.name}`,
+    `Projeto: @${feature.projectKey}`,
+    `Objetivo: ${truncate(redactSensitiveText(feature.objective), 500)}`,
+    `Feature PR mergeado: ${feature.pullRequestUrl}`,
+    `Revisor final: ${feature.reviewerProvider ?? "registrado pelo GitHub"}`,
+    "",
+    "Tasks e branches integradas:",
+    ...work,
+    "",
+    "Os Work PRs associados foram encerrados como superseded. O Maestro esta livre para a proxima Feature."
+  ].join("\n"), 4_000);
 }
 
 function truncate(text: string, maxLength: number): string {

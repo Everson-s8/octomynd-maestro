@@ -13,6 +13,7 @@ import {
 import { createDatabase, GoalRunRecord, MaestroDatabase } from "../src/db.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
+import { ManualScheduler } from "../src/goals/scheduler.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -162,14 +163,22 @@ describe("goal runner", () => {
         return completed("available");
       }
     );
+    const scheduler = new ManualScheduler();
     const coordinator = new GoalCoordinator(
       database,
       new AgentRegistry([codex]),
       path.join(tempDir, "artifacts"),
-      20
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
     );
 
     const run = coordinator.start(task.id, 8);
+    await waitFor(() => database.getGoalRun(run.id).status === "waiting_provider");
+    expect(scheduler.pendingCount).toBe(1);
+    scheduler.flush();
     await waitFor(() => database.getGoalRun(run.id).status === "completed");
 
     expect(database.getTask(task.id).status).toBe("done");
@@ -178,6 +187,66 @@ describe("goal runner", () => {
     expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
     expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
     coordinator.shutdown();
+  });
+
+  it("resumes with an alternate provider after a retryable failure", async () => {
+    const projectDir = path.join(tempDir, "fallback-project");
+    const worktreeDir = path.join(tempDir, "fallback-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "fallback", path: projectDir });
+    const task = database.createTask("resume with Claude", "dashboard", "fallback");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "waiting_quota",
+      branchName: "task",
+      worktreePath: worktreeDir
+    });
+    const run = database.createGoalRun(task.id, 8);
+    const planning = database.createGoalStep(run.id, "planning", "codex");
+    database.finishGoalStep({ id: planning.id, status: "completed", summary: "planned", durationMs: 1 });
+    const failedCoding = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({
+      id: failedCoding.id,
+      status: "failed",
+      summary: "Codex sem cota disponivel.",
+      error: "quota",
+      durationMs: 1
+    });
+    const waitingRun = database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "implementing",
+      stepCount: 1,
+      lastError: "quota"
+    });
+    let codexCodingCalls = 0;
+    const codex = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "implementing") codexCodingCalls += 1;
+        return completed("Codex available");
+      }
+    );
+    const claude = new FakeProvider(
+      "claude",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("Claude fallback")
+    );
+
+    const resumed = await runTaskGoal(
+      database,
+      new AgentRegistry([codex, claude]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), existingRun: waitingRun }
+    );
+
+    expect(resumed.status).toBe("completed");
+    expect(codexCodingCalls).toBe(0);
+    expect(database.listGoalSteps(run.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider)).toEqual(["codex", "claude"]);
   });
 
   it("notifies once when a delivered goal is ready for review", async () => {
@@ -222,6 +291,51 @@ describe("goal runner", () => {
     coordinator.shutdown();
   });
 
+  it("stores a short, sanitized lastError instead of a giant raw provider dump", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "boo", path: projectDir });
+    const task = database.createTask("investigate telemetry leak", "dashboard", "boo");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const fakeSecret = `sk-ant-${"a".repeat(24)}`;
+    const hugeLeakyError = [
+      `Stack trace referencing C:\\Users\\evers\\Documents\\worktree\\task-9`,
+      `Leaked key: ${fakeSecret}`,
+      "y".repeat(5_000)
+    ].join("\n");
+    const codex = new FakeProvider("codex", ["planning"], () => ({
+      outcome: "failed",
+      summary: "Codex (planning): erro desconhecido.",
+      output: hugeLeakyError,
+      error: hugeLeakyError,
+      durationMs: 1,
+      retryable: false
+    }));
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([codex]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 4 }
+    );
+
+    expect(run.status).toBe("failed");
+    expect(run.lastError).toBe("Codex (planning): erro desconhecido.");
+    expect(run.lastError!.length).toBeLessThan(300);
+    expect(run.lastError).not.toContain(fakeSecret);
+    expect(run.lastError).not.toContain("C:\\Users\\evers");
+
+    const step = database.listGoalSteps(run.id).at(-1)!;
+    expect(step.error).not.toContain(fakeSecret);
+    expect(step.error).not.toContain("C:\\Users\\evers");
+    expect(step.error).toContain("[REDACTED_SECRET]");
+    expect(step.error).toContain("[REDACTED_LOCAL_PATH]");
+    expect(step.error).toContain("y".repeat(5_000));
+  });
+
   it("cancels an active provider process and preserves task history", async () => {
     const projectDir = path.join(tempDir, "cancel-project");
     const worktreeDir = path.join(tempDir, "cancel-worktree");
@@ -261,6 +375,72 @@ describe("goal runner", () => {
     expect(database.listGoalSteps(run.id).at(-1)?.status).toBe("cancelled");
     expect(database.listEvents().some((event) => event.type === "goal.cancelled")).toBe(true);
     coordinator.shutdown();
+  });
+
+  it("treats a rejected provider promise during cancellation as a cancelled step, not a stuck run", async () => {
+    const projectDir = path.join(tempDir, "reject-cancel-project");
+    const worktreeDir = path.join(tempDir, "reject-cancel-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "reject-cancel", path: projectDir });
+    const task = database.createTask("long running task", "dashboard", "reject-cancel");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Rejecting Codex",
+      capabilities: new Set(["planning"]),
+      health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
+      execute: async (request) => new Promise((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => reject(new Error("Aborted by signal")), { once: true });
+      })
+    };
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts")
+    );
+
+    const run = coordinator.start(task.id, 6);
+    await waitFor(() => database.listGoalSteps(run.id).length === 1);
+    coordinator.cancel(task.id);
+    await waitFor(() => database.getGoalRun(run.id).status === "cancelled");
+
+    expect(database.getTask(task.id).status).toBe("cancelled");
+    const steps = database.listGoalSteps(run.id);
+    expect(steps.at(-1)?.status).toBe("cancelled");
+    expect(steps.some((step) => step.status === "running")).toBe(false);
+    coordinator.shutdown();
+  });
+
+  it("closes the step and fails the run when a provider throws instead of resolving", async () => {
+    const projectDir = path.join(tempDir, "throw-project");
+    const worktreeDir = path.join(tempDir, "throw-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "throw", path: projectDir });
+    const task = database.createTask("task with a broken provider", "dashboard", "throw");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const codex = new FakeProvider("codex", ["planning"], () => {
+      throw new Error("provider crashed unexpectedly");
+    });
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([codex]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 6 }
+    );
+
+    expect(run.status).toBe("failed");
+    expect(run.lastError).toContain("provider crashed unexpectedly");
+    expect(database.getTask(task.id).status).toBe("failed");
+    const steps = database.listGoalSteps(run.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("failed");
+    expect(steps[0].error).toContain("provider crashed unexpectedly");
+    expect(database.listEvents().some((event) => event.type === "goal.step_failed")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.failed")).toBe(true);
   });
 });
 

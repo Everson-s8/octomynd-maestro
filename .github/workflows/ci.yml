@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Build, typecheck, test, and secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies (fail-closed)
+        run: npm ci
+
+      - name: Typecheck backend
+        run: npm run typecheck
+
+      - name: Typecheck UI
+        run: npm run typecheck:ui
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build UI
+        run: npm run build:ui
+
+      - name: Secret scan (no secret values are printed)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Patterns mirror src/security/redaction.ts SECRET_PATTERNS.
+          # Only filenames are reported; matched content is never echoed.
+          private_key_prefix='-----BEGIN '
+          private_key_suffix=' PRIVATE KEY-----'
+          patterns=(
+            '-E' '\bsk-(proj-)?[A-Za-z0-9_-]{20,}'
+            '-E' '\bsk-ant-[A-Za-z0-9_-]{20,}'
+            '-E' '\bgh[opsu]_[A-Za-z0-9]{20,}'
+            '-E' '\b[0-9]{8,12}:[A-Za-z0-9_-]{30,}'
+            '-F' "${private_key_prefix}RSA${private_key_suffix}"
+            '-F' "${private_key_prefix}EC${private_key_suffix}"
+            '-F' "${private_key_prefix}OPENSSH${private_key_suffix}"
+            '-F' "${private_key_prefix}PRIVATE KEY-----"
+          )
+
+          found=0
+          for i in "${!patterns[@]}"; do
+            if [ $((i % 2)) -ne 0 ]; then continue; fi
+            flag="${patterns[$i]}"
+            expr="${patterns[$((i + 1))]}"
+            matches=$(git grep -lI "$flag" -e "$expr" -- \
+              ':!node_modules' ':!dist' ':!build' ':!coverage' ':!.git' ':!package-lock.json' \
+              || true)
+            if [ -n "$matches" ]; then
+              found=1
+              echo "::error::Potential secret pattern detected in the following file(s):"
+              echo "$matches" | sed 's/^/::error:: - /'
+            fi
+          done
+
+          if [ "$found" -ne 0 ]; then
+            echo "::error::Secret scan failed. Remove the flagged content before merging."
+            exit 1
+          fi
+
+          echo "Secret scan passed: no known secret patterns found."

@@ -50,8 +50,51 @@ describe("human review queue", () => {
     expect(item.agents).toEqual(["codex", "claude"]);
     expect(item.changedFiles).toEqual(["src/feature.ts"]);
     expect(item.tests[0].summary).toContain("32 testes");
+    expect(item.changeSafetyGate.status).toBe("passed");
     expect(item.securityAlerts[0].code).toBe("secret_scan_passed");
     expect(JSON.stringify(item)).not.toContain(tempDir);
+  });
+
+  it("marks a clean diff as passed", () => {
+    git(["checkout", "main"]);
+    git(["checkout", "-b", "maestro/clean-review"]);
+    const run = reviewableGoal({
+      branchName: "maestro/clean-review",
+      commitSha: git(["rev-parse", "HEAD"]).trim()
+    });
+
+    const item = buildReviewQueueItem(database, run);
+
+    expect(item.changedFiles).toEqual([]);
+    expect(item.changeSafetyGate.status).toBe("passed");
+    expect(item.securityAlerts[0].code).toBe("secret_scan_passed");
+  });
+
+  it("fails closed when Git cannot inspect the worktree", async () => {
+    const nonRepo = path.join(tempDir, "not-a-repo");
+    fs.mkdirSync(nonRepo);
+    fs.writeFileSync(path.join(nonRepo, "feature.ts"), "export const feature = true;\n");
+    const run = reviewableGoal({
+      branchName: "maestro/non-repo-review",
+      worktreePath: nonRepo,
+      commitSha: "abc123"
+    });
+    const github = new FakeGitHubGateway();
+    const reviews = new ReviewCoordinator(database, idleGoalCoordinator(), github);
+
+    const item = buildReviewQueueItem(database, run);
+    expect(item.changedFiles).toEqual([]);
+    expect(item.changeSafetyGate.status).toBe("unavailable");
+    expect(item.securityAlerts[0]).toMatchObject({
+      severity: "warning",
+      code: "changed_files_unavailable"
+    });
+
+    await expect(reviews.decide(run.id, "approved", "Diff revisado manualmente.")).rejects.toThrow(
+      "Change Safety Gate"
+    );
+    expect(github.actions).toEqual([]);
+    expect(database.listHumanReviews(run.id)).toEqual([]);
   });
 
   it("approves a clean PR without merging it", async () => {
@@ -112,16 +155,23 @@ describe("human review queue", () => {
     goals.shutdown();
   });
 
-  it("blocks approval when a changed file triggers the secret guard", async () => {
-    fs.writeFileSync(path.join(projectDir, "credentials.json"), '{"token":"placeholder"}\n');
-    git(["add", "credentials.json"]);
-    git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Credentials"]);
+  it("blocks approval when a changed file contains secret-shaped content", async () => {
+    fs.writeFileSync(path.join(projectDir, "bad.txt"), `token=${"sk-" + "a".repeat(30)}\n`);
+    git(["add", "bad.txt"]);
+    git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Secret-shaped content"]);
     const run = reviewableGoal();
     const github = new FakeGitHubGateway();
     const reviews = new ReviewCoordinator(database, idleGoalCoordinator(), github);
 
+    const item = buildReviewQueueItem(database, run);
+    expect(item.changeSafetyGate.status).toBe("blocked");
+    expect(item.securityAlerts).toContainEqual(expect.objectContaining({
+      severity: "high",
+      code: "sensitive_change",
+      file: "bad.txt"
+    }));
     await expect(reviews.decide(run.id, "approved", "Aprovar mesmo assim.")).rejects.toThrow(
-      "security alerts"
+      "Change Safety Gate"
     );
     expect(github.actions).toEqual([]);
     expect(database.listHumanReviews(run.id)).toEqual([]);
@@ -169,6 +219,7 @@ describe("human review queue", () => {
       databasePath: path.join(tempDir, "maestro.db"),
       worktreesPath: path.join(tempDir, "worktrees"),
       dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
+      autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
       telegram: { botToken: "not-a-real-token", allowedUserId: "test-user" }
     };
     const server = createDashboardServer({ config, database, staticRoot: tempDir, goalCoordinator: goals, reviewCoordinator: reviews });
@@ -208,13 +259,17 @@ class FakeGitHubGateway implements ReviewGitHubGateway {
   async close() { this.actions.push("close"); }
 }
 
-function reviewableGoal(): GoalRunRecord {
+function reviewableGoal(options: {
+  branchName?: string;
+  worktreePath?: string;
+  commitSha?: string;
+} = {}): GoalRunRecord {
   const task = database.createTask("Criar integracao segura", "dashboard", "boo");
   database.updateTaskWorktree({
     id: task.id,
     status: "planning",
-    branchName: "maestro/review-test",
-    worktreePath: projectDir
+    branchName: options.branchName ?? "maestro/review-test",
+    worktreePath: options.worktreePath ?? projectDir
   });
   const run = database.createGoalRun(task.id, 8);
   finishStep(run.id, "planning", "codex", "Plano criado");
@@ -222,7 +277,7 @@ function reviewableGoal(): GoalRunRecord {
   finishStep(run.id, "reviewing", "claude", "Aprovado sem bloqueios");
   database.updateGoalDelivery({
     id: run.id,
-    commitSha: git(["rev-parse", "HEAD"]).trim(),
+    commitSha: options.commitSha ?? git(["rev-parse", "HEAD"]).trim(),
     pullRequestUrl: "https://github.com/example/boo/pull/1"
   });
   database.updateTaskStatus(task.id, "awaiting_human");

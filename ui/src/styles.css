@@ -216,7 +216,7 @@ a { color: inherit; text-decoration: none; }
 .review-evidence > header div { min-width: 0; }.review-evidence > header span { color: var(--violet); font-family: var(--mono); font-size: .64rem; font-weight: 800; text-transform: uppercase; }
 .review-evidence h3 { margin: 7px 0 0; font-size: 1.38rem; line-height: 1.25; letter-spacing: -.03em; }
 .review-security-state { flex: 0 0 auto; padding: 6px 9px; border-radius: 999px; }
-.review-security-state.is-safe { color: var(--success); background: rgba(67,228,155,.12); }.review-security-state.is-danger { color: #ff9ea4; background: rgba(255,92,103,.13); }
+.review-security-state.is-safe { color: var(--success); background: rgba(67,228,155,.12); }.review-security-state.is-warning { color: #ffd487; background: rgba(255,184,61,.13); }.review-security-state.is-danger { color: #ff9ea4; background: rgba(255,92,103,.13); }
 .review-summary { margin: 0; color: rgba(255,255,255,.7); font-size: .82rem; line-height: 1.6; }
 .review-facts { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
 .review-facts div { display: grid; gap: 5px; padding: 11px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 11px; }

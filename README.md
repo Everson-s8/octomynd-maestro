@@ -114,6 +114,14 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/task @<key> <text>` creates a local task for a project.
 - `/queue` lists recent tasks.
 - `/queue @<key>` lists recent tasks for a project.
+- `/cancel <id>` cancels an active, waiting, or queued task without deleting its history.
+
+The governed backlog autopilot is enabled by default. It starts at most one running goal at a time,
+keeps `waiting_provider` goals from consuming that global slot, and never starts a second task for a
+project that already has a running or waiting goal. Exact duplicates of delivered/completed work are
+marked `blocked` for human review rather than silently discarded. Configure it with
+`MAESTRO_AUTOPILOT_ENABLED`, `MAESTRO_AUTOPILOT_POLL_MS`, and
+`MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
 - Any plain text message is saved as feedback.
 
 Final goal notifications are proactive: completed goals with a draft PR send a concise review request.
@@ -138,6 +146,28 @@ Example:
 /task @octomynd melhorar resposta fora de contexto
 /queue @octomynd
 ```
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`. It is
+fail-closed: any failing step blocks the workflow, and no step ignores errors or masks
+a non-zero exit code. The workflow does not deploy and does not merge pull requests.
+
+Required checks (all must pass):
+
+1. `npm ci` — clean, reproducible dependency install.
+2. `npm run typecheck` — backend TypeScript typecheck.
+3. `npm run typecheck:ui` — UI TypeScript typecheck.
+4. `npm test` — full Vitest suite.
+5. `npm run build:ui` — production UI build.
+6. Secret scan — greps tracked files for the secret patterns used by
+   `src/security/redaction.ts` (API keys, bot tokens, private key headers) and fails the
+   run if any match. Only filenames are reported; matched secret values are never
+   printed to logs.
+
+The workflow uses `permissions: contents: read` (no write access), a `concurrency`
+group keyed on workflow and ref to cancel superseded runs, and `actions/setup-node`
+with `cache: npm` keyed on `package-lock.json` for safe, deterministic caching.
 
 ## Local Data
 

@@ -13,6 +13,11 @@ describe("config", () => {
       host: "127.0.0.1",
       port: 4787
     });
+    expect(config.autopilot).toEqual({
+      enabled: true,
+      pollIntervalMs: 30_000,
+      maxConcurrentGoals: 1
+    });
   });
 
   it("validates missing token", () => {
@@ -39,5 +44,19 @@ describe("config", () => {
     expect(validateRuntimeConfig(config)).toContain(
       "MAESTRO_DASHBOARD_HOST must stay local: use 127.0.0.1 or localhost."
     );
+  });
+
+  it("allows conservative autopilot tuning", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_AUTOPILOT_ENABLED: "false",
+      MAESTRO_AUTOPILOT_POLL_MS: "5000",
+      MAESTRO_AUTOPILOT_MAX_CONCURRENT: "2"
+    });
+
+    expect(config.autopilot).toEqual({
+      enabled: false,
+      pollIntervalMs: 5_000,
+      maxConcurrentGoals: 2
+    });
   });
 });

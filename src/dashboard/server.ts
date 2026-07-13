@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
 import {
@@ -10,10 +11,14 @@ import {
   HumanReviewDecision,
   MaestroDatabase
 } from "../db.js";
-import { createProjectTask, prepareTask } from "../orchestrator.js";
+import { ApplicationCommands } from "../commands/application-commands.js";
+import { ApplicationCommandError } from "../commands/errors.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
+import { BacklogAutopilot } from "../backlog/autopilot.js";
+import { redactSensitiveText } from "../security/redaction.js";
+import { FeatureCoordinator } from "../features/coordinator.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -22,14 +27,18 @@ export type DashboardServerOptions = {
   claudeReviewer?: ClaudeReviewer;
   goalCoordinator?: GoalCoordinator;
   reviewCoordinator?: ReviewCoordinator;
+  featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
+  backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
-  const staticRoot = options.staticRoot ?? path.resolve(process.cwd(), "ui/dist");
+  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
+  const commands = new ApplicationCommands(options.database);
 
   return http.createServer(async (request, response) => {
     try {
-      await routeRequest(request, response, options, staticRoot);
+      await routeRequest(request, response, options, staticRoot, commands);
     } catch (error) {
       console.error("Dashboard request failed:", error instanceof Error ? error.message : "unknown error");
       sendJson(response, 500, { error: "dashboard_request_failed" });
@@ -50,7 +59,8 @@ async function routeRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: DashboardServerOptions,
-  staticRoot: string
+  staticRoot: string,
+  commands: ApplicationCommands
 ) {
   const url = new URL(request.url ?? "/", "http://localhost");
 
@@ -64,8 +74,16 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    await options.reviewCoordinator?.reconcile();
-    sendJson(response, 200, buildDashboardSnapshot(options.config, options.database));
+    await Promise.all([
+      options.reviewCoordinator?.reconcile(),
+      options.featureCoordinator?.reconcile()
+    ]);
+    sendJson(response, 200, buildDashboardSnapshot(
+      options.config,
+      options.database,
+      undefined,
+      options.backlogAutopilot?.snapshot()
+    ));
     return;
   }
 
@@ -217,21 +235,12 @@ async function routeRequest(
       return;
     }
 
-    const project = options.database.findProjectByKey(projectKey);
-    if (!project) {
-      sendJson(response, 404, { error: "project_not_found" });
-      return;
+    try {
+      const task = commands.createTask({ channel: "dashboard" }, { text, projectKey });
+      sendJson(response, 201, { task });
+    } catch (error) {
+      sendCommandError(response, error, "task_create_failed");
     }
-
-    const task = createProjectTask(options.database, text, project.key);
-    options.database.addEvent({
-      source: "dashboard",
-      type: "task.created",
-      text,
-      taskId: task.id,
-      metadata: { projectKey: project.key }
-    });
-    sendJson(response, 201, { task });
     return;
   }
 
@@ -283,29 +292,12 @@ async function routeRequest(
   const prepareMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/prepare$/);
   if (request.method === "POST" && prepareMatch) {
     const taskId = Number(prepareMatch[1]);
-    const result = prepareTask(options.database, taskId, options.config.worktreesPath);
-    if (!result.ok) {
-      options.database.addEvent({
-        source: "dashboard",
-        type: "task.prepare_failed",
-        text: result.errors.join("\n"),
-        taskId
-      });
-      sendJson(response, 409, { error: "task_prepare_failed", details: result.errors });
-      return;
+    try {
+      const result = commands.prepareTask({ channel: "dashboard" }, taskId, options.config.worktreesPath);
+      sendJson(response, 200, { task: result.task });
+    } catch (error) {
+      sendCommandError(response, error, "task_prepare_failed");
     }
-
-    options.database.addEvent({
-      source: "dashboard",
-      type: "task.prepared",
-      text: result.branchName,
-      taskId,
-      metadata: {
-        branchName: result.branchName,
-        worktreePath: result.worktreePath
-      }
-    });
-    sendJson(response, 200, { task: result.task });
     return;
   }
 
@@ -348,7 +340,18 @@ async function routeRequest(
     const runId = Number(goalMatch[1]);
     try {
       const run = options.database.getGoalRun(runId);
-      sendJson(response, 200, { run, steps: options.database.listGoalSteps(run.id) });
+      sendJson(response, 200, {
+        run: {
+          ...run,
+          lastError: run.lastError ? redactSensitiveText(run.lastError) : null
+        },
+        steps: options.database.listGoalSteps(run.id).map((step) => ({
+          ...step,
+          summary: redactSensitiveText(step.summary),
+          output: redactSensitiveText(step.output),
+          error: step.error ? redactSensitiveText(step.error) : null
+        }))
+      });
     } catch {
       sendJson(response, 404, { error: "goal_run_not_found" });
     }
@@ -452,6 +455,18 @@ function serveStatic(response: ServerResponse, staticRoot: string, pathname: str
     "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable"
   });
   fs.createReadStream(filePath).pipe(response);
+}
+
+function sendCommandError(response: ServerResponse, error: unknown, errorCode: string) {
+  if (error instanceof ApplicationCommandError) {
+    const status = error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 400;
+    sendJson(response, status, { error: errorCode, details: error.details });
+    return;
+  }
+  sendJson(response, 500, {
+    error: errorCode,
+    details: [error instanceof Error ? error.message : "Unknown error"]
+  });
 }
 
 function sendJson(response: ServerResponse, status: number, payload: unknown) {

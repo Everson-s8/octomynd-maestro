@@ -31,6 +31,7 @@ beforeEach(() => {
     databasePath: path.join(tempDir, "maestro.db"),
     worktreesPath: path.join(tempDir, "worktrees"),
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
+    autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
   database = createDatabase(path.join(tempDir, "maestro.db"));
@@ -52,6 +53,7 @@ describe("dashboard", () => {
     expect(snapshot.projects[0].key).toBe("boo");
     expect(snapshot.summary.improvementCandidates).toBe(0);
     expect(snapshot.summary.activeGoals).toBe(0);
+    expect(snapshot.autopilot).toMatchObject({ enabled: true, state: "idle", queuedTasks: 1 });
     expect(JSON.stringify(snapshot)).not.toContain("test-token");
     expect(JSON.stringify(snapshot)).not.toContain('"123"');
     expect(JSON.stringify(snapshot)).not.toContain(tempDir);
@@ -88,6 +90,51 @@ describe("dashboard", () => {
     expect(snapshot.projects[0].currentWork[0].taskId).toBe(task.id);
   });
 
+  it("sanitizes but does not truncate the goal evidence endpoint", async () => {
+    const task = database.listTasks()[0];
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/evidence-test",
+      worktreePath: projectDir
+    });
+    const run = database.createGoalRun(task.id);
+    const step = database.createGoalStep(run.id, "planning", "codex");
+    const fakeSecret = `sk-ant-${"z".repeat(24)}`;
+    const fullDetail = `Path: C:\\Users\\evers\\Documents\\worktree\nKey: ${fakeSecret}\n${"n".repeat(3_000)}`;
+    database.finishGoalStep({
+      id: step.id,
+      status: "failed",
+      summary: "Codex (planning): erro desconhecido.",
+      output: fullDetail,
+      error: fullDetail,
+      durationMs: 5
+    });
+
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      goalCoordinator: new GoalCoordinator(database, new AgentRegistry([successfulGoalProvider]), path.join(tempDir, "runs"))
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/goals/${run.id}`);
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { steps: Array<{ output: string; error: string }> };
+      const [returnedStep] = payload.steps;
+
+      expect(returnedStep.output).not.toContain(fakeSecret);
+      expect(returnedStep.output).not.toContain("C:\\Users\\evers");
+      expect(returnedStep.output).toContain("n".repeat(3_000));
+      expect(returnedStep.error).not.toContain(fakeSecret);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("serves the dashboard API and creates a queued task", async () => {
     const server = createDashboardServer({
       config,
@@ -102,7 +149,8 @@ describe("dashboard", () => {
         status: "completed",
         content: "Aprovado com ajustes de contraste.",
         error: null,
-        durationMs: 42
+        durationMs: 42,
+        timedOut: false
       })
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -122,6 +170,9 @@ describe("dashboard", () => {
       expect(taskResponse.status).toBe(201);
       expect(database.listTasksByProject("boo")).toHaveLength(2);
       expect(database.getLastEvent()?.source).toBe("dashboard");
+      const taskPayload = await taskResponse.json() as { task: { id: number; source: string } };
+      expect(taskPayload.task.source).toBe("dashboard");
+      expect(database.getTask(taskPayload.task.id).source).toBe("dashboard");
 
       const disposableResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
         method: "POST",
@@ -204,6 +255,32 @@ describe("dashboard", () => {
       await waitFor(() => database.getGoalRun(goalPayload.run.id).status !== "running");
       expect(database.getGoalRun(goalPayload.run.id).status).toBe("completed");
       expect(database.getTask(createdTask.id).status).toBe("done");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("maps typed application command errors to HTTP status codes", async () => {
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const notFoundResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "does-not-exist", text: "task orfa" })
+      });
+      expect(notFoundResponse.status).toBe(404);
+
+      const task = database.listTasks()[0];
+      const prepareResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
+      expect(prepareResponse.status).toBe(200);
+
+      const conflictResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
+      expect(conflictResponse.status).toBe(409);
+      const conflictPayload = await conflictResponse.json() as { error: string; details: string[] };
+      expect(conflictPayload.details.join(" ")).toContain("already has a worktree");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
