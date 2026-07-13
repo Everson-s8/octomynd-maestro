@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { GoalRunRecord, ProjectRecord, TaskRecord } from "../db.js";
 import { GitCommandResult, runGit } from "../git.js";
+import { formatSecretScanFinding, scanWorktreePathsForSecrets } from "../security/secrets.js";
 
 export type GoalDeliveryResult = {
   commitSha: string;
@@ -21,23 +21,6 @@ export type GoalPublisher = (
   project: ProjectRecord,
   commitSha: string
 ) => Promise<string>;
-
-const SECRET_PATTERNS = [
-  /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/,
-  /sk-ant-[A-Za-z0-9_-]{20,}/,
-  /\bgh[opsu]_[A-Za-z0-9]{20,}/,
-  /\b\d{8,12}:[A-Za-z0-9_-]{30,}/,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/
-];
-
-const SENSITIVE_FILE_NAMES = new Set([
-  ".credentials.json",
-  ".env",
-  "credentials.json",
-  "id_ed25519",
-  "id_rsa",
-  "secrets.json"
-]);
 
 export const deliverGoalToDraftPullRequest = createGoalDeliveryHandler();
 
@@ -89,29 +72,7 @@ export function createGoalDeliveryHandler(
 }
 
 export function scanGoalChangesForSecrets(worktreePath: string, relativePaths: string[]): string[] {
-  const findings: string[] = [];
-  for (const relativePath of relativePaths) {
-    const normalized = relativePath.replaceAll("\\", "/");
-    const fileName = path.posix.basename(normalized).toLowerCase();
-    if (isSensitiveFileName(fileName)) {
-      findings.push(`${normalized}: sensitive filename`);
-      continue;
-    }
-    const absolutePath = path.resolve(worktreePath, relativePath);
-    const relativeToRoot = path.relative(path.resolve(worktreePath), absolutePath);
-    if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
-      findings.push(`${normalized}: outside worktree`);
-      continue;
-    }
-    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) continue;
-    const buffer = fs.readFileSync(absolutePath);
-    if (buffer.length > 2_000_000 || buffer.includes(0)) continue;
-    const content = buffer.toString("utf8");
-    if (SECRET_PATTERNS.some((pattern) => pattern.test(content))) {
-      findings.push(`${normalized}: secret-shaped content`);
-    }
-  }
-  return findings;
+  return scanWorktreePathsForSecrets(worktreePath, relativePaths).map(formatSecretScanFinding);
 }
 
 function listChangedFiles(worktreePath: string): string[] {
@@ -176,11 +137,6 @@ function requireGit(result: GitCommandResult, operation: string): GitCommandResu
 
 function splitNull(value: string): string[] {
   return value.split("\0").map((item) => item.trim()).filter(Boolean);
-}
-
-function isSensitiveFileName(fileName: string): boolean {
-  if (SENSITIVE_FILE_NAMES.has(fileName)) return true;
-  return fileName.startsWith(".env.") && fileName !== ".env.example";
 }
 
 function singleLine(value: string): string {

@@ -1,14 +1,22 @@
 import path from "node:path";
 import { MaestroDatabase, GoalRunRecord, HumanReviewRecord } from "../db.js";
 import { runGit } from "../git.js";
-import { scanGoalChangesForSecrets } from "../goals/delivery.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { scanWorktreePathsForSecrets, SecretScanFinding } from "../security/secrets.js";
 
 export type ReviewSecurityAlert = {
   severity: "info" | "warning" | "high";
   code: string;
   message: string;
   file: string | null;
+};
+
+export type ChangeSafetyGateStatus = "passed" | "blocked" | "unavailable";
+
+export type ChangeSafetyGate = {
+  status: ChangeSafetyGateStatus;
+  code: string;
+  message: string;
 };
 
 export type ReviewQueueItem = {
@@ -22,6 +30,7 @@ export type ReviewQueueItem = {
   agents: string[];
   changedFiles: string[];
   tests: Array<{ provider: string; status: string; summary: string; durationMs: number | null }>;
+  changeSafetyGate: ChangeSafetyGate;
   securityAlerts: ReviewSecurityAlert[];
   pullRequestUrl: string;
   diffUrl: string;
@@ -56,10 +65,9 @@ export function buildReviewQueueItem(
   const steps = database.listGoalSteps(run.id);
   const decisions = database.listHumanReviews(run.id);
   const latestDecision = decisions[0]?.decision ?? "pending";
-  const changedFiles = task.worktreePath
-    ? listChangedFiles(task.worktreePath, project.defaultBranch)
-    : [];
-  const securityAlerts = inspectSecurity(task.worktreePath, changedFiles);
+  const changedFilesResult = inspectChangedFiles(task.worktreePath, project.defaultBranch);
+  const changedFiles = changedFilesResult.status === "available" ? changedFilesResult.files : [];
+  const changeSafety = inspectChangeSafety(task.worktreePath, changedFilesResult);
   const reviewSummary = [...steps].reverse().find((step) => step.phase === "reviewing")?.summary;
 
   return {
@@ -80,7 +88,8 @@ export function buildReviewQueueItem(
         summary: redactSensitiveText(step.summary),
         durationMs: step.durationMs
       })),
-    securityAlerts,
+    changeSafetyGate: changeSafety.gate,
+    securityAlerts: changeSafety.alerts,
     pullRequestUrl: run.pullRequestUrl,
     diffUrl: `${run.pullRequestUrl.replace(/\/$/, "")}/files`,
     commitSha: run.commitSha,
@@ -93,34 +102,116 @@ export function buildReviewQueueItem(
   };
 }
 
-function listChangedFiles(worktreePath: string, defaultBranch: string): string[] {
+type ChangedFilesInspection =
+  | { status: "available"; files: string[] }
+  | { status: "unavailable"; code: string; message: string };
+
+function inspectChangedFiles(worktreePath: string | null, defaultBranch: string): ChangedFilesInspection {
+  if (!worktreePath) {
+    return {
+      status: "unavailable",
+      code: "worktree_unavailable",
+      message: "Worktree indisponivel para nova verificacao."
+    };
+  }
   const safeDirectory = `safe.directory=${path.resolve(worktreePath)}`;
   const candidates = [`origin/${defaultBranch}`, defaultBranch];
   for (const base of candidates) {
     const result = runGit(["-c", safeDirectory, "diff", "--name-only", "-z", `${base}...HEAD`], worktreePath);
-    if (result.ok) return splitNull(result.stdout).map(normalizeRelativePath);
+    if (result.ok) {
+      return {
+        status: "available",
+        files: splitNull(result.stdout).map(normalizeRelativePath)
+      };
+    }
   }
   const fallback = runGit(["-c", safeDirectory, "show", "--pretty=", "--name-only", "-z", "HEAD"], worktreePath);
-  return fallback.ok ? splitNull(fallback.stdout).map(normalizeRelativePath) : [];
+  if (fallback.ok) {
+    return {
+      status: "available",
+      files: splitNull(fallback.stdout).map(normalizeRelativePath)
+    };
+  }
+  return {
+    status: "unavailable",
+    code: "changed_files_unavailable",
+    message: "Nao foi possivel inspecionar o diff local para segredos."
+  };
 }
 
-function inspectSecurity(worktreePath: string | null, changedFiles: string[]): ReviewSecurityAlert[] {
-  if (!worktreePath) {
-    return [{ severity: "warning", code: "worktree_unavailable", message: "Worktree indisponivel para nova verificacao.", file: null }];
-  }
-  const findings = scanGoalChangesForSecrets(worktreePath, changedFiles);
-  if (findings.length === 0) {
-    return [{ severity: "info", code: "secret_scan_passed", message: "Verificacao de segredos concluida sem alertas.", file: null }];
-  }
-  return findings.map((finding) => {
-    const [file] = finding.split(":", 1);
-    return {
-      severity: "high" as const,
-      code: "sensitive_change",
-      message: "Arquivo alterado requer revisao de seguranca antes da aprovacao.",
-      file: normalizeRelativePath(file)
+function inspectChangeSafety(
+  worktreePath: string | null,
+  changedFilesResult: ChangedFilesInspection
+): { gate: ChangeSafetyGate; alerts: ReviewSecurityAlert[] } {
+  if (changedFilesResult.status === "unavailable") {
+    const gate = {
+      status: "unavailable" as const,
+      code: changedFilesResult.code,
+      message: changedFilesResult.message
     };
-  });
+    return {
+      gate,
+      alerts: [{
+        severity: "warning",
+        code: changedFilesResult.code,
+        message: changedFilesResult.message,
+        file: null
+      }]
+    };
+  }
+
+  if (!worktreePath) {
+    const gate = {
+      status: "unavailable" as const,
+      code: "worktree_unavailable",
+      message: "Worktree indisponivel para nova verificacao."
+    };
+    return {
+      gate,
+      alerts: [{
+        severity: "warning",
+        code: gate.code,
+        message: gate.message,
+        file: null
+      }]
+    };
+  }
+
+  const findings = scanWorktreePathsForSecrets(worktreePath, changedFilesResult.files);
+  if (findings.length === 0) {
+    const gate = {
+      status: "passed" as const,
+      code: "secret_scan_passed",
+      message: "Verificacao de segredos concluida sem alertas."
+    };
+    return {
+      gate,
+      alerts: [{
+        severity: "info",
+        code: gate.code,
+        message: gate.message,
+        file: null
+      }]
+    };
+  }
+
+  return {
+    gate: {
+      status: "blocked",
+      code: "sensitive_change",
+      message: "Arquivo alterado requer revisao de seguranca antes da aprovacao."
+    },
+    alerts: findings.map(secretFindingToAlert)
+  };
+}
+
+function secretFindingToAlert(finding: SecretScanFinding): ReviewSecurityAlert {
+  return {
+    severity: "high",
+    code: "sensitive_change",
+    message: "Arquivo alterado requer revisao de seguranca antes da aprovacao.",
+    file: normalizeRelativePath(finding.relativePath)
+  };
 }
 
 function splitNull(value: string): string[] {
