@@ -221,6 +221,80 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/feature-plans") {
+    const projectKey = url.searchParams.get("projectKey");
+    try {
+      sendJson(response, 200, { featurePlans: commands.listFeaturePlans(projectKey) });
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_list_failed");
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/feature-plans") {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: readString(body.projectKey),
+        objective: readString(body.objective),
+        acceptanceCriteria: readStringArray(body.acceptanceCriteria),
+        taskIds: readNumberArray(body.taskIds),
+        idempotencyKey: readString(body.idempotencyKey) || null
+      });
+      sendJson(response, result.applied ? 201 : 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_create_failed");
+    }
+    return;
+  }
+
+  const featurePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)$/);
+  if (request.method === "GET" && featurePlanMatch) {
+    try {
+      sendJson(response, 200, commands.getFeaturePlan(Number(featurePlanMatch[1])));
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_get_failed");
+    }
+    return;
+  }
+
+  const cancelFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.cancelFeaturePlan(
+        { channel: "dashboard" },
+        Number(cancelFeaturePlanMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_cancel_failed");
+    }
+    return;
+  }
+
+  const replanFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/replan$/);
+  if (request.method === "POST" && replanFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.replanFeaturePlan(
+        { channel: "dashboard" },
+        Number(replanFeaturePlanMatch[1]),
+        {
+          objective: readString(body.objective),
+          acceptanceCriteria: readStringArray(body.acceptanceCriteria),
+          taskIds: readNumberArray(body.taskIds),
+          idempotencyKey: readString(body.idempotencyKey) || null
+        }
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_replan_failed");
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/tasks") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
@@ -425,6 +499,18 @@ function readString(value: unknown): string {
 
 function readEnum(value: unknown, options: readonly string[]): string | null {
   return typeof value === "string" && options.includes(value) ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === "number")
+    : [];
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {

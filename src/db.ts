@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -224,6 +225,64 @@ export type FeatureInput = {
   pullRequestUrl: string;
 };
 
+export type FeaturePlanStatus = "planned" | "cancelled";
+
+export type FeaturePlanRecord = {
+  id: number;
+  projectId: number;
+  projectKey: string;
+  projectName: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: FeaturePlanStatus;
+  source: string;
+  createdByUserId: string | null;
+  createdByUsername: string | null;
+  revision: number;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanTaskRecord = {
+  id: number;
+  featurePlanId: number;
+  taskId: number;
+  taskText: string;
+  taskStatus: TaskStatus;
+  position: number;
+  createdAt: string;
+};
+
+export type FeaturePlanDetails = {
+  plan: FeaturePlanRecord;
+  tasks: FeaturePlanTaskRecord[];
+};
+
+export type FeaturePlanWriteResult = FeaturePlanDetails & {
+  applied: boolean;
+};
+
+export type FeaturePlanInput = {
+  projectKey: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  source?: string;
+  createdByUserId?: string | null;
+  createdByUsername?: string | null;
+  idempotencyKey?: string | null;
+};
+
+export type FeaturePlanReplanInput = {
+  id: number;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  idempotencyKey?: string | null;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -370,6 +429,45 @@ export function createDatabase(databasePath: string) {
   const updateFeatureItemStatusStatement = db.prepare(`
     UPDATE feature_items SET status = @status, updated_at = @now WHERE id = @id
   `);
+  const createFeaturePlanStatement = db.prepare(`
+    INSERT INTO feature_plans (
+      project_id, objective, acceptance_criteria_json, status, source,
+      created_by_user_id, created_by_username, revision,
+      cancelled_at, cancel_reason, created_at, updated_at
+    )
+    VALUES (
+      @projectId, @objective, @acceptanceCriteriaJson, 'planned', @source,
+      @createdByUserId, @createdByUsername, 1,
+      NULL, NULL, @now, @now
+    )
+  `);
+  const addFeaturePlanTaskStatement = db.prepare(`
+    INSERT INTO feature_plan_tasks (feature_plan_id, task_id, position, created_at)
+    VALUES (@featurePlanId, @taskId, @position, @now)
+  `);
+  const cancelFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET status = 'cancelled',
+        cancelled_at = @now,
+        cancel_reason = @cancelReason,
+        updated_at = @now
+    WHERE id = @id AND status = 'planned'
+  `);
+  const replanFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET objective = @objective,
+        acceptance_criteria_json = @acceptanceCriteriaJson,
+        revision = revision + 1,
+        updated_at = @now
+    WHERE id = @id AND status = 'planned'
+  `);
+  const deleteFeaturePlanTasksStatement = db.prepare("DELETE FROM feature_plan_tasks WHERE feature_plan_id = ?");
+  const addFeaturePlanOperationStatement = db.prepare(`
+    INSERT INTO feature_plan_operations (
+      feature_plan_id, operation_type, idempotency_key, request_hash, created_at
+    )
+    VALUES (@featurePlanId, @operationType, @idempotencyKey, @requestHash, @now)
+  `);
 
   return {
     close: () => db.close(),
@@ -447,6 +545,12 @@ export function createDatabase(databasePath: string) {
       const goalCount = db.prepare("SELECT COUNT(*) AS count FROM goal_runs WHERE task_id = ?").get(id) as { count: number };
       if (goalCount.count > 0) {
         throw new Error(`Task #${id} has execution history and cannot be deleted. Cancel it instead.`);
+      }
+      const featurePlanLink = db
+        .prepare("SELECT feature_plan_id FROM feature_plan_tasks WHERE task_id = ? ORDER BY feature_plan_id ASC LIMIT 1")
+        .get(id) as { feature_plan_id: number } | undefined;
+      if (featurePlanLink) {
+        throw new Error(`Task #${id} is associated with Feature Plan #${featurePlanLink.feature_plan_id} and cannot be deleted.`);
       }
       if (!["queued", "cancelled"].includes(task.status)) {
         throw new Error(`Task #${id} must be queued or cancelled before deletion.`);
@@ -851,6 +955,163 @@ export function createDatabase(databasePath: string) {
       this.getFeatureItem(id);
       updateFeatureItemStatusStatement.run({ id, status, now: new Date().toISOString() });
       return this.getFeatureItem(id);
+    },
+
+    createFeaturePlan(input: FeaturePlanInput): FeaturePlanWriteResult {
+      const normalized = normalizeFeaturePlanInput(input);
+      const project = this.getProjectByKey(normalized.projectKey);
+      validateFeaturePlanTasks(project.id, normalized.taskIds, (id) => this.getTask(id));
+      const requestHash = hashFeaturePlanOperation("create", {
+        projectId: project.id,
+        objective: normalized.objective,
+        acceptanceCriteria: normalized.acceptanceCriteria,
+        taskIds: normalized.taskIds
+      });
+      const existingOperation = normalized.idempotencyKey
+        ? findFeaturePlanOperation(db, normalized.idempotencyKey)
+        : null;
+      if (existingOperation) {
+        validateFeaturePlanOperationReuse(existingOperation, "create", requestHash);
+        return { ...this.getFeaturePlanDetails(existingOperation.feature_plan_id), applied: false };
+      }
+      validateFeaturePlanTaskAvailability(db, normalized.taskIds);
+
+      const now = new Date().toISOString();
+      const planId = db.transaction(() => {
+        const result = createFeaturePlanStatement.run({
+          projectId: project.id,
+          objective: normalized.objective,
+          acceptanceCriteriaJson: JSON.stringify(normalized.acceptanceCriteria),
+          source: normalized.source,
+          createdByUserId: normalized.createdByUserId,
+          createdByUsername: normalized.createdByUsername,
+          now
+        });
+        const featurePlanId = Number(result.lastInsertRowid);
+        insertFeaturePlanTasks(addFeaturePlanTaskStatement, featurePlanId, normalized.taskIds, now);
+        if (normalized.idempotencyKey) {
+          addFeaturePlanOperationStatement.run({
+            featurePlanId,
+            operationType: "create",
+            idempotencyKey: normalized.idempotencyKey,
+            requestHash,
+            now
+          });
+        }
+        return featurePlanId;
+      })();
+
+      return { ...this.getFeaturePlanDetails(planId), applied: true };
+    },
+
+    getFeaturePlan(id: number): FeaturePlanRecord {
+      const row = db.prepare(featurePlanSelectSql("WHERE feature_plans.id = ?")).get(id) as FeaturePlanRow | undefined;
+      if (!row) throw new Error(`Feature plan not found: ${id}`);
+      return mapFeaturePlan(row);
+    },
+
+    getFeaturePlanDetails(id: number): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      return { plan, tasks: this.listFeaturePlanTasks(plan.id) };
+    },
+
+    listFeaturePlans(limit = 30): FeaturePlanRecord[] {
+      const rows = db
+        .prepare(featurePlanSelectSql("ORDER BY feature_plans.id DESC LIMIT ?"))
+        .all(limit) as FeaturePlanRow[];
+      return rows.map(mapFeaturePlan);
+    },
+
+    listFeaturePlansByProject(projectKey: string, limit = 30): FeaturePlanRecord[] {
+      const rows = db
+        .prepare(featurePlanSelectSql("WHERE projects.key = ? ORDER BY feature_plans.id DESC LIMIT ?"))
+        .all(projectKey, limit) as FeaturePlanRow[];
+      return rows.map(mapFeaturePlan);
+    },
+
+    listFeaturePlanTasks(featurePlanId: number): FeaturePlanTaskRecord[] {
+      const rows = db
+        .prepare(featurePlanTasksSelectSql("WHERE feature_plan_tasks.feature_plan_id = ? ORDER BY feature_plan_tasks.position ASC"))
+        .all(featurePlanId) as FeaturePlanTaskRow[];
+      return rows.map(mapFeaturePlanTask);
+    },
+
+    countFeaturePlansByStatus(): Record<string, number> {
+      const rows = db
+        .prepare("SELECT status, COUNT(*) as count FROM feature_plans GROUP BY status")
+        .all() as Array<{ status: string; count: number }>;
+      return Object.fromEntries(rows.map((row) => [row.status, row.count]));
+    },
+
+    cancelFeaturePlan(id: number, reason?: string | null): FeaturePlanWriteResult {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === "cancelled") {
+        return { ...this.getFeaturePlanDetails(id), applied: false };
+      }
+      const result = cancelFeaturePlanStatement.run({
+        id,
+        cancelReason: reason?.trim() || null,
+        now: new Date().toISOString()
+      });
+      if (result.changes === 0) {
+        throw new Error(`Feature plan #${id} cannot be cancelled from status ${plan.status}.`);
+      }
+      return { ...this.getFeaturePlanDetails(id), applied: true };
+    },
+
+    replanFeaturePlan(input: FeaturePlanReplanInput): FeaturePlanWriteResult {
+      const plan = this.getFeaturePlan(input.id);
+      const normalized = normalizeFeaturePlanInput({
+        projectKey: plan.projectKey,
+        objective: input.objective,
+        acceptanceCriteria: input.acceptanceCriteria,
+        taskIds: input.taskIds,
+        idempotencyKey: input.idempotencyKey
+      });
+      const requestHash = hashFeaturePlanOperation("replan", {
+        featurePlanId: plan.id,
+        objective: normalized.objective,
+        acceptanceCriteria: normalized.acceptanceCriteria,
+        taskIds: normalized.taskIds
+      });
+      const existingOperation = normalized.idempotencyKey
+        ? findFeaturePlanOperation(db, normalized.idempotencyKey)
+        : null;
+      if (existingOperation) {
+        validateFeaturePlanOperationReuse(existingOperation, "replan", requestHash, plan.id);
+        return { ...this.getFeaturePlanDetails(existingOperation.feature_plan_id), applied: false };
+      }
+      if (plan.status !== "planned") {
+        throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
+      }
+      validateFeaturePlanTasks(plan.projectId, normalized.taskIds, (id) => this.getTask(id));
+      validateFeaturePlanTaskAvailability(db, normalized.taskIds, plan.id);
+
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        const result = replanFeaturePlanStatement.run({
+          id: plan.id,
+          objective: normalized.objective,
+          acceptanceCriteriaJson: JSON.stringify(normalized.acceptanceCriteria),
+          now
+        });
+        if (result.changes === 0) {
+          throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
+        }
+        deleteFeaturePlanTasksStatement.run(plan.id);
+        insertFeaturePlanTasks(addFeaturePlanTaskStatement, plan.id, normalized.taskIds, now);
+        if (normalized.idempotencyKey) {
+          addFeaturePlanOperationStatement.run({
+            featurePlanId: plan.id,
+            operationType: "replan",
+            idempotencyKey: normalized.idempotencyKey,
+            requestHash,
+            now
+          });
+        }
+      })();
+
+      return { ...this.getFeaturePlanDetails(plan.id), applied: true };
     }
   };
 }
@@ -994,6 +1255,49 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (feature_id) REFERENCES features(id),
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
+
+    CREATE TABLE IF NOT EXISTS feature_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      objective TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'planned',
+      source TEXT NOT NULL,
+      created_by_user_id TEXT,
+      created_by_username TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
+      cancelled_at TEXT,
+      cancel_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(feature_plan_id, task_id),
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      operation_type TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
+      ON feature_plan_tasks(task_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
+      ON feature_plan_operations(feature_plan_id);
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -1001,6 +1305,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
 }
 
 type ProjectRow = {
@@ -1134,6 +1440,43 @@ type FeatureItemRow = {
   updated_at: string;
 };
 
+type FeaturePlanRow = {
+  id: number;
+  project_id: number;
+  project_key: string;
+  project_name: string;
+  objective: string;
+  acceptance_criteria_json: string;
+  status: FeaturePlanStatus;
+  source: string;
+  created_by_user_id: string | null;
+  created_by_username: string | null;
+  revision: number;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanTaskRow = {
+  id: number;
+  feature_plan_id: number;
+  task_id: number;
+  task_text: string;
+  task_status: TaskStatus;
+  position: number;
+  created_at: string;
+};
+
+type FeaturePlanOperationRow = {
+  id: number;
+  feature_plan_id: number;
+  operation_type: "create" | "replan";
+  idempotency_key: string;
+  request_hash: string;
+  created_at: string;
+};
+
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
@@ -1182,6 +1525,137 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     risk,
     source: input.source?.trim() || "dashboard"
   };
+}
+
+function normalizeFeaturePlanInput(input: FeaturePlanInput): Required<FeaturePlanInput> {
+  const projectKey = input.projectKey.trim().toLowerCase();
+  if (!projectKey) throw new Error("Feature plan project is required.");
+
+  const objective = input.objective.trim();
+  const acceptanceCriteria = input.acceptanceCriteria
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const taskIds = uniqueTaskIds(input.taskIds);
+  const source = input.source?.trim() || "dashboard";
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
+
+  if (objective.length < 8) {
+    throw new Error("Feature plan objective must be at least 8 characters.");
+  }
+  if (acceptanceCriteria.length === 0) {
+    throw new Error("Feature plan requires at least one acceptance criterion.");
+  }
+  if (taskIds.length === 0) {
+    throw new Error("Feature plan requires at least one explicit task association.");
+  }
+  if (idempotencyKey && idempotencyKey.length > 120) {
+    throw new Error("Feature plan idempotency key must be 120 characters or fewer.");
+  }
+
+  return {
+    projectKey,
+    objective,
+    acceptanceCriteria,
+    taskIds,
+    source,
+    createdByUserId: input.createdByUserId?.trim() || null,
+    createdByUsername: input.createdByUsername?.trim() || null,
+    idempotencyKey
+  };
+}
+
+function uniqueTaskIds(taskIds: number[]): number[] {
+  const seen = new Set<number>();
+  const normalized: number[] = [];
+  for (const taskId of taskIds) {
+    if (!Number.isInteger(taskId) || taskId <= 0) {
+      throw new Error("Feature plan task ids must be positive integers.");
+    }
+    if (seen.has(taskId)) {
+      throw new Error(`Feature plan task #${taskId} was provided more than once.`);
+    }
+    seen.add(taskId);
+    normalized.push(taskId);
+  }
+  return normalized;
+}
+
+function validateFeaturePlanTasks(
+  projectId: number,
+  taskIds: number[],
+  getTask: (id: number) => TaskRecord
+): void {
+  for (const taskId of taskIds) {
+    const task = getTask(taskId);
+    if (task.projectId !== projectId) {
+      throw new Error(`Task #${taskId} does not belong to the Feature Plan project.`);
+    }
+  }
+}
+
+function validateFeaturePlanTaskAvailability(
+  db: Database.Database,
+  taskIds: number[],
+  currentFeaturePlanId?: number
+): void {
+  for (const taskId of taskIds) {
+    const row = db.prepare(`
+      SELECT feature_plans.id AS feature_plan_id
+      FROM feature_plan_tasks
+      JOIN feature_plans ON feature_plans.id = feature_plan_tasks.feature_plan_id
+      WHERE feature_plan_tasks.task_id = ?
+        AND feature_plans.status = 'planned'
+        AND feature_plans.id <> ?
+      ORDER BY feature_plans.id ASC
+      LIMIT 1
+    `).get(taskId, currentFeaturePlanId ?? -1) as { feature_plan_id: number } | undefined;
+    if (row) {
+      throw new Error(`Task #${taskId} is already associated with active Feature Plan #${row.feature_plan_id}.`);
+    }
+  }
+}
+
+function insertFeaturePlanTasks(
+  statement: Database.Statement,
+  featurePlanId: number,
+  taskIds: number[],
+  now: string
+): void {
+  taskIds.forEach((taskId, index) => {
+    statement.run({ featurePlanId, taskId, position: index + 1, now });
+  });
+}
+
+function findFeaturePlanOperation(
+  db: Database.Database,
+  idempotencyKey: string
+): FeaturePlanOperationRow | null {
+  const row = db
+    .prepare("SELECT * FROM feature_plan_operations WHERE idempotency_key = ?")
+    .get(idempotencyKey) as FeaturePlanOperationRow | undefined;
+  return row ?? null;
+}
+
+function validateFeaturePlanOperationReuse(
+  operation: FeaturePlanOperationRow,
+  operationType: "create" | "replan",
+  requestHash: string,
+  expectedFeaturePlanId?: number
+): void {
+  if (
+    operation.operation_type !== operationType
+    || operation.request_hash !== requestHash
+    || (expectedFeaturePlanId !== undefined && operation.feature_plan_id !== expectedFeaturePlanId)
+  ) {
+    throw new Error("Feature plan idempotency key was already used for a different operation.");
+  }
+}
+
+function hashFeaturePlanOperation(operationType: "create" | "replan", payload: Record<string, unknown>): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ operationType, ...payload }))
+    .digest("hex");
 }
 
 function mapProject(row: ProjectRow): ProjectRecord {
@@ -1335,6 +1809,49 @@ function mapFeatureItem(row: FeatureItemRow): FeatureItemRecord {
   };
 }
 
+function mapFeaturePlan(row: FeaturePlanRow): FeaturePlanRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name,
+    objective: row.objective,
+    acceptanceCriteria: parseStringArrayJson(row.acceptance_criteria_json),
+    status: row.status,
+    source: row.source,
+    createdByUserId: row.created_by_user_id,
+    createdByUsername: row.created_by_username,
+    revision: row.revision,
+    cancelledAt: row.cancelled_at,
+    cancelReason: row.cancel_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function parseStringArrayJson(value: string | null): string[] {
+  try {
+    const parsed = JSON.parse(value || "[]") as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapFeaturePlanTask(row: FeaturePlanTaskRow): FeaturePlanTaskRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    taskId: row.task_id,
+    taskText: row.task_text,
+    taskStatus: row.task_status,
+    position: row.position,
+    createdAt: row.created_at
+  };
+}
+
 function featureSelectSql(suffix = ""): string {
   return `
     SELECT features.*,
@@ -1342,6 +1859,28 @@ function featureSelectSql(suffix = ""): string {
            projects.name AS project_name
     FROM features
     JOIN projects ON projects.id = features.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plans.*,
+           projects.key AS project_key,
+           projects.name AS project_name
+    FROM feature_plans
+    JOIN projects ON projects.id = feature_plans.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanTasksSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_tasks.*,
+           tasks.text AS task_text,
+           tasks.status AS task_status
+    FROM feature_plan_tasks
+    JOIN tasks ON tasks.id = feature_plan_tasks.task_id
     ${suffix}
   `;
 }
