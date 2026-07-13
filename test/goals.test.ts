@@ -13,6 +13,7 @@ import {
 import { createDatabase, GoalRunRecord, MaestroDatabase } from "../src/db.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
+import { ManualScheduler } from "../src/goals/scheduler.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -162,14 +163,22 @@ describe("goal runner", () => {
         return completed("available");
       }
     );
+    const scheduler = new ManualScheduler();
     const coordinator = new GoalCoordinator(
       database,
       new AgentRegistry([codex]),
       path.join(tempDir, "artifacts"),
-      20
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
     );
 
     const run = coordinator.start(task.id, 8);
+    await waitFor(() => database.getGoalRun(run.id).status === "waiting_provider");
+    expect(scheduler.pendingCount).toBe(1);
+    scheduler.flush();
     await waitFor(() => database.getGoalRun(run.id).status === "completed");
 
     expect(database.getTask(task.id).status).toBe("done");
@@ -321,6 +330,72 @@ describe("goal runner", () => {
     expect(database.listGoalSteps(run.id).at(-1)?.status).toBe("cancelled");
     expect(database.listEvents().some((event) => event.type === "goal.cancelled")).toBe(true);
     coordinator.shutdown();
+  });
+
+  it("treats a rejected provider promise during cancellation as a cancelled step, not a stuck run", async () => {
+    const projectDir = path.join(tempDir, "reject-cancel-project");
+    const worktreeDir = path.join(tempDir, "reject-cancel-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "reject-cancel", path: projectDir });
+    const task = database.createTask("long running task", "dashboard", "reject-cancel");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Rejecting Codex",
+      capabilities: new Set(["planning"]),
+      health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
+      execute: async (request) => new Promise((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => reject(new Error("Aborted by signal")), { once: true });
+      })
+    };
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts")
+    );
+
+    const run = coordinator.start(task.id, 6);
+    await waitFor(() => database.listGoalSteps(run.id).length === 1);
+    coordinator.cancel(task.id);
+    await waitFor(() => database.getGoalRun(run.id).status === "cancelled");
+
+    expect(database.getTask(task.id).status).toBe("cancelled");
+    const steps = database.listGoalSteps(run.id);
+    expect(steps.at(-1)?.status).toBe("cancelled");
+    expect(steps.some((step) => step.status === "running")).toBe(false);
+    coordinator.shutdown();
+  });
+
+  it("closes the step and fails the run when a provider throws instead of resolving", async () => {
+    const projectDir = path.join(tempDir, "throw-project");
+    const worktreeDir = path.join(tempDir, "throw-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "throw", path: projectDir });
+    const task = database.createTask("task with a broken provider", "dashboard", "throw");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const codex = new FakeProvider("codex", ["planning"], () => {
+      throw new Error("provider crashed unexpectedly");
+    });
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([codex]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 6 }
+    );
+
+    expect(run.status).toBe("failed");
+    expect(run.lastError).toContain("provider crashed unexpectedly");
+    expect(database.getTask(task.id).status).toBe("failed");
+    const steps = database.listGoalSteps(run.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("failed");
+    expect(steps[0].error).toContain("provider crashed unexpectedly");
+    expect(database.listEvents().some((event) => event.type === "goal.step_failed")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.failed")).toBe(true);
   });
 });
 

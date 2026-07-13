@@ -7,7 +7,7 @@ import {
   TaskStatus
 } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
-import { AgentCapability, AgentProviderId } from "../agents/types.js";
+import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
@@ -58,12 +58,14 @@ export async function runTaskGoal(
       if (options.signal?.aborted) {
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
-      database.updateTaskStatus(task.id, taskStatusForPhase(phase));
-      currentRun = database.updateGoalRun({
-        id: run.id,
-        status: "running",
-        currentPhase: phase,
-        stepCount
+      currentRun = database.withTransaction(() => {
+        database.updateTaskStatus(task.id, taskStatusForPhase(phase));
+        return database.updateGoalRun({
+          id: run.id,
+          status: "running",
+          currentPhase: phase,
+          stepCount
+        });
       });
       let routed = await registry.route(CAPABILITIES[phase], excluded);
       if (!routed && excluded.size > 0) {
@@ -75,49 +77,67 @@ export async function runTaskGoal(
         return pauseRun(database, currentRun, phase, stepCount, error, task.id);
       }
 
-      const goalStep = database.createGoalStep(run.id, phase, routed.provider.id);
+      const goalStep = database.withTransaction(() => {
+        const step = database.createGoalStep(run.id, phase, routed.provider.id);
+        database.addEvent({
+          source: routed.provider.id,
+          type: "goal.step_started",
+          text: `${phase} with ${routed.provider.label}`,
+          taskId: task.id,
+          metadata: { runId: run.id, stepId: step.id, phase }
+        });
+        return step;
+      });
       options.onProgress?.(currentRun, routed.provider.id);
-      database.addEvent({
-        source: routed.provider.id,
-        type: "goal.step_started",
-        text: `${phase} with ${routed.provider.label}`,
-        taskId: task.id,
-        metadata: { runId: run.id, stepId: goalStep.id, phase }
-      });
 
-      const result = await routed.provider.execute({
-        runId: run.id,
-        stepNumber: stepCount + 1,
-        phase,
-        capability: CAPABILITIES[phase],
-        task: database.getTask(task.id),
-        project,
-        previousSteps: database.listGoalSteps(run.id),
-        humanFeedback: latestChangeRequest(database, run.id),
-        artifactsRoot: path.resolve(options.artifactsRoot),
-        signal: options.signal
-      });
+      const startedAt = Date.now();
+      let result: AgentExecutionResult;
+      try {
+        result = await routed.provider.execute({
+          runId: run.id,
+          stepNumber: stepCount + 1,
+          phase,
+          capability: CAPABILITIES[phase],
+          task: database.getTask(task.id),
+          project,
+          previousSteps: database.listGoalSteps(run.id),
+          humanFeedback: latestChangeRequest(database, run.id),
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          signal: options.signal
+        });
+      } catch (error) {
+        result = {
+          outcome: options.signal?.aborted ? "cancelled" : "failed",
+          summary: error instanceof Error ? error.message : "Unknown provider execution error.",
+          output: "",
+          error: error instanceof Error ? error.message : "Unknown provider execution error.",
+          durationMs: Date.now() - startedAt,
+          retryable: false
+        };
+      }
       const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
-      database.finishGoalStep({
-        id: goalStep.id,
-        status: result.outcome as Exclude<GoalStepStatus, "running">,
-        summary: result.summary,
-        output: result.output,
-        error: result.error,
-        durationMs: result.durationMs
-      });
-      database.addEvent({
-        source: routed.provider.id,
-        type: `goal.step_${result.outcome}`,
-        text: result.summary,
-        taskId: task.id,
-        metadata: {
-          runId: run.id,
-          stepId: goalStep.id,
-          phase,
+      database.withTransaction(() => {
+        database.finishGoalStep({
+          id: goalStep.id,
+          status: result.outcome as Exclude<GoalStepStatus, "running">,
+          summary: result.summary,
+          output: result.output,
+          error: result.error,
           durationMs: result.durationMs
-        }
+        });
+        database.addEvent({
+          source: routed.provider.id,
+          type: `goal.step_${result.outcome}`,
+          text: result.summary,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            stepId: goalStep.id,
+            phase,
+            durationMs: result.durationMs
+          }
+        });
       });
 
       if (result.outcome === "cancelled" || options.signal?.aborted) {
@@ -164,27 +184,32 @@ export async function runTaskGoal(
       if (!nextPhase) {
         let deliveredRun = currentRun;
         if (options.delivery) {
-          database.updateTaskStatus(task.id, "awaiting_human");
-          database.addEvent({
-            source: "maestro",
-            type: "goal.delivery_started",
-            text: `Delivering goal #${run.id} to a draft pull request.`,
-            taskId: task.id,
-            metadata: { runId: run.id }
+          database.withTransaction(() => {
+            database.updateTaskStatus(task.id, "awaiting_human");
+            database.addEvent({
+              source: "maestro",
+              type: "goal.delivery_started",
+              text: `Delivering goal #${run.id} to a draft pull request.`,
+              taskId: task.id,
+              metadata: { runId: run.id }
+            });
           });
           try {
             const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
-            deliveredRun = database.updateGoalDelivery({
-              id: run.id,
-              commitSha: delivery.commitSha,
-              pullRequestUrl: delivery.pullRequestUrl
-            });
-            database.addEvent({
-              source: "maestro",
-              type: "goal.delivered",
-              text: `Draft pull request created for goal #${run.id}.`,
-              taskId: task.id,
-              metadata: { runId: run.id, ...delivery }
+            deliveredRun = database.withTransaction(() => {
+              const updated = database.updateGoalDelivery({
+                id: run.id,
+                commitSha: delivery.commitSha,
+                pullRequestUrl: delivery.pullRequestUrl
+              });
+              database.addEvent({
+                source: "maestro",
+                type: "goal.delivered",
+                text: `Draft pull request created for goal #${run.id}.`,
+                taskId: task.id,
+                metadata: { runId: run.id, ...delivery }
+              });
+              return updated;
             });
           } catch (error) {
             return finishRun(
@@ -200,18 +225,21 @@ export async function runTaskGoal(
         } else {
           database.updateTaskStatus(task.id, "done");
         }
-        const completed = database.updateGoalRun({
-          id: deliveredRun.id,
-          status: "completed",
-          currentPhase: phase,
-          stepCount
-        });
-        database.addEvent({
-          source: "maestro",
-          type: "goal.completed",
-          text: `Goal #${run.id} completed automatically.`,
-          taskId: task.id,
-          metadata: { runId: run.id, stepCount }
+        const completed = database.withTransaction(() => {
+          const updated = database.updateGoalRun({
+            id: deliveredRun.id,
+            status: "completed",
+            currentPhase: phase,
+            stepCount
+          });
+          database.addEvent({
+            source: "maestro",
+            type: "goal.completed",
+            text: `Goal #${run.id} completed automatically.`,
+            taskId: task.id,
+            metadata: { runId: run.id, stepCount }
+          });
+          return updated;
         });
         return completed;
       }
@@ -268,22 +296,24 @@ function pauseRun(
   error: string,
   taskId: number
 ): GoalRunRecord {
-  database.updateTaskStatus(taskId, "waiting_quota");
-  const paused = database.updateGoalRun({
-    id: run.id,
-    status: "waiting_provider",
-    currentPhase: phase,
-    stepCount,
-    lastError: error
+  return database.withTransaction(() => {
+    database.updateTaskStatus(taskId, "waiting_quota");
+    const paused = database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: phase,
+      stepCount,
+      lastError: error
+    });
+    database.addEvent({
+      source: "maestro",
+      type: "goal.waiting_provider",
+      text: error,
+      taskId,
+      metadata: { runId: run.id, phase, stepCount }
+    });
+    return paused;
   });
-  database.addEvent({
-    source: "maestro",
-    type: "goal.waiting_provider",
-    text: error,
-    taskId,
-    metadata: { runId: run.id, phase, stepCount }
-  });
-  return paused;
 }
 
 function nextPhaseAfter(phase: GoalPhase): GoalPhase | null {
@@ -304,22 +334,24 @@ function finishRun(
   error: string,
   taskId: number
 ): GoalRunRecord {
-  database.updateTaskStatus(taskId, status);
-  const finished = database.updateGoalRun({
-    id: run.id,
-    status,
-    currentPhase: phase,
-    stepCount,
-    lastError: error
+  return database.withTransaction(() => {
+    database.updateTaskStatus(taskId, status);
+    const finished = database.updateGoalRun({
+      id: run.id,
+      status,
+      currentPhase: phase,
+      stepCount,
+      lastError: error
+    });
+    database.addEvent({
+      source: "maestro",
+      type: `goal.${status}`,
+      text: error,
+      taskId,
+      metadata: { runId: run.id, phase, stepCount }
+    });
+    return finished;
   });
-  database.addEvent({
-    source: "maestro",
-    type: `goal.${status}`,
-    text: error,
-    taskId,
-    metadata: { runId: run.id, phase, stepCount }
-  });
-  return finished;
 }
 
 function cancelRun(
@@ -329,20 +361,22 @@ function cancelRun(
   stepCount: number,
   taskId: number
 ): GoalRunRecord {
-  database.updateTaskStatus(taskId, "cancelled");
-  const cancelled = database.updateGoalRun({
-    id: run.id,
-    status: "cancelled",
-    currentPhase: phase,
-    stepCount,
-    lastError: "Cancelled by user."
+  return database.withTransaction(() => {
+    database.updateTaskStatus(taskId, "cancelled");
+    const cancelled = database.updateGoalRun({
+      id: run.id,
+      status: "cancelled",
+      currentPhase: phase,
+      stepCount,
+      lastError: "Cancelled by user."
+    });
+    database.addEvent({
+      source: "human",
+      type: "goal.cancelled",
+      text: `Goal #${run.id} cancelled by user.`,
+      taskId,
+      metadata: { runId: run.id, phase, stepCount }
+    });
+    return cancelled;
   });
-  database.addEvent({
-    source: "human",
-    type: "goal.cancelled",
-    text: `Goal #${run.id} cancelled by user.`,
-    taskId,
-    metadata: { runId: run.id, phase, stepCount }
-  });
-  return cancelled;
 }

@@ -133,4 +133,25 @@ describe("database", () => {
     database.createGoalRun(protectedTask.id);
     expect(() => database.deleteTask(protectedTask.id)).toThrow("execution history");
   });
+
+  it("rolls back every write in withTransaction when a later step throws", () => {
+    const task = database.createTask("atomic transitions");
+    database.updateTaskStatus(task.id, "implementing");
+    const run = database.createGoalRun(task.id, 4);
+    const eventsBefore = database.listEvents().length;
+
+    expect(() => {
+      database.withTransaction(() => {
+        database.updateTaskStatus(task.id, "testing");
+        database.updateGoalRun({ id: run.id, status: "running", currentPhase: "testing", stepCount: 1 });
+        database.addEvent({ source: "maestro", type: "goal.step_started", text: "partial write", taskId: task.id });
+        throw new Error("simulated crash mid-transition");
+      });
+    }).toThrow("simulated crash mid-transition");
+
+    expect(database.getTask(task.id).status).toBe("implementing");
+    expect(database.getGoalRun(run.id).status).toBe("running");
+    expect(database.getGoalRun(run.id).currentPhase).toBe("planning");
+    expect(database.listEvents().length).toBe(eventsBefore);
+  });
 });

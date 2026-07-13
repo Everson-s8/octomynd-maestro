@@ -3,10 +3,11 @@ import { GoalRunRecord, MaestroDatabase } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
+import { Scheduler, SystemScheduler } from "./scheduler.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, { promise: Promise<GoalRunRecord>; controller: AbortController }>();
-  private readonly retryTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly retryTimers = new Map<number, unknown>();
 
   constructor(
     private readonly database: MaestroDatabase,
@@ -15,7 +16,8 @@ export class GoalCoordinator {
     private readonly retryDelayMs = 15 * 60_000,
     private readonly delivery?: GoalDeliveryHandler,
     private readonly notify?: GoalNotificationHandler,
-    private readonly notifyProgress?: GoalProgressNotificationHandler
+    private readonly notifyProgress?: GoalProgressNotificationHandler,
+    private readonly scheduler: Scheduler = new SystemScheduler()
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -46,14 +48,17 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
     }
-    const reopened = this.database.reopenGoalRun(runId);
-    this.database.updateTaskStatus(reopened.taskId, "changes_requested");
-    this.database.addEvent({
-      source: "human",
-      type: "goal.changes_requested",
-      text: `Goal #${runId} returned to implementation.`,
-      taskId: reopened.taskId,
-      metadata: { runId }
+    const reopened = this.database.withTransaction(() => {
+      const run = this.database.reopenGoalRun(runId);
+      this.database.updateTaskStatus(run.taskId, "changes_requested");
+      this.database.addEvent({
+        source: "human",
+        type: "goal.changes_requested",
+        text: `Goal #${runId} returned to implementation.`,
+        taskId: run.taskId,
+        metadata: { runId }
+      });
+      return run;
     });
     this.execute(reopened);
     return reopened;
@@ -66,7 +71,7 @@ export class GoalCoordinator {
   }
 
   shutdown() {
-    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    for (const timer of this.retryTimers.values()) this.scheduler.cancel(timer);
     this.retryTimers.clear();
     for (const active of this.active.values()) active.controller.abort();
   }
@@ -82,12 +87,14 @@ export class GoalCoordinator {
     }
     const active = this.active.get(taskId);
     if (active) {
-      this.database.updateTaskStatus(taskId, "cancelled");
-      this.database.addEvent({
-        source: "human",
-        type: "task.cancel_requested",
-        text: `Cancellation requested for task #${taskId}.`,
-        taskId
+      this.database.withTransaction(() => {
+        this.database.updateTaskStatus(taskId, "cancelled");
+        this.database.addEvent({
+          source: "human",
+          type: "task.cancel_requested",
+          text: `Cancellation requested for task #${taskId}.`,
+          taskId
+        });
       });
       active.controller.abort();
       return this.database.getTask(taskId);
@@ -98,30 +105,34 @@ export class GoalCoordinator {
     );
     if (waitingRun) {
       const timer = this.retryTimers.get(waitingRun.id);
-      if (timer) clearTimeout(timer);
+      if (timer !== undefined) this.scheduler.cancel(timer);
       this.retryTimers.delete(waitingRun.id);
-      this.database.updateGoalRun({
-        id: waitingRun.id,
-        status: "cancelled",
-        currentPhase: waitingRun.currentPhase,
-        stepCount: waitingRun.stepCount,
-        lastError: "Cancelled by user."
-      });
     }
-    this.database.updateTaskStatus(taskId, "cancelled");
-    this.database.addEvent({
-      source: "human",
-      type: "task.cancelled",
-      text: `Task #${taskId} cancelled by user.`,
-      taskId,
-      metadata: { runId: waitingRun?.id ?? null }
+    this.database.withTransaction(() => {
+      if (waitingRun) {
+        this.database.updateGoalRun({
+          id: waitingRun.id,
+          status: "cancelled",
+          currentPhase: waitingRun.currentPhase,
+          stepCount: waitingRun.stepCount,
+          lastError: "Cancelled by user."
+        });
+      }
+      this.database.updateTaskStatus(taskId, "cancelled");
+      this.database.addEvent({
+        source: "human",
+        type: "task.cancelled",
+        text: `Task #${taskId} cancelled by user.`,
+        taskId,
+        metadata: { runId: waitingRun?.id ?? null }
+      });
     });
     return this.database.getTask(taskId);
   }
 
   private execute(run: GoalRunRecord) {
     const existingTimer = this.retryTimers.get(run.id);
-    if (existingTimer) clearTimeout(existingTimer);
+    if (existingTimer !== undefined) this.scheduler.cancel(existingTimer);
     this.retryTimers.delete(run.id);
     const controller = new AbortController();
     const promise = runTaskGoal(this.database, this.registry, run.taskId, {
@@ -169,7 +180,7 @@ export class GoalCoordinator {
 
   private scheduleRetry(run: GoalRunRecord) {
     if (this.retryTimers.has(run.id)) return;
-    const timer = setTimeout(() => {
+    const timer = this.scheduler.schedule(() => {
       this.retryTimers.delete(run.id);
       try {
         this.resume(run.id);

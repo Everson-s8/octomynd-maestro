@@ -291,6 +291,10 @@ export function createDatabase(databasePath: string) {
   return {
     close: () => db.close(),
 
+    withTransaction<T>(fn: () => T): T {
+      return db.transaction(fn)();
+    },
+
     registerProject(input: ProjectInput): ProjectRecord {
       const now = new Date().toISOString();
       const project = normalizeProjectInput(input);
