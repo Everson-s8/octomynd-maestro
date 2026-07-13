@@ -43,7 +43,7 @@ export async function runTaskGoal(
   let currentRun = run;
   let phase: GoalPhase = run.currentPhase;
   let stepCount = run.stepCount;
-  let excluded = new Set<AgentProviderId>();
+  let excluded = initialExcludedProviders(database, run, phase);
 
   database.addEvent({
     source: "maestro",
@@ -65,7 +65,11 @@ export async function runTaskGoal(
         currentPhase: phase,
         stepCount
       });
-      const routed = await registry.route(CAPABILITIES[phase], excluded);
+      let routed = await registry.route(CAPABILITIES[phase], excluded);
+      if (!routed && excluded.size > 0) {
+        excluded = new Set();
+        routed = await registry.route(CAPABILITIES[phase]);
+      }
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
         return pauseRun(database, currentRun, phase, stepCount, error, task.id);
@@ -240,6 +244,20 @@ export async function runTaskGoal(
 function latestChangeRequest(database: MaestroDatabase, runId: number): string | null {
   const review = database.getLatestHumanReview(runId);
   return review?.decision === "changes_requested" ? redactSensitiveText(review.note) : null;
+}
+
+function initialExcludedProviders(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase
+): Set<AgentProviderId> {
+  if (run.status !== "waiting_provider") return new Set();
+  const latestStep = [...database.listGoalSteps(run.id)]
+    .reverse()
+    .find((step) => step.phase === phase);
+  if (latestStep?.status !== "failed") return new Set();
+  if (latestStep.provider !== "codex" && latestStep.provider !== "claude") return new Set();
+  return new Set([latestStep.provider]);
 }
 
 function pauseRun(

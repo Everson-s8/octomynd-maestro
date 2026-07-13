@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { runAgentProcess } from "./process.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -87,7 +87,14 @@ export class CodexProvider implements AgentProvider {
       "-"
     ];
 
-    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), 20 * 60_000, request.signal);
+    const processResult = await runAgentProcess({
+      command: process.execPath,
+      args,
+      cwd,
+      stdin: buildPrompt(request),
+      timeoutMs: 20 * 60_000,
+      signal: request.signal
+    });
     if (processResult.aborted) {
       return {
         outcome: "cancelled",
@@ -100,6 +107,16 @@ export class CodexProvider implements AgentProvider {
     }
     const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
+      if (processResult.timedOut) {
+        return {
+          outcome: "failed",
+          summary: "Codex excedeu o tempo limite da etapa.",
+          output: combined,
+          error: combined || "Codex execution timed out.",
+          durationMs: processResult.durationMs,
+          retryable: true
+        };
+      }
       const quota = /usage limit|rate limit|quota|credits/i.test(combined);
       const authentication = /401|authentication|login required|credentials/i.test(combined);
       if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
@@ -109,7 +126,7 @@ export class CodexProvider implements AgentProvider {
         summary: quota ? "Codex sem cota disponivel." : authentication ? "Codex requer autenticacao." : "Codex falhou.",
         output: combined,
         error: combined || "Codex terminou sem resposta.",
-        durationMs: Date.now() - startedAt,
+        durationMs: processResult.durationMs,
         retryable: quota || authentication
       };
     }
@@ -190,49 +207,6 @@ function resolveCodexCliEntry(): string | null {
       : ""
   ].filter(Boolean);
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
-}
-
-function runProcess(
-  command: string,
-  args: string[],
-  cwd: string,
-  stdin: string,
-  timeoutMs: number,
-  signal?: AbortSignal
-) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    const onAbort = () => {
-      aborted = true;
-      child.kill();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => child.kill(), timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout = appendBounded(stdout, chunk); });
-    child.stderr.on("data", (chunk: string) => { stderr = appendBounded(stderr, chunk); });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
-    });
-    child.on("close", (exitCode) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode, stdout, stderr, aborted });
-    });
-    child.stdin.end(stdin);
-    if (signal?.aborted) onAbort();
-  });
-}
-
-function appendBounded(current: string, chunk: string): string {
-  const next = current + chunk;
-  return next.length <= 2_000_000 ? next : next.slice(-2_000_000);
 }
 
 function failure(error: string, startedAt: number, retryable: boolean, output = ""): AgentExecutionResult {

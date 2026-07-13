@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeCliCommand,
+  buildClaudeGoalArgs,
+  buildClaudeGoalPrompt,
   buildClaudeReviewPrompt,
-  isClaudeAuthenticationError
+  ClaudeProvider,
+  isClaudeAuthenticationError,
+  isClaudeQuotaError
 } from "../src/agents/claude.js";
+import { AgentExecutionRequest } from "../src/agents/types.js";
 import { ProjectRecord, TaskRecord } from "../src/db.js";
 
 describe("claude review", () => {
@@ -54,4 +59,70 @@ describe("claude review", () => {
     expect(isClaudeAuthenticationError("API Error: 401 Invalid authentication credentials")).toBe(true);
     expect(isClaudeAuthenticationError("Unexpected filesystem failure")).toBe(false);
   });
+
+  it("advertises goal capabilities while leaving conversation out", () => {
+    expect([...new ClaudeProvider().capabilities]).toEqual([
+      "planning",
+      "coding",
+      "testing",
+      "reviewing",
+      "research"
+    ]);
+  });
+
+  it("uses read-only mode for planning and guarded workspace tools for coding", () => {
+    const planning = executionRequest("planning", "planning");
+    const coding = executionRequest("implementing", "coding");
+
+    const planningArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), planning, "C:/worktree");
+    const codingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), coding, "C:/worktree");
+
+    expect(planningArgs).toContain("plan");
+    expect(planningArgs.join(" ")).not.toContain("--allowedTools");
+    expect(codingArgs).toContain("acceptEdits");
+    expect(codingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
+    expect(codingArgs.join(" ")).toContain("Bash(git push *)");
+    expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
+  });
+
+  it("recognizes Claude subscription quota failures", () => {
+    expect(isClaudeQuotaError("You've hit your session limit · resets 12:40am")).toBe(true);
+    expect(isClaudeQuotaError("Unexpected filesystem failure")).toBe(false);
+  });
 });
+
+function executionRequest(
+  phase: AgentExecutionRequest["phase"],
+  capability: AgentExecutionRequest["capability"]
+): AgentExecutionRequest {
+  return {
+    runId: 1,
+    stepNumber: 1,
+    phase,
+    capability,
+    task: {
+      id: 9,
+      projectId: 1,
+      projectKey: "maestro",
+      projectName: "Octomynd Maestro",
+      text: "melhorar provider",
+      status: phase,
+      source: "dashboard",
+      branchName: "maestro/task-9",
+      worktreePath: "C:/worktree",
+      createdAt: "now",
+      updatedAt: "now"
+    },
+    project: {
+      id: 1,
+      key: "maestro",
+      name: "Octomynd Maestro",
+      path: "C:/repo/maestro",
+      defaultBranch: "main",
+      createdAt: "now",
+      updatedAt: "now"
+    },
+    previousSteps: [],
+    artifactsRoot: "C:/artifacts"
+  };
+}
