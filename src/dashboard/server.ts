@@ -10,7 +10,8 @@ import {
   HumanReviewDecision,
   MaestroDatabase
 } from "../db.js";
-import { createProjectTask, prepareTask } from "../orchestrator.js";
+import { ApplicationCommands } from "../commands/application-commands.js";
+import { ApplicationCommandError } from "../commands/errors.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
@@ -26,10 +27,11 @@ export type DashboardServerOptions = {
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const staticRoot = options.staticRoot ?? path.resolve(process.cwd(), "ui/dist");
+  const commands = new ApplicationCommands(options.database);
 
   return http.createServer(async (request, response) => {
     try {
-      await routeRequest(request, response, options, staticRoot);
+      await routeRequest(request, response, options, staticRoot, commands);
     } catch (error) {
       console.error("Dashboard request failed:", error instanceof Error ? error.message : "unknown error");
       sendJson(response, 500, { error: "dashboard_request_failed" });
@@ -50,7 +52,8 @@ async function routeRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: DashboardServerOptions,
-  staticRoot: string
+  staticRoot: string,
+  commands: ApplicationCommands
 ) {
   const url = new URL(request.url ?? "/", "http://localhost");
 
@@ -217,21 +220,12 @@ async function routeRequest(
       return;
     }
 
-    const project = options.database.findProjectByKey(projectKey);
-    if (!project) {
-      sendJson(response, 404, { error: "project_not_found" });
-      return;
+    try {
+      const task = commands.createTask({ channel: "dashboard" }, { text, projectKey });
+      sendJson(response, 201, { task });
+    } catch (error) {
+      sendCommandError(response, error, "task_create_failed");
     }
-
-    const task = createProjectTask(options.database, text, project.key);
-    options.database.addEvent({
-      source: "dashboard",
-      type: "task.created",
-      text,
-      taskId: task.id,
-      metadata: { projectKey: project.key }
-    });
-    sendJson(response, 201, { task });
     return;
   }
 
@@ -283,29 +277,12 @@ async function routeRequest(
   const prepareMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/prepare$/);
   if (request.method === "POST" && prepareMatch) {
     const taskId = Number(prepareMatch[1]);
-    const result = prepareTask(options.database, taskId, options.config.worktreesPath);
-    if (!result.ok) {
-      options.database.addEvent({
-        source: "dashboard",
-        type: "task.prepare_failed",
-        text: result.errors.join("\n"),
-        taskId
-      });
-      sendJson(response, 409, { error: "task_prepare_failed", details: result.errors });
-      return;
+    try {
+      const result = commands.prepareTask({ channel: "dashboard" }, taskId, options.config.worktreesPath);
+      sendJson(response, 200, { task: result.task });
+    } catch (error) {
+      sendCommandError(response, error, "task_prepare_failed");
     }
-
-    options.database.addEvent({
-      source: "dashboard",
-      type: "task.prepared",
-      text: result.branchName,
-      taskId,
-      metadata: {
-        branchName: result.branchName,
-        worktreePath: result.worktreePath
-      }
-    });
-    sendJson(response, 200, { task: result.task });
     return;
   }
 
@@ -452,6 +429,18 @@ function serveStatic(response: ServerResponse, staticRoot: string, pathname: str
     "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable"
   });
   fs.createReadStream(filePath).pipe(response);
+}
+
+function sendCommandError(response: ServerResponse, error: unknown, errorCode: string) {
+  if (error instanceof ApplicationCommandError) {
+    const status = error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 400;
+    sendJson(response, status, { error: errorCode, details: error.details });
+    return;
+  }
+  sendJson(response, 500, {
+    error: errorCode,
+    details: [error instanceof Error ? error.message : "Unknown error"]
+  });
 }
 
 function sendJson(response: ServerResponse, status: number, payload: unknown) {

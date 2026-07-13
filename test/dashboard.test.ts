@@ -122,6 +122,9 @@ describe("dashboard", () => {
       expect(taskResponse.status).toBe(201);
       expect(database.listTasksByProject("boo")).toHaveLength(2);
       expect(database.getLastEvent()?.source).toBe("dashboard");
+      const taskPayload = await taskResponse.json() as { task: { id: number; source: string } };
+      expect(taskPayload.task.source).toBe("dashboard");
+      expect(database.getTask(taskPayload.task.id).source).toBe("dashboard");
 
       const disposableResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
         method: "POST",
@@ -204,6 +207,32 @@ describe("dashboard", () => {
       await waitFor(() => database.getGoalRun(goalPayload.run.id).status !== "running");
       expect(database.getGoalRun(goalPayload.run.id).status).toBe("completed");
       expect(database.getTask(createdTask.id).status).toBe("done");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("maps typed application command errors to HTTP status codes", async () => {
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const notFoundResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "does-not-exist", text: "task orfa" })
+      });
+      expect(notFoundResponse.status).toBe(404);
+
+      const task = database.listTasks()[0];
+      const prepareResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
+      expect(prepareResponse.status).toBe(200);
+
+      const conflictResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
+      expect(conflictResponse.status).toBe(409);
+      const conflictPayload = await conflictResponse.json() as { error: string; details: string[] };
+      expect(conflictPayload.details.join(" ")).toContain("already has a worktree");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
