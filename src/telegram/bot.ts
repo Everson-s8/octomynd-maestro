@@ -1,10 +1,14 @@
-import { Bot } from "grammy";
+import { Bot, Context } from "grammy";
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
-import { createProjectTask, parseProjectTaskInput, prepareTask, registerProject } from "../orchestrator.js";
+import { parseProjectTaskInput } from "../orchestrator.js";
+import { ApplicationCommands } from "../commands/application-commands.js";
+import { ApplicationCommandError } from "../commands/errors.js";
+import { CommandOrigin } from "../commands/types.js";
 
 export function createTelegramBot(config: MaestroConfig, database: MaestroDatabase) {
   const bot = new Bot(config.telegram.botToken);
+  const commands = new ApplicationCommands(database);
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -82,24 +86,13 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       return;
     }
 
-    const result = registerProject(database, input);
-    if (!result.ok) {
-      await ctx.reply(["Projeto nao cadastrado.", ...result.errors].join("\n"));
+    let result;
+    try {
+      result = commands.registerProject(telegramOrigin(ctx), input);
+    } catch (error) {
+      await ctx.reply(["Projeto nao cadastrado.", ...commandErrorDetails(error)].join("\n"));
       return;
     }
-
-    database.addEvent({
-      source: "telegram",
-      type: "project.registered",
-      text: result.project.key,
-      userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null,
-      metadata: {
-        projectKey: result.project.key,
-        defaultBranch: result.project.defaultBranch,
-        warnings: result.warnings
-      }
-    });
 
     const lines = [
       `Projeto ${result.project.key} cadastrado.`,
@@ -121,32 +114,25 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       return;
     }
 
-    const project = taskInput.projectKey
-      ? database.findProjectByKey(taskInput.projectKey)
-      : database.getDefaultProject();
-
-    if (!project) {
-      await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
+    let task: TaskRecord;
+    try {
+      task = commands.createTask(telegramOrigin(ctx), {
+        text: taskInput.text,
+        projectKey: taskInput.projectKey
+      });
+    } catch (error) {
+      if (error instanceof ApplicationCommandError && error.code === "not_found") {
+        await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
+        return;
+      }
+      await ctx.reply(["Task nao criada.", ...commandErrorDetails(error)].join("\n"));
       return;
     }
-
-    const task = createProjectTask(database, taskInput.text, project.key);
-    database.addEvent({
-      source: "telegram",
-      type: "task.created",
-      text: taskInput.text,
-      userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null,
-      taskId: task.id,
-      metadata: {
-        projectKey: project.key
-      }
-    });
 
     await ctx.reply(
       [
         `Task #${task.id} criada.`,
-        `Projeto: ${project.key}`,
+        `Projeto: ${task.projectKey}`,
         `Estado: ${task.status}`,
         `Demanda: ${task.text}`
       ].join("\n")
@@ -175,32 +161,13 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       return;
     }
 
-    const result = prepareTask(database, taskId, config.worktreesPath);
-    if (!result.ok) {
-      database.addEvent({
-        source: "telegram",
-        type: "task.prepare_failed",
-        text: result.errors.join("\n"),
-        userId: String(ctx.from?.id ?? ""),
-        username: ctx.from?.username ?? null,
-        taskId
-      });
-      await ctx.reply(["Prepare falhou.", ...result.errors].join("\n"));
+    let result;
+    try {
+      result = commands.prepareTask(telegramOrigin(ctx), taskId, config.worktreesPath);
+    } catch (error) {
+      await ctx.reply(["Prepare falhou.", ...commandErrorDetails(error)].join("\n"));
       return;
     }
-
-    database.addEvent({
-      source: "telegram",
-      type: "task.prepared",
-      text: result.branchName,
-      userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null,
-      taskId: result.task.id,
-      metadata: {
-        branchName: result.branchName,
-        worktreePrepared: true
-      }
-    });
 
     await ctx.reply(
       [
@@ -239,6 +206,21 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
   });
 
   return bot;
+}
+
+function telegramOrigin(ctx: Context): CommandOrigin {
+  return {
+    channel: "telegram",
+    userId: String(ctx.from?.id ?? ""),
+    username: ctx.from?.username ?? null
+  };
+}
+
+function commandErrorDetails(error: unknown): string[] {
+  if (error instanceof ApplicationCommandError) {
+    return error.details;
+  }
+  return [error instanceof Error ? error.message : "Erro desconhecido."];
 }
 
 export function parseTaskText(messageText: string): string {
