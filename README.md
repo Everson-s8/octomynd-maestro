@@ -139,6 +139,28 @@ Example:
 /queue @octomynd
 ```
 
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`. It is
+fail-closed: any failing step blocks the workflow, and no step ignores errors or masks
+a non-zero exit code. The workflow does not deploy and does not merge pull requests.
+
+Required checks (all must pass):
+
+1. `npm ci` — clean, reproducible dependency install.
+2. `npm run typecheck` — backend TypeScript typecheck.
+3. `npm run typecheck:ui` — UI TypeScript typecheck.
+4. `npm test` — full Vitest suite.
+5. `npm run build:ui` — production UI build.
+6. Secret scan — greps tracked files for the secret patterns used by
+   `src/security/redaction.ts` (API keys, bot tokens, private key headers) and fails the
+   run if any match. Only filenames are reported; matched secret values are never
+   printed to logs.
+
+The workflow uses `permissions: contents: read` (no write access), a `concurrency`
+group keyed on workflow and ref to cancel superseded runs, and `actions/setup-node`
+with `cache: npm` keyed on `package-lock.json` for safe, deterministic caching.
+
 ## Local Data
 
 The local SQLite database is stored at `.maestro/maestro.db` by default. The folder is ignored by Git.
