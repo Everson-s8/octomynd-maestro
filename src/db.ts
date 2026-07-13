@@ -283,6 +283,104 @@ export type FeaturePlanReplanInput = {
   idempotencyKey?: string | null;
 };
 
+export type FeaturePlanIntegrationStatus =
+  | "preparing"
+  | "integrating"
+  | "verifying"
+  | "completed"
+  | "failed";
+
+export type FeaturePlanIntegrationCheckpoint =
+  | "created"
+  | "validated"
+  | "base_fetched"
+  | "worktree_created"
+  | "integrating"
+  | "commits_integrated"
+  | "secret_scan_passed"
+  | "diff_check_passed"
+  | "completed"
+  | "failed";
+
+export type FeaturePlanIntegrationRecord = {
+  id: number;
+  featurePlanId: number;
+  projectId: number;
+  projectKey: string;
+  projectName: string;
+  planRevision: number;
+  status: FeaturePlanIntegrationStatus;
+  checkpoint: FeaturePlanIntegrationCheckpoint;
+  branchName: string;
+  worktreePath: string;
+  baseSha: string | null;
+  headSha: string | null;
+  lastError: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanIntegrationItemStatus = "pending" | "integrated" | "failed";
+
+export type FeaturePlanIntegrationItemRecord = {
+  id: number;
+  integrationId: number;
+  featurePlanId: number;
+  taskId: number;
+  taskText: string;
+  taskStatus: TaskStatus;
+  position: number;
+  commitSha: string;
+  pullRequestUrl: string;
+  branchName: string;
+  status: FeaturePlanIntegrationItemStatus;
+  appliedCommitSha: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanIntegrationDetails = {
+  integration: FeaturePlanIntegrationRecord;
+  items: FeaturePlanIntegrationItemRecord[];
+};
+
+export type FeaturePlanIntegrationInput = {
+  featurePlanId: number;
+  projectId: number;
+  planRevision: number;
+  branchName: string;
+  worktreePath: string;
+};
+
+export type FeaturePlanIntegrationUpdate = {
+  id: number;
+  status?: FeaturePlanIntegrationStatus;
+  checkpoint?: FeaturePlanIntegrationCheckpoint;
+  baseSha?: string | null;
+  headSha?: string | null;
+  lastError?: string | null;
+  completedAt?: string | null;
+};
+
+export type FeaturePlanIntegrationItemInput = {
+  integrationId: number;
+  featurePlanId: number;
+  taskId: number;
+  position: number;
+  commitSha: string;
+  pullRequestUrl: string;
+  branchName: string;
+};
+
+export type FeaturePlanIntegrationItemUpdate = {
+  id: number;
+  status: FeaturePlanIntegrationItemStatus;
+  appliedCommitSha?: string | null;
+  lastError?: string | null;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -467,6 +565,49 @@ export function createDatabase(databasePath: string) {
       feature_plan_id, operation_type, idempotency_key, request_hash, created_at
     )
     VALUES (@featurePlanId, @operationType, @idempotencyKey, @requestHash, @now)
+  `);
+  const createFeaturePlanIntegrationStatement = db.prepare(`
+    INSERT INTO feature_plan_integrations (
+      feature_plan_id, project_id, plan_revision, status, checkpoint,
+      branch_name, worktree_path, base_sha, head_sha, last_error,
+      completed_at, created_at, updated_at
+    )
+    VALUES (
+      @featurePlanId, @projectId, @planRevision, 'preparing', 'created',
+      @branchName, @worktreePath, NULL, NULL, NULL,
+      NULL, @now, @now
+    )
+  `);
+  const updateFeaturePlanIntegrationStatement = db.prepare(`
+    UPDATE feature_plan_integrations
+    SET status = @status,
+        checkpoint = @checkpoint,
+        base_sha = @baseSha,
+        head_sha = @headSha,
+        last_error = @lastError,
+        completed_at = @completedAt,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const addFeaturePlanIntegrationItemStatement = db.prepare(`
+    INSERT INTO feature_plan_integration_items (
+      integration_id, feature_plan_id, task_id, position, commit_sha,
+      pull_request_url, branch_name, status, applied_commit_sha,
+      last_error, created_at, updated_at
+    )
+    VALUES (
+      @integrationId, @featurePlanId, @taskId, @position, @commitSha,
+      @pullRequestUrl, @branchName, 'pending', NULL,
+      NULL, @now, @now
+    )
+  `);
+  const updateFeaturePlanIntegrationItemStatement = db.prepare(`
+    UPDATE feature_plan_integration_items
+    SET status = @status,
+        applied_commit_sha = @appliedCommitSha,
+        last_error = @lastError,
+        updated_at = @now
+    WHERE id = @id
   `);
 
   return {
@@ -1048,6 +1189,7 @@ export function createDatabase(databasePath: string) {
       if (plan.status === "cancelled") {
         return { ...this.getFeaturePlanDetails(id), applied: false };
       }
+      assertFeaturePlanIntegrationNotStarted(db, id);
       const result = cancelFeaturePlanStatement.run({
         id,
         cancelReason: reason?.trim() || null,
@@ -1084,6 +1226,7 @@ export function createDatabase(databasePath: string) {
       if (plan.status !== "planned") {
         throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
       }
+      assertFeaturePlanIntegrationNotStarted(db, plan.id);
       validateFeaturePlanTasks(plan.projectId, normalized.taskIds, (id) => this.getTask(id));
       validateFeaturePlanTaskAvailability(db, normalized.taskIds, plan.id);
 
@@ -1112,6 +1255,150 @@ export function createDatabase(databasePath: string) {
       })();
 
       return { ...this.getFeaturePlanDetails(plan.id), applied: true };
+    },
+
+    createFeaturePlanIntegration(input: FeaturePlanIntegrationInput): FeaturePlanIntegrationRecord {
+      const plan = this.getFeaturePlan(input.featurePlanId);
+      if (plan.projectId !== input.projectId) {
+        throw new Error(`Feature Plan #${input.featurePlanId} does not belong to project #${input.projectId}.`);
+      }
+      const existing = this.findFeaturePlanIntegrationByFeaturePlan(input.featurePlanId);
+      if (existing) {
+        if (
+          existing.projectId !== input.projectId
+          || existing.planRevision !== input.planRevision
+          || existing.branchName !== input.branchName.trim()
+          || existing.worktreePath !== path.resolve(input.worktreePath.trim())
+        ) {
+          throw new Error(`Feature Plan #${input.featurePlanId} already has a different integration checkpoint.`);
+        }
+        return existing;
+      }
+      const branchName = input.branchName.trim();
+      const worktreePathInput = input.worktreePath.trim();
+      if (!branchName || !worktreePathInput) {
+        throw new Error("Feature Plan integration requires branch and worktree path.");
+      }
+      const worktreePath = path.resolve(worktreePathInput);
+      const now = new Date().toISOString();
+      const result = createFeaturePlanIntegrationStatement.run({
+        featurePlanId: input.featurePlanId,
+        projectId: input.projectId,
+        planRevision: input.planRevision,
+        branchName,
+        worktreePath,
+        now
+      });
+      return this.getFeaturePlanIntegration(Number(result.lastInsertRowid));
+    },
+
+    getFeaturePlanIntegration(id: number): FeaturePlanIntegrationRecord {
+      const row = db
+        .prepare(featurePlanIntegrationSelectSql("WHERE feature_plan_integrations.id = ?"))
+        .get(id) as FeaturePlanIntegrationRow | undefined;
+      if (!row) throw new Error(`Feature Plan integration not found: ${id}`);
+      return mapFeaturePlanIntegration(row);
+    },
+
+    findFeaturePlanIntegrationByFeaturePlan(featurePlanId: number): FeaturePlanIntegrationRecord | null {
+      const row = db
+        .prepare(featurePlanIntegrationSelectSql("WHERE feature_plan_integrations.feature_plan_id = ?"))
+        .get(featurePlanId) as FeaturePlanIntegrationRow | undefined;
+      return row ? mapFeaturePlanIntegration(row) : null;
+    },
+
+    getFeaturePlanIntegrationDetails(id: number): FeaturePlanIntegrationDetails {
+      const integration = this.getFeaturePlanIntegration(id);
+      return { integration, items: this.listFeaturePlanIntegrationItems(integration.id) };
+    },
+
+    getFeaturePlanIntegrationDetailsByFeaturePlan(featurePlanId: number): FeaturePlanIntegrationDetails | null {
+      const integration = this.findFeaturePlanIntegrationByFeaturePlan(featurePlanId);
+      return integration ? { integration, items: this.listFeaturePlanIntegrationItems(integration.id) } : null;
+    },
+
+    listFeaturePlanIntegrationItems(integrationId: number): FeaturePlanIntegrationItemRecord[] {
+      const rows = db
+        .prepare(featurePlanIntegrationItemsSelectSql(
+          "WHERE feature_plan_integration_items.integration_id = ? ORDER BY feature_plan_integration_items.position ASC"
+        ))
+        .all(integrationId) as FeaturePlanIntegrationItemRow[];
+      return rows.map(mapFeaturePlanIntegrationItem);
+    },
+
+    ensureFeaturePlanIntegrationItem(input: FeaturePlanIntegrationItemInput): FeaturePlanIntegrationItemRecord {
+      this.getFeaturePlanIntegration(input.integrationId);
+      this.getTask(input.taskId);
+      const normalized = normalizeFeaturePlanIntegrationItemInput(input);
+      const existing = db
+        .prepare("SELECT * FROM feature_plan_integration_items WHERE integration_id = ? AND task_id = ?")
+        .get(normalized.integrationId, normalized.taskId) as FeaturePlanIntegrationItemBaseRow | undefined;
+      if (existing) {
+        if (
+          existing.feature_plan_id !== normalized.featurePlanId
+          || existing.position !== normalized.position
+          || existing.commit_sha !== normalized.commitSha
+          || existing.pull_request_url !== normalized.pullRequestUrl
+          || existing.branch_name !== normalized.branchName
+        ) {
+          throw new Error(`Task #${normalized.taskId} already has a different integration item checkpoint.`);
+        }
+        return this.getFeaturePlanIntegrationItem(existing.id);
+      }
+      const result = addFeaturePlanIntegrationItemStatement.run({
+        ...normalized,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegrationItem(Number(result.lastInsertRowid));
+    },
+
+    getFeaturePlanIntegrationItem(id: number): FeaturePlanIntegrationItemRecord {
+      const row = db
+        .prepare(featurePlanIntegrationItemsSelectSql("WHERE feature_plan_integration_items.id = ?"))
+        .get(id) as FeaturePlanIntegrationItemRow | undefined;
+      if (!row) throw new Error(`Feature Plan integration item not found: ${id}`);
+      return mapFeaturePlanIntegrationItem(row);
+    },
+
+    updateFeaturePlanIntegration(input: FeaturePlanIntegrationUpdate): FeaturePlanIntegrationRecord {
+      const integration = this.getFeaturePlanIntegration(input.id);
+      updateFeaturePlanIntegrationStatement.run({
+        id: integration.id,
+        status: input.status ?? integration.status,
+        checkpoint: input.checkpoint ?? integration.checkpoint,
+        baseSha: input.baseSha === undefined ? integration.baseSha : input.baseSha,
+        headSha: input.headSha === undefined ? integration.headSha : input.headSha,
+        lastError: input.lastError === undefined ? integration.lastError : input.lastError,
+        completedAt: input.completedAt === undefined ? integration.completedAt : input.completedAt,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegration(integration.id);
+    },
+
+    updateFeaturePlanIntegrationItem(input: FeaturePlanIntegrationItemUpdate): FeaturePlanIntegrationItemRecord {
+      const item = this.getFeaturePlanIntegrationItem(input.id);
+      updateFeaturePlanIntegrationItemStatement.run({
+        id: item.id,
+        status: input.status,
+        appliedCommitSha: input.appliedCommitSha === undefined ? item.appliedCommitSha : input.appliedCommitSha,
+        lastError: input.lastError === undefined ? item.lastError : input.lastError,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegrationItem(item.id);
+    },
+
+    findLatestCompletedGoalRunForTask(taskId: number): GoalRunRecord | null {
+      const row = db
+        .prepare(`
+          SELECT *
+          FROM goal_runs
+          WHERE task_id = ?
+            AND status = 'completed'
+          ORDER BY id DESC
+          LIMIT 1
+        `)
+        .get(taskId) as GoalRunRow | undefined;
+      return row ? mapGoalRun(row) : null;
     }
   };
 }
@@ -1294,10 +1581,56 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id)
     );
 
+    CREATE TABLE IF NOT EXISTS feature_plan_integrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL UNIQUE,
+      project_id INTEGER NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing',
+      checkpoint TEXT NOT NULL DEFAULT 'created',
+      branch_name TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      base_sha TEXT,
+      head_sha TEXT,
+      last_error TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_integration_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      integration_id INTEGER NOT NULL,
+      feature_plan_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      commit_sha TEXT NOT NULL,
+      pull_request_url TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      applied_commit_sha TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(integration_id, task_id),
+      UNIQUE(integration_id, commit_sha),
+      FOREIGN KEY (integration_id) REFERENCES feature_plan_integrations(id),
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
       ON feature_plan_tasks(task_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
       ON feature_plan_operations(feature_plan_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integrations_plan_id
+      ON feature_plan_integrations(feature_plan_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_integration_id
+      ON feature_plan_integration_items(integration_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_task_id
+      ON feature_plan_integration_items(task_id);
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -1477,6 +1810,46 @@ type FeaturePlanOperationRow = {
   created_at: string;
 };
 
+type FeaturePlanIntegrationRow = {
+  id: number;
+  feature_plan_id: number;
+  project_id: number;
+  project_key: string;
+  project_name: string;
+  plan_revision: number;
+  status: FeaturePlanIntegrationStatus;
+  checkpoint: FeaturePlanIntegrationCheckpoint;
+  branch_name: string;
+  worktree_path: string;
+  base_sha: string | null;
+  head_sha: string | null;
+  last_error: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanIntegrationItemBaseRow = {
+  id: number;
+  integration_id: number;
+  feature_plan_id: number;
+  task_id: number;
+  position: number;
+  commit_sha: string;
+  pull_request_url: string;
+  branch_name: string;
+  status: FeaturePlanIntegrationItemStatus;
+  applied_commit_sha: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanIntegrationItemRow = FeaturePlanIntegrationItemBaseRow & {
+  task_text: string;
+  task_status: TaskStatus;
+};
+
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
@@ -1615,6 +1988,15 @@ function validateFeaturePlanTaskAvailability(
   }
 }
 
+function assertFeaturePlanIntegrationNotStarted(db: Database.Database, featurePlanId: number): void {
+  const row = db
+    .prepare("SELECT id FROM feature_plan_integrations WHERE feature_plan_id = ? LIMIT 1")
+    .get(featurePlanId) as { id: number } | undefined;
+  if (row) {
+    throw new Error(`Feature plan #${featurePlanId} already has integration checkpoint #${row.id}.`);
+  }
+}
+
 function insertFeaturePlanTasks(
   statement: Database.Statement,
   featurePlanId: number,
@@ -1624,6 +2006,36 @@ function insertFeaturePlanTasks(
   taskIds.forEach((taskId, index) => {
     statement.run({ featurePlanId, taskId, position: index + 1, now });
   });
+}
+
+function normalizeFeaturePlanIntegrationItemInput(
+  input: FeaturePlanIntegrationItemInput
+): FeaturePlanIntegrationItemInput {
+  const commitSha = input.commitSha.trim();
+  const pullRequestUrl = input.pullRequestUrl.trim();
+  const branchName = input.branchName.trim();
+  if (!Number.isInteger(input.position) || input.position <= 0) {
+    throw new Error("Feature Plan integration item position must be a positive integer.");
+  }
+  if (!/^[a-f0-9]{40}$/i.test(commitSha)) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} has an invalid commit SHA.`);
+  }
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/i.test(pullRequestUrl)) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} has an invalid Work PR URL.`);
+  }
+  if (!branchName) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} requires a branch name.`);
+  }
+
+  return {
+    integrationId: input.integrationId,
+    featurePlanId: input.featurePlanId,
+    taskId: input.taskId,
+    position: input.position,
+    commitSha: commitSha.toLowerCase(),
+    pullRequestUrl,
+    branchName
+  };
 }
 
 function findFeaturePlanOperation(
@@ -1852,6 +2264,49 @@ function mapFeaturePlanTask(row: FeaturePlanTaskRow): FeaturePlanTaskRecord {
   };
 }
 
+function mapFeaturePlanIntegration(row: FeaturePlanIntegrationRow): FeaturePlanIntegrationRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name,
+    planRevision: row.plan_revision,
+    status: row.status,
+    checkpoint: row.checkpoint,
+    branchName: row.branch_name,
+    worktreePath: row.worktree_path,
+    baseSha: row.base_sha,
+    headSha: row.head_sha,
+    lastError: row.last_error,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFeaturePlanIntegrationItem(
+  row: FeaturePlanIntegrationItemRow
+): FeaturePlanIntegrationItemRecord {
+  return {
+    id: row.id,
+    integrationId: row.integration_id,
+    featurePlanId: row.feature_plan_id,
+    taskId: row.task_id,
+    taskText: row.task_text,
+    taskStatus: row.task_status,
+    position: row.position,
+    commitSha: row.commit_sha,
+    pullRequestUrl: row.pull_request_url,
+    branchName: row.branch_name,
+    status: row.status,
+    appliedCommitSha: row.applied_commit_sha,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function featureSelectSql(suffix = ""): string {
   return `
     SELECT features.*,
@@ -1881,6 +2336,28 @@ function featurePlanTasksSelectSql(suffix = ""): string {
            tasks.status AS task_status
     FROM feature_plan_tasks
     JOIN tasks ON tasks.id = feature_plan_tasks.task_id
+    ${suffix}
+  `;
+}
+
+function featurePlanIntegrationSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_integrations.*,
+           projects.key AS project_key,
+           projects.name AS project_name
+    FROM feature_plan_integrations
+    JOIN projects ON projects.id = feature_plan_integrations.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanIntegrationItemsSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_integration_items.*,
+           tasks.text AS task_text,
+           tasks.status AS task_status
+    FROM feature_plan_integration_items
+    JOIN tasks ON tasks.id = feature_plan_integration_items.task_id
     ${suffix}
   `;
 }
