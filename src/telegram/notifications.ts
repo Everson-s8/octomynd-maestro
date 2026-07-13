@@ -83,6 +83,14 @@ export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord): st
     ].join("\n");
   }
 
+  if (run.status === "cancelled") {
+    return [
+      `Task #${task.id} cancelada.`,
+      `Projeto: ${project}`,
+      `Goal #${run.id}: cancelled`
+    ].join("\n");
+  }
+
   return [
     `Task #${task.id} requer atencao.`,
     `Projeto: ${project}`,

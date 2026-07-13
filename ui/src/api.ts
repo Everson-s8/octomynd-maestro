@@ -11,6 +11,7 @@ export type TaskStatus =
   | "waiting_quota"
   | "blocked"
   | "failed"
+  | "cancelled"
   | "done";
 
 export type DashboardTask = {
@@ -84,7 +85,7 @@ export type DashboardData = {
 export type GoalRun = {
   id: number;
   taskId: number;
-  status: "running" | "waiting_provider" | "completed" | "blocked" | "failed";
+  status: "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
   currentPhase: "planning" | "implementing" | "testing" | "reviewing";
   stepCount: number;
   maxSteps: number;
@@ -193,6 +194,24 @@ export async function prepareTask(taskId: number) {
     throw new Error(payload.details?.join(" ") || payload.error || "Não foi possível preparar a task.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
+}
+
+export async function cancelTask(taskId: number) {
+  const response = await fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
+  const payload = await response.json() as { task?: DashboardTask; error?: string; details?: string };
+  if (!response.ok || !payload.task) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel cancelar a task.");
+  }
+  return payload.task;
+}
+
+export async function deleteTask(taskId: number) {
+  const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+  const payload = await response.json() as { task?: DashboardTask; error?: string; details?: string };
+  if (!response.ok || !payload.task) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel apagar a task.");
+  }
+  return payload.task;
 }
 
 export async function fetchTaskReviews(taskId: number): Promise<TaskReview[]> {

@@ -122,4 +122,15 @@ describe("database", () => {
     expect(reopened.maxSteps).toBe(8);
     expect(reopened.finishedAt).toBeNull();
   });
+
+  it("deletes only tasks without worktrees or execution history", () => {
+    database.registerProject({ key: "boo", path: tempDir });
+    const removable = database.createTask("remover rascunho", "dashboard", "boo");
+    expect(database.deleteTask(removable.id).id).toBe(removable.id);
+    expect(() => database.getTask(removable.id)).toThrow("not found");
+
+    const protectedTask = database.createTask("preservar historico", "dashboard", "boo");
+    database.createGoalRun(protectedTask.id);
+    expect(() => database.deleteTask(protectedTask.id)).toThrow("execution history");
+  });
 });

@@ -107,7 +107,8 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 
 - `/start` shows the bot introduction.
 - `/help` shows available commands.
-- `/status` shows daemon status and recent activity.
+- `/status` shows daemon status, active goals and agents currently working.
+- `/status @<key>` shows the active work for one project.
 - `/projects` lists registered projects.
 - `/project_add <key> <repo-path>` registers a local Git project.
 - `/task @<key> <text>` creates a local task for a project.
@@ -117,6 +118,18 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 
 Final goal notifications are proactive: completed goals with a draft PR send a concise review request.
 The notification excludes local worktree paths, credentials and private Telegram identifiers.
+Phase updates are also sent when an agent starts planning, implementation, testing or review,
+regardless of whether the task originated in Telegram, the dashboard or another local surface.
+
+## Task lifecycle controls
+
+The task detail panel supports two governed actions:
+
+- **Cancel task** interrupts an active Codex or Claude subprocess and preserves execution history.
+- **Delete task** is limited to tasks without a worktree or goal history.
+
+Pull requests are reconciled with GitHub while the dashboard is active. A PR merged outside the
+dashboard automatically marks its task as completed and leaves the human review queue.
 
 Example:
 

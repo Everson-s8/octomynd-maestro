@@ -221,6 +221,47 @@ describe("goal runner", () => {
     expect(notifications[0].pullRequestUrl).toBe("https://github.com/example/boo/pull/1");
     coordinator.shutdown();
   });
+
+  it("cancels an active provider process and preserves task history", async () => {
+    const projectDir = path.join(tempDir, "cancel-project");
+    const worktreeDir = path.join(tempDir, "cancel-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "cancel", path: projectDir });
+    const task = database.createTask("long running task", "dashboard", "cancel");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Cancelable Codex",
+      capabilities: new Set(["planning"]),
+      health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
+      execute: async (request) => new Promise((resolve) => {
+        request.signal?.addEventListener("abort", () => resolve({
+          outcome: "cancelled",
+          summary: "cancelled",
+          output: "",
+          error: null,
+          durationMs: 1,
+          retryable: false
+        }), { once: true });
+      })
+    };
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts")
+    );
+
+    const run = coordinator.start(task.id, 6);
+    await waitFor(() => database.listGoalSteps(run.id).length === 1);
+    coordinator.cancel(task.id);
+    await waitFor(() => database.getGoalRun(run.id).status === "cancelled");
+
+    expect(database.getTask(task.id).status).toBe("cancelled");
+    expect(database.listGoalSteps(run.id).at(-1)?.status).toBe("cancelled");
+    expect(database.listEvents().some((event) => event.type === "goal.cancelled")).toBe(true);
+    coordinator.shutdown();
+  });
 });
 
 class FakeProvider implements AgentProvider {

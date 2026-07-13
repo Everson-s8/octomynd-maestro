@@ -1,7 +1,9 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  cancelTask,
   createImprovement,
   createTask,
+  deleteTask,
   decideHumanReview,
   decideImprovement,
   DashboardData,
@@ -36,6 +38,7 @@ const taskStatusLabels: Record<TaskStatus, string> = {
   waiting_quota: "aguardando cota",
   blocked: "bloqueada",
   failed: "falhou",
+  cancelled: "cancelada",
   done: "concluída"
 };
 
@@ -52,6 +55,7 @@ const statusOrder: TaskStatus[] = [
   "blocked",
   "failed",
   "rejected",
+  "cancelled",
   "done"
 ];
 
@@ -87,7 +91,7 @@ export default function App() {
   const activeTasks = useMemo(() => {
     if (!data) return [];
     return [...data.tasks]
-      .filter((task) => !["done", "failed", "rejected"].includes(task.status))
+      .filter((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status))
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
   }, [data]);
   const selectedTask = data?.tasks.find((task) => task.id === selectedTaskId) ?? null;
@@ -138,6 +142,10 @@ export default function App() {
         goal={selectedGoal}
         onClose={() => setSelectedTaskId(null)}
         onPrepared={async () => {
+          await refresh(true);
+        }}
+        onDeleted={async () => {
+          setSelectedTaskId(null);
           await refresh(true);
         }}
       />
@@ -221,7 +229,7 @@ function Topbar({
 }
 
 function HeroConsole({ data }: { data: DashboardData }) {
-  const leadTask = data.tasks.find((task) => !["done", "failed", "rejected"].includes(task.status));
+  const leadTask = data.tasks.find((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status));
   return (
     <section className="hero-console panel" aria-labelledby="hero-title">
       <div className="hero-grid" aria-hidden="true" />
@@ -678,16 +686,19 @@ function TaskDetail({
   task,
   goal,
   onClose,
-  onPrepared
+  onPrepared,
+  onDeleted
 }: {
   task: DashboardTask | null;
   goal: GoalRun | null;
   onClose: () => void;
   onPrepared: () => Promise<void>;
+  onDeleted: () => Promise<void>;
 }) {
   const [preparing, setPreparing] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [startingGoal, setStartingGoal] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState<"cancel" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviews, setReviews] = useState<TaskReview[]>([]);
   const open = task !== null;
@@ -754,7 +765,37 @@ function TaskDetail({
     }
   }
 
+  async function handleCancel() {
+    if (!window.confirm(`Cancelar a task #${taskId}? O agente em execucao sera interrompido.`)) return;
+    setLifecycleBusy("cancel");
+    setError(null);
+    try {
+      await cancelTask(taskId);
+      await onPrepared();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar a task.");
+    } finally {
+      setLifecycleBusy(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Apagar permanentemente a task #${taskId}? Esta acao nao pode ser desfeita.`)) return;
+    setLifecycleBusy("delete");
+    setError(null);
+    try {
+      await deleteTask(taskId);
+      await onDeleted();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel apagar a task.");
+    } finally {
+      setLifecycleBusy(null);
+    }
+  }
+
   const canPrepare = task.status === "queued" && !task.worktreePrepared;
+  const canCancel = !["done", "failed", "rejected", "cancelled"].includes(task.status);
+  const canDelete = !task.worktreePrepared && ["queued", "cancelled"].includes(task.status);
 
   return (
     <div className="detail-backdrop is-open" onMouseDown={(event) => {
@@ -793,7 +834,7 @@ function TaskDetail({
           <p>O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem atualizar a task manualmente.</p>
           <button
             className="goal-action"
-            disabled={!task.worktreePrepared || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || ["done", "awaiting_human", "ready_to_merge", "rejected"].includes(task.status)}
+            disabled={!task.worktreePrepared || ["running", "waiting_provider"].includes(goal?.status ?? "") || startingGoal || ["done", "awaiting_human", "ready_to_merge", "rejected", "cancelled"].includes(task.status)}
             onClick={() => void handleStartGoal()}
           >
             {startingGoal
@@ -838,6 +879,19 @@ function TaskDetail({
               <p>{review.content || review.error}</p>
             </article>
           ))}
+        </div>
+
+        <div className="task-danger-zone">
+          <div><span>Controle da task</span><strong>Cancelar ou apagar</strong></div>
+          <p>Cancelar interrompe a execucao e preserva o historico. Apagar so e permitido sem worktree e sem historico de goal.</p>
+          <div className="task-danger-actions">
+            <button disabled={!canCancel || lifecycleBusy !== null} onClick={() => void handleCancel()}>
+              {lifecycleBusy === "cancel" ? "Cancelando..." : "Cancelar task"}
+            </button>
+            <button disabled={!canDelete || lifecycleBusy !== null} onClick={() => void handleDelete()}>
+              {lifecycleBusy === "delete" ? "Apagando..." : "Apagar task"}
+            </button>
+          </div>
         </div>
       </aside>
     </div>
@@ -898,7 +952,7 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
 }
 
 function statusProgress(status: TaskStatus): number {
-  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, blocked: 42, failed: 100, rejected: 100, done: 100 }[status];
+  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, blocked: 42, failed: 100, rejected: 100, cancelled: 100, done: 100 }[status];
 }
 
 function formatRelative(value: string): string {

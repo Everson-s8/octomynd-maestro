@@ -142,5 +142,5 @@ function defaultAgentPresence(
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return !["done", "failed", "blocked", "rejected"].includes(task.status);
+  return !["done", "failed", "blocked", "rejected", "cancelled"].includes(task.status);
 }

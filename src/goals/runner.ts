@@ -25,6 +25,7 @@ export type GoalRunnerOptions = {
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
+  signal?: AbortSignal;
 };
 
 export async function runTaskGoal(
@@ -54,6 +55,9 @@ export async function runTaskGoal(
 
   try {
     while (stepCount < run.maxSteps) {
+      if (options.signal?.aborted) {
+        return cancelRun(database, currentRun, phase, stepCount, task.id);
+      }
       database.updateTaskStatus(task.id, taskStatusForPhase(phase));
       currentRun = database.updateGoalRun({
         id: run.id,
@@ -86,9 +90,10 @@ export async function runTaskGoal(
         project,
         previousSteps: database.listGoalSteps(run.id),
         humanFeedback: latestChangeRequest(database, run.id),
-        artifactsRoot: path.resolve(options.artifactsRoot)
+        artifactsRoot: path.resolve(options.artifactsRoot),
+        signal: options.signal
       });
-      const countsTowardBudget = !(result.outcome === "failed" && result.retryable);
+      const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
       database.finishGoalStep({
         id: goalStep.id,
@@ -110,6 +115,10 @@ export async function runTaskGoal(
           durationMs: result.durationMs
         }
       });
+
+      if (result.outcome === "cancelled" || options.signal?.aborted) {
+        return cancelRun(database, currentRun, phase, stepCount, task.id);
+      }
 
       if (result.outcome === "blocked") {
         return finishRun(database, currentRun, "blocked", phase, stepCount, result.error || result.summary, task.id);
@@ -293,4 +302,29 @@ function finishRun(
     metadata: { runId: run.id, phase, stepCount }
   });
   return finished;
+}
+
+function cancelRun(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase,
+  stepCount: number,
+  taskId: number
+): GoalRunRecord {
+  database.updateTaskStatus(taskId, "cancelled");
+  const cancelled = database.updateGoalRun({
+    id: run.id,
+    status: "cancelled",
+    currentPhase: phase,
+    stepCount,
+    lastError: "Cancelled by user."
+  });
+  database.addEvent({
+    source: "human",
+    type: "goal.cancelled",
+    text: `Goal #${run.id} cancelled by user.`,
+    taskId,
+    metadata: { runId: run.id, phase, stepCount }
+  });
+  return cancelled;
 }

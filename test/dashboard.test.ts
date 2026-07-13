@@ -123,6 +123,18 @@ describe("dashboard", () => {
       expect(database.listTasksByProject("boo")).toHaveLength(2);
       expect(database.getLastEvent()?.source).toBe("dashboard");
 
+      const disposableResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", text: "task descartavel" })
+      });
+      const disposable = await disposableResponse.json() as { task: { id: number } };
+      const deleteResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${disposable.task.id}`, {
+        method: "DELETE"
+      });
+      expect(deleteResponse.status).toBe(200);
+      expect(() => database.getTask(disposable.task.id)).toThrow("not found");
+
       const createdTask = database.listTasksByProject("boo")[0];
       const prepareResponse = await fetch(
         `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/prepare`,

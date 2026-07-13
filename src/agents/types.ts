@@ -3,7 +3,7 @@ import { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db.js";
 export type AgentProviderId = "codex" | "claude";
 export type AgentCapability = "planning" | "coding" | "testing" | "reviewing" | "research" | "conversation";
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
-export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed";
+export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
 
 export type AgentHealth = {
   state: AgentHealthState;
@@ -21,6 +21,7 @@ export type AgentExecutionRequest = {
   previousSteps: GoalStepRecord[];
   humanFeedback?: string | null;
   artifactsRoot: string;
+  signal?: AbortSignal;
 };
 
 export type AgentExecutionResult = {

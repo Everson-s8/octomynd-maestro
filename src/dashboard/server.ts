@@ -235,6 +235,51 @@ async function routeRequest(
     return;
   }
 
+  const cancelTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelTaskMatch) {
+    if (!options.goalCoordinator) {
+      sendJson(response, 503, { error: "goal_runner_unavailable" });
+      return;
+    }
+    try {
+      const task = options.goalCoordinator.cancel(Number(cancelTaskMatch[1]));
+      sendJson(response, 200, { task });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown cancellation error";
+      sendJson(response, /not found/i.test(message) ? 404 : 409, {
+        error: "task_cancel_failed",
+        details: message
+      });
+    }
+    return;
+  }
+
+  const deleteTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)$/);
+  if (request.method === "DELETE" && deleteTaskMatch) {
+    const taskId = Number(deleteTaskMatch[1]);
+    if (options.goalCoordinator?.isActive(taskId)) {
+      sendJson(response, 409, { error: "task_delete_failed", details: "Cancel the active task before deleting it." });
+      return;
+    }
+    try {
+      const task = options.database.deleteTask(taskId);
+      options.database.addEvent({
+        source: "dashboard",
+        type: "task.deleted",
+        text: `Task #${task.id} deleted.`,
+        metadata: { deletedTaskId: task.id, projectKey: task.projectKey }
+      });
+      sendJson(response, 200, { task });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown deletion error";
+      sendJson(response, /not found/i.test(message) ? 404 : 409, {
+        error: "task_delete_failed",
+        details: message
+      });
+    }
+    return;
+  }
+
   const prepareMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/prepare$/);
   if (request.method === "POST" && prepareMatch) {
     const taskId = Number(prepareMatch[1]);

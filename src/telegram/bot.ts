@@ -306,7 +306,7 @@ export function formatStatus(projectName: string, database: MaestroDatabase, pro
     `Maestro: online`,
     projectKey ? `Projeto: @${projectKey}` : `Workspace: ${projectName}`,
     `Projetos: ${projects.length}`,
-    `Tasks ativas: ${tasks.filter((task) => !["done", "failed", "rejected", "blocked"].includes(task.status)).length}`,
+    `Tasks ativas: ${tasks.filter((task) => !["done", "failed", "rejected", "blocked", "cancelled"].includes(task.status)).length}`,
     ...(projectKey ? [] : [
       `Tasks queued: ${counts.queued ?? 0}`,
       `Tasks awaiting_human: ${counts.awaiting_human ?? 0}`,

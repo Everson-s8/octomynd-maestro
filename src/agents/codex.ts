@@ -87,7 +87,17 @@ export class CodexProvider implements AgentProvider {
       "-"
     ];
 
-    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), 20 * 60_000);
+    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), 20 * 60_000, request.signal);
+    if (processResult.aborted) {
+      return {
+        outcome: "cancelled",
+        summary: "Codex execution cancelled by user.",
+        output: "",
+        error: null,
+        durationMs: Date.now() - startedAt,
+        retryable: false
+      };
+    }
     const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
       const quota = /usage limit|rate limit|quota|credits/i.test(combined);
@@ -182,11 +192,24 @@ function resolveCodexCliEntry(): string | null {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
-function runProcess(command: string, args: string[], cwd: string, stdin: string, timeoutMs: number) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve) => {
+function runProcess(
+  command: string,
+  args: string[],
+  cwd: string,
+  stdin: string,
+  timeoutMs: number,
+  signal?: AbortSignal
+) {
+  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      child.kill();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(() => child.kill(), timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -194,13 +217,16 @@ function runProcess(command: string, args: string[], cwd: string, stdin: string,
     child.stderr.on("data", (chunk: string) => { stderr = appendBounded(stderr, chunk); });
     child.on("error", (error) => {
       clearTimeout(timeout);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim() });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
-      resolve({ exitCode, stdout, stderr });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ exitCode, stdout, stderr, aborted });
     });
     child.stdin.end(stdin);
+    if (signal?.aborted) onAbort();
   });
 }
 

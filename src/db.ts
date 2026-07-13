@@ -15,6 +15,7 @@ export type TaskStatus =
   | "waiting_quota"
   | "blocked"
   | "failed"
+  | "cancelled"
   | "done";
 
 export type ProjectRecord = {
@@ -126,9 +127,9 @@ export type ImprovementProposalInput = {
   source?: string;
 };
 
-export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed";
+export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
 export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
-export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed";
+export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
 
 export type GoalRunRecord = {
   id: number;
@@ -230,6 +231,7 @@ export function createDatabase(databasePath: string) {
   const updateTaskStatusStatement = db.prepare(`
     UPDATE tasks SET status = @status, updated_at = @now WHERE id = @id
   `);
+  const deleteTaskStatement = db.prepare("DELETE FROM tasks WHERE id = ?");
   const createGoalRunStatement = db.prepare(`
     INSERT INTO goal_runs (
       task_id, status, current_phase, step_count, max_steps, last_error,
@@ -348,6 +350,26 @@ export function createDatabase(databasePath: string) {
       this.getTask(id);
       updateTaskStatusStatement.run({ id, status, now: new Date().toISOString() });
       return this.getTask(id);
+    },
+
+    deleteTask(id: number): TaskRecord {
+      const task = this.getTask(id);
+      if (task.worktreePath) {
+        throw new Error(`Task #${id} has a prepared worktree and cannot be deleted. Cancel it instead.`);
+      }
+      const goalCount = db.prepare("SELECT COUNT(*) AS count FROM goal_runs WHERE task_id = ?").get(id) as { count: number };
+      if (goalCount.count > 0) {
+        throw new Error(`Task #${id} has execution history and cannot be deleted. Cancel it instead.`);
+      }
+      if (!["queued", "cancelled"].includes(task.status)) {
+        throw new Error(`Task #${id} must be queued or cancelled before deletion.`);
+      }
+      db.transaction(() => {
+        db.prepare("DELETE FROM task_reviews WHERE task_id = ?").run(id);
+        db.prepare("DELETE FROM events WHERE task_id = ?").run(id);
+        deleteTaskStatement.run(id);
+      })();
+      return task;
     },
 
     listTasks(limit = 10): TaskRecord[] {

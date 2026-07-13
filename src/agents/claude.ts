@@ -35,7 +35,17 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
-    const result = await reviewTaskWithClaude(request.task, request.project);
+    const result = await reviewTaskWithClaude(request.task, request.project, request.signal);
+    if (request.signal?.aborted) {
+      return {
+        outcome: "cancelled",
+        summary: "Claude execution cancelled by user.",
+        output: "",
+        error: null,
+        durationMs: result.durationMs,
+        retryable: false
+      };
+    }
     if (result.status !== "completed") {
       this.cacheHealth({
         state: result.status === "auth_required" ? "auth_required" : "offline",
@@ -74,7 +84,11 @@ export class ClaudeProvider implements AgentProvider {
   }
 }
 
-export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
+export const reviewTaskWithClaude = async (
+  task: TaskRecord,
+  project: ProjectRecord,
+  signal?: AbortSignal
+): Promise<ClaudeReviewResult> => {
   const startedAt = Date.now();
   const cwd = task.worktreePath || project.path;
   const cli = resolveClaudeCliCommand();
@@ -110,7 +124,7 @@ export const reviewTaskWithClaude: ClaudeReviewer = async (task, project) => {
     "--no-session-persistence"
   ];
 
-  const result = await runProcess(cli.command, args, cwd, 180_000);
+  const result = await runProcess(cli.command, args, cwd, 180_000, signal);
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
   if (result.exitCode === 0 && result.stdout.trim()) {
@@ -177,11 +191,17 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
   return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
 }
 
-function runProcess(command: string, args: string[], cwd: string, timeoutMs: number) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve) => {
+function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal) {
+  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      child.kill();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(() => child.kill(), timeoutMs);
 
     child.stdout.setEncoding("utf8");
@@ -190,12 +210,15 @@ function runProcess(command: string, args: string[], cwd: string, timeoutMs: num
     child.stderr.on("data", (chunk: string) => { stderr = appendBounded(stderr, chunk); });
     child.on("error", (error) => {
       clearTimeout(timeout);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim() });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
-      resolve({ exitCode, stdout, stderr });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ exitCode, stdout, stderr, aborted });
     });
+    if (signal?.aborted) onAbort();
   });
 }
 
