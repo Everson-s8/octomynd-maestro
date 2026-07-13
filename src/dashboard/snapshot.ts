@@ -30,6 +30,7 @@ export function buildDashboardSnapshot(
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
   const reviewQueue = listReviewQueue(database);
+  const features = database.listFeatures(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -112,6 +113,26 @@ export function buildDashboardSnapshot(
       lastError: goal.lastError
         ? truncateForDisplay(redactSensitiveText(goal.lastError), EVENT_TEXT_MAX_LENGTH)
         : null
+    })),
+    features: features.map((feature) => ({
+      id: feature.id,
+      projectKey: feature.projectKey,
+      name: redactSensitiveText(feature.name),
+      objective: truncateForDisplay(redactSensitiveText(feature.objective), EVENT_TEXT_MAX_LENGTH),
+      status: feature.status,
+      branchName: redactSensitiveText(feature.branchName),
+      pullRequestUrl: feature.pullRequestUrl,
+      reviewerProvider: feature.reviewerProvider,
+      reviewSummary: feature.reviewSummary
+        ? truncateForDisplay(redactSensitiveText(feature.reviewSummary), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      lastError: feature.lastError
+        ? truncateForDisplay(redactSensitiveText(feature.lastError), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      itemCount: database.listFeatureItems(feature.id).length,
+      mergedAt: feature.mergedAt,
+      createdAt: feature.createdAt,
+      updatedAt: feature.updatedAt
     })),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)

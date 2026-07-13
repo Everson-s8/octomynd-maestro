@@ -18,6 +18,7 @@ import { buildDashboardSnapshot } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { FeatureCoordinator } from "../features/coordinator.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -26,6 +27,7 @@ export type DashboardServerOptions = {
   claudeReviewer?: ClaudeReviewer;
   goalCoordinator?: GoalCoordinator;
   reviewCoordinator?: ReviewCoordinator;
+  featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
 };
 
@@ -72,7 +74,10 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    await options.reviewCoordinator?.reconcile();
+    await Promise.all([
+      options.reviewCoordinator?.reconcile(),
+      options.featureCoordinator?.reconcile()
+    ]);
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,

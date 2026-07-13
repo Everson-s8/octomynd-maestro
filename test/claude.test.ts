@@ -9,7 +9,8 @@ import {
   buildClaudeReviewPrompt,
   ClaudeProvider,
   isClaudeAuthenticationError,
-  isClaudeQuotaError
+  isClaudeQuotaError,
+  parseClaudeReviewDecision
 } from "../src/agents/claude.js";
 import { AgentExecutionRequest } from "../src/agents/types.js";
 import { ProjectRecord, TaskRecord } from "../src/db.js";
@@ -77,10 +78,12 @@ describe("claude review", () => {
     const planning = executionRequest("planning", "planning");
     const coding = executionRequest("implementing", "coding");
     const testing = executionRequest("testing", "testing");
+    const reviewing = executionRequest("reviewing", "reviewing");
 
     const planningArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), planning, "C:/worktree");
     const codingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), coding, "C:/worktree");
     const testingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), testing, "C:/worktree");
+    const reviewingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), reviewing, "C:/worktree");
 
     expect(planningArgs).toContain("plan");
     expect(planningArgs.join(" ")).not.toContain("--allowedTools");
@@ -92,12 +95,25 @@ describe("claude review", () => {
     expect(testingArgs.join(" ")).toContain("Bash(npm test*)");
     expect(testingArgs.join(" ")).not.toContain("--allowedTools Read,Glob,Grep,Edit,Write,Bash --disallowedTools");
     expect(testingArgs.join(" ")).toContain("Bash(curl*)");
+    expect(reviewingArgs).toContain("plan");
+    expect(reviewingArgs.join(" ")).toContain("Bash(git diff*)");
+    expect(reviewingArgs.join(" ")).toContain("Bash(git show*)");
+    expect(reviewingArgs.join(" ")).not.toContain("Edit");
     expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
   });
 
   it("recognizes Claude subscription quota failures", () => {
     expect(isClaudeQuotaError("You've hit your session limit · resets 12:40am")).toBe(true);
     expect(isClaudeQuotaError("Unexpected filesystem failure")).toBe(false);
+  });
+
+  it("requires one explicit final review decision", () => {
+    expect(parseClaudeReviewDecision("Tudo certo.\nFINAL_REVIEW_DECISION: approved")).toBe("approved");
+    expect(parseClaudeReviewDecision("FINAL_REVIEW_DECISION: changes_requested")).toBe("changes_requested");
+    expect(parseClaudeReviewDecision("Aprovado sem marcador estruturado.")).toBeNull();
+    expect(parseClaudeReviewDecision(
+      "FINAL_REVIEW_DECISION: approved\nFINAL_REVIEW_DECISION: changes_requested"
+    )).toBeNull();
   });
 });
 

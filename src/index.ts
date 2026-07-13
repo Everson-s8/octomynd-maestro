@@ -13,6 +13,8 @@ import { createTelegramReviewNotifier } from "./telegram/notifications.js";
 import { createTelegramGoalProgressNotifier, createTelegramReviewSyncNotifier } from "./telegram/notifications.js";
 import { ReviewCoordinator } from "./reviews/coordinator.js";
 import { BacklogAutopilot } from "./backlog/autopilot.js";
+import { FeatureCoordinator } from "./features/coordinator.js";
+import { createTelegramFeatureNotifier } from "./telegram/notifications.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -61,6 +63,11 @@ const reviewSyncNotifier = createTelegramReviewSyncNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const featureNotifier = createTelegramFeatureNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
@@ -68,14 +75,29 @@ const reviewCoordinator = new ReviewCoordinator(
   reviewNotifier,
   reviewSyncNotifier
 );
+const featureCoordinator = new FeatureCoordinator(
+  database,
+  agentRegistry,
+  path.join(path.dirname(config.databasePath), "feature-runs"),
+  undefined,
+  featureNotifier
+);
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath
 });
 void reviewCoordinator.reconcile(true);
+featureCoordinator.start();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
-  ? await startDashboardServer({ config, database, goalCoordinator, reviewCoordinator, backlogAutopilot })
+  ? await startDashboardServer({
+    config,
+    database,
+    goalCoordinator,
+    reviewCoordinator,
+    featureCoordinator,
+    backlogAutopilot
+  })
   : null;
 backlogAutopilot.start();
 
@@ -107,6 +129,7 @@ function shutdown() {
   console.log("Stopping Maestro.");
   bot.stop();
   backlogAutopilot.shutdown();
+  featureCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
     dashboardServer.close(() => database.close());

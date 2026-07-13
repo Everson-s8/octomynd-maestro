@@ -34,6 +34,14 @@ const CLAUDE_CAPABILITIES = new Set<AgentCapability>([
 ]);
 
 const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
+const REVIEW_TOOLS = [...READ_ONLY_TOOLS, "Bash"];
+const REVIEW_ALLOWED_TOOLS = [
+  ...READ_ONLY_TOOLS,
+  "Bash(git diff*)",
+  "Bash(git status*)",
+  "Bash(git log*)",
+  "Bash(git show*)"
+];
 const CODING_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
 const TESTING_TOOLS = [...CODING_TOOLS, "Bash"];
 const TESTING_ALLOWED_TOOLS = [
@@ -125,12 +133,14 @@ export class ClaudeProvider implements AgentProvider {
       checkedAt: new Date().toISOString()
     }, 30_000);
     const content = result.stdout.trim();
-    const requestsChanges = request.phase === "reviewing"
-      && /reprovado|aprovado com ajustes|mudancas? solicitadas?|changes requested/i.test(content);
+    const reviewDecision = request.phase === "reviewing" ? parseClaudeReviewDecision(content) : null;
+    const requestsChanges = request.phase === "reviewing" && reviewDecision !== "approved";
     return {
       outcome: requestsChanges ? "changes_requested" : "completed",
       summary: requestsChanges
-        ? "Claude solicitou ajustes concretos."
+        ? reviewDecision === "changes_requested"
+          ? "Claude solicitou ajustes concretos."
+          : "Claude nao aprovou explicitamente a revisao final."
         : `Claude concluiu a fase ${request.phase}.`,
       output: content,
       error: null,
@@ -243,7 +253,12 @@ export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
     planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
     implementing: "Implemente integralmente a task no workspace. Preserve o escopo.",
     testing: "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
-    reviewing: "Revise o diff, requisitos e testes. Nao edite. Solicite ajustes somente para problemas concretos."
+    reviewing: [
+      "Revise o diff, requisitos e testes. Nao edite.",
+      "Solicite ajustes somente para problemas concretos.",
+      "Finalize com uma linha exata: FINAL_REVIEW_DECISION: approved ou FINAL_REVIEW_DECISION: changes_requested.",
+      "Se nao conseguir inspecionar todo o diff ou validar as evidencias, use changes_requested."
+    ].join(" ")
   }[request.phase];
 
   return [
@@ -270,8 +285,9 @@ export function buildClaudeGoalArgs(
 ): string[] {
   const writable = request.capability === "coding" || request.capability === "testing";
   const testing = request.capability === "testing";
-  const tools = testing ? TESTING_TOOLS : writable ? CODING_TOOLS : READ_ONLY_TOOLS;
-  const allowedTools = testing ? TESTING_ALLOWED_TOOLS : CODING_TOOLS;
+  const reviewing = request.capability === "reviewing";
+  const tools = testing ? TESTING_TOOLS : writable ? CODING_TOOLS : reviewing ? REVIEW_TOOLS : READ_ONLY_TOOLS;
+  const allowedTools = testing ? TESTING_ALLOWED_TOOLS : reviewing ? REVIEW_ALLOWED_TOOLS : CODING_TOOLS;
   return [
     ...cli.argsPrefix,
     "--print",
@@ -281,12 +297,20 @@ export function buildClaudeGoalArgs(
     writable ? "acceptEdits" : "plan",
     "--tools",
     tools.join(","),
-    ...(writable ? ["--allowedTools", allowedTools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS] : []),
+    ...(writable || reviewing
+      ? ["--allowedTools", allowedTools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS]
+      : []),
     "--add-dir",
     cwd,
     "--no-session-persistence",
     buildClaudeGoalPrompt(request)
   ];
+}
+
+export function parseClaudeReviewDecision(content: string): "approved" | "changes_requested" | null {
+  const matches = [...content.matchAll(/FINAL_REVIEW_DECISION:\s*(approved|changes_requested)\b/gi)];
+  if (matches.length !== 1) return null;
+  return matches[0][1].toLowerCase() as "approved" | "changes_requested";
 }
 
 export function buildClaudeCliCommand(cliEntry: string): ClaudeCliCommand {
