@@ -209,6 +209,21 @@ describe("human review queue", () => {
     expect(reviews.list()).toEqual([]);
   });
 
+  it("continues review reconciliation from background polling", async () => {
+    const run = reviewableGoal();
+    const github = new FakeGitHubGateway();
+    github.state = { isDraft: false, state: "MERGED" };
+    const reviews = new ReviewCoordinator(database, idleGoalCoordinator(), github, undefined, undefined, 20);
+
+    reviews.start();
+    try {
+      await waitFor(() => database.getTask(run.taskId).status === "done");
+      expect(database.getLastEvent()?.type).toBe("review.sync_merged");
+    } finally {
+      reviews.shutdown();
+    }
+  });
+
   it("serves the review queue and records an API decision", async () => {
     const run = reviewableGoal();
     const goals = idleGoalCoordinator();

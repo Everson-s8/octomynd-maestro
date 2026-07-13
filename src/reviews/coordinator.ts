@@ -15,6 +15,7 @@ export type ReviewSyncNotifier = (item: ReviewQueueItem, state: ReviewSyncState)
 
 export class ReviewCoordinator {
   private lastReconciledAt = 0;
+  private timer: NodeJS.Timeout | null = null;
   private reconcilePromise: Promise<number> | null = null;
 
   constructor(
@@ -22,7 +23,8 @@ export class ReviewCoordinator {
     private readonly goals: GoalCoordinator,
     private readonly github: ReviewGitHubGateway = new GhReviewGateway(),
     private readonly notify?: ReviewDecisionNotifier,
-    private readonly notifySync?: ReviewSyncNotifier
+    private readonly notifySync?: ReviewSyncNotifier,
+    private readonly pollIntervalMs = 15_000
   ) {}
 
   list(): ReviewQueueItem[] {
@@ -33,9 +35,21 @@ export class ReviewCoordinator {
     return buildReviewQueueItem(this.database, runId);
   }
 
+  start(): void {
+    if (this.timer) return;
+    void this.reconcile(true);
+    this.timer = setInterval(() => void this.reconcile(true), this.pollIntervalMs);
+    this.timer.unref?.();
+  }
+
+  shutdown(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
   reconcile(force = false): Promise<number> {
     const now = Date.now();
-    if (!force && now - this.lastReconciledAt < 15_000) return Promise.resolve(0);
+    if (!force && now - this.lastReconciledAt < this.pollIntervalMs) return Promise.resolve(0);
     if (this.reconcilePromise) return this.reconcilePromise;
     this.lastReconciledAt = now;
     this.reconcilePromise = this.reconcilePullRequests().finally(() => {

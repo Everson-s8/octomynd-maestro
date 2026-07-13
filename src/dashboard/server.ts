@@ -74,10 +74,6 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    await Promise.all([
-      options.reviewCoordinator?.reconcile(),
-      options.featureCoordinator?.reconcile()
-    ]);
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,
