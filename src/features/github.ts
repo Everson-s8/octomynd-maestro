@@ -15,6 +15,8 @@ export type FeaturePullRequestState = {
   isDraft: boolean;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   headRefName: string;
+  headRepositoryOwner: string;
+  headRepositoryName: string;
   baseRefName: string;
   headSha: string;
   checks: FeatureCheck[];
@@ -25,6 +27,7 @@ export interface FeatureGitHubGateway {
   merge(url: string, expectedHeadSha: string): Promise<void>;
   markDraft(url: string): Promise<void>;
   closeSuperseded(url: string, featureUrl: string): Promise<void>;
+  deleteHeadBranch(url: string): Promise<void>;
 }
 
 export class GhFeatureGateway implements FeatureGitHubGateway {
@@ -34,7 +37,7 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       "view",
       url,
       "--json",
-      "number,title,url,state,isDraft,mergeable,headRefName,baseRefName,headRefOid,statusCheckRollup"
+      "number,title,url,state,isDraft,mergeable,headRefName,headRepository,headRepositoryOwner,baseRefName,headRefOid,statusCheckRollup"
     ], "inspect feature pull request");
     const parsed = JSON.parse(output) as {
       number: number;
@@ -44,6 +47,8 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       isDraft: boolean;
       mergeable: FeaturePullRequestState["mergeable"];
       headRefName: string;
+      headRepository: { name: string } | null;
+      headRepositoryOwner: { login: string } | null;
       baseRefName: string;
       headRefOid: string;
       statusCheckRollup: Array<Record<string, unknown>>;
@@ -56,6 +61,8 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       isDraft: parsed.isDraft,
       mergeable: parsed.mergeable,
       headRefName: parsed.headRefName,
+      headRepositoryOwner: parsed.headRepositoryOwner?.login ?? "",
+      headRepositoryName: parsed.headRepository?.name ?? "",
       baseRefName: parsed.baseRefName,
       headSha: parsed.headRefOid,
       checks: (parsed.statusCheckRollup ?? []).map(mapCheck)
@@ -82,10 +89,31 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       "pr",
       "close",
       url,
-      "--delete-branch",
       "--comment",
       `Superseded by the completed Feature PR ${featureUrl}.`
     ], "close superseded work pull request");
+  }
+
+  async deleteHeadBranch(url: string): Promise<void> {
+    const state = await this.inspect(url);
+    if (!state.headRepositoryOwner || !state.headRepositoryName || !state.headRefName) {
+      throw new Error("Cannot identify the pull request head repository and branch.");
+    }
+    if (state.headRefName === state.baseRefName) {
+      throw new Error("Refusing to delete the pull request base branch.");
+    }
+    try {
+      await runGh([
+        "api",
+        "--method",
+        "DELETE",
+        `repos/${state.headRepositoryOwner}/${state.headRepositoryName}/git/refs/heads/${state.headRefName}`
+      ], "delete integrated pull request branch");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/HTTP 404|reference does not exist|git reference could not be found/i.test(message)) return;
+      throw error;
+    }
   }
 }
 
