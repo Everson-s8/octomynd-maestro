@@ -10,6 +10,11 @@ export type MaestroConfig = {
     host: string;
     port: number;
   };
+  autopilot: {
+    enabled: boolean;
+    pollIntervalMs: number;
+    maxConcurrentGoals: number;
+  };
   telegram: {
     botToken: string;
     allowedUserId: string | null;
@@ -28,6 +33,11 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
       enabled: normalizeBoolean(env.MAESTRO_DASHBOARD_ENABLED, true),
       host: env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1",
       port: normalizePort(env.MAESTRO_DASHBOARD_PORT, 4787)
+    },
+    autopilot: {
+      enabled: normalizeBoolean(env.MAESTRO_AUTOPILOT_ENABLED, true),
+      pollIntervalMs: normalizePositiveInteger(env.MAESTRO_AUTOPILOT_POLL_MS, 30_000, 1_000),
+      maxConcurrentGoals: normalizePositiveInteger(env.MAESTRO_AUTOPILOT_MAX_CONCURRENT, 1, 1)
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",
@@ -69,4 +79,9 @@ function normalizeBoolean(value: string | undefined, fallback: boolean): boolean
 function normalizePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
+}
+
+function normalizePositiveInteger(value: string | undefined, fallback: number, minimum: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
 }

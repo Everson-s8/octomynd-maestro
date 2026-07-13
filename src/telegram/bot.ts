@@ -5,8 +5,18 @@ import { parseProjectTaskInput } from "../orchestrator.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
+import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 
-export function createTelegramBot(config: MaestroConfig, database: MaestroDatabase) {
+export type TelegramBotOptions = {
+  cancelTask?: (taskId: number) => TaskRecord;
+  autopilotStatus?: () => BacklogAutopilotSnapshot | null;
+};
+
+export function createTelegramBot(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  options: TelegramBotOptions = {}
+) {
   const bot = new Bot(config.telegram.botToken);
   const commands = new ApplicationCommands(database);
 
@@ -64,7 +74,7 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
       return;
     }
-    await ctx.reply(formatStatus(config.projectName, database, projectKey));
+    await ctx.reply(formatStatus(config.projectName, database, projectKey, options.autopilotStatus?.() ?? null));
   });
 
   bot.command("projects", async (ctx) => {
@@ -179,6 +189,10 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
     );
   });
 
+  bot.command("cancel", async (ctx) => {
+    await ctx.reply(executeCancelCommand(ctx.message?.text ?? "", options.cancelTask));
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
 
@@ -262,6 +276,21 @@ export function parseTaskId(messageText: string, command: string): number | null
   return match ? Number(match[1]) : null;
 }
 
+export function executeCancelCommand(
+  messageText: string,
+  cancelTask?: (taskId: number) => TaskRecord
+): string {
+  const taskId = parseTaskId(messageText, "cancel");
+  if (!taskId) return "Use: /cancel 2";
+  if (!cancelTask) return "Cancelamento indisponivel neste runtime.";
+  try {
+    const task = cancelTask(taskId);
+    return `Task #${task.id} cancelada. Estado: ${task.status}.`;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Nao foi possivel cancelar a task.";
+  }
+}
+
 export function isUserAllowed(userId: number | undefined, allowedUserId: string | null): boolean {
   if (!allowedUserId) {
     return true;
@@ -269,7 +298,12 @@ export function isUserAllowed(userId: number | undefined, allowedUserId: string 
   return userId !== undefined && String(userId) === allowedUserId;
 }
 
-export function formatStatus(projectName: string, database: MaestroDatabase, projectKey: string | null = null): string {
+export function formatStatus(
+  projectName: string,
+  database: MaestroDatabase,
+  projectKey: string | null = null,
+  autopilot: BacklogAutopilotSnapshot | null = null
+): string {
   const counts = database.countTasksByStatus();
   const lastEvent = database.getLastEvent();
   const projects = database.listProjects();
@@ -294,6 +328,10 @@ export function formatStatus(projectName: string, database: MaestroDatabase, pro
       `Tasks awaiting_human: ${counts.awaiting_human ?? 0}`,
       `Tasks done: ${counts.done ?? 0}`
     ]),
+    ...(autopilot ? [
+      `Autopilot: ${autopilot.enabled ? autopilot.state : "disabled"}`,
+      `Autopilot slots: ${autopilot.runningGoals}/${autopilot.maxConcurrentGoals}; waiting_provider: ${autopilot.waitingProviderGoals}`
+    ] : []),
     "",
     "Trabalhando agora:",
     ...(working.length > 0 ? working : ["- nenhum agente executando"]),
@@ -333,6 +371,7 @@ function formatHelp(): string {
     "/project_add chave caminho-do-repo - cadastrar projeto",
     "/task @projeto texto - criar task",
     "/prepare id - criar branch/worktree local",
+    "/cancel id - cancelar task ativa ou queued",
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto"
   ].join("\n");

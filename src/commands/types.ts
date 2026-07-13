@@ -1,4 +1,4 @@
-export type CommandChannel = "dashboard" | "telegram" | "whatsapp";
+export type CommandChannel = "dashboard" | "telegram" | "whatsapp" | "maestro";
 
 export type CommandOrigin = {
   channel: CommandChannel;

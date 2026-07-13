@@ -244,6 +244,7 @@ function HeroConsole({ data }: { data: DashboardData }) {
           <span>{data.summary.activeTasks} tasks ativas</span>
           <span>{data.summary.projects} projetos locais</span>
           <span>acesso {data.daemon.access === "restricted" ? "restrito" : "aberto"}</span>
+          <span>autopilot {data.autopilot.enabled ? data.autopilot.state : "desligado"}</span>
         </div>
       </div>
       <div className="hero-visual">
@@ -257,7 +258,11 @@ function HeroConsole({ data }: { data: DashboardData }) {
       <div className="hero-now">
         <span>Agora no Maestro</span>
         <strong>{leadTask ? `#${leadTask.id} · ${leadTask.text}` : "Fila livre para a próxima missão"}</strong>
-        <small>{leadTask ? `${leadTask.projectKey ?? "sem projeto"} · ${taskStatusLabels[leadTask.status]}` : "Crie uma task pelo painel ou Telegram"}</small>
+        <small>{leadTask
+          ? `${leadTask.projectKey ?? "sem projeto"} · ${taskStatusLabels[leadTask.status]}`
+          : data.autopilot.enabled
+            ? "Autopilot aguardando a próxima task válida"
+            : "Crie uma task pelo painel ou Telegram"}</small>
       </div>
     </section>
   );

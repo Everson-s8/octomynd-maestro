@@ -43,6 +43,16 @@ describe("ApplicationCommands.createTask", () => {
     expect(telegramTask.source).toBe("telegram");
   });
 
+  it("accepts the internal Maestro origin used by backlog automation", () => {
+    const task = commands.createTask(
+      { channel: "maestro" },
+      { text: "internal backlog task", projectKey: "boo" }
+    );
+
+    expect(task.source).toBe("maestro");
+    expect(database.getLastEvent()?.source).toBe("maestro");
+  });
+
   it("records an audit event carrying the origin metadata", () => {
     commands.createTask({ channel: "telegram", userId: "42", username: "operador" }, { text: "com auditoria", projectKey: "boo" });
 

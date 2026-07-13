@@ -67,10 +67,10 @@ export async function runTaskGoal(
           stepCount
         });
       });
-      let routed = await registry.route(CAPABILITIES[phase], excluded);
+      let routed = await registry.acquire(CAPABILITIES[phase], excluded);
       if (!routed && excluded.size > 0) {
         excluded = new Set();
-        routed = await registry.route(CAPABILITIES[phase]);
+        routed = await registry.acquire(CAPABILITIES[phase]);
       }
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
@@ -114,6 +114,8 @@ export async function runTaskGoal(
           durationMs: Date.now() - startedAt,
           retryable: false
         };
+      } finally {
+        routed.release();
       }
       const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;

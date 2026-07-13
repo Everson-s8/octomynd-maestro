@@ -31,6 +31,7 @@ beforeEach(() => {
     databasePath: path.join(tempDir, "maestro.db"),
     worktreesPath: path.join(tempDir, "worktrees"),
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
+    autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
   database = createDatabase(path.join(tempDir, "maestro.db"));
@@ -52,6 +53,7 @@ describe("dashboard", () => {
     expect(snapshot.projects[0].key).toBe("boo");
     expect(snapshot.summary.improvementCandidates).toBe(0);
     expect(snapshot.summary.activeGoals).toBe(0);
+    expect(snapshot.autopilot).toMatchObject({ enabled: true, state: "idle", queuedTasks: 1 });
     expect(JSON.stringify(snapshot)).not.toContain("test-token");
     expect(JSON.stringify(snapshot)).not.toContain('"123"');
     expect(JSON.stringify(snapshot)).not.toContain(tempDir);
