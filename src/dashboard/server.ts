@@ -295,6 +295,21 @@ async function routeRequest(
     return;
   }
 
+  const integrateFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/integrate$/);
+  if (request.method === "POST" && integrateFeaturePlanMatch) {
+    try {
+      const result = await commands.integrateFeaturePlan(
+        { channel: "dashboard" },
+        Number(integrateFeaturePlanMatch[1]),
+        options.config.worktreesPath
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_integration_failed");
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/tasks") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
