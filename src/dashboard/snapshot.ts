@@ -29,8 +29,10 @@ export function buildDashboardSnapshot(
   const goals = database.listGoalRuns(30);
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
+  const featurePlanCounts = database.countFeaturePlansByStatus();
   const reviewQueue = listReviewQueue(database);
   const features = database.listFeatures(30);
+  const featurePlans = database.listFeaturePlans(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -57,6 +59,7 @@ export function buildDashboardSnapshot(
       queuedTasks: counts.queued ?? 0,
       humanGates: reviewQueue.length + (counts.ready_to_merge ?? 0) + (improvementCounts.candidate ?? 0),
       improvementCandidates: improvementCounts.candidate ?? 0,
+      plannedFeaturePlans: featurePlanCounts.planned ?? 0,
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
@@ -133,6 +136,26 @@ export function buildDashboardSnapshot(
       mergedAt: feature.mergedAt,
       createdAt: feature.createdAt,
       updatedAt: feature.updatedAt
+    })),
+    featurePlans: featurePlans.map((plan) => ({
+      id: plan.id,
+      projectKey: plan.projectKey,
+      projectName: plan.projectName,
+      objective: truncateForDisplay(redactSensitiveText(plan.objective), EVENT_TEXT_MAX_LENGTH),
+      acceptanceCriteria: plan.acceptanceCriteria.map((item) => (
+        truncateForDisplay(redactSensitiveText(item), EVENT_TEXT_MAX_LENGTH)
+      )),
+      status: plan.status,
+      source: plan.source,
+      revision: plan.revision,
+      taskIds: database.listFeaturePlanTasks(plan.id).map((task) => task.taskId),
+      taskCount: database.listFeaturePlanTasks(plan.id).length,
+      cancelledAt: plan.cancelledAt,
+      cancelReason: plan.cancelReason
+        ? truncateForDisplay(redactSensitiveText(plan.cancelReason), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt
     })),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)
