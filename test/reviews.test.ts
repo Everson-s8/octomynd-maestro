@@ -169,6 +169,7 @@ describe("human review queue", () => {
       databasePath: path.join(tempDir, "maestro.db"),
       worktreesPath: path.join(tempDir, "worktrees"),
       dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
+      autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
       telegram: { botToken: "not-a-real-token", allowedUserId: "test-user" }
     };
     const server = createDashboardServer({ config, database, staticRoot: tempDir, goalCoordinator: goals, reviewCoordinator: reviews });

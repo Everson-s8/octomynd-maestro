@@ -2,6 +2,7 @@ import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, TaskRecord } from "../db.js";
 import { listReviewQueue } from "../reviews/evidence.js";
 import { redactSensitiveText, sanitizePublicMetadata } from "../security/redaction.js";
+import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -16,7 +17,8 @@ export type AgentPresence = {
 export function buildDashboardSnapshot(
   config: MaestroConfig,
   database: MaestroDatabase,
-  agents?: AgentPresence[]
+  agents?: AgentPresence[],
+  autopilot?: BacklogAutopilotSnapshot
 ) {
   const projects = database.listProjects();
   const tasks = database.listTasks(80);
@@ -34,6 +36,17 @@ export function buildDashboardSnapshot(
       state: "online" as const,
       access: config.telegram.allowedUserId ? "restricted" : "unrestricted",
       dashboardHost: config.dashboard.host
+    },
+    autopilot: autopilot ?? {
+      enabled: config.autopilot.enabled,
+      state: config.autopilot.enabled ? "idle" as const : "disabled" as const,
+      maxConcurrentGoals: config.autopilot.maxConcurrentGoals,
+      pollIntervalMs: config.autopilot.pollIntervalMs,
+      runningGoals: goals.filter((goal) => goal.status === "running").length,
+      waitingProviderGoals: goals.filter((goal) => goal.status === "waiting_provider").length,
+      queuedTasks: counts.queued ?? 0,
+      lastAction: "snapshot_only",
+      lastTickAt: null
     },
     summary: {
       projects: projects.length,

@@ -65,7 +65,7 @@ export async function runTaskGoal(
         currentPhase: phase,
         stepCount
       });
-      const routed = await registry.route(CAPABILITIES[phase], excluded);
+      const routed = await registry.acquire(CAPABILITIES[phase], excluded);
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
         return pauseRun(database, currentRun, phase, stepCount, error, task.id);
@@ -81,18 +81,23 @@ export async function runTaskGoal(
         metadata: { runId: run.id, stepId: goalStep.id, phase }
       });
 
-      const result = await routed.provider.execute({
-        runId: run.id,
-        stepNumber: stepCount + 1,
-        phase,
-        capability: CAPABILITIES[phase],
-        task: database.getTask(task.id),
-        project,
-        previousSteps: database.listGoalSteps(run.id),
-        humanFeedback: latestChangeRequest(database, run.id),
-        artifactsRoot: path.resolve(options.artifactsRoot),
-        signal: options.signal
-      });
+      let result;
+      try {
+        result = await routed.provider.execute({
+          runId: run.id,
+          stepNumber: stepCount + 1,
+          phase,
+          capability: CAPABILITIES[phase],
+          task: database.getTask(task.id),
+          project,
+          previousSteps: database.listGoalSteps(run.id),
+          humanFeedback: latestChangeRequest(database, run.id),
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          signal: options.signal
+        });
+      } finally {
+        routed.release();
+      }
       const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
       database.finishGoalStep({

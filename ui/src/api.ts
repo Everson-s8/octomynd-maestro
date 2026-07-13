@@ -56,6 +56,17 @@ export type DashboardData = {
     access: "restricted" | "unrestricted";
     dashboardHost: string;
   };
+  autopilot: {
+    enabled: boolean;
+    state: "disabled" | "idle" | "working" | "waiting_provider" | "at_capacity";
+    maxConcurrentGoals: number;
+    pollIntervalMs: number;
+    runningGoals: number;
+    waitingProviderGoals: number;
+    queuedTasks: number;
+    lastAction: string;
+    lastTickAt: string | null;
+  };
   summary: {
     projects: number;
     activeTasks: number;

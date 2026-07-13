@@ -14,6 +14,7 @@ import { createProjectTask, prepareTask } from "../orchestrator.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
+import { BacklogAutopilot } from "../backlog/autopilot.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -22,6 +23,7 @@ export type DashboardServerOptions = {
   claudeReviewer?: ClaudeReviewer;
   goalCoordinator?: GoalCoordinator;
   reviewCoordinator?: ReviewCoordinator;
+  backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -65,7 +67,12 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
     await options.reviewCoordinator?.reconcile();
-    sendJson(response, 200, buildDashboardSnapshot(options.config, options.database));
+    sendJson(response, 200, buildDashboardSnapshot(
+      options.config,
+      options.database,
+      undefined,
+      options.backlogAutopilot?.snapshot()
+    ));
     return;
   }
 
