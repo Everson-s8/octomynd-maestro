@@ -33,6 +33,8 @@ export type DashboardProject = {
   defaultBranch: string;
   taskCount: number;
   activeTaskCount: number;
+  workingAgents: string[];
+  currentWork: Array<{ taskId: number; phase: string; provider: string | null }>;
 };
 
 export type DashboardEvent = {
@@ -71,8 +73,11 @@ export type DashboardData = {
   agents: Array<{
     id: "codex" | "claude" | "telegram";
     label: string;
-    state: "ready" | "attention" | "offline";
+    state: "ready" | "working" | "attention" | "offline";
     detail: string;
+    taskId?: number;
+    projectKey?: string;
+    phase?: string;
   }>;
 };
 

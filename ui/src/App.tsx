@@ -433,7 +433,7 @@ function AgentDock({ agents }: { agents: DashboardData["agents"] }) {
           <article className={`agent-card agent-${agent.id}`} key={agent.id}>
             <div className="agent-avatar">{agent.id === "telegram" ? <Icon name="send" /> : agent.label.slice(0, 1)}</div>
             <div><strong>{agent.label}</strong><small>{agent.detail}</small></div>
-            <span className={`agent-state state-${agent.state}`}>{agent.state === "ready" ? "pronto" : agent.state === "attention" ? "atenção" : "offline"}</span>
+            <span className={`agent-state state-${agent.state}`}>{agent.state === "working" ? "trabalhando" : agent.state === "ready" ? "pronto" : agent.state === "attention" ? "atenção" : "offline"}</span>
           </article>
         ))}
       </div>
@@ -454,6 +454,11 @@ function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
               <span><strong>{project.activeTaskCount}</strong> ativas</span>
               <span><strong>{project.taskCount}</strong> total</span>
               <span><strong>{project.defaultBranch}</strong> branch</span>
+            </div>
+            <div className="project-live-status">
+              {project.currentWork.length > 0
+                ? project.currentWork.map((work) => <span key={`${work.taskId}-${work.phase}`}>{work.provider ?? "Maestro"} · task #{work.taskId} · {work.phase}</span>)
+                : <span>Nenhum agente trabalhando agora</span>}
             </div>
             <small className="project-path">Repositório local protegido</small>
           </article>

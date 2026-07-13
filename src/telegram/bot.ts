@@ -47,6 +47,7 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
   });
 
   bot.command("status", async (ctx) => {
+    const projectKey = parseStatusProjectKey(ctx.message?.text ?? "");
     database.addEvent({
       source: "telegram",
       type: "command.status",
@@ -55,7 +56,11 @@ export function createTelegramBot(config: MaestroConfig, database: MaestroDataba
       username: ctx.from?.username ?? null
     });
 
-    await ctx.reply(formatStatus(config.projectName, database));
+    if (projectKey && !database.findProjectByKey(projectKey)) {
+      await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
+      return;
+    }
+    await ctx.reply(formatStatus(config.projectName, database, projectKey));
   });
 
   bot.command("projects", async (ctx) => {
@@ -262,6 +267,13 @@ export function parseQueueProjectKey(messageText: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
+export function parseStatusProjectKey(messageText: string): string | null {
+  const text = messageText.replace(/^\/status(?:@\w+)?\s*/i, "").trim();
+  if (!text) return null;
+  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 export function parseTaskId(messageText: string, command: string): number | null {
   const regex = new RegExp(`^/${command}(?:@\\w+)?\\s+(\\d+)\\s*$`, "i");
   const match = messageText.match(regex);
@@ -275,20 +287,35 @@ export function isUserAllowed(userId: number | undefined, allowedUserId: string 
   return userId !== undefined && String(userId) === allowedUserId;
 }
 
-export function formatStatus(projectName: string, database: MaestroDatabase): string {
+export function formatStatus(projectName: string, database: MaestroDatabase, projectKey: string | null = null): string {
   const counts = database.countTasksByStatus();
   const lastEvent = database.getLastEvent();
   const projects = database.listProjects();
+  const tasks = projectKey ? database.listTasksByProject(projectKey, 40) : database.listTasks(40);
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const activeGoals = database.listGoalRuns(100).filter(
+    (goal) => taskIds.has(goal.taskId) && ["running", "waiting_provider"].includes(goal.status)
+  );
+  const working = activeGoals.map((goal) => {
+    const task = database.getTask(goal.taskId);
+    const provider = database.listGoalSteps(goal.id).at(-1)?.provider ?? "roteando agente";
+    return `- #${task.id} @${task.projectKey ?? "inbox"}: ${provider} em ${goal.currentPhase} (${goal.stepCount}/${goal.maxSteps})`;
+  });
 
   return [
     `Maestro: online`,
-    `Workspace: ${projectName}`,
+    projectKey ? `Projeto: @${projectKey}` : `Workspace: ${projectName}`,
     `Projetos: ${projects.length}`,
-    `Tasks queued: ${counts.queued ?? 0}`,
-    `Tasks planning: ${counts.planning ?? 0}`,
-    `Tasks awaiting_human: ${counts.awaiting_human ?? 0}`,
-    `Tasks done: ${counts.done ?? 0}`,
-    `Tasks failed: ${counts.failed ?? 0}`,
+    `Tasks ativas: ${tasks.filter((task) => !["done", "failed", "rejected", "blocked"].includes(task.status)).length}`,
+    ...(projectKey ? [] : [
+      `Tasks queued: ${counts.queued ?? 0}`,
+      `Tasks awaiting_human: ${counts.awaiting_human ?? 0}`,
+      `Tasks done: ${counts.done ?? 0}`
+    ]),
+    "",
+    "Trabalhando agora:",
+    ...(working.length > 0 ? working : ["- nenhum agente executando"]),
+    "",
     `Ultimo evento: ${lastEvent ? `${lastEvent.type} em ${lastEvent.createdAt}` : "nenhum"}`
   ].join("\n");
 }
@@ -318,7 +345,8 @@ function formatHelp(): string {
     "Octomynd Maestro esta online.",
     "",
     "Comandos:",
-    "/status - ver estado atual",
+    "/status - ver estado geral e agentes trabalhando",
+    "/status @projeto - ver estado de um projeto",
     "/projects - listar projetos",
     "/project_add chave caminho-do-repo - cadastrar projeto",
     "/task @projeto texto - criar task",

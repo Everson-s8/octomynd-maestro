@@ -64,6 +64,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
+    await options.reviewCoordinator?.reconcile();
     sendJson(response, 200, buildDashboardSnapshot(options.config, options.database));
     return;
   }

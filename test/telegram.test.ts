@@ -4,11 +4,12 @@ import {
   isUserAllowed,
   parseProjectAddText,
   parseQueueProjectKey,
+  parseStatusProjectKey,
   parseTaskId,
   parseTaskText
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
-import { formatGoalNotification } from "../src/telegram/notifications.js";
+import { createTelegramGoalProgressNotifier, formatGoalNotification } from "../src/telegram/notifications.js";
 import { createTelegramReviewNotifier } from "../src/telegram/notifications.js";
 import { createDatabase, GoalRunRecord, TaskRecord } from "../src/db.js";
 import { MaestroConfig } from "../src/config.js";
@@ -43,6 +44,11 @@ describe("telegram helpers", () => {
     expect(parseQueueProjectKey("/queue @octomynd")).toBe("octomynd");
     expect(parseQueueProjectKey("/queue octomynd")).toBe("octomynd");
     expect(parseQueueProjectKey("/queue")).toBeNull();
+  });
+
+  it("parses status project key", () => {
+    expect(parseStatusProjectKey("/status @boo")).toBe("boo");
+    expect(parseStatusProjectKey("/status")).toBeNull();
   });
 
   it("parses task ids", () => {
@@ -98,6 +104,29 @@ describe("telegram helpers", () => {
       expect(sent[0].text).not.toContain("private-chat-id");
       expect(sent[0].text).not.toContain("bot-token");
       expect(database.getLastEvent()?.type).toBe("review.notification_sent");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("sends phase progress for tasks created outside Telegram", async () => {
+    const database = createDatabase(":memory:");
+    try {
+      database.registerProject({ key: "boo", path: process.cwd() });
+      const task = database.createTask("melhorar painel", "codex", "boo");
+      const run = database.createGoalRun(task.id);
+      const sent: string[] = [];
+      const notifier = createTelegramGoalProgressNotifier(
+        telegramConfig(),
+        database,
+        async (_chatId, text) => { sent.push(text); }
+      );
+
+      await notifier!(run, "codex");
+
+      expect(sent[0]).toContain("Task #1 em andamento");
+      expect(sent[0]).toContain("Agente: codex");
+      expect(database.getLastEvent()?.type).toBe("goal.progress_notification_sent");
     } finally {
       database.close();
     }

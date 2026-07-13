@@ -12,7 +12,7 @@ import { createDashboardServer } from "../src/dashboard/server.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { ReviewCoordinator } from "../src/reviews/coordinator.js";
 import { buildReviewQueueItem } from "../src/reviews/evidence.js";
-import { ReviewGitHubGateway } from "../src/reviews/github.js";
+import { PullRequestState, ReviewGitHubGateway } from "../src/reviews/github.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -139,6 +139,26 @@ describe("human review queue", () => {
     expect(github.actions).toEqual([]);
   });
 
+  it("reconciles a pull request merged outside the dashboard", async () => {
+    const run = reviewableGoal();
+    const github = new FakeGitHubGateway();
+    github.state = { isDraft: false, state: "MERGED" };
+    const notifications: string[] = [];
+    const reviews = new ReviewCoordinator(
+      database,
+      idleGoalCoordinator(),
+      github,
+      undefined,
+      async (_item, state) => { notifications.push(state); }
+    );
+
+    expect(await reviews.reconcile(true)).toBe(1);
+    expect(database.getTask(run.taskId).status).toBe("done");
+    expect(database.getLastEvent()?.type).toBe("review.sync_merged");
+    expect(notifications).toEqual(["MERGED"]);
+    expect(reviews.list()).toEqual([]);
+  });
+
   it("serves the review queue and records an API decision", async () => {
     const run = reviewableGoal();
     const goals = idleGoalCoordinator();
@@ -181,6 +201,8 @@ describe("human review queue", () => {
 
 class FakeGitHubGateway implements ReviewGitHubGateway {
   actions: string[] = [];
+  state: PullRequestState = { isDraft: true, state: "OPEN" };
+  async inspect() { return this.state; }
   async markReady() { this.actions.push("ready"); }
   async markDraft() { this.actions.push("draft"); }
   async close() { this.actions.push("close"); }

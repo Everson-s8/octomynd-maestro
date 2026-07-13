@@ -70,6 +70,24 @@ describe("dashboard", () => {
     expect(protectedSnapshot).not.toContain("worktreePath");
   });
 
+  it("shows the provider currently working on a project", () => {
+    const task = database.listTasks()[0];
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/status-test",
+      worktreePath: projectDir
+    });
+    const run = database.createGoalRun(task.id);
+    database.createGoalStep(run.id, "planning", "codex");
+
+    const snapshot = buildDashboardSnapshot(config, database);
+
+    expect(snapshot.agents.find((agent) => agent.id === "codex")?.state).toBe("working");
+    expect(snapshot.projects[0].workingAgents).toEqual(["codex"]);
+    expect(snapshot.projects[0].currentWork[0].taskId).toBe(task.id);
+  });
+
   it("serves the dashboard API and creates a queued task", async () => {
     const server = createDashboardServer({
       config,

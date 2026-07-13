@@ -24,7 +24,7 @@ export type GoalRunnerOptions = {
   maxSteps?: number;
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
-  onProgress?: (run: GoalRunRecord) => void;
+  onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
 };
 
 export async function runTaskGoal(
@@ -61,8 +61,6 @@ export async function runTaskGoal(
         currentPhase: phase,
         stepCount
       });
-      options.onProgress?.(currentRun);
-
       const routed = await registry.route(CAPABILITIES[phase], excluded);
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
@@ -70,6 +68,7 @@ export async function runTaskGoal(
       }
 
       const goalStep = database.createGoalStep(run.id, phase, routed.provider.id);
+      options.onProgress?.(currentRun, routed.provider.id);
       database.addEvent({
         source: routed.provider.id,
         type: "goal.step_started",
@@ -201,7 +200,6 @@ export async function runTaskGoal(
           taskId: task.id,
           metadata: { runId: run.id, stepCount }
         });
-        options.onProgress?.(completed);
         return completed;
       }
       phase = nextPhase;

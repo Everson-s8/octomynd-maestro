@@ -2,7 +2,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
-import { GoalNotificationHandler } from "../telegram/notifications.js";
+import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, Promise<GoalRunRecord>>();
@@ -14,7 +14,8 @@ export class GoalCoordinator {
     private readonly artifactsRoot: string,
     private readonly retryDelayMs = 15 * 60_000,
     private readonly delivery?: GoalDeliveryHandler,
-    private readonly notify?: GoalNotificationHandler
+    private readonly notify?: GoalNotificationHandler,
+    private readonly notifyProgress?: GoalProgressNotificationHandler
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -81,7 +82,19 @@ export class GoalCoordinator {
       artifactsRoot: this.artifactsRoot,
       maxSteps: run.maxSteps,
       existingRun: run,
-      delivery: this.delivery
+      delivery: this.delivery,
+      onProgress: (progressRun, providerId) => {
+        if (!this.notifyProgress) return;
+        void this.notifyProgress(progressRun, providerId).catch((error) => {
+          this.database.addEvent({
+            source: "maestro",
+            type: "goal.progress_notification_failed",
+            text: error instanceof Error ? error.message : "Unknown progress notification error.",
+            taskId: progressRun.taskId,
+            metadata: { runId: progressRun.id, phase: progressRun.currentPhase, providerId }
+          });
+        });
+      }
     });
     this.active.set(run.taskId, promise);
     void promise.then(

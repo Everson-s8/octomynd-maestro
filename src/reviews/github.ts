@@ -3,12 +3,17 @@ import { spawnSync } from "node:child_process";
 export type PullRequestState = { isDraft: boolean; state: "OPEN" | "CLOSED" | "MERGED" };
 
 export interface ReviewGitHubGateway {
+  inspect(url: string): Promise<PullRequestState>;
   markReady(url: string): Promise<void>;
   markDraft(url: string): Promise<void>;
   close(url: string): Promise<void>;
 }
 
 export class GhReviewGateway implements ReviewGitHubGateway {
+  async inspect(url: string): Promise<PullRequestState> {
+    return readState(url);
+  }
+
   async markReady(url: string): Promise<void> {
     const state = readState(url);
     if (state.state !== "OPEN") throw new Error("Pull request is not open.");

@@ -34,7 +34,11 @@ export type ReviewQueueItem = {
 export function listReviewQueue(database: MaestroDatabase): ReviewQueueItem[] {
   return database
     .listGoalRuns(100)
-    .filter((run) => run.pullRequestUrl && run.status === "completed")
+    .filter((run) => (
+      run.pullRequestUrl &&
+      run.status === "completed" &&
+      database.getTask(run.taskId).status === "awaiting_human"
+    ))
     .map((run) => buildReviewQueueItem(database, run))
     .filter((item) => !["approved", "rejected"].includes(item.status));
 }

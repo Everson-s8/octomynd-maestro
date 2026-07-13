@@ -10,6 +10,7 @@ import { GoalCoordinator } from "./goals/coordinator.js";
 import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
 import { createTelegramGoalNotifier } from "./telegram/notifications.js";
 import { createTelegramReviewNotifier } from "./telegram/notifications.js";
+import { createTelegramGoalProgressNotifier, createTelegramReviewSyncNotifier } from "./telegram/notifications.js";
 import { ReviewCoordinator } from "./reviews/coordinator.js";
 
 const config = loadConfig();
@@ -30,15 +31,26 @@ const goalNotifier = createTelegramGoalNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const goalProgressNotifier = createTelegramGoalProgressNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const goalCoordinator = new GoalCoordinator(
   database,
   agentRegistry,
   path.join(path.dirname(config.databasePath), "runs"),
   15 * 60_000,
   deliverGoalToDraftPullRequest,
-  goalNotifier
+  goalNotifier,
+  goalProgressNotifier
 );
 const reviewNotifier = createTelegramReviewNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const reviewSyncNotifier = createTelegramReviewSyncNotifier(
   config,
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
@@ -47,8 +59,10 @@ const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
   undefined,
-  reviewNotifier
+  reviewNotifier,
+  reviewSyncNotifier
 );
+void reviewCoordinator.reconcile(true);
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({ config, database, goalCoordinator, reviewCoordinator })

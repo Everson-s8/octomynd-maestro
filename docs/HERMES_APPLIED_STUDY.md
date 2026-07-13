@@ -87,6 +87,8 @@ tests, review, and explicit activation.
 5. Agent-owned versus user-owned artifact classification.
 6. Gateway adapter interface shared by Telegram, WhatsApp, and future channels.
 
+The deferred WhatsApp implementation plan is recorded in `docs/WHATSAPP_GATEWAY_PLAN.md`.
+
 ### Medium priority
 
 1. Skill usage telemetry and stale lifecycle.
