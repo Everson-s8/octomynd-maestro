@@ -86,7 +86,7 @@ backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath
 });
-void reviewCoordinator.reconcile(true);
+reviewCoordinator.start();
 featureCoordinator.start();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
@@ -129,6 +129,7 @@ function shutdown() {
   console.log("Stopping Maestro.");
   bot.stop();
   backlogAutopilot.shutdown();
+  reviewCoordinator.shutdown();
   featureCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {

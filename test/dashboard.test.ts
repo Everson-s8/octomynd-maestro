@@ -2,13 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
+import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { AgentProvider } from "../src/agents/types.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
-import { createDashboardServer } from "../src/dashboard/server.js";
+import { createDashboardServer, DashboardServerOptions } from "../src/dashboard/server.js";
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 
@@ -255,6 +256,49 @@ describe("dashboard", () => {
       await waitFor(() => database.getGoalRun(goalPayload.run.id).status !== "running");
       expect(database.getGoalRun(goalPayload.run.id).status).toBe("completed");
       expect(database.getTask(createdTask.id).status).toBe("done");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("serves the dashboard snapshot without waiting for slow coordinators", async () => {
+    let reviewReconcileCalls = 0;
+    let featureReconcileCalls = 0;
+    const slowReviewCoordinator = {
+      reconcile: async () => {
+        reviewReconcileCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return 1;
+      }
+    } as unknown as NonNullable<DashboardServerOptions["reviewCoordinator"]>;
+    const slowFeatureCoordinator: NonNullable<DashboardServerOptions["featureCoordinator"]> = {
+      reconcile: async () => {
+        featureReconcileCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return 1;
+      }
+    };
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      reviewCoordinator: slowReviewCoordinator,
+      featureCoordinator: slowFeatureCoordinator
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const startedAt = performance.now();
+      const response = await fetch(`http://127.0.0.1:${port}/api/dashboard`);
+      const elapsedMs = performance.now() - startedAt;
+      const dashboard = await response.json() as { summary: { projects: number } };
+
+      expect(response.status).toBe(200);
+      expect(dashboard.summary.projects).toBe(1);
+      expect(elapsedMs).toBeLessThan(500);
+      expect(reviewReconcileCalls).toBe(0);
+      expect(featureReconcileCalls).toBe(0);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

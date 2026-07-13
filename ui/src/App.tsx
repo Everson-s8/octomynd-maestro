@@ -8,8 +8,10 @@ import {
   decideImprovement,
   DashboardData,
   DashboardEvent,
+  DashboardFeature,
   DashboardProject,
   DashboardTask,
+  FeatureStatus,
   fetchTaskReviews,
   fetchDashboard,
   GoalRun,
@@ -57,6 +59,28 @@ const statusOrder: TaskStatus[] = [
   "rejected",
   "cancelled",
   "done"
+];
+
+const featureStatusLabels: Record<FeatureStatus, string> = {
+  draft: "draft",
+  waiting_checks: "checks",
+  reviewing: "review final",
+  waiting_provider: "sem provider",
+  changes_requested: "ajustes",
+  merging: "merge",
+  completed: "concluida",
+  failed: "falhou"
+};
+
+const featureStatusOrder: FeatureStatus[] = [
+  "reviewing",
+  "merging",
+  "waiting_provider",
+  "waiting_checks",
+  "changes_requested",
+  "draft",
+  "failed",
+  "completed"
 ];
 
 export default function App() {
@@ -119,6 +143,7 @@ export default function App() {
             <HeroConsole data={data} />
             <SummaryStrip data={data} />
             <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
+            <FeatureBoard features={data.features} />
             <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
             <AgentDock agents={data.agents} />
             <ProjectDeck projects={data.projects} />
@@ -423,6 +448,62 @@ function TaskBoard({ tasks, onOpenTask }: { tasks: DashboardTask[]; onOpenTask: 
         {tasks.length === 0 ? (
           <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
         ) : tasks.slice(0, 8).map((task) => <TaskRow task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)}
+      </div>
+    </section>
+  );
+}
+
+function FeatureBoard({ features }: { features: DashboardFeature[] }) {
+  const sortedFeatures = [...features].sort((left, right) => {
+    const statusDelta = featureStatusOrder.indexOf(left.status) - featureStatusOrder.indexOf(right.status);
+    if (statusDelta !== 0) return statusDelta;
+    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+  });
+  const counts = features.reduce<Record<FeatureStatus, number>>((accumulator, feature) => {
+    accumulator[feature.status] += 1;
+    return accumulator;
+  }, {
+    draft: 0,
+    waiting_checks: 0,
+    reviewing: 0,
+    waiting_provider: 0,
+    changes_requested: 0,
+    merging: 0,
+    completed: 0,
+    failed: 0
+  });
+
+  return (
+    <section className="panel feature-board" id="features" aria-labelledby="features-title">
+      <SectionHeader eyebrow="Feature PRs" title="Runtime de features" meta={`${features.length} registradas`} />
+      <div className="feature-status-strip" aria-label="Estados de feature">
+        {featureStatusOrder.map((status) => (
+          <span className={`feature-status-count status-${status}`} key={status}>
+            <strong>{counts[status]}</strong>{featureStatusLabels[status]}
+          </span>
+        ))}
+      </div>
+      <div className="feature-list">
+        {sortedFeatures.length === 0 ? (
+          <EmptyState icon="folder" title="Nenhuma Feature PR" text="Features registradas aparecem aqui durante checks, review final e merge." />
+        ) : sortedFeatures.slice(0, 6).map((feature) => (
+          <article className={`feature-row status-${feature.status}`} key={feature.id}>
+            <span className={`status-rail status-${feature.status}`} />
+            <div className="feature-copy">
+              <div><span className="project-tag">@{feature.projectKey}</span><FeatureStatusPill status={feature.status} /></div>
+              <strong>{feature.name}</strong>
+              <p>{feature.lastError ?? feature.reviewSummary ?? feature.objective}</p>
+              <small>{feature.itemCount} Work PR(s) - {feature.branchName}</small>
+            </div>
+            <div className="feature-progress" aria-label={`Status: ${featureStatusLabels[feature.status]}`}>
+              <span><i style={{ width: `${featureProgress(feature.status)}%` }} /></span>
+              <small>{featureProgress(feature.status)}%</small>
+            </div>
+            <a className="row-action" href={feature.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Abrir Feature PR ${feature.id}`}>
+              <Icon name="arrow" />
+            </a>
+          </article>
+        ))}
       </div>
     </section>
   );
@@ -937,6 +1018,10 @@ function StatusPill({ status }: { status: TaskStatus }) {
   return <span className={`status-pill status-${status}`}>{taskStatusLabels[status]}</span>;
 }
 
+function FeatureStatusPill({ status }: { status: FeatureStatus }) {
+  return <span className={`status-pill status-${status}`}>{featureStatusLabels[status]}</span>;
+}
+
 function EmptyState({ icon, title, text }: { icon: string; title: string; text: string }) {
   return <div className="empty-state"><Icon name={icon} /><strong>{title}</strong><p>{text}</p></div>;
 }
@@ -984,6 +1069,10 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
 
 function statusProgress(status: TaskStatus): number {
   return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, blocked: 42, failed: 100, rejected: 100, cancelled: 100, done: 100 }[status];
+}
+
+function featureProgress(status: FeatureStatus): number {
+  return { draft: 12, waiting_checks: 34, reviewing: 58, waiting_provider: 48, changes_requested: 30, merging: 86, completed: 100, failed: 100 }[status];
 }
 
 function formatRelative(value: string): string {

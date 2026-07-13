@@ -27,6 +27,33 @@ export type DashboardTask = {
   updatedAt: string;
 };
 
+export type FeatureStatus =
+  | "draft"
+  | "waiting_checks"
+  | "reviewing"
+  | "waiting_provider"
+  | "changes_requested"
+  | "merging"
+  | "completed"
+  | "failed";
+
+export type DashboardFeature = {
+  id: number;
+  projectKey: string;
+  name: string;
+  objective: string;
+  status: FeatureStatus;
+  branchName: string;
+  pullRequestUrl: string;
+  reviewerProvider: string | null;
+  reviewSummary: string | null;
+  lastError: string | null;
+  itemCount: number;
+  mergedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DashboardProject = {
   id: number;
   key: string;
@@ -81,6 +108,7 @@ export type DashboardData = {
   events: DashboardEvent[];
   improvements: ImprovementProposal[];
   goals: GoalRun[];
+  features: DashboardFeature[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";
