@@ -180,6 +180,66 @@ describe("goal runner", () => {
     coordinator.shutdown();
   });
 
+  it("resumes with an alternate provider after a retryable failure", async () => {
+    const projectDir = path.join(tempDir, "fallback-project");
+    const worktreeDir = path.join(tempDir, "fallback-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "fallback", path: projectDir });
+    const task = database.createTask("resume with Claude", "dashboard", "fallback");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "waiting_quota",
+      branchName: "task",
+      worktreePath: worktreeDir
+    });
+    const run = database.createGoalRun(task.id, 8);
+    const planning = database.createGoalStep(run.id, "planning", "codex");
+    database.finishGoalStep({ id: planning.id, status: "completed", summary: "planned", durationMs: 1 });
+    const failedCoding = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({
+      id: failedCoding.id,
+      status: "failed",
+      summary: "Codex sem cota disponivel.",
+      error: "quota",
+      durationMs: 1
+    });
+    const waitingRun = database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "implementing",
+      stepCount: 1,
+      lastError: "quota"
+    });
+    let codexCodingCalls = 0;
+    const codex = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "implementing") codexCodingCalls += 1;
+        return completed("Codex available");
+      }
+    );
+    const claude = new FakeProvider(
+      "claude",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("Claude fallback")
+    );
+
+    const resumed = await runTaskGoal(
+      database,
+      new AgentRegistry([codex, claude]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), existingRun: waitingRun }
+    );
+
+    expect(resumed.status).toBe("completed");
+    expect(codexCodingCalls).toBe(0);
+    expect(database.listGoalSteps(run.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider)).toEqual(["codex", "claude"]);
+  });
+
   it("notifies once when a delivered goal is ready for review", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");

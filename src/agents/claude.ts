@@ -1,8 +1,14 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
-import { AgentExecutionRequest, AgentExecutionResult, AgentHealth, AgentProvider } from "./types.js";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import {
+  AgentCapability,
+  AgentExecutionRequest,
+  AgentExecutionResult,
+  AgentHealth,
+  AgentProvider
+} from "./types.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -18,10 +24,54 @@ type ClaudeCliCommand = {
   argsPrefix: string[];
 };
 
+const CLAUDE_CAPABILITIES = new Set<AgentCapability>([
+  "planning",
+  "coding",
+  "testing",
+  "reviewing",
+  "research"
+]);
+
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
+const CODING_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
+const TESTING_TOOLS = [...CODING_TOOLS, "Bash"];
+const TESTING_ALLOWED_TOOLS = [
+  ...CODING_TOOLS,
+  "Bash(git status*)",
+  "Bash(git diff*)",
+  "Bash(npm test*)",
+  "Bash(npx vitest*)",
+  "Bash(pytest*)",
+  "Bash(python -m pytest*)",
+  "Bash(cargo test*)",
+  "Bash(go test*)"
+];
+const DISALLOWED_MUTATIONS = [
+  "Bash(git commit*)",
+  "Bash(git push*)",
+  "Bash(git reset --hard*)",
+  "Bash(git clean*)",
+  "Bash(gh*)",
+  "Bash(npm publish*)",
+  "Bash(pnpm publish*)",
+  "Bash(yarn npm publish*)",
+  "Bash(docker push*)",
+  "Bash(kubectl apply*)",
+  "Bash(kubectl rollout*)",
+  "Bash(terraform apply*)",
+  "Bash(vercel*)",
+  "Bash(netlify*)",
+  "Bash(aws*)",
+  "Bash(az*)",
+  "Bash(gcloud*)",
+  "Bash(curl*)",
+  "Bash(wget*)"
+];
+
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
-  readonly capabilities = new Set(["reviewing"] as const);
+  readonly capabilities = CLAUDE_CAPABILITIES;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
@@ -35,8 +85,8 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
-    const result = await reviewTaskWithClaude(request.task, request.project, request.signal);
-    if (request.signal?.aborted) {
+    const result = await executeClaudeGoal(request);
+    if (result.aborted || request.signal?.aborted) {
       return {
         outcome: "cancelled",
         summary: "Claude execution cancelled by user.",
@@ -46,19 +96,30 @@ export class ClaudeProvider implements AgentProvider {
         retryable: false
       };
     }
-    if (result.status !== "completed") {
+    if (result.exitCode !== 0 || !result.stdout.trim()) {
+      const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      const authenticationFailed = isClaudeAuthenticationError(errorText);
+      const quotaFailed = isClaudeQuotaError(errorText);
+      const retryable = authenticationFailed || quotaFailed || result.timedOut;
+      const summary = authenticationFailed
+        ? "Claude Code precisa ser reautenticado."
+        : quotaFailed
+          ? "Claude sem cota disponivel."
+          : result.timedOut
+            ? "Claude excedeu o tempo limite da etapa."
+            : "Claude falhou.";
       this.cacheHealth({
-        state: result.status === "auth_required" ? "auth_required" : "offline",
-        detail: result.error || "Claude indisponivel",
+        state: authenticationFailed ? "auth_required" : quotaFailed ? "quota" : "offline",
+        detail: summary,
         checkedAt: new Date().toISOString()
-      }, result.status === "auth_required" ? 60_000 : 30_000);
+      }, retryable ? 10 * 60_000 : 30_000);
       return {
         outcome: "failed",
-        summary: result.error || "Claude review failed.",
-        output: "",
-        error: result.error,
+        summary,
+        output: errorText,
+        error: errorText || summary,
         durationMs: result.durationMs,
-        retryable: result.status === "auth_required"
+        retryable
       };
     }
 
@@ -67,11 +128,15 @@ export class ClaudeProvider implements AgentProvider {
       detail: "Claude CLI autenticado",
       checkedAt: new Date().toISOString()
     }, 30_000);
-    const requestsChanges = /reprovado|aprovado com ajustes|mudancas? solicitadas?/i.test(result.content);
+    const content = result.stdout.trim();
+    const requestsChanges = request.phase === "reviewing"
+      && /reprovado|aprovado com ajustes|mudancas? solicitadas?|changes requested/i.test(content);
     return {
       outcome: requestsChanges ? "changes_requested" : "completed",
-      summary: requestsChanges ? "Claude solicitou ajustes concretos." : "Claude aprovou a etapa.",
-      output: result.content,
+      summary: requestsChanges
+        ? "Claude solicitou ajustes concretos."
+        : `Claude concluiu a fase ${request.phase}.`,
+      output: content,
       error: null,
       durationMs: result.durationMs,
       retryable: false
@@ -124,7 +189,14 @@ export const reviewTaskWithClaude = async (
     "--no-session-persistence"
   ];
 
-  const result = await runProcess(cli.command, args, cwd, 180_000, signal);
+  const result = await runAgentProcess({
+    command: cli.command,
+    args,
+    cwd,
+    timeoutMs: 180_000,
+    signal,
+    env: buildRestrictedAgentEnvironment()
+  });
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
   if (result.exitCode === 0 && result.stdout.trim()) {
@@ -164,6 +236,63 @@ export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord
   ].join("\n");
 }
 
+export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
+  const previous = request.previousSteps.length === 0
+    ? "Nenhuma etapa anterior."
+    : request.previousSteps.map((step) => (
+      `- ${step.phase}/${step.provider}/${step.status}: ${step.summary}\n`
+      + `  detalhes: ${step.output.slice(0, 2_000) || "sem detalhes"}`
+    )).join("\n");
+  const phaseInstruction = {
+    planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
+    implementing: "Implemente integralmente a task no workspace. Preserve o escopo.",
+    testing: "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
+    reviewing: "Revise o diff, requisitos e testes. Nao edite. Solicite ajustes somente para problemas concretos."
+  }[request.phase];
+
+  return [
+    "Voce e um worker do Octomynd Maestro executando uma goal persistente.",
+    "Trabalhe autonomamente nesta etapa, sem pedir atualizacao manual da task.",
+    "Nunca faca commit, push, merge, deploy, altere credenciais ou saia do workspace.",
+    `Projeto: ${request.project.name} (@${request.project.key})`,
+    `Task #${request.task.id}: ${request.task.text}`,
+    `Fase: ${request.phase}`,
+    phaseInstruction,
+    "",
+    "Historico resumido das etapas:",
+    previous,
+    ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
+    "",
+    "Entregue um resumo em portugues com arquivos alterados, testes, bloqueios e evidencias."
+  ].join("\n");
+}
+
+export function buildClaudeGoalArgs(
+  cli: ClaudeCliCommand,
+  request: AgentExecutionRequest,
+  cwd: string
+): string[] {
+  const writable = request.capability === "coding" || request.capability === "testing";
+  const testing = request.capability === "testing";
+  const tools = testing ? TESTING_TOOLS : writable ? CODING_TOOLS : READ_ONLY_TOOLS;
+  const allowedTools = testing ? TESTING_ALLOWED_TOOLS : CODING_TOOLS;
+  return [
+    ...cli.argsPrefix,
+    "--print",
+    "--output-format",
+    "text",
+    "--permission-mode",
+    writable ? "acceptEdits" : "plan",
+    "--tools",
+    tools.join(","),
+    ...(writable ? ["--allowedTools", allowedTools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS] : []),
+    "--add-dir",
+    cwd,
+    "--no-session-persistence",
+    buildClaudeGoalPrompt(request)
+  ];
+}
+
 export function buildClaudeCliCommand(cliEntry: string): ClaudeCliCommand {
   return cliEntry.toLowerCase().endsWith(".js")
     ? { command: process.execPath, argsPrefix: [cliEntry] }
@@ -172,6 +301,33 @@ export function buildClaudeCliCommand(cliEntry: string): ClaudeCliCommand {
 
 export function isClaudeAuthenticationError(errorText: string): boolean {
   return /401|authentication|credentials|not logged in|please run \/login|sign in/i.test(errorText);
+}
+
+export function isClaudeQuotaError(errorText: string): boolean {
+  return /session limit|usage limit|rate limit|quota|resets? at/i.test(errorText);
+}
+
+async function executeClaudeGoal(request: AgentExecutionRequest) {
+  const cwd = request.task.worktreePath || request.project.path;
+  const cli = resolveClaudeCliCommand();
+  if (!cli || !fs.existsSync(cwd)) {
+    return {
+      exitCode: null,
+      stdout: "",
+      stderr: !cli ? "Claude Code CLI was not found." : `Task workspace does not exist: ${cwd}`,
+      aborted: false,
+      timedOut: false,
+      durationMs: 0
+    };
+  }
+  return runAgentProcess({
+    command: cli.command,
+    args: buildClaudeGoalArgs(cli, request, cwd),
+    cwd,
+    timeoutMs: 20 * 60_000,
+    signal: request.signal,
+    env: buildRestrictedAgentEnvironment()
+  });
 }
 
 function resolveClaudeCliCommand(): ClaudeCliCommand | null {
@@ -189,40 +345,4 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
   ]);
   const cliEntry = candidates.find((candidate) => fs.existsSync(candidate));
   return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
-}
-
-function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    const onAbort = () => {
-      aborted = true;
-      child.kill();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => child.kill(), timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout = appendBounded(stdout, chunk); });
-    child.stderr.on("data", (chunk: string) => { stderr = appendBounded(stderr, chunk); });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
-    });
-    child.on("close", (exitCode) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode, stdout, stderr, aborted });
-    });
-    if (signal?.aborted) onAbort();
-  });
-}
-
-function appendBounded(current: string, chunk: string): string {
-  const next = current + chunk;
-  return next.length <= 2_000_000 ? next : next.slice(-2_000_000);
 }
