@@ -155,6 +155,11 @@ function reviewItem(taskId: number, runId: number): ReviewQueueItem {
     agents: ["codex"],
     changedFiles: ["src/test.ts"],
     tests: [],
+    changeSafetyGate: {
+      status: "passed",
+      code: "secret_scan_passed",
+      message: "Verificacao de segredos concluida sem alertas."
+    },
     securityAlerts: [],
     pullRequestUrl: "https://github.com/example/boo/pull/1",
     diffUrl: "https://github.com/example/boo/pull/1/files",

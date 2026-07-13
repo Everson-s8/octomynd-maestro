@@ -59,6 +59,9 @@ export class ReviewCoordinator {
     if (containsSensitiveText(note)) {
       throw new Error("Decision justification contains a secret or private local path.");
     }
+    if (decision === "approved" && item.changeSafetyGate.status !== "passed") {
+      throw new Error("Change Safety Gate must pass before approval.");
+    }
     if (decision === "approved" && item.securityAlerts.some((alert) => alert.severity === "high")) {
       throw new Error("High-severity security alerts must be resolved before approval.");
     }
@@ -119,6 +122,8 @@ export class ReviewCoordinator {
           nextStatus = "rejected";
           syncState = "CLOSED";
         } else if (!state.isDraft && task.status === "awaiting_human") {
+          const item = buildReviewQueueItem(this.database, run);
+          if (item.changeSafetyGate.status !== "passed") continue;
           nextStatus = "ready_to_merge";
           syncState = "READY";
         } else if (state.isDraft && task.status === "ready_to_merge") {

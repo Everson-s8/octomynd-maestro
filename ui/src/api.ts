@@ -128,6 +128,12 @@ export type TaskReview = {
 
 export type HumanReviewDecision = "approved" | "changes_requested" | "rejected";
 
+export type ChangeSafetyGate = {
+  status: "passed" | "blocked" | "unavailable";
+  code: string;
+  message: string;
+};
+
 export type HumanReview = {
   id: number;
   runId: number;
@@ -149,6 +155,7 @@ export type ReviewQueueItem = {
   agents: string[];
   changedFiles: string[];
   tests: Array<{ provider: string; status: string; summary: string; durationMs: number | null }>;
+  changeSafetyGate: ChangeSafetyGate;
   securityAlerts: Array<{
     severity: "info" | "warning" | "high";
     code: string;
