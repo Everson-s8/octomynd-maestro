@@ -18,6 +18,9 @@ describe("config", () => {
       pollIntervalMs: 30_000,
       maxConcurrentGoals: 1
     });
+    expect(config.runtime).toEqual({
+      tokenEfficient: true
+    });
   });
 
   it("validates missing token", () => {
@@ -58,5 +61,13 @@ describe("config", () => {
       pollIntervalMs: 5_000,
       maxConcurrentGoals: 2
     });
+  });
+
+  it("allows disabling the token-efficient runtime adapter", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_TOKEN_RUNTIME_ENABLED: "false"
+    });
+
+    expect(config.runtime.tokenEfficient).toBe(false);
   });
 });

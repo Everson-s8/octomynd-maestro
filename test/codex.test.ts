@@ -30,8 +30,41 @@ describe("codex provider", () => {
     const prompt = buildCodexGoalPrompt(executionRequest());
 
     expect(prompt).toContain("Fase: implementing");
-    expect(prompt).toContain("Nao fa");
+    expect(prompt).toContain("Nunca faca");
     expect(prompt).toContain("commit, push, merge, deploy");
+  });
+
+  it("prefers the token-efficient handoff over raw previous-step output", () => {
+    const request = executionRequest();
+    request.previousSteps = [{
+      id: 1,
+      runId: 1,
+      phase: "planning",
+      provider: "claude",
+      status: "completed",
+      summary: "planejado",
+      output: `RAW-DETAIL ${"x".repeat(3_000)}`,
+      error: null,
+      durationMs: 1,
+      createdAt: "now",
+      finishedAt: "now"
+    }];
+    request.previousStepHandoff = [{
+      stepId: 1,
+      phase: "planning",
+      provider: "claude",
+      status: "completed",
+      summary: "planejado",
+      compactOutput: "evidencias:\n- npm test PASS",
+      rawOutputArtifact: "goal-1/step-0001-planning-claude/provider-output.raw.txt",
+      telemetry: {} as never
+    }];
+
+    const prompt = buildCodexGoalPrompt(request);
+
+    expect(prompt).toContain("compacto:");
+    expect(prompt).toContain("npm test PASS");
+    expect(prompt).not.toContain("RAW-DETAIL");
   });
 });
 

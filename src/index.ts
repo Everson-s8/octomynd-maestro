@@ -51,7 +51,9 @@ goalCoordinator = new GoalCoordinator(
   15 * 60_000,
   deliverGoalToDraftPullRequest,
   goalNotifier,
-  goalProgressNotifier
+  goalProgressNotifier,
+  undefined,
+  { enabled: config.runtime.tokenEfficient }
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,
@@ -118,6 +120,7 @@ if (recoveredGoals > 0) {
   console.log(`Goals waiting for providers: ${recoveredGoals}. Automatic retry scheduled.`);
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
+console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
 
 void bot.start({
   onStart: (botInfo) => {

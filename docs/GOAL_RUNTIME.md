@@ -21,6 +21,24 @@ new goal or losing the completed steps.
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
 
+## Token-efficient handoff runtime
+
+Goal handoffs between phases use a token-efficient runtime. Each completed step keeps the sanitized
+provider output in SQLite, writes a sanitized raw output artifact under `.maestro/runs/`, and sends
+only a compact structured handoff to the next worker. The compact handoff preserves concrete errors,
+review decisions, changed-file evidence, search hits, Git evidence and test failures while omitting
+bulk diff/log/test noise. Raw artifacts can be recovered on demand from the step artifact key.
+
+The runtime records paired A/B telemetry for every step: the legacy 2,000-character slice as control
+and the compact handoff as treatment. Telemetry includes estimated bytes and tokens by provider,
+phase and detected command family (`git.diff`, `git.status`, `git.log`, `rg`, `test` or
+`provider.output`), plus artifact keys. Metrics never include raw output text.
+
+If a local `rtk` executable or npm-global RTK package is already present, the runtime records that
+fact. It never installs, downloads or updates RTK. When RTK is absent, the internal compressor is used
+transparently. The adapter can be disabled with `MAESTRO_TOKEN_RUNTIME_ENABLED=false`, without
+changing delivery gates, review gates or final Feature PR completion rules.
+
 ## Routing
 
 Providers advertise capabilities. The registry selects a ready provider using this preference order:
@@ -78,6 +96,9 @@ service can still enforce the limits of the user's plan.
   Managed projects do not need to implement Telegram unless their own product explicitly requires it.
 - The dashboard review queue exposes only sanitized evidence: relative changed files, providers,
   test-step summaries, security alerts, commit and public GitHub URLs.
+- Internal worker handoffs are structured and terse; security decisions, final review, merge
+  decisions and important user-facing messages remain explicit and are not compressed into terse
+  shorthand.
 - Human review decisions require a justification and are stored in `human_reviews`.
 - `approved` marks the GitHub PR ready and moves the task to `ready_to_merge`; merge remains manual.
 - `changes_requested` returns the PR to draft and reopens the same goal at `implementing`, with the

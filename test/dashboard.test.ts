@@ -32,6 +32,7 @@ beforeEach(() => {
     worktreesPath: path.join(tempDir, "worktrees"),
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
+    runtime: { tokenEfficient: true },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
   database = createDatabase(path.join(tempDir, "maestro.db"));
