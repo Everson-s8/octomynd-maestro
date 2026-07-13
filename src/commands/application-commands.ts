@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
+import {
+  FeaturePlanDetails,
+  FeaturePlanWriteResult,
+  MaestroDatabase,
+  ProjectRecord,
+  TaskRecord
+} from "../db.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
@@ -20,6 +26,21 @@ export type RegisterProjectOutcome = {
 export type CreateTaskInput = {
   text: string;
   projectKey?: string | null;
+};
+
+export type CreateFeaturePlanInput = {
+  projectKey: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  idempotencyKey?: string | null;
+};
+
+export type ReplanFeaturePlanInput = {
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  idempotencyKey?: string | null;
 };
 
 export type PrepareTaskOutcome = {
@@ -100,6 +121,120 @@ export class ApplicationCommands {
     return task;
   }
 
+  createFeaturePlan(origin: CommandOrigin, input: CreateFeaturePlanInput): FeaturePlanWriteResult {
+    try {
+      const result = this.database.createFeaturePlan({
+        projectKey: input.projectKey,
+        objective: input.objective,
+        acceptanceCriteria: input.acceptanceCriteria,
+        taskIds: input.taskIds,
+        idempotencyKey: input.idempotencyKey,
+        source: origin.channel,
+        createdByUserId: origin.userId ?? null,
+        createdByUsername: origin.username ?? null
+      });
+
+      if (result.applied) {
+        this.database.addEvent({
+          source: origin.channel,
+          type: "feature_plan.created",
+          text: result.plan.objective,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          metadata: {
+            featurePlanId: result.plan.id,
+            projectKey: result.plan.projectKey,
+            taskIds: result.tasks.map((task) => task.taskId),
+            acceptanceCriteriaCount: result.plan.acceptanceCriteria.length,
+            revision: result.plan.revision
+          }
+        });
+      }
+
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  getFeaturePlan(featurePlanId: number): FeaturePlanDetails {
+    try {
+      return this.database.getFeaturePlanDetails(featurePlanId);
+    } catch (error) {
+      throw notFoundError(error instanceof Error ? error.message : `Feature plan not found: ${featurePlanId}`);
+    }
+  }
+
+  listFeaturePlans(projectKey?: string | null, limit = 30): FeaturePlanDetails[] {
+    const plans = projectKey?.trim()
+      ? this.database.listFeaturePlansByProject(projectKey.trim().toLowerCase(), limit)
+      : this.database.listFeaturePlans(limit);
+    return plans.map((plan) => this.database.getFeaturePlanDetails(plan.id));
+  }
+
+  cancelFeaturePlan(origin: CommandOrigin, featurePlanId: number, reason?: string | null): FeaturePlanWriteResult {
+    try {
+      const result = this.database.cancelFeaturePlan(featurePlanId, reason);
+      if (result.applied) {
+        this.database.addEvent({
+          source: origin.channel,
+          type: "feature_plan.cancelled",
+          text: result.plan.cancelReason || `Feature Plan #${result.plan.id} cancelled.`,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          metadata: {
+            featurePlanId: result.plan.id,
+            projectKey: result.plan.projectKey,
+            taskIds: result.tasks.map((task) => task.taskId),
+            revision: result.plan.revision
+          }
+        });
+      }
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  replanFeaturePlan(
+    origin: CommandOrigin,
+    featurePlanId: number,
+    input: ReplanFeaturePlanInput
+  ): FeaturePlanWriteResult {
+    let before: FeaturePlanDetails | null = null;
+    try {
+      before = this.database.getFeaturePlanDetails(featurePlanId);
+      const result = this.database.replanFeaturePlan({
+        id: featurePlanId,
+        objective: input.objective,
+        acceptanceCriteria: input.acceptanceCriteria,
+        taskIds: input.taskIds,
+        idempotencyKey: input.idempotencyKey
+      });
+      if (result.applied) {
+        this.database.addEvent({
+          source: origin.channel,
+          type: "feature_plan.replanned",
+          text: result.plan.objective,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          metadata: {
+            featurePlanId: result.plan.id,
+            projectKey: result.plan.projectKey,
+            previousRevision: before.plan.revision,
+            revision: result.plan.revision,
+            previousTaskIds: before.tasks.map((task) => task.taskId),
+            taskIds: result.tasks.map((task) => task.taskId),
+            acceptanceCriteriaCount: result.plan.acceptanceCriteria.length
+          }
+        });
+      }
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
   prepareTask(origin: CommandOrigin, taskId: number, worktreesRoot: string): PrepareTaskOutcome {
     let task: TaskRecord;
     try {
@@ -165,5 +300,12 @@ export class ApplicationCommands {
       username: origin.username ?? null,
       taskId
     });
+  }
+
+  private toFeaturePlanCommandError(error: unknown): never {
+    const message = error instanceof Error ? error.message : "Unknown feature plan error.";
+    if (/not found/i.test(message)) throw notFoundError(message);
+    if (/already associated|already used|cannot be|cancelled/i.test(message)) throw conflictError(message);
+    throw validationError(message);
   }
 }

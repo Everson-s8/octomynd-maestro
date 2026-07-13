@@ -54,6 +54,44 @@ export type DashboardFeature = {
   updatedAt: string;
 };
 
+export type FeaturePlanStatus = "planned" | "cancelled";
+
+export type DashboardFeaturePlan = {
+  id: number;
+  projectKey: string;
+  projectName: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: FeaturePlanStatus;
+  source: string;
+  revision: number;
+  taskIds: number[];
+  taskCount: number;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanTask = {
+  id: number;
+  featurePlanId: number;
+  taskId: number;
+  taskText: string;
+  taskStatus: TaskStatus;
+  position: number;
+  createdAt: string;
+};
+
+export type FeaturePlanDetails = {
+  plan: DashboardFeaturePlan & {
+    createdByUserId?: string | null;
+    createdByUsername?: string | null;
+  };
+  tasks: FeaturePlanTask[];
+  applied?: boolean;
+};
+
 export type DashboardProject = {
   id: number;
   key: string;
@@ -100,6 +138,7 @@ export type DashboardData = {
     queuedTasks: number;
     humanGates: number;
     improvementCandidates: number;
+    plannedFeaturePlans: number;
     activeGoals: number;
     completedTasks: number;
   };
@@ -109,6 +148,7 @@ export type DashboardData = {
   improvements: ImprovementProposal[];
   goals: GoalRun[];
   features: DashboardFeature[];
+  featurePlans: DashboardFeaturePlan[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";
@@ -316,6 +356,68 @@ export async function decideImprovement(
     throw new Error(payload.details || payload.error || "Nao foi possivel decidir a proposta.");
   }
   return payload.improvement;
+}
+
+export async function fetchFeaturePlan(featurePlanId: number): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}`);
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel carregar o plano.");
+  }
+  return payload;
+}
+
+export async function createFeaturePlan(input: {
+  projectKey: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  idempotencyKey?: string | null;
+}): Promise<FeaturePlanDetails> {
+  const response = await fetch("/api/feature-plans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel criar o plano.");
+  }
+  return payload;
+}
+
+export async function cancelFeaturePlan(featurePlanId: number, reason = ""): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel cancelar o plano.");
+  }
+  return payload;
+}
+
+export async function replanFeaturePlan(
+  featurePlanId: number,
+  input: {
+    objective: string;
+    acceptanceCriteria: string[];
+    taskIds: number[];
+    idempotencyKey?: string | null;
+  }
+): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/replan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel replanejar.");
+  }
+  return payload;
 }
 
 export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<GoalRun> {
