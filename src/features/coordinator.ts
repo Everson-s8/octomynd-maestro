@@ -260,6 +260,7 @@ export class FeatureCoordinator {
         if (item.pullRequestUrl !== feature.pullRequestUrl) {
           await this.github.closeSuperseded(item.pullRequestUrl, feature.pullRequestUrl);
         }
+        await this.github.deleteHeadBranch(item.pullRequestUrl);
       } catch (error) {
         workPullRequestPending = true;
         this.addEvent(feature, "feature.work_pr_close_failed", safeSummary(error), task.id);
@@ -280,8 +281,15 @@ export class FeatureCoordinator {
       completedItems.push({ item: this.database.getFeatureItem(item.id), task: this.database.getTask(task.id), cleanup });
     }
 
+    try {
+      await this.github.deleteHeadBranch(feature.pullRequestUrl);
+    } catch (error) {
+      workPullRequestPending = true;
+      this.addEvent(feature, "feature.branch_delete_failed", safeSummary(error));
+    }
+
     if (workPullRequestPending) {
-      const message = "Feature merged, but one or more Work PRs still need to be closed.";
+      const message = "Feature merged, but one or more integrated branches still need cleanup.";
       this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
       this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
       return;

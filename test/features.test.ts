@@ -98,6 +98,10 @@ describe("feature completion protocol", () => {
       url: "https://github.com/example/project/pull/4",
       featureUrl: feature.pullRequestUrl
     }]);
+    expect(fixture.github.deleted).toEqual([
+      "https://github.com/example/project/pull/4",
+      feature.pullRequestUrl
+    ]);
     expect(fixture.database.getTask(fixture.task.id).status).toBe("done");
     expect(fixture.database.listFeatureItems(feature.id)[0].status).toBe("completed");
     expect(notification).not.toBeNull();
@@ -229,6 +233,7 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   state = pullRequestState();
   readonly merges: Array<{ url: string; expectedHeadSha: string }> = [];
   readonly closed: Array<{ url: string; featureUrl: string }> = [];
+  readonly deleted: string[] = [];
   markedDraft = false;
   closeFailuresRemaining = 0;
 
@@ -260,6 +265,10 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
     }
     this.closed.push({ url, featureUrl });
   }
+
+  async deleteHeadBranch(url: string): Promise<void> {
+    this.deleted.push(url);
+  }
 }
 
 function pullRequestState(): FeaturePullRequestState {
@@ -271,6 +280,8 @@ function pullRequestState(): FeaturePullRequestState {
     isDraft: false,
     mergeable: "MERGEABLE",
     headRefName: "maestro/feature-reliability",
+    headRepositoryOwner: "example",
+    headRepositoryName: "project",
     baseRefName: "main",
     headSha: "abc123",
     checks: [{ name: "CI", status: "COMPLETED", conclusion: "SUCCESS" }]
