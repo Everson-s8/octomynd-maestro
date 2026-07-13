@@ -95,7 +95,7 @@ export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord): st
     `Task #${task.id} requer atencao.`,
     `Projeto: ${project}`,
     `Goal #${run.id}: ${run.status}`,
-    run.lastError ? `Motivo: ${truncate(run.lastError, 240)}` : "Consulte o dashboard para detalhes."
+    run.lastError ? `Motivo: ${truncate(redactSensitiveText(run.lastError), 240)}` : "Consulte o dashboard para detalhes."
   ].join("\n");
 }
 

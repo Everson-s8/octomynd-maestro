@@ -88,6 +88,51 @@ describe("dashboard", () => {
     expect(snapshot.projects[0].currentWork[0].taskId).toBe(task.id);
   });
 
+  it("sanitizes but does not truncate the goal evidence endpoint", async () => {
+    const task = database.listTasks()[0];
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/evidence-test",
+      worktreePath: projectDir
+    });
+    const run = database.createGoalRun(task.id);
+    const step = database.createGoalStep(run.id, "planning", "codex");
+    const fakeSecret = `sk-ant-${"z".repeat(24)}`;
+    const fullDetail = `Path: C:\\Users\\evers\\Documents\\worktree\nKey: ${fakeSecret}\n${"n".repeat(3_000)}`;
+    database.finishGoalStep({
+      id: step.id,
+      status: "failed",
+      summary: "Codex (planning): erro desconhecido.",
+      output: fullDetail,
+      error: fullDetail,
+      durationMs: 5
+    });
+
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      goalCoordinator: new GoalCoordinator(database, new AgentRegistry([successfulGoalProvider]), path.join(tempDir, "runs"))
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/goals/${run.id}`);
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { steps: Array<{ output: string; error: string }> };
+      const [returnedStep] = payload.steps;
+
+      expect(returnedStep.output).not.toContain(fakeSecret);
+      expect(returnedStep.output).not.toContain("C:\\Users\\evers");
+      expect(returnedStep.output).toContain("n".repeat(3_000));
+      expect(returnedStep.error).not.toContain(fakeSecret);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("serves the dashboard API and creates a queued task", async () => {
     const server = createDashboardServer({
       config,
@@ -102,7 +147,8 @@ describe("dashboard", () => {
         status: "completed",
         content: "Aprovado com ajustes de contraste.",
         error: null,
-        durationMs: 42
+        durationMs: 42,
+        timedOut: false
       })
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -18,7 +18,10 @@ afterEach(() => {
 
 describe("goal delivery guard", () => {
   it("allows ordinary source files", () => {
-    fs.writeFileSync(path.join(tempDir, "feature.ts"), "export const ready = true;\n");
+    fs.writeFileSync(
+      path.join(tempDir, "feature.ts"),
+      'export const branch = "maestro/task-10-melhorar-a-telemetria-operacional";\n'
+    );
     expect(scanGoalChangesForSecrets(tempDir, ["feature.ts"])).toEqual([]);
   });
 

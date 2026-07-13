@@ -1,7 +1,9 @@
 import { MaestroConfig } from "../config.js";
 import { MaestroDatabase, TaskRecord } from "../db.js";
 import { listReviewQueue } from "../reviews/evidence.js";
-import { redactSensitiveText, sanitizePublicMetadata } from "../security/redaction.js";
+import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
+
+const EVENT_TEXT_MAX_LENGTH = 500;
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -79,7 +81,7 @@ export function buildDashboardSnapshot(
       id: event.id,
       source: event.source,
       type: event.type,
-      text: redactSensitiveText(event.text),
+      text: truncateForDisplay(redactSensitiveText(event.text), EVENT_TEXT_MAX_LENGTH),
       taskId: event.taskId,
       createdAt: event.createdAt,
       metadata: sanitizePublicMetadata(event.metadata)
@@ -92,7 +94,10 @@ export function buildDashboardSnapshot(
       evidence: item.evidence.map(redactSensitiveText),
       decisionNote: item.decisionNote ? redactSensitiveText(item.decisionNote) : null
     })),
-    goals: goals.map((goal) => ({ ...goal, lastError: goal.lastError ? redactSensitiveText(goal.lastError) : null })),
+    goals: goals.map((goal) => ({
+      ...goal,
+      lastError: goal.lastError ? truncateForDisplay(redactSensitiveText(goal.lastError), EVENT_TEXT_MAX_LENGTH) : null
+    })),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)
   };

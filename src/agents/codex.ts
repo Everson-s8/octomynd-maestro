@@ -7,6 +7,9 @@ import {
   AgentHealth,
   AgentProvider
 } from "./types.js";
+import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
+
+const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 
 const CODEX_CAPABILITIES = new Set([
   "planning",
@@ -33,6 +36,8 @@ export class CodexProvider implements AgentProvider {
   readonly capabilities = CODEX_CAPABILITIES;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+
+  constructor(private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS) {}
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -87,7 +92,7 @@ export class CodexProvider implements AgentProvider {
       "-"
     ];
 
-    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), 20 * 60_000, request.signal);
+    const processResult = await runProcess(process.execPath, args, cwd, buildPrompt(request), this.timeoutMs, request.signal);
     if (processResult.aborted) {
       return {
         outcome: "cancelled",
@@ -100,17 +105,16 @@ export class CodexProvider implements AgentProvider {
     }
     const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
-      const quota = /usage limit|rate limit|quota|credits/i.test(combined);
-      const authentication = /401|authentication|login required|credentials/i.test(combined);
-      if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
-      if (authentication) this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
+      const category = classifyFailure(combined, processResult.timedOut);
+      if (category === "quota") this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
+      if (category === "auth_required") this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
       return {
         outcome: "failed",
-        summary: quota ? "Codex sem cota disponivel." : authentication ? "Codex requer autenticacao." : "Codex falhou.",
+        summary: buildFailureSummary("Codex", request.phase, category),
         output: combined,
         error: combined || "Codex terminou sem resposta.",
         durationMs: Date.now() - startedAt,
-        retryable: quota || authentication
+        retryable: isRetryableFailureCategory(category)
       };
     }
 
@@ -200,17 +204,21 @@ function runProcess(
   timeoutMs: number,
   signal?: AbortSignal
 ) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
+  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean; timedOut: boolean }>((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let aborted = false;
+    let timedOut = false;
     const onAbort = () => {
       aborted = true;
       child.kill();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => child.kill(), timeoutMs);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout = appendBounded(stdout, chunk); });
@@ -218,12 +226,12 @@ function runProcess(
     child.on("error", (error) => {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
+      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted, timedOut });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode, stdout, stderr, aborted });
+      resolve({ exitCode, stdout, stderr, aborted, timedOut });
     });
     child.stdin.end(stdin);
     if (signal?.aborted) onAbort();

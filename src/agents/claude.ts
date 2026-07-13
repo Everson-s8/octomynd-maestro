@@ -3,13 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
 import { AgentExecutionRequest, AgentExecutionResult, AgentHealth, AgentProvider } from "./types.js";
+import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
   content: string;
   error: string | null;
   durationMs: number;
+  timedOut: boolean;
 };
+
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 export type ClaudeReviewer = (task: TaskRecord, project: ProjectRecord) => Promise<ClaudeReviewResult>;
 
@@ -25,6 +29,8 @@ export class ClaudeProvider implements AgentProvider {
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
+  constructor(private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS) {}
+
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const health: AgentHealth = resolveClaudeCliCommand()
@@ -35,7 +41,7 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
-    const result = await reviewTaskWithClaude(request.task, request.project, request.signal);
+    const result = await reviewTaskWithClaude(request.task, request.project, request.signal, this.timeoutMs);
     if (request.signal?.aborted) {
       return {
         outcome: "cancelled",
@@ -47,18 +53,25 @@ export class ClaudeProvider implements AgentProvider {
       };
     }
     if (result.status !== "completed") {
+      // reviewTaskWithClaude already replaces the raw error with a friendly Portuguese message
+      // once authentication is confirmed, so that status is authoritative here; only the
+      // remaining raw error text needs classification for quota/timeout/unknown.
+      const category = result.status === "auth_required"
+        ? "auth_required"
+        : classifyFailure(result.error ?? "", result.timedOut);
+      const healthState = category === "auth_required" ? "auth_required" : category === "quota" ? "quota" : "offline";
       this.cacheHealth({
-        state: result.status === "auth_required" ? "auth_required" : "offline",
+        state: healthState,
         detail: result.error || "Claude indisponivel",
         checkedAt: new Date().toISOString()
-      }, result.status === "auth_required" ? 60_000 : 30_000);
+      }, category === "auth_required" || category === "quota" ? 60_000 : 30_000);
       return {
         outcome: "failed",
-        summary: result.error || "Claude review failed.",
+        summary: buildFailureSummary("Claude", request.phase, category),
         output: "",
         error: result.error,
         durationMs: result.durationMs,
-        retryable: result.status === "auth_required"
+        retryable: isRetryableFailureCategory(category)
       };
     }
 
@@ -87,7 +100,8 @@ export class ClaudeProvider implements AgentProvider {
 export const reviewTaskWithClaude = async (
   task: TaskRecord,
   project: ProjectRecord,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<ClaudeReviewResult> => {
   const startedAt = Date.now();
   const cwd = task.worktreePath || project.path;
@@ -98,7 +112,8 @@ export const reviewTaskWithClaude = async (
       status: "failed",
       content: "",
       error: "Claude Code CLI was not found in the global npm installation.",
-      durationMs: Date.now() - startedAt
+      durationMs: Date.now() - startedAt,
+      timedOut: false
     };
   }
 
@@ -107,7 +122,8 @@ export const reviewTaskWithClaude = async (
       status: "failed",
       content: "",
       error: `Task workspace does not exist: ${cwd}`,
-      durationMs: Date.now() - startedAt
+      durationMs: Date.now() - startedAt,
+      timedOut: false
     };
   }
 
@@ -124,7 +140,7 @@ export const reviewTaskWithClaude = async (
     "--no-session-persistence"
   ];
 
-  const result = await runProcess(cli.command, args, cwd, 180_000, signal);
+  const result = await runProcess(cli.command, args, cwd, timeoutMs, signal);
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
   if (result.exitCode === 0 && result.stdout.trim()) {
@@ -132,18 +148,20 @@ export const reviewTaskWithClaude = async (
       status: "completed",
       content: result.stdout.trim(),
       error: null,
-      durationMs: Date.now() - startedAt
+      durationMs: Date.now() - startedAt,
+      timedOut: false
     };
   }
 
-  const authenticationFailed = isClaudeAuthenticationError(errorText);
+  const authenticationFailed = !result.timedOut && isClaudeAuthenticationError(errorText);
   return {
     status: authenticationFailed ? "auth_required" : "failed",
     content: "",
     error: authenticationFailed
       ? "Claude Code precisa ser reautenticado antes da revisao."
       : errorText || "Claude review failed without output.",
-    durationMs: Date.now() - startedAt
+    durationMs: Date.now() - startedAt,
+    timedOut: result.timedOut
   };
 };
 
@@ -192,17 +210,21 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
 }
 
 function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal) {
-  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean }>((resolve) => {
+  return new Promise<{ exitCode: number | null; stdout: string; stderr: string; aborted: boolean; timedOut: boolean }>((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let aborted = false;
+    let timedOut = false;
     const onAbort = () => {
       aborted = true;
       child.kill();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => child.kill(), timeoutMs);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -211,12 +233,12 @@ function runProcess(command: string, args: string[], cwd: string, timeoutMs: num
     child.on("error", (error) => {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted });
+      resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), aborted, timedOut });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode, stdout, stderr, aborted });
+      resolve({ exitCode, stdout, stderr, aborted, timedOut });
     });
     if (signal?.aborted) onAbort();
   });
