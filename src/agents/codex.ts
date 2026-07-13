@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -33,6 +34,8 @@ export class CodexProvider implements AgentProvider {
   readonly capabilities = CODEX_CAPABILITIES;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+
+  constructor(private readonly executionTimeoutMs = 20 * 60_000) {}
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -90,7 +93,7 @@ export class CodexProvider implements AgentProvider {
       args,
       cwd,
       stdin: buildPrompt(request),
-      timeoutMs: 20 * 60_000,
+      timeoutMs: this.executionTimeoutMs,
       signal: request.signal,
       env: buildRestrictedAgentEnvironment()
     });
@@ -106,27 +109,18 @@ export class CodexProvider implements AgentProvider {
     }
     const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
-      if (processResult.timedOut) {
-        return {
-          outcome: "failed",
-          summary: "Codex excedeu o tempo limite da etapa.",
-          output: combined,
-          error: combined || "Codex execution timed out.",
-          durationMs: processResult.durationMs,
-          retryable: true
-        };
-      }
-      const quota = isCodexQuotaError(combined);
-      const authentication = isCodexAuthenticationError(combined);
-      if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
-      if (authentication) this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
+      const category = classifyFailure(combined, processResult.timedOut);
+      const retryable = isRetryableFailureCategory(category);
+      const summary = buildFailureSummary(this.label, request.phase, category);
+      if (category === "quota") this.cacheHealth("quota", summary, 10 * 60_000);
+      if (category === "auth_required") this.cacheHealth("auth_required", summary, 10 * 60_000);
       return {
         outcome: "failed",
-        summary: quota ? "Codex sem cota disponivel." : authentication ? "Codex requer autenticacao." : "Codex falhou.",
+        summary,
         output: combined,
-        error: combined || "Codex terminou sem resposta.",
+        error: combined || summary,
         durationMs: processResult.durationMs,
-        retryable: quota || authentication
+        retryable
       };
     }
 
@@ -146,11 +140,13 @@ export class CodexProvider implements AgentProvider {
         retryable: false
       };
     } catch (error) {
+      const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
       return failure(
-        `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`,
+        buildFailureSummary(this.label, request.phase, "unknown"),
         startedAt,
         false,
-        combined
+        combined || detail,
+        detail
       );
     }
   }
@@ -220,10 +216,16 @@ function resolveCodexCliEntry(): string | null {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
-function failure(error: string, startedAt: number, retryable: boolean, output = ""): AgentExecutionResult {
+function failure(
+  summary: string,
+  startedAt: number,
+  retryable: boolean,
+  output = "",
+  error = summary
+): AgentExecutionResult {
   return {
     outcome: "failed",
-    summary: error,
+    summary,
     output,
     error,
     durationMs: Date.now() - startedAt,

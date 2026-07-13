@@ -9,7 +9,9 @@ import {
 import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { GoalDeliveryHandler } from "./delivery.js";
-import { redactSensitiveText } from "../security/redaction.js";
+import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
+
+const LAST_ERROR_MAX_LENGTH = 300;
 
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
 const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
@@ -119,19 +121,22 @@ export async function runTaskGoal(
       }
       const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
+      const safeSummary = redactSensitiveText(result.summary);
+      const safeOutput = redactSensitiveText(result.output);
+      const safeError = result.error ? redactSensitiveText(result.error) : null;
       database.withTransaction(() => {
         database.finishGoalStep({
           id: goalStep.id,
           status: result.outcome as Exclude<GoalStepStatus, "running">,
-          summary: result.summary,
-          output: result.output,
-          error: result.error,
+          summary: safeSummary,
+          output: safeOutput,
+          error: safeError,
           durationMs: result.durationMs
         });
         database.addEvent({
           source: routed.provider.id,
           type: `goal.step_${result.outcome}`,
-          text: result.summary,
+          text: safeSummary,
           taskId: task.id,
           metadata: {
             runId: run.id,
@@ -147,7 +152,7 @@ export async function runTaskGoal(
       }
 
       if (result.outcome === "blocked") {
-        return finishRun(database, currentRun, "blocked", phase, stepCount, result.error || result.summary, task.id);
+        return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
       }
       if (result.outcome === "failed") {
         excluded.add(routed.provider.id);
@@ -159,11 +164,11 @@ export async function runTaskGoal(
             currentRun,
             phase,
             stepCount,
-            result.error || result.summary,
+            result.summary || result.error || "Provider failure.",
             task.id
           );
         }
-        return finishRun(database, currentRun, "failed", phase, stepCount, result.error || result.summary, task.id);
+        return finishRun(database, currentRun, "failed", phase, stepCount, result.summary || result.error || "Provider failure.", task.id);
       }
       if (result.outcome === "changes_requested") {
         if (phase !== "reviewing") {
@@ -298,6 +303,7 @@ function pauseRun(
   error: string,
   taskId: number
 ): GoalRunRecord {
+  const safeError = sanitizeForRunSummary(error);
   return database.withTransaction(() => {
     database.updateTaskStatus(taskId, "waiting_quota");
     const paused = database.updateGoalRun({
@@ -305,17 +311,21 @@ function pauseRun(
       status: "waiting_provider",
       currentPhase: phase,
       stepCount,
-      lastError: error
+      lastError: safeError
     });
     database.addEvent({
       source: "maestro",
       type: "goal.waiting_provider",
-      text: error,
+      text: safeError,
       taskId,
       metadata: { runId: run.id, phase, stepCount }
     });
     return paused;
   });
+}
+
+function sanitizeForRunSummary(text: string): string {
+  return truncateForDisplay(redactSensitiveText(text), LAST_ERROR_MAX_LENGTH);
 }
 
 function nextPhaseAfter(phase: GoalPhase): GoalPhase | null {
@@ -336,6 +346,7 @@ function finishRun(
   error: string,
   taskId: number
 ): GoalRunRecord {
+  const safeError = sanitizeForRunSummary(error);
   return database.withTransaction(() => {
     database.updateTaskStatus(taskId, status);
     const finished = database.updateGoalRun({
@@ -343,12 +354,12 @@ function finishRun(
       status,
       currentPhase: phase,
       stepCount,
-      lastError: error
+      lastError: safeError
     });
     database.addEvent({
       source: "maestro",
       type: `goal.${status}`,
-      text: error,
+      text: safeError,
       taskId,
       metadata: { runId: run.id, phase, stepCount }
     });

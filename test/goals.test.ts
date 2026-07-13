@@ -291,6 +291,51 @@ describe("goal runner", () => {
     coordinator.shutdown();
   });
 
+  it("stores a short, sanitized lastError instead of a giant raw provider dump", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "boo", path: projectDir });
+    const task = database.createTask("investigate telemetry leak", "dashboard", "boo");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const fakeSecret = `sk-ant-${"a".repeat(24)}`;
+    const hugeLeakyError = [
+      `Stack trace referencing C:\\Users\\evers\\Documents\\worktree\\task-9`,
+      `Leaked key: ${fakeSecret}`,
+      "y".repeat(5_000)
+    ].join("\n");
+    const codex = new FakeProvider("codex", ["planning"], () => ({
+      outcome: "failed",
+      summary: "Codex (planning): erro desconhecido.",
+      output: hugeLeakyError,
+      error: hugeLeakyError,
+      durationMs: 1,
+      retryable: false
+    }));
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([codex]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 4 }
+    );
+
+    expect(run.status).toBe("failed");
+    expect(run.lastError).toBe("Codex (planning): erro desconhecido.");
+    expect(run.lastError!.length).toBeLessThan(300);
+    expect(run.lastError).not.toContain(fakeSecret);
+    expect(run.lastError).not.toContain("C:\\Users\\evers");
+
+    const step = database.listGoalSteps(run.id).at(-1)!;
+    expect(step.error).not.toContain(fakeSecret);
+    expect(step.error).not.toContain("C:\\Users\\evers");
+    expect(step.error).toContain("[REDACTED_SECRET]");
+    expect(step.error).toContain("[REDACTED_LOCAL_PATH]");
+    expect(step.error).toContain("y".repeat(5_000));
+  });
+
   it("cancels an active provider process and preserves task history", async () => {
     const projectDir = path.join(tempDir, "cancel-project");
     const worktreeDir = path.join(tempDir, "cancel-worktree");

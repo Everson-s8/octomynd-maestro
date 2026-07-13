@@ -114,6 +114,21 @@ describe("telegram helpers", () => {
     expect(message).not.toContain("token");
   });
 
+  it("redacts secrets and local paths from the failure reason it sends", () => {
+    const fakeSecret = `sk-ant-${"a".repeat(24)}`;
+    const failedRun: GoalRunRecord = {
+      ...goalRun(),
+      status: "failed",
+      lastError: `Codex (implementing): erro desconhecido. Key ${fakeSecret} at C:\\Users\\evers\\worktree`
+    };
+
+    const message = formatGoalNotification(failedRun, taskRecord());
+
+    expect(message).toContain("requer atencao");
+    expect(message).not.toContain(fakeSecret);
+    expect(message).not.toContain("C:\\Users\\evers");
+  });
+
   it("sends review decisions without exposing the private chat id", async () => {
     const database = createDatabase(":memory:");
     try {

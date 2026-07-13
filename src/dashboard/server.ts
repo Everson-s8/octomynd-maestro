@@ -17,6 +17,7 @@ import { GoalCoordinator } from "../goals/coordinator.js";
 import { buildDashboardSnapshot } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -334,7 +335,18 @@ async function routeRequest(
     const runId = Number(goalMatch[1]);
     try {
       const run = options.database.getGoalRun(runId);
-      sendJson(response, 200, { run, steps: options.database.listGoalSteps(run.id) });
+      sendJson(response, 200, {
+        run: {
+          ...run,
+          lastError: run.lastError ? redactSensitiveText(run.lastError) : null
+        },
+        steps: options.database.listGoalSteps(run.id).map((step) => ({
+          ...step,
+          summary: redactSensitiveText(step.summary),
+          output: redactSensitiveText(step.output),
+          error: step.error ? redactSensitiveText(step.error) : null
+        }))
+      });
     } catch {
       sendJson(response, 404, { error: "goal_run_not_found" });
     }

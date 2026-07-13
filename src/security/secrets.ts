@@ -12,8 +12,8 @@ export type SecretScanFinding = {
 };
 
 export const SECRET_PATTERNS = [
-  /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/,
-  /sk-ant-[A-Za-z0-9_-]{20,}/,
+  /(?<![A-Za-z0-9_])sk-ant-[A-Za-z0-9_-]{20,}/,
+  /(?<![A-Za-z0-9_])sk-(?:proj-)?[A-Za-z0-9_-]{20,}/,
   /\bgh[opsu]_[A-Za-z0-9]{20,}/,
   /\b\d{8,12}:[A-Za-z0-9_-]{30,}/,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/

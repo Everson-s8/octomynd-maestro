@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildClaudeCliCommand,
   buildClaudeGoalArgs,
@@ -98,9 +101,98 @@ describe("claude review", () => {
   });
 });
 
+describe("claude provider telemetry", () => {
+  let tempDir: string;
+  let cwd: string;
+  let originalAppData: string | undefined;
+  let originalFakeMode: string | undefined;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-claude-cli-"));
+    cwd = path.join(tempDir, "workspace");
+    fs.mkdirSync(cwd);
+    const claudeRoot = path.join(tempDir, "npm", "node_modules", "@anthropic-ai", "claude-code");
+    fs.mkdirSync(claudeRoot, { recursive: true });
+    fs.writeFileSync(path.join(claudeRoot, "cli.js"), FAKE_CLAUDE_CLI_SOURCE, "utf8");
+    originalAppData = process.env.APPDATA;
+    originalFakeMode = process.env.FAKE_CLAUDE_MODE;
+    process.env.APPDATA = tempDir;
+  });
+
+  afterEach(() => {
+    if (originalAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = originalAppData;
+    if (originalFakeMode === undefined) delete process.env.FAKE_CLAUDE_MODE;
+    else process.env.FAKE_CLAUDE_MODE = originalFakeMode;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reports a short, structured summary for a quota failure and marks it retryable", async () => {
+    process.env.FAKE_CLAUDE_MODE = "quota";
+    const provider = new ClaudeProvider(5_000);
+
+    const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
+
+    expect(result.outcome).toBe("failed");
+    expect(result.summary).toBe("Claude (reviewing): cota do provedor esgotada.");
+    expect(result.retryable).toBe(true);
+    expect(result.error).toContain("rate limit");
+  });
+
+  it("reports authentication failures distinctly from quota", async () => {
+    process.env.FAKE_CLAUDE_MODE = "auth";
+    const provider = new ClaudeProvider(5_000);
+
+    const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
+
+    expect(result.outcome).toBe("failed");
+    expect(result.summary).toBe("Claude (reviewing): autenticacao necessaria.");
+    expect(result.retryable).toBe(true);
+  });
+
+  it("classifies a killed process as a timeout instead of an unknown failure", async () => {
+    process.env.FAKE_CLAUDE_MODE = "timeout";
+    const provider = new ClaudeProvider(150);
+
+    const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
+
+    expect(result.outcome).toBe("failed");
+    expect(result.summary).toBe("Claude (reviewing): tempo limite excedido.");
+    expect(result.retryable).toBe(true);
+  }, 10_000);
+
+  it("falls back to an unknown, non-retryable failure for unrecognized errors", async () => {
+    process.env.FAKE_CLAUDE_MODE = "unknown";
+    const provider = new ClaudeProvider(5_000);
+
+    const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
+
+    expect(result.outcome).toBe("failed");
+    expect(result.summary).toBe("Claude (reviewing): erro desconhecido.");
+    expect(result.retryable).toBe(false);
+  });
+});
+
+const FAKE_CLAUDE_CLI_SOURCE = `
+const mode = process.env.FAKE_CLAUDE_MODE || "unknown";
+if (mode === "timeout") {
+  setInterval(() => {}, 1000);
+} else if (mode === "quota") {
+  process.stderr.write("Error: rate limit exceeded, please retry later\\n");
+  process.exit(1);
+} else if (mode === "auth") {
+  process.stderr.write("Not logged in. Please run /login\\n");
+  process.exit(1);
+} else {
+  process.stderr.write("boom: unexpected internal failure\\n");
+  process.exit(1);
+}
+`;
+
 function executionRequest(
   phase: AgentExecutionRequest["phase"],
-  capability: AgentExecutionRequest["capability"]
+  capability: AgentExecutionRequest["capability"],
+  worktreePath = "C:/worktree"
 ): AgentExecutionRequest {
   return {
     runId: 1,
@@ -116,7 +208,7 @@ function executionRequest(
       status: phase,
       source: "dashboard",
       branchName: "maestro/task-9",
-      worktreePath: "C:/worktree",
+      worktreePath,
       createdAt: "now",
       updatedAt: "now"
     },
@@ -124,12 +216,12 @@ function executionRequest(
       id: 1,
       key: "maestro",
       name: "Octomynd Maestro",
-      path: "C:/repo/maestro",
+      path: worktreePath,
       defaultBranch: "main",
       createdAt: "now",
       updatedAt: "now"
     },
     previousSteps: [],
-    artifactsRoot: "C:/artifacts"
+    artifactsRoot: path.join(worktreePath, "..", "artifacts")
   };
 }

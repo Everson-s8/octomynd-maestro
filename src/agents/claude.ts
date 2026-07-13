@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
 import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 import {
   AgentCapability,
   AgentExecutionRequest,
@@ -75,6 +76,8 @@ export class ClaudeProvider implements AgentProvider {
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
+  constructor(private readonly executionTimeoutMs = 20 * 60_000) {}
+
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const health: AgentHealth = resolveClaudeCliCommand()
@@ -85,7 +88,7 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
-    const result = await executeClaudeGoal(request);
+    const result = await executeClaudeGoal(request, this.executionTimeoutMs);
     if (result.aborted || request.signal?.aborted) {
       return {
         outcome: "cancelled",
@@ -98,18 +101,11 @@ export class ClaudeProvider implements AgentProvider {
     }
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      const authenticationFailed = isClaudeAuthenticationError(errorText);
-      const quotaFailed = isClaudeQuotaError(errorText);
-      const retryable = authenticationFailed || quotaFailed || result.timedOut;
-      const summary = authenticationFailed
-        ? "Claude Code precisa ser reautenticado."
-        : quotaFailed
-          ? "Claude sem cota disponivel."
-          : result.timedOut
-            ? "Claude excedeu o tempo limite da etapa."
-            : "Claude falhou.";
+      const category = classifyFailure(errorText, result.timedOut);
+      const retryable = isRetryableFailureCategory(category);
+      const summary = buildFailureSummary(this.label, request.phase, category);
       this.cacheHealth({
-        state: authenticationFailed ? "auth_required" : quotaFailed ? "quota" : "offline",
+        state: category === "auth_required" ? "auth_required" : category === "quota" ? "quota" : "offline",
         detail: summary,
         checkedAt: new Date().toISOString()
       }, retryable ? 10 * 60_000 : 30_000);
@@ -307,7 +303,7 @@ export function isClaudeQuotaError(errorText: string): boolean {
   return /session limit|usage limit|rate limit|quota|resets? at/i.test(errorText);
 }
 
-async function executeClaudeGoal(request: AgentExecutionRequest) {
+async function executeClaudeGoal(request: AgentExecutionRequest, timeoutMs: number) {
   const cwd = request.task.worktreePath || request.project.path;
   const cli = resolveClaudeCliCommand();
   if (!cli || !fs.existsSync(cwd)) {
@@ -324,7 +320,7 @@ async function executeClaudeGoal(request: AgentExecutionRequest) {
     command: cli.command,
     args: buildClaudeGoalArgs(cli, request, cwd),
     cwd,
-    timeoutMs: 20 * 60_000,
+    timeoutMs,
     signal: request.signal,
     env: buildRestrictedAgentEnvironment()
   });
