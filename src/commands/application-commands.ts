@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  FeaturePlanIntegrationDetails,
   FeaturePlanDetails,
   FeaturePlanWriteResult,
   MaestroDatabase,
   ProjectRecord,
   TaskRecord
 } from "../db.js";
+import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
@@ -172,6 +174,19 @@ export class ApplicationCommands {
     return plans.map((plan) => this.database.getFeaturePlanDetails(plan.id));
   }
 
+  async integrateFeaturePlan(
+    _origin: CommandOrigin,
+    featurePlanId: number,
+    worktreesRoot: string,
+    github?: WorkPullRequestGateway
+  ): Promise<FeaturePlanIntegrationDetails> {
+    try {
+      return await new FeatureIntegrationBuilder(this.database, worktreesRoot, github).build(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
   cancelFeaturePlan(origin: CommandOrigin, featurePlanId: number, reason?: string | null): FeaturePlanWriteResult {
     try {
       const result = this.database.cancelFeaturePlan(featurePlanId, reason);
@@ -305,7 +320,9 @@ export class ApplicationCommands {
   private toFeaturePlanCommandError(error: unknown): never {
     const message = error instanceof Error ? error.message : "Unknown feature plan error.";
     if (/not found/i.test(message)) throw notFoundError(message);
-    if (/already associated|already used|cannot be|cancelled/i.test(message)) throw conflictError(message);
+    if (/already associated|already used|cannot be|cancelled|conflict|dirty|cherry-pick|secret guard|diff whitespace|checkpoint|changed after/i.test(message)) {
+      throw conflictError(message);
+    }
     throw validationError(message);
   }
 }
