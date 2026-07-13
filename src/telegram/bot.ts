@@ -1,15 +1,17 @@
 import { Bot, Context } from "grammy";
 import { MaestroConfig } from "../config.js";
-import { MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
+import { FeaturePlanDetails, FeatureRecord, MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
 import { parseProjectTaskInput } from "../orchestrator.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
+import { FeatureGitHubGateway } from "../features/github.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
   autopilotStatus?: () => BacklogAutopilotSnapshot | null;
+  featureGithub?: FeatureGitHubGateway;
 };
 
 export function createTelegramBot(
@@ -18,7 +20,7 @@ export function createTelegramBot(
   options: TelegramBotOptions = {}
 ) {
   const bot = new Bot(config.telegram.botToken);
-  const commands = new ApplicationCommands(database);
+  const commands = new ApplicationCommands(database, options.featureGithub);
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -193,6 +195,52 @@ export function createTelegramBot(
     await ctx.reply(executeCancelCommand(ctx.message?.text ?? "", options.cancelTask));
   });
 
+  bot.command("features", async (ctx) => {
+    const projectKey = parseFeaturesProjectKey(ctx.message?.text ?? "");
+    database.addEvent({
+      source: "telegram",
+      type: "command.features",
+      text: "/features",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey }
+    });
+
+    if (projectKey && !database.findProjectByKey(projectKey)) {
+      await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
+      return;
+    }
+
+    const plans = commands.listFeaturePlans(projectKey, 10);
+    const features = database.listFeatures(30).filter((feature) => !projectKey || feature.projectKey === projectKey);
+    await ctx.reply(formatFeatures(database, plans, features));
+  });
+
+  bot.command("feature_cancel", async (ctx) => {
+    const parsed = parseFeatureCancelText(ctx.message?.text ?? "");
+    if (!parsed) {
+      await ctx.reply("Use: /feature_cancel id [motivo]");
+      return;
+    }
+
+    let feature: FeatureRecord;
+    try {
+      feature = await commands.cancelFeature(telegramOrigin(ctx), parsed.featureId, parsed.reason);
+    } catch (error) {
+      await ctx.reply(["Cancelamento nao aplicado.", ...commandErrorDetails(error)].join("\n"));
+      return;
+    }
+
+    await ctx.reply(
+      [
+        `Feature #${feature.id} cancelada.`,
+        `Estado: ${feature.status}`,
+        "O PR consolidado e o historico continuam disponiveis para auditoria.",
+        `PR: ${feature.pullRequestUrl}`
+      ].join("\n")
+    );
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
 
@@ -274,6 +322,21 @@ export function parseTaskId(messageText: string, command: string): number | null
   const regex = new RegExp(`^/${command}(?:@\\w+)?\\s+(\\d+)\\s*$`, "i");
   const match = messageText.match(regex);
   return match ? Number(match[1]) : null;
+}
+
+export function parseFeaturesProjectKey(messageText: string): string | null {
+  const text = messageText.replace(/^\/features(?:@\w+)?\s*/i, "").trim();
+  if (!text) return null;
+  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+export function parseFeatureCancelText(
+  messageText: string
+): { featureId: number; reason: string | null } | null {
+  const match = messageText.match(/^\/feature_cancel(?:@\w+)?\s+(\d+)(?:\s+(.+))?\s*$/i);
+  if (!match) return null;
+  return { featureId: Number(match[1]), reason: match[2]?.trim() || null };
 }
 
 export function executeCancelCommand(
@@ -373,7 +436,56 @@ function formatHelp(): string {
     "/prepare id - criar branch/worktree local",
     "/cancel id - cancelar task ativa ou queued",
     "/queue - listar tasks recentes",
-    "/queue @projeto - listar tasks do projeto"
+    "/queue @projeto - listar tasks do projeto",
+    "/features - listar Feature Plans e Feature PRs",
+    "/features @projeto - listar Feature Plans e Feature PRs do projeto",
+    "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria"
+  ].join("\n");
+}
+
+function formatFeatures(
+  database: MaestroDatabase,
+  plans: FeaturePlanDetails[],
+  features: FeatureRecord[]
+): string {
+  if (plans.length === 0 && features.length === 0) {
+    return "Nenhum Feature Plan ou Feature PR registrado ainda.";
+  }
+
+  const planLines = plans.slice(0, 8).flatMap((details) => {
+    const { plan, tasks } = details;
+    const blockers = tasks.filter((task) => task.taskStatus !== "awaiting_human");
+    const eligible = plan.status === "planned" && tasks.length > 0 && blockers.length === 0;
+    const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
+    const lines = [
+      `#${plan.id} @${plan.projectKey} [${plan.status}]${plan.status === "planned" ? (eligible ? " elegivel" : " aguardando tasks") : ""} - ${truncate(plan.objective, 160)}`
+    ];
+    if (blockers.length > 0) {
+      lines.push(...blockers.map((task) => `   blocker: task #${task.taskId} (${task.taskStatus})`));
+    }
+    if (integration) {
+      lines.push(
+        `   integracao: ${integration.integration.status} (${integration.integration.checkpoint})`
+        + (integration.integration.lastError ? ` - ${truncate(integration.integration.lastError, 160)}` : "")
+      );
+    }
+    if (plan.cancelReason) {
+      lines.push(`   cancelado: ${truncate(plan.cancelReason, 160)}`);
+    }
+    return lines;
+  });
+
+  const featureLines = features.slice(0, 8).map((feature) => (
+    `#${feature.id} @${feature.projectKey} [${feature.status}] - ${feature.pullRequestUrl}`
+    + (feature.lastError ? ` - ${truncate(feature.lastError, 160)}` : "")
+  ));
+
+  return [
+    "Feature Plans:",
+    ...(planLines.length > 0 ? planLines : ["- nenhum plano"]),
+    "",
+    "Feature PRs consolidados (revise apenas estes):",
+    ...(featureLines.length > 0 ? featureLines : ["- nenhuma feature ativa"])
   ].join("\n");
 }
 

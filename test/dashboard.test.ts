@@ -12,6 +12,7 @@ import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { createDashboardServer, DashboardServerOptions } from "../src/dashboard/server.js";
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
+import { FeatureGitHubGateway, FeaturePullRequestState } from "../src/features/github.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -90,6 +91,44 @@ describe("dashboard", () => {
     expect(snapshot.agents.find((agent) => agent.id === "codex")?.state).toBe("working");
     expect(snapshot.projects[0].workingAgents).toEqual(["codex"]);
     expect(snapshot.projects[0].currentWork[0].taskId).toBe(task.id);
+  });
+
+  it("shows Feature Plan tasks, eligibility, integration blockers and consolidated PR linkage", () => {
+    const first = database.createTask("primeiro bloco", "maestro", "boo");
+    const second = database.createTask("segundo bloco", "maestro", "boo");
+    database.updateTaskStatus(first.id, "awaiting_human");
+    database.updateTaskStatus(second.id, "awaiting_human");
+    const plan = database.createFeaturePlan({
+      projectKey: "boo",
+      objective: "Montar uma Feature consolidada.",
+      acceptanceCriteria: ["Somente um Feature PR"],
+      taskIds: [first.id, second.id]
+    });
+    const feature = database.createFeature({
+      projectKey: "boo",
+      featurePlanId: plan.plan.id,
+      name: "Feature consolidada",
+      objective: plan.plan.objective,
+      branchName: "maestro/feature-plan-1-r1",
+      worktreePath: path.join(tempDir, "feature-worktree"),
+      pullRequestUrl: "https://github.com/example/boo/pull/9"
+    });
+
+    const snapshot = buildDashboardSnapshot(config, database);
+    const featurePlan = snapshot.featurePlans.find((item) => item.id === plan.plan.id)!;
+
+    expect(featurePlan.eligible).toBe(true);
+    expect(featurePlan.blockers).toEqual([]);
+    expect(featurePlan.tasks).toEqual([
+      expect.objectContaining({ id: first.id, status: "awaiting_human" }),
+      expect.objectContaining({ id: second.id, status: "awaiting_human" })
+    ]);
+    expect(featurePlan.feature).toEqual({
+      id: feature.id,
+      status: "draft",
+      pullRequestUrl: feature.pullRequestUrl
+    });
+    expect(featurePlan.cancellable).toBe(false);
   });
 
   it("sanitizes but does not truncate the goal evidence endpoint", async () => {
@@ -330,6 +369,38 @@ describe("dashboard", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
+
+  it("cancels a pre-merge Feature through the dashboard and closes its consolidated PR", async () => {
+    const github = new FakeFeatureGitHubGateway();
+    const feature = database.createFeature({
+      projectKey: "boo",
+      name: "Feature cancelavel",
+      objective: "Cancelar com auditoria.",
+      branchName: github.state.headRefName,
+      worktreePath: path.join(tempDir, "feature-cancelavel"),
+      pullRequestUrl: github.state.url
+    });
+    const server = createDashboardServer({ config, database, staticRoot: tempDir, featureGithub: github });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/features/${feature.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Mudanca de prioridade." })
+      });
+
+      expect(response.status).toBe(200);
+      expect(database.getFeature(feature.id)).toMatchObject({
+        status: "cancelled",
+        cancelReason: "Mudanca de prioridade."
+      });
+      expect(github.closed).toEqual([github.state.url]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
 });
 
 function runGit(args: string[], cwd: string) {
@@ -361,4 +432,29 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out waiting for goal completion.");
+}
+
+class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
+  state: FeaturePullRequestState = {
+    number: 9,
+    title: "Feature cancelavel",
+    url: "https://github.com/example/boo/pull/9",
+    state: "OPEN",
+    isDraft: true,
+    mergeable: "MERGEABLE",
+    headRefName: "maestro/feature-cancelavel",
+    headRepositoryOwner: "example",
+    headRepositoryName: "boo",
+    baseRefName: "master",
+    headSha: "b".repeat(40),
+    checks: []
+  };
+  readonly closed: string[] = [];
+
+  async inspect(): Promise<FeaturePullRequestState> { return { ...this.state, checks: [...this.state.checks] }; }
+  async merge(): Promise<void> {}
+  async markDraft(): Promise<void> {}
+  async close(url: string): Promise<void> { this.closed.push(url); this.state = { ...this.state, state: "CLOSED" }; }
+  async closeSuperseded(): Promise<void> {}
+  async deleteHeadBranch(): Promise<void> {}
 }

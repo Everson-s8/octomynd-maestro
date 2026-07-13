@@ -19,6 +19,7 @@ import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
+import { FeatureGitHubGateway } from "../features/github.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -28,13 +29,14 @@ export type DashboardServerOptions = {
   goalCoordinator?: GoalCoordinator;
   reviewCoordinator?: ReviewCoordinator;
   featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
+  featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
-  const commands = new ApplicationCommands(options.database);
+  const commands = new ApplicationCommands(options.database, options.featureGithub);
 
   return http.createServer(async (request, response) => {
     try {
@@ -306,6 +308,22 @@ async function routeRequest(
       sendJson(response, 200, result);
     } catch (error) {
       sendCommandError(response, error, "feature_plan_integration_failed");
+    }
+    return;
+  }
+
+  const cancelFeatureMatch = url.pathname.match(/^\/api\/features\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelFeatureMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const feature = await commands.cancelFeature(
+        { channel: "dashboard" },
+        Number(cancelFeatureMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, { feature });
+    } catch (error) {
+      sendCommandError(response, error, "feature_cancel_failed");
     }
     return;
   }

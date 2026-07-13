@@ -111,8 +111,8 @@ export class FeatureIntegrationBuilder {
     const items: FeaturePlanIntegrationItemInput[] = [];
     for (const planTask of details.tasks) {
       const task = this.database.getTask(planTask.taskId);
-      if (task.status !== "ready_to_merge") {
-        throw new Error(`Task #${task.id} must be ready_to_merge before Feature Plan integration.`);
+      if (task.status !== "awaiting_human") {
+        throw new Error(`Task #${task.id} must have a delivered Draft Work PR before Feature Plan integration.`);
       }
       if (!task.branchName) {
         throw new Error(`Task #${task.id} has no branch recorded for Work PR validation.`);
@@ -145,8 +145,8 @@ export class FeatureIntegrationBuilder {
   ): Promise<void> {
     for (const item of this.database.listFeaturePlanIntegrationItems(integration.id)) {
       const task = this.database.getTask(item.taskId);
-      if (task.status !== "ready_to_merge") {
-        throw new Error(`Task #${task.id} changed from ready_to_merge before integration completed.`);
+      if (task.status !== "awaiting_human") {
+        throw new Error(`Task #${task.id} no longer has a delivered Draft Work PR.`);
       }
       const state = await this.github.inspect(item.pullRequestUrl);
       validateWorkPullRequest({
@@ -416,8 +416,8 @@ function validateWorkPullRequest(input: {
   if (state.state !== "OPEN") {
     throw new Error(`Task #${taskId} Work PR must be open before Feature Plan integration.`);
   }
-  if (state.isDraft) {
-    throw new Error(`Task #${taskId} Work PR must be ready before Feature Plan integration.`);
+  if (!state.isDraft) {
+    throw new Error(`Task #${taskId} Work PR must remain Draft; only the consolidated Feature PR can be marked ready.`);
   }
   if (state.mergeable === "CONFLICTING") {
     throw new Error(`Task #${taskId} Work PR reports merge conflicts.`);

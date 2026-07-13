@@ -57,6 +57,13 @@ export class GhFeatureAssemblyGateway implements FeatureAssemblyGitHubGateway {
   }
 }
 
+export type FeatureAssemblyEvent =
+  | { type: "started"; plan: FeaturePlanRecord }
+  | { type: "draft_ready"; plan: FeaturePlanRecord; feature: FeatureRecord }
+  | { type: "blocked"; plan: FeaturePlanRecord; message: string };
+
+export type FeatureAssemblyNotificationHandler = (event: FeatureAssemblyEvent) => Promise<void>;
+
 export class FeatureAssemblyCoordinator {
   private readonly active = new Set<number>();
   private timer: NodeJS.Timeout | null = null;
@@ -67,6 +74,7 @@ export class FeatureAssemblyCoordinator {
     private readonly worktreesRoot: string,
     private readonly workGithub: WorkPullRequestGateway = new GhFeatureGateway(),
     private readonly assemblyGithub: FeatureAssemblyGitHubGateway = new GhFeatureAssemblyGateway(),
+    private readonly notify?: FeatureAssemblyNotificationHandler,
     private readonly pollIntervalMs = 15_000
   ) {}
 
@@ -99,7 +107,11 @@ export class FeatureAssemblyCoordinator {
       try {
         if (await this.reconcilePlan(plan.id)) changes += 1;
       } catch (error) {
-        this.addPlanEvent(plan.id, "feature_plan.assembly_failed", safeSummary(error));
+        const message = safeSummary(error);
+        if (!this.database.hasFeaturePlanEvent("feature_plan.assembly_failed", plan.id, plan.revision)) {
+          this.addPlanEvent(plan.id, "feature_plan.assembly_failed", message, undefined, plan.revision);
+          await this.emitNotify({ type: "blocked", plan, message });
+        }
       } finally {
         this.active.delete(plan.id);
       }
@@ -118,13 +130,16 @@ export class FeatureAssemblyCoordinator {
 
     const details = this.database.getFeaturePlanDetails(featurePlanId);
     if (details.tasks.length === 0) return false;
-    const eligible = details.tasks.every((task) => task.taskStatus === "ready_to_merge");
+    const eligible = details.tasks.every((task) => task.taskStatus === "awaiting_human");
     if (!eligible) return false;
 
     return this.assemblePlan(details.plan);
   }
 
   private async assemblePlan(plan: FeaturePlanRecord): Promise<boolean> {
+    const isFirstAttempt = this.database.findFeaturePlanIntegrationByFeaturePlan(plan.id) === null;
+    if (isFirstAttempt) await this.emitNotify({ type: "started", plan });
+
     const project = this.database.getProjectByKey(plan.projectKey);
     const builder = new FeatureIntegrationBuilder(this.database, this.worktreesRoot, this.workGithub);
     const integrationDetails = await builder.build(plan.id);
@@ -147,6 +162,7 @@ export class FeatureAssemblyCoordinator {
         body: buildFeatureBody(plan, integrationDetails)
       });
 
+    const wasFeatureAlreadyCreated = this.database.findFeatureByFeaturePlanId(plan.id) !== null;
     const feature = this.database.createFeature({
       projectKey: project.key,
       featurePlanId: plan.id,
@@ -162,9 +178,36 @@ export class FeatureAssemblyCoordinator {
       plan.id,
       "feature_plan.assembled",
       `Feature Plan #${plan.id} assembled into Feature PR ${pullRequestUrl}.`,
-      feature.id
+      feature.id,
+      plan.revision
     );
+    if (!wasFeatureAlreadyCreated) await this.emitNotify({ type: "draft_ready", plan, feature });
     return true;
+  }
+
+  private async emitNotify(event: FeatureAssemblyEvent): Promise<void> {
+    if (!this.notify) return;
+    if (this.database.hasFeaturePlanEvent(
+      "feature_plan.assembly_notification_sent",
+      event.plan.id,
+      event.plan.revision,
+      event.type
+    )) return;
+    try {
+      await this.notify(event);
+      this.database.addEvent({
+        source: "maestro",
+        type: "feature_plan.assembly_notification_sent",
+        text: `Feature Plan #${event.plan.id} assembly notification sent (${event.type}).`,
+        metadata: {
+          featurePlanId: event.plan.id,
+          revision: event.plan.revision,
+          eventType: event.type
+        }
+      });
+    } catch (error) {
+      this.addPlanEvent(event.plan.id, "feature_plan.assembly_notification_failed", safeSummary(error));
+    }
   }
 
   private ensureFeatureItemsRegistered(
@@ -188,12 +231,18 @@ export class FeatureAssemblyCoordinator {
     return after > before;
   }
 
-  private addPlanEvent(featurePlanId: number, type: string, text: string, featureId?: number): void {
+  private addPlanEvent(
+    featurePlanId: number,
+    type: string,
+    text: string,
+    featureId?: number,
+    revision?: number
+  ): void {
     this.database.addEvent({
       source: "maestro",
       type,
       text: truncateForDisplay(redactSensitiveText(text), EVENT_TEXT_MAX_LENGTH),
-      metadata: { featurePlanId, featureId: featureId ?? null }
+      metadata: { featurePlanId, featureId: featureId ?? null, revision: revision ?? null }
     });
   }
 }

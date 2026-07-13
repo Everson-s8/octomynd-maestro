@@ -5,13 +5,20 @@ import {
   executeCancelCommand,
   isUserAllowed,
   parseProjectAddText,
+  parseFeatureCancelText,
+  parseFeaturesProjectKey,
   parseQueueProjectKey,
   parseStatusProjectKey,
   parseTaskId,
   parseTaskText
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
-import { createTelegramGoalProgressNotifier, formatGoalNotification } from "../src/telegram/notifications.js";
+import {
+  createTelegramGoalProgressNotifier,
+  formatFeatureAssemblyNotification,
+  formatFeatureBlockedNotification,
+  formatGoalNotification
+} from "../src/telegram/notifications.js";
 import { createTelegramReviewNotifier } from "../src/telegram/notifications.js";
 import { createDatabase, GoalRunRecord, TaskRecord } from "../src/db.js";
 import { MaestroConfig } from "../src/config.js";
@@ -51,6 +58,16 @@ describe("telegram helpers", () => {
   it("parses status project key", () => {
     expect(parseStatusProjectKey("/status @boo")).toBe("boo");
     expect(parseStatusProjectKey("/status")).toBeNull();
+  });
+
+  it("parses Feature operation commands", () => {
+    expect(parseFeaturesProjectKey("/features @boo")).toBe("boo");
+    expect(parseFeaturesProjectKey("/features")).toBeNull();
+    expect(parseFeatureCancelText("/feature_cancel 12 prioridade mudou")).toEqual({
+      featureId: 12,
+      reason: "prioridade mudou"
+    });
+    expect(parseFeatureCancelText("/feature_cancel nope")).toBeNull();
   });
 
   it("parses task ids", () => {
@@ -178,6 +195,43 @@ describe("telegram helpers", () => {
       expect(sent[0]).toContain("Task #1 em andamento");
       expect(sent[0]).toContain("Agente: codex");
       expect(database.getLastEvent()?.type).toBe("goal.progress_notification_sent");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("formats Feature assembly and blocker notifications without sensitive details", () => {
+    const database = createDatabase(":memory:");
+    try {
+      database.registerProject({ key: "boo", path: process.cwd() });
+      const task = database.createTask("bloco", "maestro", "boo");
+      const plan = database.createFeaturePlan({
+        projectKey: "boo",
+        objective: "Montar a Feature sem expor segredos.",
+        acceptanceCriteria: ["Somente dados sanitizados sao enviados."],
+        taskIds: [task.id]
+      }).plan;
+      const feature = database.createFeature({
+        projectKey: "boo",
+        featurePlanId: plan.id,
+        name: "Feature Boo",
+        objective: plan.objective,
+        branchName: "maestro/feature-boo",
+        worktreePath: process.cwd(),
+        pullRequestUrl: "https://github.com/example/boo/pull/10"
+      });
+
+      const ready = formatFeatureAssemblyNotification({ type: "draft_ready", plan, feature });
+      const blocked = formatFeatureBlockedNotification({
+        feature,
+        reason: "failed",
+        message: `Falhou em C:\\Users\\private com sk-proj-${"x".repeat(48)}`
+      });
+
+      expect(ready).toContain("Revise apenas este PR consolidado");
+      expect(ready).toContain(feature.pullRequestUrl);
+      expect(blocked).not.toContain("C:\\Users\\private");
+      expect(blocked).not.toContain(`sk-proj-${"x".repeat(48)}`);
     } finally {
       database.close();
     }

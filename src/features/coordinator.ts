@@ -28,7 +28,21 @@ export type FeatureCompletion = {
   }>;
 };
 
+export type FeatureBlockedReason =
+  | "conflict"
+  | "changes_requested"
+  | "waiting_provider"
+  | "closed_without_merge"
+  | "failed";
+
+export type FeatureBlockedEvent = {
+  feature: FeatureRecord;
+  reason: FeatureBlockedReason;
+  message: string;
+};
+
 export type FeatureNotificationHandler = (completion: FeatureCompletion) => Promise<void>;
+export type FeatureBlockedNotificationHandler = (event: FeatureBlockedEvent) => Promise<void>;
 
 export class FeatureCoordinator {
   private readonly active = new Set<number>();
@@ -41,6 +55,7 @@ export class FeatureCoordinator {
     private readonly artifactsRoot: string,
     private readonly github: FeatureGitHubGateway = new GhFeatureGateway(),
     private readonly notifyCompleted?: FeatureNotificationHandler,
+    private readonly notifyBlocked?: FeatureBlockedNotificationHandler,
     private readonly pollIntervalMs = 15_000
   ) {}
 
@@ -67,7 +82,7 @@ export class FeatureCoordinator {
   private async reconcileFeatures(): Promise<number> {
     let changes = 0;
     const features = this.database.listFeatures(100).filter((feature) => (
-      feature.status !== "completed" && feature.status !== "failed"
+      !["completed", "failed", "cancelled"].includes(feature.status)
     ));
     for (const feature of features) {
       if (this.active.has(feature.id)) continue;
@@ -76,8 +91,9 @@ export class FeatureCoordinator {
         changes += await this.reconcileFeature(feature);
       } catch (error) {
         const message = safeSummary(error);
-        this.database.updateFeature({ id: feature.id, status: "failed", lastError: message });
-        this.addEvent(feature, "feature.failed", message);
+        const failed = this.database.updateFeature({ id: feature.id, status: "failed", lastError: message });
+        this.addEvent(failed, "feature.failed", message);
+        await this.emitBlocked(failed, "failed", message);
         changes += 1;
       } finally {
         this.active.delete(feature.id);
@@ -94,8 +110,9 @@ export class FeatureCoordinator {
     }
     if (state.state === "CLOSED") {
       const message = "Feature PR was closed without merge.";
-      this.database.updateFeature({ id: feature.id, status: "failed", lastError: message });
-      this.addEvent(feature, "feature.closed_without_merge", message);
+      const failed = this.database.updateFeature({ id: feature.id, status: "failed", lastError: message });
+      this.addEvent(failed, "feature.closed_without_merge", message);
+      await this.emitBlocked(failed, "closed_without_merge", message);
       return 1;
     }
     if (state.isDraft) {
@@ -107,7 +124,8 @@ export class FeatureCoordinator {
       return 0;
     }
     if (state.mergeable === "CONFLICTING") {
-      await this.requestChanges(feature, "Feature PR has merge conflicts.");
+      if (feature.status === "changes_requested") return 0;
+      await this.requestChanges(feature, "conflict", "Feature PR has merge conflicts.");
       return 1;
     }
     if (state.mergeable !== "MERGEABLE") {
@@ -147,12 +165,17 @@ export class FeatureCoordinator {
     while (true) {
       const lease = await this.agents.acquire("reviewing", excluded);
       if (!lease) {
-        this.database.updateFeature({
+        const message = "No reviewing provider is currently available.";
+        const wasWaiting = feature.status === "waiting_provider";
+        const waiting = this.database.updateFeature({
           id: feature.id,
           status: "waiting_provider",
-          lastError: "No reviewing provider is currently available."
+          lastError: message
         });
-        this.addEvent(feature, "feature.waiting_provider", "Final review is waiting for a provider.");
+        if (!wasWaiting) {
+          this.addEvent(waiting, "feature.waiting_provider", "Final review is waiting for a provider.");
+          await this.emitBlocked(waiting, "waiting_provider", message);
+        }
         return;
       }
       let result;
@@ -171,14 +194,14 @@ export class FeatureCoordinator {
         return;
       }
       if (result.outcome === "changes_requested" || result.outcome === "blocked") {
-        await this.requestChanges(feature, reviewSummary, lease.provider.id);
+        await this.requestChanges(feature, "changes_requested", reviewSummary, lease.provider.id);
         return;
       }
       if (result.outcome === "failed" && result.retryable) {
         excluded.add(lease.provider.id);
         continue;
       }
-      await this.requestChanges(feature, reviewSummary || result.summary, lease.provider.id);
+      await this.requestChanges(feature, "changes_requested", reviewSummary || result.summary, lease.provider.id);
       return;
     }
   }
@@ -189,6 +212,7 @@ export class FeatureCoordinator {
     providerId: AgentProviderId,
     reviewSummary: string
   ): Promise<void> {
+    if (this.database.getFeature(feature.id).status === "cancelled") return;
     const current = await this.github.inspect(feature.pullRequestUrl);
     if (
       current.state !== "OPEN"
@@ -208,6 +232,8 @@ export class FeatureCoordinator {
       return;
     }
 
+    if (this.database.getFeature(feature.id).status === "cancelled") return;
+
     this.database.updateFeature({
       id: feature.id,
       status: "merging",
@@ -225,19 +251,30 @@ export class FeatureCoordinator {
 
   private async requestChanges(
     feature: FeatureRecord,
+    reason: Extract<FeatureBlockedReason, "conflict" | "changes_requested">,
     summary: string,
     providerId: AgentProviderId | null = null
   ): Promise<void> {
     await this.github.markDraft(feature.pullRequestUrl);
     const safe = truncateForDisplay(redactSensitiveText(summary), REVIEW_SUMMARY_MAX_LENGTH);
-    this.database.updateFeature({
+    const updated = this.database.updateFeature({
       id: feature.id,
       status: "changes_requested",
       reviewerProvider: providerId,
       reviewSummary: safe,
       lastError: safe
     });
-    this.addEvent(feature, "feature.changes_requested", safe);
+    this.addEvent(updated, "feature.changes_requested", safe);
+    await this.emitBlocked(updated, reason, safe);
+  }
+
+  private async emitBlocked(feature: FeatureRecord, reason: FeatureBlockedReason, message: string): Promise<void> {
+    if (!this.notifyBlocked) return;
+    try {
+      await this.notifyBlocked({ feature, reason, message });
+    } catch (error) {
+      this.addEvent(feature, "feature.blocked_notification_failed", safeSummary(error));
+    }
   }
 
   private async completeFeature(feature: FeatureRecord, state: FeaturePullRequestState): Promise<void> {

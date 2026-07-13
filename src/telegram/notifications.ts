@@ -3,7 +3,14 @@ import { GoalRunRecord, MaestroDatabase, TaskRecord } from "../db.js";
 import type { ReviewDecisionNotifier, ReviewSyncNotifier } from "../reviews/coordinator.js";
 import type { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
-import type { FeatureCompletion, FeatureNotificationHandler } from "../features/coordinator.js";
+import type {
+  FeatureBlockedEvent,
+  FeatureBlockedNotificationHandler,
+  FeatureBlockedReason,
+  FeatureCompletion,
+  FeatureNotificationHandler
+} from "../features/coordinator.js";
+import type { FeatureAssemblyEvent, FeatureAssemblyNotificationHandler } from "../features/assembly.js";
 
 export type GoalNotificationHandler = (run: GoalRunRecord) => Promise<void>;
 export type GoalProgressNotificationHandler = (run: GoalRunRecord, providerId: AgentProviderId) => Promise<void>;
@@ -202,6 +209,85 @@ export function formatFeatureCompletionNotification(completion: FeatureCompletio
     ...work,
     "",
     "Os Work PRs associados foram encerrados como superseded. O Maestro esta livre para a proxima Feature."
+  ].join("\n"), 4_000);
+}
+
+export function createTelegramFeatureBlockedNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): FeatureBlockedNotificationHandler | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (event) => {
+    await sendMessage(chatId, formatFeatureBlockedNotification(event));
+    database.addEvent({
+      source: "telegram",
+      type: "feature.blocked_notification_sent",
+      text: `Feature #${event.feature.id} blocked notification sent (${event.reason}).`,
+      metadata: { featureId: event.feature.id, reason: event.reason, pullRequestUrl: event.feature.pullRequestUrl }
+    });
+  };
+}
+
+const featureBlockedReasonLabels: Record<FeatureBlockedReason, string> = {
+  conflict: "conflito de merge no PR consolidado",
+  changes_requested: "revisao final pediu ajustes",
+  waiting_provider: "sem agente de revisao disponivel",
+  closed_without_merge: "PR consolidado fechado sem merge",
+  failed: "falha no fluxo automatico da Feature"
+};
+
+export function formatFeatureBlockedNotification(event: FeatureBlockedEvent): string {
+  const feature = event.feature;
+  return truncate([
+    `⚠️ Feature bloqueada: ${feature.name}`,
+    `Projeto: @${feature.projectKey}`,
+    `Motivo: ${featureBlockedReasonLabels[event.reason]}`,
+    `Detalhe: ${truncate(redactSensitiveText(event.message), 500)}`,
+    `Feature PR: ${feature.pullRequestUrl}`,
+    "",
+    "Revise apenas este PR consolidado; os Work PRs individuais permanecem como evidencia."
+  ].join("\n"), 4_000);
+}
+
+export function createTelegramFeatureAssemblyNotifier(
+  config: MaestroConfig,
+  _database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): FeatureAssemblyNotificationHandler | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (event) => {
+    await sendMessage(chatId, formatFeatureAssemblyNotification(event));
+  };
+}
+
+export function formatFeatureAssemblyNotification(event: FeatureAssemblyEvent): string {
+  if (event.type === "started") {
+    return truncate([
+      `🚀 Integracao iniciada: Feature Plan #${event.plan.id}`,
+      `Projeto: @${event.plan.projectKey}`,
+      `Objetivo: ${truncate(redactSensitiveText(event.plan.objective), 500)}`,
+      "O Maestro esta montando o PR consolidado a partir dos Work PRs prontos."
+    ].join("\n"), 4_000);
+  }
+  if (event.type === "draft_ready") {
+    return truncate([
+      `📝 Draft Feature PR pronto: ${event.feature.name}`,
+      `Projeto: @${event.feature.projectKey}`,
+      `Feature Plan #${event.plan.id}`,
+      `PR: ${event.feature.pullRequestUrl}`,
+      "",
+      "Revise apenas este PR consolidado. Os Work PRs individuais ficam como evidencia e nao exigem revisao separada."
+    ].join("\n"), 4_000);
+  }
+  return truncate([
+    `⚠️ Integracao bloqueada: Feature Plan #${event.plan.id}`,
+    `Projeto: @${event.plan.projectKey}`,
+    `Detalhe: ${truncate(redactSensitiveText(event.message), 500)}`
   ].join("\n"), 4_000);
 }
 
