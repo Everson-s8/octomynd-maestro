@@ -181,7 +181,8 @@ export type FeatureStatus =
   | "changes_requested"
   | "merging"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type FeatureRecord = {
   id: number;
@@ -200,6 +201,8 @@ export type FeatureRecord = {
   reviewedHeadSha: string | null;
   lastError: string | null;
   mergedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -520,6 +523,14 @@ export function createDatabase(databasePath: string) {
         updated_at = @now
     WHERE id = @id
   `);
+  const cancelFeatureStatement = db.prepare(`
+    UPDATE features
+    SET status = 'cancelled',
+        cancelled_at = @now,
+        cancel_reason = @cancelReason,
+        updated_at = @now
+    WHERE id = @id AND status NOT IN ('completed', 'merging', 'cancelled')
+  `);
   const addFeatureItemStatement = db.prepare(`
     INSERT INTO feature_items (
       feature_id, task_id, pull_request_url, branch_name, status, created_at, updated_at
@@ -762,6 +773,24 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?")
         .all(limit) as EventRow[];
       return rows.map(mapEvent);
+    },
+
+    hasFeaturePlanEvent(
+      type: string,
+      featurePlanId: number,
+      revision: number,
+      eventType?: string | null
+    ): boolean {
+      const row = db.prepare(`
+        SELECT 1
+        FROM events
+        WHERE type = ?
+          AND CAST(json_extract(metadata_json, '$.featurePlanId') AS INTEGER) = ?
+          AND CAST(json_extract(metadata_json, '$.revision') AS INTEGER) = ?
+          AND (? IS NULL OR json_extract(metadata_json, '$.eventType') = ?)
+        LIMIT 1
+      `).get(type, featurePlanId, revision, eventType ?? null, eventType ?? null);
+      return Boolean(row);
     },
 
     addTaskReview(input: TaskReviewInput): TaskReviewRecord {
@@ -1076,6 +1105,23 @@ export function createDatabase(databasePath: string) {
         now: new Date().toISOString()
       });
       return this.getFeature(feature.id);
+    },
+
+    cancelFeature(id: number, reason?: string | null): FeatureRecord {
+      const feature = this.getFeature(id);
+      if (feature.status === "cancelled") return feature;
+      if (["completed", "merging"].includes(feature.status)) {
+        throw new Error(`Feature #${id} cannot be cancelled from status ${feature.status}.`);
+      }
+      const result = cancelFeatureStatement.run({
+        id,
+        cancelReason: reason?.trim() || null,
+        now: new Date().toISOString()
+      });
+      if (result.changes === 0) {
+        throw new Error(`Feature #${id} cannot be cancelled from status ${feature.status}.`);
+      }
+      return this.getFeature(id);
     },
 
     addFeatureItem(input: {
@@ -1540,6 +1586,8 @@ function migrate(db: Database.Database) {
       reviewed_head_sha TEXT,
       last_error TEXT,
       merged_at TEXT,
+      cancelled_at TEXT,
+      cancel_reason TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -1657,6 +1705,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
   addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
+  addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
+  addColumnIfMissing(db, "features", "cancel_reason", "TEXT");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
       ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
@@ -1780,6 +1830,8 @@ type FeatureRow = {
   reviewed_head_sha: string | null;
   last_error: string | null;
   merged_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2226,6 +2278,8 @@ function mapFeature(row: FeatureRow): FeatureRecord {
     reviewedHeadSha: row.reviewed_head_sha,
     lastError: row.last_error,
     mergedAt: row.merged_at,
+    cancelledAt: row.cancelled_at,
+    cancelReason: row.cancel_reason,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

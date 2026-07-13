@@ -4,12 +4,15 @@ import {
   FeaturePlanIntegrationDetails,
   FeaturePlanDetails,
   FeaturePlanWriteResult,
+  FeatureRecord,
   MaestroDatabase,
   ProjectRecord,
   TaskRecord
 } from "../db.js";
+import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
+import { redactSensitiveText } from "../security/redaction.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
 
@@ -52,7 +55,10 @@ export type PrepareTaskOutcome = {
 };
 
 export class ApplicationCommands {
-  constructor(private readonly database: MaestroDatabase) {}
+  constructor(
+    private readonly database: MaestroDatabase,
+    private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway()
+  ) {}
 
   registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {
     const warnings: string[] = [];
@@ -208,6 +214,60 @@ export class ApplicationCommands {
       return result;
     } catch (error) {
       throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  async cancelFeature(origin: CommandOrigin, featureId: number, reason?: string | null): Promise<FeatureRecord> {
+    try {
+      const before = this.database.getFeature(featureId);
+      if (before.status === "cancelled") return before;
+      if (["completed", "merging"].includes(before.status)) {
+        throw new Error(`Feature #${featureId} cannot be cancelled from status ${before.status}.`);
+      }
+      const pullRequest = await this.featureGithub.inspect(before.pullRequestUrl);
+      if (pullRequest.state === "MERGED") {
+        throw new Error(`Feature #${featureId} cannot be cancelled because its pull request is already merged.`);
+      }
+      const feature = this.database.cancelFeature(featureId, reason);
+      if (pullRequest.state === "OPEN") {
+        try {
+          await this.featureGithub.close(
+            before.pullRequestUrl,
+            `Feature #${featureId} cancelled before merge. History preserved for audit.`
+          );
+        } catch (error) {
+          this.database.addEvent({
+            source: origin.channel,
+            type: "feature.cancel_close_failed",
+            text: redactSensitiveText(
+              error instanceof Error ? error.message : "Unknown GitHub close error."
+            ),
+            userId: origin.userId ?? null,
+            username: origin.username ?? null,
+            metadata: { featureId: feature.id, pullRequestUrl: feature.pullRequestUrl }
+          });
+        }
+      }
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature.cancelled",
+        text: feature.cancelReason || `Feature #${feature.id} cancelled before merge.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: {
+          featureId: feature.id,
+          featurePlanId: feature.featurePlanId,
+          projectKey: feature.projectKey,
+          previousStatus: before.status,
+          pullRequestUrl: feature.pullRequestUrl
+        }
+      });
+      return feature;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown feature cancellation error.";
+      if (/not found/i.test(message)) throw notFoundError(message);
+      if (/cannot be cancelled|already merged/i.test(message)) throw conflictError(message);
+      throw validationError(message);
     }
   }
 

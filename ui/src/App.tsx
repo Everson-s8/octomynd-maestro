@@ -1,5 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  cancelFeature,
+  cancelFeaturePlan,
   cancelTask,
   createImprovement,
   createTask,
@@ -9,6 +11,7 @@ import {
   DashboardData,
   DashboardEvent,
   DashboardFeature,
+  DashboardFeaturePlan,
   DashboardProject,
   DashboardTask,
   FeatureStatus,
@@ -69,7 +72,8 @@ const featureStatusLabels: Record<FeatureStatus, string> = {
   changes_requested: "ajustes",
   merging: "merge",
   completed: "concluida",
-  failed: "falhou"
+  failed: "falhou",
+  cancelled: "cancelada"
 };
 
 const featureStatusOrder: FeatureStatus[] = [
@@ -80,7 +84,8 @@ const featureStatusOrder: FeatureStatus[] = [
   "changes_requested",
   "draft",
   "failed",
-  "completed"
+  "completed",
+  "cancelled"
 ];
 
 export default function App() {
@@ -143,7 +148,8 @@ export default function App() {
             <HeroConsole data={data} />
             <SummaryStrip data={data} />
             <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
-            <FeatureBoard features={data.features} />
+            <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={() => refresh(true)} />
+            <FeatureBoard features={data.features} onChanged={() => refresh(true)} />
             <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
             <AgentDock agents={data.agents} />
             <ProjectDeck projects={data.projects} />
@@ -453,7 +459,9 @@ function TaskBoard({ tasks, onOpenTask }: { tasks: DashboardTask[]; onOpenTask: 
   );
 }
 
-function FeatureBoard({ features }: { features: DashboardFeature[] }) {
+function FeatureBoard({ features, onChanged }: { features: DashboardFeature[]; onChanged: () => Promise<unknown> }) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const sortedFeatures = [...features].sort((left, right) => {
     const statusDelta = featureStatusOrder.indexOf(left.status) - featureStatusOrder.indexOf(right.status);
     if (statusDelta !== 0) return statusDelta;
@@ -470,8 +478,23 @@ function FeatureBoard({ features }: { features: DashboardFeature[] }) {
     changes_requested: 0,
     merging: 0,
     completed: 0,
-    failed: 0
+    failed: 0,
+    cancelled: 0
   });
+
+  async function handleCancel(feature: DashboardFeature) {
+    if (!window.confirm(`Cancelar a Feature #${feature.id} (${feature.name}) antes do merge? O historico e o PR consolidado sao preservados para auditoria.`)) return;
+    setBusyId(feature.id);
+    setError(null);
+    try {
+      await cancelFeature(feature.id, "Cancelada pelo dashboard.");
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar a Feature.");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <section className="panel feature-board" id="features" aria-labelledby="features-title">
@@ -483,6 +506,7 @@ function FeatureBoard({ features }: { features: DashboardFeature[] }) {
           </span>
         ))}
       </div>
+      {error ? <p className="detail-error">{error}</p> : null}
       <div className="feature-list">
         {sortedFeatures.length === 0 ? (
           <EmptyState icon="folder" title="Nenhuma Feature PR" text="Features registradas aparecem aqui durante checks, review final e merge." />
@@ -494,14 +518,122 @@ function FeatureBoard({ features }: { features: DashboardFeature[] }) {
               <strong>{feature.name}</strong>
               <p>{feature.lastError ?? feature.reviewSummary ?? feature.objective}</p>
               <small>{feature.itemCount} Work PR(s) - {feature.branchName}</small>
+              {feature.status === "cancelled" && feature.cancelReason ? <small>Cancelada: {feature.cancelReason}</small> : null}
             </div>
             <div className="feature-progress" aria-label={`Status: ${featureStatusLabels[feature.status]}`}>
               <span><i style={{ width: `${featureProgress(feature.status)}%` }} /></span>
               <small>{featureProgress(feature.status)}%</small>
             </div>
-            <a className="row-action" href={feature.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Abrir Feature PR ${feature.id}`}>
-              <Icon name="arrow" />
-            </a>
+            <div className="feature-row-actions">
+              {feature.cancellable ? (
+                <button
+                  className="row-action row-action-danger"
+                  aria-label={`Cancelar Feature ${feature.id}`}
+                  disabled={busyId !== null}
+                  onClick={() => void handleCancel(feature)}
+                >
+                  {busyId === feature.id ? "..." : "Cancelar"}
+                </button>
+              ) : null}
+              <a className="row-action" href={feature.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Abrir Feature PR ${feature.id}`}>
+                <Icon name="arrow" />
+              </a>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FeaturePlanBoard({
+  featurePlans,
+  onChanged
+}: {
+  featurePlans: DashboardFeaturePlan[];
+  onChanged: () => Promise<unknown>;
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const activePlans = [...featurePlans].sort((left, right) => (
+    new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  ));
+
+  async function handleCancel(plan: DashboardFeaturePlan) {
+    if (!window.confirm(`Cancelar o Feature Plan #${plan.id} antes da integracao? O historico sera preservado.`)) return;
+    setBusyId(plan.id);
+    setError(null);
+    try {
+      await cancelFeaturePlan(plan.id, "Cancelado pelo dashboard.");
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar o Feature Plan.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="panel feature-plan-board" id="feature-plans" aria-labelledby="feature-plans-title">
+      <SectionHeader
+        eyebrow="Planejamento"
+        title="Feature Plans"
+        meta={`${featurePlans.filter((plan) => plan.status === "planned").length} ativo(s)`}
+      />
+      {error ? <p className="detail-error">{error}</p> : null}
+      <div className="feature-plan-list">
+        {activePlans.length === 0 ? (
+          <EmptyState icon="spark" title="Nenhum Feature Plan" text="Planos agrupando varias tasks em um unico PR consolidado aparecem aqui." />
+        ) : activePlans.slice(0, 6).map((plan) => (
+          <article className={`feature-plan-row plan-${plan.status}`} key={plan.id}>
+            <div className="feature-plan-copy">
+              <div>
+                <span className="project-tag">@{plan.projectKey}</span>
+                <span className={`status-pill plan-status-${plan.status}`}>{plan.status === "planned" ? "planejado" : "cancelado"}</span>
+                {plan.status === "planned" ? (
+                  <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
+                    {plan.eligible ? "elegivel para integrar" : "aguardando tasks"}
+                  </span>
+                ) : null}
+              </div>
+              <strong>{plan.objective}</strong>
+              <small>{plan.taskCount} task(s) no bloco - revisao {plan.revision}</small>
+              <div className="feature-plan-tasks">
+                {plan.tasks.map((task) => (
+                  <span className={`status-pill status-${task.status}`} key={task.id} title={task.text}>
+                    #{task.id} {task.status}
+                  </span>
+                ))}
+              </div>
+              {plan.blockers.length > 0 ? (
+                <ul className="feature-plan-blockers">
+                  {plan.blockers.map((blocker, index) => <li key={index}>{blocker}</li>)}
+                </ul>
+              ) : null}
+              {plan.integration ? (
+                <small className={plan.integration.status === "failed" ? "feature-plan-integration-error" : ""}>
+                  Integracao: {plan.integration.status} ({plan.integration.checkpoint})
+                  {plan.integration.lastError ? ` - ${plan.integration.lastError}` : ""}
+                </small>
+              ) : null}
+              {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
+            </div>
+            <div className="feature-plan-actions">
+              {plan.cancellable ? (
+                <button
+                  className="row-action row-action-danger"
+                  disabled={busyId !== null}
+                  onClick={() => void handleCancel(plan)}
+                >
+                  {busyId === plan.id ? "..." : "Cancelar plano"}
+                </button>
+              ) : null}
+              {plan.feature ? (
+                <a className="feature-plan-linked" href={plan.feature.pullRequestUrl} target="_blank" rel="noreferrer">
+                  Feature #{plan.feature.id} - {featureStatusLabels[plan.feature.status]}
+                </a>
+              ) : null}
+            </div>
           </article>
         ))}
       </div>
@@ -1072,7 +1204,7 @@ function statusProgress(status: TaskStatus): number {
 }
 
 function featureProgress(status: FeatureStatus): number {
-  return { draft: 12, waiting_checks: 34, reviewing: 58, waiting_provider: 48, changes_requested: 30, merging: 86, completed: 100, failed: 100 }[status];
+  return { draft: 12, waiting_checks: 34, reviewing: 58, waiting_provider: 48, changes_requested: 30, merging: 86, completed: 100, failed: 100, cancelled: 100 }[status];
 }
 
 function formatRelative(value: string): string {

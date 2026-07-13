@@ -26,6 +26,7 @@ export interface FeatureGitHubGateway {
   inspect(url: string): Promise<FeaturePullRequestState>;
   merge(url: string, expectedHeadSha: string): Promise<void>;
   markDraft(url: string): Promise<void>;
+  close(url: string, comment: string): Promise<void>;
   closeSuperseded(url: string, featureUrl: string): Promise<void>;
   deleteHeadBranch(url: string): Promise<void>;
 }
@@ -83,6 +84,10 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
   }
 
   async closeSuperseded(url: string, featureUrl: string): Promise<void> {
+    await this.close(url, `Superseded by the completed Feature PR ${featureUrl}.`);
+  }
+
+  async close(url: string, comment: string): Promise<void> {
     const state = await this.inspect(url);
     if (state.state !== "OPEN") return;
     await runGh([
@@ -90,8 +95,8 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       "close",
       url,
       "--comment",
-      `Superseded by the completed Feature PR ${featureUrl}.`
-    ], "close superseded work pull request");
+      comment
+    ], "close pull request");
   }
 
   async deleteHeadBranch(url: string): Promise<void> {

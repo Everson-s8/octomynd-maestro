@@ -35,7 +35,8 @@ export type FeatureStatus =
   | "changes_requested"
   | "merging"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type DashboardFeature = {
   id: number;
@@ -51,11 +52,33 @@ export type DashboardFeature = {
   lastError: string | null;
   itemCount: number;
   mergedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  cancellable: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
 export type FeaturePlanStatus = "planned" | "cancelled";
+
+export type FeaturePlanIntegrationSummary = {
+  status: "preparing" | "integrating" | "verifying" | "completed" | "failed";
+  checkpoint: string;
+  lastError: string | null;
+};
+
+export type FeaturePlanTaskSummary = {
+  id: number;
+  position: number;
+  text: string;
+  status: TaskStatus;
+};
+
+export type FeaturePlanFeatureSummary = {
+  id: number;
+  status: FeatureStatus;
+  pullRequestUrl: string;
+};
 
 export type DashboardFeaturePlan = {
   id: number;
@@ -68,6 +91,12 @@ export type DashboardFeaturePlan = {
   revision: number;
   taskIds: number[];
   taskCount: number;
+  tasks: FeaturePlanTaskSummary[];
+  eligible: boolean;
+  blockers: string[];
+  feature: FeaturePlanFeatureSummary | null;
+  integration: FeaturePlanIntegrationSummary | null;
+  cancellable: boolean;
   cancelledAt: string | null;
   cancelReason: string | null;
   createdAt: string;
@@ -357,6 +386,19 @@ export async function decideImprovement(
     throw new Error(payload.details || payload.error || "Nao foi possivel decidir a proposta.");
   }
   return payload.improvement;
+}
+
+export async function cancelFeature(featureId: number, reason = ""): Promise<DashboardFeature> {
+  const response = await fetch(`/api/features/${featureId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as { feature?: DashboardFeature; error?: string; details?: string[] };
+  if (!response.ok || !payload.feature) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel cancelar a Feature.");
+  }
+  return payload.feature;
 }
 
 export async function fetchFeaturePlan(featurePlanId: number): Promise<FeaturePlanDetails> {

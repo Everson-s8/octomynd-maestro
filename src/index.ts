@@ -15,7 +15,11 @@ import { ReviewCoordinator } from "./reviews/coordinator.js";
 import { BacklogAutopilot } from "./backlog/autopilot.js";
 import { FeatureCoordinator } from "./features/coordinator.js";
 import { FeatureAssemblyCoordinator } from "./features/assembly.js";
-import { createTelegramFeatureNotifier } from "./telegram/notifications.js";
+import {
+  createTelegramFeatureAssemblyNotifier,
+  createTelegramFeatureBlockedNotifier,
+  createTelegramFeatureNotifier
+} from "./telegram/notifications.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -71,6 +75,16 @@ const featureNotifier = createTelegramFeatureNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const featureBlockedNotifier = createTelegramFeatureBlockedNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const featureAssemblyNotifier = createTelegramFeatureAssemblyNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
@@ -83,9 +97,16 @@ const featureCoordinator = new FeatureCoordinator(
   agentRegistry,
   path.join(path.dirname(config.databasePath), "feature-runs"),
   undefined,
-  featureNotifier
+  featureNotifier,
+  featureBlockedNotifier
 );
-const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(database, config.worktreesPath);
+const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(
+  database,
+  config.worktreesPath,
+  undefined,
+  undefined,
+  featureAssemblyNotifier
+);
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath

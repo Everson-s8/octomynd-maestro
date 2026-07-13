@@ -70,7 +70,7 @@ describe("FeatureIntegrationBuilder", () => {
     const updatedBase = git(["rev-parse", "HEAD"]);
     const plan = database.createFeaturePlan({
       projectKey: "boo",
-      objective: "Integrate ready task work into one local feature branch.",
+      objective: "Integrate delivered Draft Work PRs into one local feature branch.",
       acceptanceCriteria: ["Both commits are present in plan order"],
       taskIds: [first.task.id, second.task.id]
     });
@@ -255,6 +255,30 @@ describe("FeatureIntegrationBuilder", () => {
 
     expect(database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.plan.id)).toBeNull();
   }, FEATURE_INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects a Work PR marked ready because only the Feature PR may leave Draft", async () => {
+    const delivered = deliveredTask({
+      taskText: "keep work pr draft",
+      branchName: "maestro/task-still-draft",
+      filePath: "src/still-draft.ts",
+      content: "export const stillDraft = true;\n",
+      prNumber: 17
+    });
+    github.states.set(delivered.pullRequestUrl, {
+      ...github.states.get(delivered.pullRequestUrl)!,
+      isDraft: false
+    });
+    const plan = database.createFeaturePlan({
+      projectKey: "boo",
+      objective: "Keep Work PRs as Draft evidence.",
+      acceptanceCriteria: ["Only the consolidated Feature PR becomes ready"],
+      taskIds: [delivered.task.id]
+    });
+    const builder = new FeatureIntegrationBuilder(database, path.join(tempDir, "worktrees"), github);
+
+    await expect(builder.build(plan.plan.id)).rejects.toThrow("must remain Draft");
+    expect(database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.plan.id)).toBeNull();
+  }, FEATURE_INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 function deliveredTask(input: {
@@ -294,7 +318,7 @@ function deliveredTask(input: {
     currentPhase: "reviewing",
     stepCount: 4
   });
-  database.updateTaskStatus(task.id, "ready_to_merge");
+  database.updateTaskStatus(task.id, "awaiting_human");
 
   const pullRequestUrl = `https://github.com/example/boo/pull/${input.prNumber}`;
   github.states.set(pullRequestUrl, pullRequestState({
@@ -312,7 +336,7 @@ function pullRequestState(overrides: Partial<FeaturePullRequestState>): FeatureP
     title: "Work PR",
     url: "https://github.com/example/boo/pull/1",
     state: "OPEN",
-    isDraft: false,
+    isDraft: true,
     mergeable: "MERGEABLE",
     headRefName: "maestro/task",
     headRepositoryOwner: "example",

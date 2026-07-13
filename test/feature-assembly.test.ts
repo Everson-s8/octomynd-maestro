@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase, MaestroDatabase, TaskRecord } from "../src/db.js";
-import { FeatureAssemblyCoordinator, FeatureAssemblyGitHubGateway } from "../src/features/assembly.js";
+import {
+  FeatureAssemblyCoordinator,
+  FeatureAssemblyEvent,
+  FeatureAssemblyGitHubGateway
+} from "../src/features/assembly.js";
 import { FeaturePullRequestState } from "../src/features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../src/features/integration.js";
 
@@ -46,7 +50,7 @@ afterEach(() => {
 });
 
 describe("FeatureAssemblyCoordinator", () => {
-  it("does nothing when a Feature Plan task is not yet ready to merge", async () => {
+  it("does nothing when a Feature Plan task has no delivered Draft Work PR", async () => {
     const notReady = deliveredTask({
       taskText: "add pending change",
       branchName: "maestro/task-pending",
@@ -75,7 +79,7 @@ describe("FeatureAssemblyCoordinator", () => {
     expect(assemblyGithub.created).toHaveLength(0);
   }, FEATURE_ASSEMBLY_TEST_TIMEOUT_MS);
 
-  it("assembles a single Draft Feature PR once every task is ready to merge", async () => {
+  it("assembles a single Draft Feature PR once every Draft Work PR is delivered", async () => {
     const first = deliveredTask({
       taskText: "add alpha module",
       branchName: "maestro/task-alpha",
@@ -163,6 +167,74 @@ describe("FeatureAssemblyCoordinator", () => {
     expect(assemblyGithub.created).toHaveLength(1);
     const feature = database.findFeatureByFeaturePlanId(plan.plan.id)!;
     expect(database.listFeatureItems(feature.id)).toHaveLength(1);
+  }, FEATURE_ASSEMBLY_TEST_TIMEOUT_MS);
+
+  it("notifies assembly start and Draft readiness once across repeated reconciliation", async () => {
+    const delivered = deliveredTask({
+      taskText: "add notification change",
+      branchName: "maestro/task-notification",
+      filePath: "src/notification.ts",
+      content: "export const notification = true;\n",
+      prNumber: 25
+    });
+    database.createFeaturePlan({
+      projectKey: "boo",
+      objective: "Notify meaningful Feature assembly transitions once.",
+      acceptanceCriteria: ["No polling spam"],
+      taskIds: [delivered.task.id]
+    });
+    const notifications: FeatureAssemblyEvent[] = [];
+    const coordinator = new FeatureAssemblyCoordinator(
+      database,
+      path.join(tempDir, "worktrees"),
+      workGithub,
+      assemblyGithub,
+      async (event) => { notifications.push(event); }
+    );
+
+    await coordinator.reconcile();
+    await coordinator.reconcile();
+
+    expect(notifications.map((event) => event.type)).toEqual(["started", "draft_ready"]);
+    expect(database.listEvents(100).filter((event) => (
+      event.type === "feature_plan.assembly_notification_sent"
+    ))).toHaveLength(2);
+  }, FEATURE_ASSEMBLY_TEST_TIMEOUT_MS);
+
+  it("notifies the same pre-integration blocker only once across polling retries", async () => {
+    const delivered = deliveredTask({
+      taskText: "add blocked notification change",
+      branchName: "maestro/task-blocked-notification",
+      filePath: "src/blocked-notification.ts",
+      content: "export const blockedNotification = true;\n",
+      prNumber: 26
+    });
+    workGithub.states.set(delivered.pullRequestUrl, {
+      ...workGithub.states.get(delivered.pullRequestUrl)!,
+      state: "CLOSED"
+    });
+    database.createFeaturePlan({
+      projectKey: "boo",
+      objective: "Report a persistent blocker without spamming.",
+      acceptanceCriteria: ["One blocker notification per revision"],
+      taskIds: [delivered.task.id]
+    });
+    const notifications: FeatureAssemblyEvent[] = [];
+    const coordinator = new FeatureAssemblyCoordinator(
+      database,
+      path.join(tempDir, "worktrees"),
+      workGithub,
+      assemblyGithub,
+      async (event) => { notifications.push(event); }
+    );
+
+    await coordinator.reconcile();
+    await coordinator.reconcile();
+
+    expect(notifications.map((event) => event.type)).toEqual(["started", "blocked"]);
+    expect(database.listEvents(100).filter((event) => (
+      event.type === "feature_plan.assembly_failed"
+    ))).toHaveLength(1);
   }, FEATURE_ASSEMBLY_TEST_TIMEOUT_MS);
 
   it("resumes registering Feature items if the process is interrupted right after Feature creation", async () => {
@@ -253,7 +325,7 @@ function deliveredTask(input: {
     currentPhase: "reviewing",
     stepCount: 4
   });
-  database.updateTaskStatus(task.id, "ready_to_merge");
+  database.updateTaskStatus(task.id, "awaiting_human");
 
   const pullRequestUrl = `https://github.com/example/boo/pull/${input.prNumber}`;
   workGithub.states.set(pullRequestUrl, pullRequestState({
@@ -271,7 +343,7 @@ function pullRequestState(overrides: Partial<FeaturePullRequestState>): FeatureP
     title: "Work PR",
     url: "https://github.com/example/boo/pull/1",
     state: "OPEN",
-    isDraft: false,
+    isDraft: true,
     mergeable: "MERGEABLE",
     headRefName: "maestro/task",
     headRepositoryOwner: "example",

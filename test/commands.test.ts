@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { ApplicationCommands } from "../src/commands/application-commands.js";
 import { ApplicationCommandError } from "../src/commands/errors.js";
+import { FeatureGitHubGateway, FeaturePullRequestState } from "../src/features/github.js";
 
 let tempDir: string;
 let projectDir: string;
 let database: MaestroDatabase;
 let commands: ApplicationCommands;
+let featureGithub: FakeFeatureGitHubGateway;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-commands-"));
@@ -23,7 +25,8 @@ beforeEach(() => {
 
   database = createDatabase(path.join(tempDir, "maestro.db"));
   database.registerProject({ key: "boo", name: "Boo", path: projectDir, defaultBranch: "master" });
-  commands = new ApplicationCommands(database);
+  featureGithub = new FakeFeatureGitHubGateway();
+  commands = new ApplicationCommands(database, featureGithub);
 });
 
 afterEach(() => {
@@ -156,9 +159,105 @@ describe("ApplicationCommands.registerProject", () => {
   });
 });
 
+describe("ApplicationCommands.cancelFeature", () => {
+  it("closes the consolidated PR and preserves an audited cancelled record", async () => {
+    const feature = database.createFeature({
+      projectKey: "boo",
+      name: "Feature cancelavel",
+      objective: "Cancelar antes do merge.",
+      branchName: "maestro/feature-cancelavel",
+      worktreePath: path.join(tempDir, "feature-cancelavel"),
+      pullRequestUrl: featureGithub.state.url
+    });
+
+    const cancelled = await commands.cancelFeature(
+      { channel: "telegram", userId: "42", username: "operador" },
+      feature.id,
+      "Prioridade mudou."
+    );
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancelReason).toBe("Prioridade mudou.");
+    expect(featureGithub.closed).toEqual([featureGithub.state.url]);
+    expect(database.getLastEvent()).toMatchObject({
+      source: "telegram",
+      type: "feature.cancelled",
+      userId: "42"
+    });
+  });
+
+  it("fails closed when GitHub reports that the Feature PR was already merged", async () => {
+    featureGithub.state = { ...featureGithub.state, state: "MERGED", isDraft: false };
+    const feature = database.createFeature({
+      projectKey: "boo",
+      name: "Feature mergeada",
+      objective: "Nao pode cancelar depois do merge.",
+      branchName: "maestro/feature-merged",
+      worktreePath: path.join(tempDir, "feature-merged"),
+      pullRequestUrl: featureGithub.state.url
+    });
+
+    await expect(commands.cancelFeature({ channel: "dashboard" }, feature.id)).rejects.toMatchObject({
+      code: "conflict"
+    });
+    expect(database.getFeature(feature.id).status).toBe("draft");
+    expect(featureGithub.closed).toHaveLength(0);
+  });
+
+  it("keeps the Feature cancelled when closing GitHub fails and audits the cleanup blocker", async () => {
+    const feature = database.createFeature({
+      projectKey: "boo",
+      name: "Feature com falha de fechamento",
+      objective: "Cancelar localmente mesmo se GitHub estiver indisponivel.",
+      branchName: "maestro/feature-close-failure",
+      worktreePath: path.join(tempDir, "feature-close-failure"),
+      pullRequestUrl: featureGithub.state.url
+    });
+    featureGithub.closeError = new Error(`Falha em C:\\Users\\private com sk-proj-${"x".repeat(48)}`);
+
+    const cancelled = await commands.cancelFeature({ channel: "dashboard" }, feature.id, "Cancelamento seguro.");
+
+    expect(cancelled.status).toBe("cancelled");
+    const closeFailure = database.listEvents(10).find((event) => event.type === "feature.cancel_close_failed");
+    expect(closeFailure).toBeDefined();
+    expect(closeFailure?.text).not.toContain("C:\\Users\\private");
+    expect(closeFailure?.text).not.toContain(`sk-proj-${"x".repeat(48)}`);
+  });
+});
+
 function runGit(args: string[], cwd: string) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
   if (result.status !== 0) {
     throw new Error(result.stderr || result.stdout || "git test setup failed");
   }
+}
+
+class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
+  state: FeaturePullRequestState = {
+    number: 7,
+    title: "Feature cancelavel",
+    url: "https://github.com/example/boo/pull/7",
+    state: "OPEN",
+    isDraft: true,
+    mergeable: "MERGEABLE",
+    headRefName: "maestro/feature-cancelavel",
+    headRepositoryOwner: "example",
+    headRepositoryName: "boo",
+    baseRefName: "master",
+    headSha: "a".repeat(40),
+    checks: []
+  };
+  readonly closed: string[] = [];
+  closeError: Error | null = null;
+
+  async inspect(): Promise<FeaturePullRequestState> { return { ...this.state, checks: [...this.state.checks] }; }
+  async merge(): Promise<void> {}
+  async markDraft(): Promise<void> {}
+  async close(url: string): Promise<void> {
+    if (this.closeError) throw this.closeError;
+    this.closed.push(url);
+    this.state = { ...this.state, state: "CLOSED" };
+  }
+  async closeSuperseded(): Promise<void> {}
+  async deleteHeadBranch(): Promise<void> {}
 }

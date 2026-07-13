@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { AgentExecutionRequest, AgentProvider } from "../src/agents/types.js";
 import { createDatabase } from "../src/db.js";
-import { FeatureCompletion, FeatureCoordinator } from "../src/features/coordinator.js";
+import {
+  FeatureBlockedEvent,
+  FeatureCompletion,
+  FeatureCoordinator
+} from "../src/features/coordinator.js";
 import {
   FeatureGitHubGateway,
   FeaturePullRequestState,
@@ -152,6 +156,98 @@ describe("feature completion protocol", () => {
     expect(notifications).toBe(1);
     fixture.database.close();
   });
+
+  it("notifies a merge conflict once and returns the Feature PR to Draft", async () => {
+    const fixture = createFixture("completed");
+    fixture.github.state.mergeable = "CONFLICTING";
+    const blocked: FeatureBlockedEvent[] = [];
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([fixture.provider]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github,
+      undefined,
+      async (event) => { blocked.push(event); }
+    );
+
+    await coordinator.reconcile();
+    await coordinator.reconcile();
+
+    expect(blocked.map((event) => event.reason)).toEqual(["conflict"]);
+    expect(fixture.github.markedDraft).toBe(true);
+    expect(fixture.github.merges).toHaveLength(0);
+    fixture.database.close();
+  });
+
+  it("notifies waiting_provider only on the transition into that blocker", async () => {
+    const fixture = createFixture("completed");
+    const blocked: FeatureBlockedEvent[] = [];
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github,
+      undefined,
+      async (event) => { blocked.push(event); }
+    );
+
+    await coordinator.reconcile();
+    await coordinator.reconcile();
+
+    expect(blocked.map((event) => event.reason)).toEqual(["waiting_provider"]);
+    expect(fixture.database.getFeature(fixture.feature.id).status).toBe("waiting_provider");
+    fixture.database.close();
+  });
+
+  it("does not reconcile a cancelled Feature", async () => {
+    const fixture = createFixture("completed");
+    fixture.database.cancelFeature(fixture.feature.id, "Cancelled before review.");
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([fixture.provider]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github
+    );
+
+    await coordinator.reconcile();
+
+    expect(fixture.github.inspectCalls).toBe(0);
+    expect(fixture.provider.requests).toHaveLength(0);
+    fixture.database.close();
+  });
+
+  it("does not merge when the Feature is cancelled while final review is running", async () => {
+    const fixture = createFixture("completed");
+    const cancellingProvider: AgentProvider = {
+      id: "claude",
+      label: "Claude",
+      capabilities: new Set(["reviewing"] as const),
+      health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        fixture.database.cancelFeature(fixture.feature.id, "Cancelled during review.");
+        return {
+          outcome: "completed",
+          summary: "Approved before cancellation was observed.",
+          output: "Approved.",
+          error: null,
+          durationMs: 1,
+          retryable: false
+        };
+      }
+    };
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([cancellingProvider]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github
+    );
+
+    await coordinator.reconcile();
+
+    expect(fixture.database.getFeature(fixture.feature.id).status).toBe("cancelled");
+    expect(fixture.github.merges).toHaveLength(0);
+    fixture.database.close();
+  });
 });
 
 describe("feature check gate", () => {
@@ -236,8 +332,10 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   readonly deleted: string[] = [];
   markedDraft = false;
   closeFailuresRemaining = 0;
+  inspectCalls = 0;
 
   async inspect(url: string): Promise<FeaturePullRequestState> {
+    this.inspectCalls += 1;
     if (url === this.state.url) return { ...this.state, checks: [...this.state.checks] };
     return {
       ...this.state,
@@ -256,6 +354,10 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   async markDraft(): Promise<void> {
     this.markedDraft = true;
     this.state = { ...this.state, isDraft: true };
+  }
+
+  async close(url: string, comment: string): Promise<void> {
+    this.closed.push({ url, featureUrl: comment });
   }
 
   async closeSuperseded(url: string, featureUrl: string): Promise<void> {
