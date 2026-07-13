@@ -188,6 +188,7 @@ export type FeatureRecord = {
   projectId: number;
   projectKey: string;
   projectName: string;
+  featurePlanId: number | null;
   name: string;
   objective: string;
   status: FeatureStatus;
@@ -218,6 +219,7 @@ export type FeatureItemRecord = {
 
 export type FeatureInput = {
   projectKey: string;
+  featurePlanId?: number | null;
   name: string;
   objective: string;
   branchName: string;
@@ -498,12 +500,12 @@ export function createDatabase(databasePath: string) {
   `);
   const createFeatureStatement = db.prepare(`
     INSERT INTO features (
-      project_id, name, objective, status, branch_name, worktree_path,
+      project_id, feature_plan_id, name, objective, status, branch_name, worktree_path,
       pull_request_url, reviewer_provider, review_summary, reviewed_head_sha,
       last_error, merged_at, created_at, updated_at
     )
     VALUES (
-      @projectId, @name, @objective, 'draft', @branchName, @worktreePath,
+      @projectId, @featurePlanId, @name, @objective, 'draft', @branchName, @worktreePath,
       @pullRequestUrl, NULL, NULL, NULL, NULL, NULL, @now, @now
     )
   `);
@@ -1001,14 +1003,21 @@ export function createDatabase(databasePath: string) {
       const branchName = input.branchName.trim();
       const worktreePath = path.resolve(input.worktreePath.trim());
       const pullRequestUrl = input.pullRequestUrl.trim();
+      const featurePlanId = input.featurePlanId ?? null;
       if (!name || !objective || !branchName || !pullRequestUrl) {
         throw new Error("Feature requires name, objective, branch, worktree and pull request.");
       }
       const existing = this.findFeatureByPullRequestUrl(pullRequestUrl);
       if (existing) return existing;
+      if (featurePlanId !== null) {
+        const existingForPlan = this.findFeatureByFeaturePlanId(featurePlanId);
+        if (existingForPlan) return existingForPlan;
+        this.getFeaturePlan(featurePlanId);
+      }
       const now = new Date().toISOString();
       const result = createFeatureStatement.run({
         projectId: project.id,
+        featurePlanId,
         name,
         objective,
         branchName,
@@ -1029,6 +1038,13 @@ export function createDatabase(databasePath: string) {
       const row = db
         .prepare(featureSelectSql("WHERE features.pull_request_url = ?"))
         .get(pullRequestUrl) as FeatureRow | undefined;
+      return row ? mapFeature(row) : null;
+    },
+
+    findFeatureByFeaturePlanId(featurePlanId: number): FeatureRecord | null {
+      const row = db
+        .prepare(featureSelectSql("WHERE features.feature_plan_id = ?"))
+        .get(featurePlanId) as FeatureRow | undefined;
       return row ? mapFeature(row) : null;
     },
 
@@ -1640,6 +1656,11 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
+  addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
+      ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
+  `);
 }
 
 type ProjectRow = {
@@ -1747,6 +1768,7 @@ type FeatureRow = {
   project_id: number;
   project_key: string;
   project_name: string;
+  feature_plan_id: number | null;
   name: string;
   objective: string;
   status: FeatureStatus;
@@ -2192,6 +2214,7 @@ function mapFeature(row: FeatureRow): FeatureRecord {
     projectId: row.project_id,
     projectKey: row.project_key,
     projectName: row.project_name,
+    featurePlanId: row.feature_plan_id,
     name: row.name,
     objective: row.objective,
     status: row.status,
