@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
 import {
@@ -28,7 +29,8 @@ export type DashboardServerOptions = {
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
-  const staticRoot = options.staticRoot ?? path.resolve(process.cwd(), "ui/dist");
+  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
   const commands = new ApplicationCommands(options.database);
 
   return http.createServer(async (request, response) => {
