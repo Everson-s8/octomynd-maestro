@@ -73,15 +73,22 @@ describe("claude review", () => {
   it("uses read-only mode for planning and guarded workspace tools for coding", () => {
     const planning = executionRequest("planning", "planning");
     const coding = executionRequest("implementing", "coding");
+    const testing = executionRequest("testing", "testing");
 
     const planningArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), planning, "C:/worktree");
     const codingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), coding, "C:/worktree");
+    const testingArgs = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), testing, "C:/worktree");
 
     expect(planningArgs).toContain("plan");
     expect(planningArgs.join(" ")).not.toContain("--allowedTools");
     expect(codingArgs).toContain("acceptEdits");
-    expect(codingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
+    expect(codingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write");
+    expect(codingArgs.join(" ")).not.toContain("Read,Glob,Grep,Edit,Write,Bash");
     expect(codingArgs.join(" ")).toContain("Bash(git push *)");
+    expect(testingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
+    expect(testingArgs.join(" ")).toContain("Bash(npm test *)");
+    expect(testingArgs.join(" ")).not.toContain("--allowedTools Read,Glob,Grep,Edit,Write,Bash --disallowedTools");
+    expect(testingArgs.join(" ")).toContain("Bash(curl *)");
     expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
   });
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runAgentProcess } from "./process.js";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -67,9 +67,7 @@ export class CodexProvider implements AgentProvider {
     const outputPath = path.join(artifactDir, "result.json");
     fs.writeFileSync(schemaPath, JSON.stringify(RESULT_SCHEMA, null, 2), "utf8");
 
-    const sandbox = request.capability === "coding" || request.capability === "testing"
-      ? "workspace-write"
-      : "read-only";
+    const sandbox = codexSandboxForCapability(request.capability);
     const args = [
       cliEntry,
       "exec",
@@ -93,7 +91,8 @@ export class CodexProvider implements AgentProvider {
       cwd,
       stdin: buildPrompt(request),
       timeoutMs: 20 * 60_000,
-      signal: request.signal
+      signal: request.signal,
+      env: buildRestrictedAgentEnvironment()
     });
     if (processResult.aborted) {
       return {
@@ -117,8 +116,8 @@ export class CodexProvider implements AgentProvider {
           retryable: true
         };
       }
-      const quota = /usage limit|rate limit|quota|credits/i.test(combined);
-      const authentication = /401|authentication|login required|credentials/i.test(combined);
+      const quota = isCodexQuotaError(combined);
+      const authentication = isCodexAuthenticationError(combined);
       if (quota) this.cacheHealth("quota", "Codex aguardando renovacao de cota.", 10 * 60_000);
       if (authentication) this.cacheHealth("auth_required", "Codex requer autenticacao.", 10 * 60_000);
       return {
@@ -164,6 +163,18 @@ export class CodexProvider implements AgentProvider {
 
 export function buildCodexGoalPrompt(request: AgentExecutionRequest): string {
   return buildPrompt(request);
+}
+
+export function codexSandboxForCapability(capability: AgentExecutionRequest["capability"]): "read-only" | "workspace-write" {
+  return capability === "coding" || capability === "testing" ? "workspace-write" : "read-only";
+}
+
+export function isCodexQuotaError(errorText: string): boolean {
+  return /usage limit|rate limit|quota|credits/i.test(errorText);
+}
+
+export function isCodexAuthenticationError(errorText: string): boolean {
+  return /401|authentication|login required|credentials/i.test(errorText);
 }
 
 function buildPrompt(request: AgentExecutionRequest): string {

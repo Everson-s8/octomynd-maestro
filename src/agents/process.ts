@@ -8,6 +8,7 @@ export type AgentProcessRequest = {
   timeoutMs: number;
   signal?: AbortSignal;
   maxOutputChars?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type AgentProcessResult = {
@@ -27,7 +28,8 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
     const child = spawn(request.command, request.args, {
       cwd: request.cwd,
       windowsHide: true,
-      stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"]
+      stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      env: request.env ?? process.env
     });
     let stdout = "";
     let stderr = "";
@@ -79,6 +81,14 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
     if (request.stdin !== undefined) child.stdin?.end(request.stdin);
     if (request.signal?.aborted) onAbort();
   });
+}
+
+export function buildRestrictedAgentEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isSensitiveEnvironmentKey(key)));
+}
+
+function isSensitiveEnvironmentKey(key: string): boolean {
+  return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
 }
 
 function appendBounded(current: string, chunk: string, maxChars: number): string {

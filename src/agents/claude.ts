@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
-import { runAgentProcess } from "./process.js";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
   AgentCapability,
   AgentExecutionRequest,
@@ -33,14 +33,39 @@ const CLAUDE_CAPABILITIES = new Set<AgentCapability>([
 ]);
 
 const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
-const WORKSPACE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"];
+const CODING_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
+const TESTING_TOOLS = [...CODING_TOOLS, "Bash"];
+const TESTING_ALLOWED_TOOLS = [
+  ...CODING_TOOLS,
+  "Bash(git status *)",
+  "Bash(git diff *)",
+  "Bash(npm test *)",
+  "Bash(npx vitest *)",
+  "Bash(pytest *)",
+  "Bash(python -m pytest *)",
+  "Bash(cargo test *)",
+  "Bash(go test *)"
+];
 const DISALLOWED_MUTATIONS = [
   "Bash(git commit *)",
   "Bash(git push *)",
   "Bash(git reset --hard *)",
   "Bash(git clean *)",
-  "Bash(gh pr merge *)",
-  "Bash(gh release *)"
+  "Bash(gh *)",
+  "Bash(npm publish *)",
+  "Bash(pnpm publish *)",
+  "Bash(yarn npm publish *)",
+  "Bash(docker push *)",
+  "Bash(kubectl apply *)",
+  "Bash(kubectl rollout *)",
+  "Bash(terraform apply *)",
+  "Bash(vercel *)",
+  "Bash(netlify *)",
+  "Bash(aws *)",
+  "Bash(az *)",
+  "Bash(gcloud *)",
+  "Bash(curl *)",
+  "Bash(wget *)"
 ];
 
 export class ClaudeProvider implements AgentProvider {
@@ -169,7 +194,8 @@ export const reviewTaskWithClaude = async (
     args,
     cwd,
     timeoutMs: 180_000,
-    signal
+    signal,
+    env: buildRestrictedAgentEnvironment()
   });
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
@@ -247,7 +273,9 @@ export function buildClaudeGoalArgs(
   cwd: string
 ): string[] {
   const writable = request.capability === "coding" || request.capability === "testing";
-  const tools = writable ? WORKSPACE_TOOLS : READ_ONLY_TOOLS;
+  const testing = request.capability === "testing";
+  const tools = testing ? TESTING_TOOLS : writable ? CODING_TOOLS : READ_ONLY_TOOLS;
+  const allowedTools = testing ? TESTING_ALLOWED_TOOLS : CODING_TOOLS;
   return [
     ...cli.argsPrefix,
     "--print",
@@ -257,7 +285,7 @@ export function buildClaudeGoalArgs(
     writable ? "acceptEdits" : "plan",
     "--tools",
     tools.join(","),
-    ...(writable ? ["--allowedTools", tools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS] : []),
+    ...(writable ? ["--allowedTools", allowedTools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS] : []),
     "--add-dir",
     cwd,
     "--no-session-persistence",
@@ -297,7 +325,8 @@ async function executeClaudeGoal(request: AgentExecutionRequest) {
     args: buildClaudeGoalArgs(cli, request, cwd),
     cwd,
     timeoutMs: 20 * 60_000,
-    signal: request.signal
+    signal: request.signal,
+    env: buildRestrictedAgentEnvironment()
   });
 }
 

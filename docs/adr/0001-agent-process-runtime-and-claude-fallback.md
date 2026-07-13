@@ -19,9 +19,12 @@ their command construction, permission policy, prompts, health, and result class
 Claude advertises planning, coding, testing, reviewing, and research:
 
 - planning/reviewing run in `plan` mode with read-only tools;
-- coding/testing run in `acceptEdits` mode inside the prepared task worktree;
+- coding runs in `acceptEdits` mode without Bash inside the prepared task worktree;
+- testing adds an allowlist of test commands and read-only Git inspection commands;
 - bypass permissions are never enabled;
-- commit, push, destructive Git cleanup, PR merge, and release commands are denied;
+- credential-shaped environment variables are removed before provider subprocesses start;
+- commit, push, destructive Git cleanup, network download tools, cloud CLIs, package publication,
+  PR merge, and release commands are denied;
 - delivery remains a deterministic Maestro responsibility after testing and review;
 - authentication, quota, and timeout failures are retryable and route to another provider.
 
@@ -37,3 +40,6 @@ single-provider installation does not deadlock.
 - The Maestro still cannot merge or deploy automatically.
 - Claude CLI permission semantics are now part of the adapter contract and require regression tests
   when the installed CLI is upgraded.
+
+The initial implementation was validated against Claude Code `2.1.207` using `claude --help`, a
+read-only planning smoke, and a coding smoke in a disposable directory without bypass permissions.

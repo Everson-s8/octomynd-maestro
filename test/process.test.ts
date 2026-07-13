@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runAgentProcess } from "../src/agents/process.js";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "../src/agents/process.js";
 
 describe("agent process runtime", () => {
   it("captures stdout, stderr and stdin through one interface", async () => {
@@ -56,5 +56,22 @@ describe("agent process runtime", () => {
 
     expect(result.stdout).toHaveLength(20);
     expect(result.stdout.endsWith("TAIL")).toBe(true);
+  });
+
+  it("removes credentials while preserving normal runtime variables", () => {
+    const restricted = buildRestrictedAgentEnvironment({
+      PATH: "C:/tools",
+      APPDATA: "C:/user/appdata",
+      OPENAI_API_KEY: "secret",
+      TELEGRAM_BOT_TOKEN: "secret",
+      DATABASE_PASSWORD: "secret",
+      SAFE_SETTING: "yes"
+    });
+
+    expect(restricted).toEqual({
+      PATH: "C:/tools",
+      APPDATA: "C:/user/appdata",
+      SAFE_SETTING: "yes"
+    });
   });
 });

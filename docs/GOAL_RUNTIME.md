@@ -49,13 +49,15 @@ for a later retry.
   Coding/testing use `workspace-write`; planning/review use `read-only`. Output is constrained by a
   JSON schema and artifacts are stored under `.maestro/runs/`.
 - **Claude**: real CLI adapter for planning, coding, testing, review, and research. Planning/review
-  use `plan` with read-only tools. Coding/testing use `acceptEdits` inside the prepared worktree;
-  commit, push, destructive Git cleanup, PR merge, and release commands are explicitly denied.
-  Authentication, subscription quota, and timeout failures are classified as retryable.
+  use `plan` with read-only tools. Coding uses `acceptEdits` without shell access. Testing adds only
+  allowlisted test and read-only Git commands. Commit, push, destructive Git cleanup, network
+  download tools, cloud CLIs, package publication, PR merge, and release commands are explicitly
+  denied. Authentication, subscription quota, and timeout failures are classified as retryable.
 
 Codex and Claude share the same process runtime for bounded output, stdin, timeout, cancellation,
 and Windows-hidden subprocess execution. Provider adapters only define CLI arguments, phase policy,
-prompting, and result classification.
+prompting, and result classification. Credential-shaped environment variables are removed before
+either worker process starts; subscription authentication continues through the installed CLIs.
 
 The Maestro does not use the OpenAI API and does not require `OPENAI_API_KEY`. Codex uses the user's
 existing Codex/ChatGPT authentication, while Claude uses its own installed CLI authentication. Each
