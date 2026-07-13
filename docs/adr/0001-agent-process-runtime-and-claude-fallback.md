@@ -43,3 +43,6 @@ single-provider installation does not deadlock.
 
 The initial implementation was validated against Claude Code `2.1.207` using `claude --help`, a
 read-only planning smoke, and a coding smoke in a disposable directory without bypass permissions.
+A testing smoke executed the allowlisted `npm test` command and created its expected marker. A direct
+`node -e` command outside the allowlist returned `This command requires approval` in non-interactive
+mode and did not create its forbidden marker.

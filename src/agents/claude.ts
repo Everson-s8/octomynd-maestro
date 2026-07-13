@@ -37,35 +37,35 @@ const CODING_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
 const TESTING_TOOLS = [...CODING_TOOLS, "Bash"];
 const TESTING_ALLOWED_TOOLS = [
   ...CODING_TOOLS,
-  "Bash(git status *)",
-  "Bash(git diff *)",
-  "Bash(npm test *)",
-  "Bash(npx vitest *)",
-  "Bash(pytest *)",
-  "Bash(python -m pytest *)",
-  "Bash(cargo test *)",
-  "Bash(go test *)"
+  "Bash(git status*)",
+  "Bash(git diff*)",
+  "Bash(npm test*)",
+  "Bash(npx vitest*)",
+  "Bash(pytest*)",
+  "Bash(python -m pytest*)",
+  "Bash(cargo test*)",
+  "Bash(go test*)"
 ];
 const DISALLOWED_MUTATIONS = [
-  "Bash(git commit *)",
-  "Bash(git push *)",
-  "Bash(git reset --hard *)",
-  "Bash(git clean *)",
-  "Bash(gh *)",
-  "Bash(npm publish *)",
-  "Bash(pnpm publish *)",
-  "Bash(yarn npm publish *)",
-  "Bash(docker push *)",
-  "Bash(kubectl apply *)",
-  "Bash(kubectl rollout *)",
-  "Bash(terraform apply *)",
-  "Bash(vercel *)",
-  "Bash(netlify *)",
-  "Bash(aws *)",
-  "Bash(az *)",
-  "Bash(gcloud *)",
-  "Bash(curl *)",
-  "Bash(wget *)"
+  "Bash(git commit*)",
+  "Bash(git push*)",
+  "Bash(git reset --hard*)",
+  "Bash(git clean*)",
+  "Bash(gh*)",
+  "Bash(npm publish*)",
+  "Bash(pnpm publish*)",
+  "Bash(yarn npm publish*)",
+  "Bash(docker push*)",
+  "Bash(kubectl apply*)",
+  "Bash(kubectl rollout*)",
+  "Bash(terraform apply*)",
+  "Bash(vercel*)",
+  "Bash(netlify*)",
+  "Bash(aws*)",
+  "Bash(az*)",
+  "Bash(gcloud*)",
+  "Bash(curl*)",
+  "Bash(wget*)"
 ];
 
 export class ClaudeProvider implements AgentProvider {

@@ -84,11 +84,11 @@ describe("claude review", () => {
     expect(codingArgs).toContain("acceptEdits");
     expect(codingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write");
     expect(codingArgs.join(" ")).not.toContain("Read,Glob,Grep,Edit,Write,Bash");
-    expect(codingArgs.join(" ")).toContain("Bash(git push *)");
+    expect(codingArgs.join(" ")).toContain("Bash(git push*)");
     expect(testingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
-    expect(testingArgs.join(" ")).toContain("Bash(npm test *)");
+    expect(testingArgs.join(" ")).toContain("Bash(npm test*)");
     expect(testingArgs.join(" ")).not.toContain("--allowedTools Read,Glob,Grep,Edit,Write,Bash --disallowedTools");
-    expect(testingArgs.join(" ")).toContain("Bash(curl *)");
+    expect(testingArgs.join(" ")).toContain("Bash(curl*)");
     expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
   });
 
