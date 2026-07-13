@@ -1,5 +1,5 @@
 import path from "node:path";
-import {
+import type {
   GoalPhase,
   GoalRunRecord,
   GoalStepStatus,
@@ -10,6 +10,9 @@ import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
+import { compressStepOutput } from "../runtime/compression.js";
+import { detectLocalRtk } from "../runtime/rtk.js";
+import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 
@@ -26,6 +29,7 @@ export type GoalRunnerOptions = {
   maxSteps?: number;
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
+  tokenRuntime?: { enabled?: boolean } | false;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -46,6 +50,8 @@ export async function runTaskGoal(
   let phase: GoalPhase = run.currentPhase;
   let stepCount = run.stepCount;
   let excluded = initialExcludedProviders(database, run, phase);
+  const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
+  const rtk = detectLocalRtk();
 
   database.addEvent({
     source: "maestro",
@@ -95,6 +101,15 @@ export async function runTaskGoal(
       const startedAt = Date.now();
       let result: AgentExecutionResult;
       try {
+        const previousSteps = database.listGoalSteps(run.id).filter((step) => step.id !== goalStep.id);
+        const previousStepHandoff = tokenRuntimeEnabled
+          ? previousSteps.map((step) => compressStepOutput({
+            step,
+            rtk,
+            rawOutputArtifact: rawOutputArtifactKey(step),
+            enabled: true
+          }).handoff)
+          : undefined;
         result = await routed.provider.execute({
           runId: run.id,
           stepNumber: stepCount + 1,
@@ -102,7 +117,12 @@ export async function runTaskGoal(
           capability: CAPABILITIES[phase],
           task: database.getTask(task.id),
           project,
-          previousSteps: database.listGoalSteps(run.id),
+          previousSteps,
+          previousStepHandoff,
+          tokenRuntime: {
+            enabled: tokenRuntimeEnabled,
+            rtk
+          },
           humanFeedback: latestChangeRequest(database, run.id),
           artifactsRoot: path.resolve(options.artifactsRoot),
           signal: options.signal
@@ -124,6 +144,31 @@ export async function runTaskGoal(
       const safeSummary = redactSensitiveText(result.summary);
       const safeOutput = redactSensitiveText(result.output);
       const safeError = result.error ? redactSensitiveText(result.error) : null;
+      const completedStep = {
+        ...goalStep,
+        status: result.outcome as Exclude<GoalStepStatus, "running">,
+        summary: safeSummary,
+        output: safeOutput,
+        error: safeError
+      };
+      const rawArtifactText = [
+        `summary: ${safeSummary}`,
+        safeOutput ? `output:\n${safeOutput}` : "",
+        safeError ? `error:\n${safeError}` : ""
+      ].filter(Boolean).join("\n\n");
+      const compressed = compressStepOutput({
+        step: completedStep,
+        rtk,
+        rawOutputArtifact: rawOutputArtifactKey(completedStep),
+        enabled: tokenRuntimeEnabled
+      });
+      const artifactKeys = writeGoalStepRuntimeArtifacts({
+        artifactsRoot: path.resolve(options.artifactsRoot),
+        step: completedStep,
+        rawOutput: rawArtifactText,
+        compactHandoff: compressed.compactOutput,
+        telemetry: compressed.telemetry
+      });
       database.withTransaction(() => {
         database.finishGoalStep({
           id: goalStep.id,
@@ -142,7 +187,11 @@ export async function runTaskGoal(
             runId: run.id,
             stepId: goalStep.id,
             phase,
-            durationMs: result.durationMs
+            durationMs: result.durationMs,
+            tokenRuntime: {
+              ...compressed.telemetry,
+              artifacts: artifactKeys
+            }
           }
         });
       });

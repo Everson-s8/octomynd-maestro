@@ -1,4 +1,6 @@
-import { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db.js";
+import type { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db.js";
+import type { TokenEfficientHandoffStep } from "../runtime/compression.js";
+import type { RtkDetection } from "../runtime/rtk.js";
 
 export type AgentProviderId = "codex" | "claude";
 export type AgentCapability = "planning" | "coding" | "testing" | "reviewing" | "research" | "conversation";
@@ -19,6 +21,11 @@ export type AgentExecutionRequest = {
   task: TaskRecord;
   project: ProjectRecord;
   previousSteps: GoalStepRecord[];
+  previousStepHandoff?: TokenEfficientHandoffStep[];
+  tokenRuntime?: {
+    enabled: boolean;
+    rtk: RtkDetection;
+  };
   humanFeedback?: string | null;
   artifactsRoot: string;
   signal?: AbortSignal;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
+import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -174,12 +175,9 @@ export function isCodexAuthenticationError(errorText: string): boolean {
 }
 
 function buildPrompt(request: AgentExecutionRequest): string {
-  const previous = request.previousSteps.length === 0
-    ? "Nenhuma etapa anterior."
-    : request.previousSteps.map((step) => (
-      `- ${step.phase}/${step.provider}/${step.status}: ${step.summary}\n` +
-      `  detalhes: ${step.output.slice(0, 2_000) || "sem detalhes"}`
-    )).join("\n");
+  const previous = request.previousStepHandoff
+    ? formatTokenEfficientPreviousSteps(request.previousStepHandoff)
+    : formatLegacyPreviousSteps(request.previousSteps);
   const phaseInstruction = {
     planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
     implementing: "Implemente integralmente a task no workspace. Preserve o escopo e nao faca commit nem push.",
@@ -190,7 +188,9 @@ function buildPrompt(request: AgentExecutionRequest): string {
   return [
     "Voce e um worker do Octomynd Maestro executando uma goal persistente.",
     "Trabalhe autonomamente nesta etapa, sem pedir atualizacao manual da task.",
-    "Nao faça commit, push, merge, deploy, altere credenciais ou saia do workspace.",
+    "Use respostas estruturadas e tersas nos handoffs internos.",
+    "Nao use estilo Caveman em decisoes de seguranca, review final, merge ou mensagens importantes ao usuario.",
+    "Nunca faca commit, push, merge, deploy, altere credenciais ou saia do workspace.",
     `Projeto: ${request.project.name} (@${request.project.key})`,
     `Task #${request.task.id}: ${request.task.text}`,
     `Fase: ${request.phase}`,

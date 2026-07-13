@@ -14,6 +14,7 @@ import { createDatabase, GoalRunRecord, MaestroDatabase } from "../src/db.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
 import { ManualScheduler } from "../src/goals/scheduler.js";
+import { recoverGoalStepRawOutput } from "../src/runtime/artifacts.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -334,6 +335,76 @@ describe("goal runner", () => {
     expect(step.error).toContain("[REDACTED_SECRET]");
     expect(step.error).toContain("[REDACTED_LOCAL_PATH]");
     expect(step.error).toContain("y".repeat(5_000));
+  });
+
+  it("sends compact previous-step handoffs while preserving sanitized raw artifacts and telemetry", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    const artifactsRoot = path.join(tempDir, "artifacts");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "runtime", path: projectDir });
+    const task = database.createTask("measure token runtime", "dashboard", "runtime");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const fakeSecret = `${["sk", "proj"].join("-")}-${"z".repeat(24)}`;
+    const rawPlanningOutput = [
+      "git diff -- src/runtime/compression.ts",
+      "diff --git a/src/runtime/compression.ts b/src/runtime/compression.ts",
+      "@@ -1 +1 @@",
+      `+const token = "${fakeSecret}";`,
+      "npm test",
+      "PASS test/runtime.test.ts",
+      "x".repeat(6_000)
+    ].join("\n");
+    let capturedHandoff: AgentExecutionRequest["previousStepHandoff"] | undefined;
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "planning") return { ...completed("planned"), output: rawPlanningOutput };
+        if (request.phase === "implementing") capturedHandoff = request.previousStepHandoff;
+        return completed("done");
+      }
+    );
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([provider]),
+      task.id,
+      { artifactsRoot, maxSteps: 6 }
+    );
+
+    expect(run.status).toBe("completed");
+    expect(capturedHandoff).toHaveLength(1);
+    expect(capturedHandoff![0].compactOutput.length).toBeLessThan(rawPlanningOutput.length);
+    expect(capturedHandoff![0].compactOutput).toContain("[REDACTED_SECRET]");
+    expect(capturedHandoff![0].compactOutput).not.toContain(fakeSecret);
+
+    const planningStep = database.listGoalSteps(run.id)[0];
+    const recovered = recoverGoalStepRawOutput(artifactsRoot, planningStep);
+    expect(recovered).toContain("[REDACTED_SECRET]");
+    expect(recovered).toContain("x".repeat(6_000));
+    expect(recovered).not.toContain(fakeSecret);
+
+    const stepEvent = database.listEvents(100).find((event) => (
+      event.type === "goal.step_completed" && event.metadata.stepId === planningStep.id
+    ));
+    expect(stepEvent?.metadata.tokenRuntime).toMatchObject({
+      provider: "codex",
+      phase: "planning",
+      adapter: "internal",
+      artifacts: {
+        rawOutputKey: expect.stringContaining("provider-output.raw.txt")
+      }
+    });
+    const tokenRuntime = stepEvent!.metadata.tokenRuntime as {
+      baseline: { bytes: number };
+      compact: { bytes: number };
+      abTest: { savedTokens: number };
+    };
+    expect(tokenRuntime.baseline.bytes).toBeGreaterThan(tokenRuntime.compact.bytes);
+    expect(tokenRuntime.abTest.savedTokens).toBeGreaterThan(0);
   });
 
   it("cancels an active provider process and preserves task history", async () => {

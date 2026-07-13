@@ -15,6 +15,9 @@ export type MaestroConfig = {
     pollIntervalMs: number;
     maxConcurrentGoals: number;
   };
+  runtime: {
+    tokenEfficient: boolean;
+  };
   telegram: {
     botToken: string;
     allowedUserId: string | null;
@@ -38,6 +41,9 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
       enabled: normalizeBoolean(env.MAESTRO_AUTOPILOT_ENABLED, true),
       pollIntervalMs: normalizePositiveInteger(env.MAESTRO_AUTOPILOT_POLL_MS, 30_000, 1_000),
       maxConcurrentGoals: normalizePositiveInteger(env.MAESTRO_AUTOPILOT_MAX_CONCURRENT, 1, 1)
+    },
+    runtime: {
+      tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true)
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",

@@ -1,6 +1,7 @@
 import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase } from "../db.js";
 import { runTaskGoal } from "./runner.js";
+import type { GoalRunnerOptions } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
@@ -17,7 +18,8 @@ export class GoalCoordinator {
     private readonly delivery?: GoalDeliveryHandler,
     private readonly notify?: GoalNotificationHandler,
     private readonly notifyProgress?: GoalProgressNotificationHandler,
-    private readonly scheduler: Scheduler = new SystemScheduler()
+    private readonly scheduler: Scheduler = new SystemScheduler(),
+    private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"]
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -140,6 +142,7 @@ export class GoalCoordinator {
       maxSteps: run.maxSteps,
       existingRun: run,
       delivery: this.delivery,
+      tokenRuntime: this.tokenRuntime,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;
