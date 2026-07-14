@@ -29,8 +29,10 @@ export function buildDashboardSnapshot(
   const goals = database.listGoalRuns(30);
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
+  const featurePlanCounts = database.countFeaturePlansByStatus();
   const reviewQueue = listReviewQueue(database);
   const features = database.listFeatures(30);
+  const featurePlans = database.listFeaturePlans(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -57,6 +59,7 @@ export function buildDashboardSnapshot(
       queuedTasks: counts.queued ?? 0,
       humanGates: reviewQueue.length + (counts.ready_to_merge ?? 0) + (improvementCounts.candidate ?? 0),
       improvementCandidates: improvementCounts.candidate ?? 0,
+      plannedFeaturePlans: featurePlanCounts.planned ?? 0,
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
@@ -117,6 +120,7 @@ export function buildDashboardSnapshot(
     features: features.map((feature) => ({
       id: feature.id,
       projectKey: feature.projectKey,
+      featurePlanId: feature.featurePlanId,
       name: redactSensitiveText(feature.name),
       objective: truncateForDisplay(redactSensitiveText(feature.objective), EVENT_TEXT_MAX_LENGTH),
       status: feature.status,
@@ -131,9 +135,63 @@ export function buildDashboardSnapshot(
         : null,
       itemCount: database.listFeatureItems(feature.id).length,
       mergedAt: feature.mergedAt,
+      cancelledAt: feature.cancelledAt,
+      cancelReason: feature.cancelReason
+        ? truncateForDisplay(redactSensitiveText(feature.cancelReason), EVENT_TEXT_MAX_LENGTH)
+        : null,
+      cancellable: !["completed", "merging", "cancelled"].includes(feature.status),
       createdAt: feature.createdAt,
       updatedAt: feature.updatedAt
     })),
+    featurePlans: featurePlans.map((plan) => {
+      const tasks = database.listFeaturePlanTasks(plan.id);
+      const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
+      const associatedFeature = database.findFeatureByFeaturePlanId(plan.id);
+      const blockers = tasks
+        .filter((task) => task.taskStatus !== "awaiting_human")
+        .map((task) => `Task #${task.taskId} esta ${task.taskStatus}, aguardando Draft Work PR entregue.`);
+      return {
+        id: plan.id,
+        projectKey: plan.projectKey,
+        projectName: plan.projectName,
+        objective: truncateForDisplay(redactSensitiveText(plan.objective), EVENT_TEXT_MAX_LENGTH),
+        acceptanceCriteria: plan.acceptanceCriteria.map((item) => (
+          truncateForDisplay(redactSensitiveText(item), EVENT_TEXT_MAX_LENGTH)
+        )),
+        status: plan.status,
+        source: plan.source,
+        revision: plan.revision,
+        taskIds: tasks.map((task) => task.taskId),
+        taskCount: tasks.length,
+        tasks: tasks.map((task) => ({
+          id: task.taskId,
+          position: task.position,
+          text: truncateForDisplay(redactSensitiveText(task.taskText), EVENT_TEXT_MAX_LENGTH),
+          status: task.taskStatus
+        })),
+        eligible: plan.status === "planned" && tasks.length > 0 && blockers.length === 0,
+        blockers,
+        feature: associatedFeature ? {
+          id: associatedFeature.id,
+          status: associatedFeature.status,
+          pullRequestUrl: associatedFeature.pullRequestUrl
+        } : null,
+        integration: integration ? {
+          status: integration.integration.status,
+          checkpoint: integration.integration.checkpoint,
+          lastError: integration.integration.lastError
+            ? truncateForDisplay(redactSensitiveText(integration.integration.lastError), EVENT_TEXT_MAX_LENGTH)
+            : null
+        } : null,
+        cancellable: plan.status === "planned" && !integration && !associatedFeature,
+        cancelledAt: plan.cancelledAt,
+        cancelReason: plan.cancelReason
+          ? truncateForDisplay(redactSensitiveText(plan.cancelReason), EVENT_TEXT_MAX_LENGTH)
+          : null,
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt
+      };
+    }),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)
   };

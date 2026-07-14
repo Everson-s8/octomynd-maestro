@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -180,13 +181,15 @@ export type FeatureStatus =
   | "changes_requested"
   | "merging"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type FeatureRecord = {
   id: number;
   projectId: number;
   projectKey: string;
   projectName: string;
+  featurePlanId: number | null;
   name: string;
   objective: string;
   status: FeatureStatus;
@@ -198,6 +201,8 @@ export type FeatureRecord = {
   reviewedHeadSha: string | null;
   lastError: string | null;
   mergedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -217,11 +222,168 @@ export type FeatureItemRecord = {
 
 export type FeatureInput = {
   projectKey: string;
+  featurePlanId?: number | null;
   name: string;
   objective: string;
   branchName: string;
   worktreePath: string;
   pullRequestUrl: string;
+};
+
+export type FeaturePlanStatus = "planned" | "cancelled";
+
+export type FeaturePlanRecord = {
+  id: number;
+  projectId: number;
+  projectKey: string;
+  projectName: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: FeaturePlanStatus;
+  source: string;
+  createdByUserId: string | null;
+  createdByUsername: string | null;
+  revision: number;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanTaskRecord = {
+  id: number;
+  featurePlanId: number;
+  taskId: number;
+  taskText: string;
+  taskStatus: TaskStatus;
+  position: number;
+  createdAt: string;
+};
+
+export type FeaturePlanDetails = {
+  plan: FeaturePlanRecord;
+  tasks: FeaturePlanTaskRecord[];
+};
+
+export type FeaturePlanWriteResult = FeaturePlanDetails & {
+  applied: boolean;
+};
+
+export type FeaturePlanInput = {
+  projectKey: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  source?: string;
+  createdByUserId?: string | null;
+  createdByUsername?: string | null;
+  idempotencyKey?: string | null;
+};
+
+export type FeaturePlanReplanInput = {
+  id: number;
+  objective: string;
+  acceptanceCriteria: string[];
+  taskIds: number[];
+  idempotencyKey?: string | null;
+};
+
+export type FeaturePlanIntegrationStatus =
+  | "preparing"
+  | "integrating"
+  | "verifying"
+  | "completed"
+  | "failed";
+
+export type FeaturePlanIntegrationCheckpoint =
+  | "created"
+  | "validated"
+  | "base_fetched"
+  | "worktree_created"
+  | "integrating"
+  | "commits_integrated"
+  | "secret_scan_passed"
+  | "diff_check_passed"
+  | "completed"
+  | "failed";
+
+export type FeaturePlanIntegrationRecord = {
+  id: number;
+  featurePlanId: number;
+  projectId: number;
+  projectKey: string;
+  projectName: string;
+  planRevision: number;
+  status: FeaturePlanIntegrationStatus;
+  checkpoint: FeaturePlanIntegrationCheckpoint;
+  branchName: string;
+  worktreePath: string;
+  baseSha: string | null;
+  headSha: string | null;
+  lastError: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanIntegrationItemStatus = "pending" | "integrated" | "failed";
+
+export type FeaturePlanIntegrationItemRecord = {
+  id: number;
+  integrationId: number;
+  featurePlanId: number;
+  taskId: number;
+  taskText: string;
+  taskStatus: TaskStatus;
+  position: number;
+  commitSha: string;
+  pullRequestUrl: string;
+  branchName: string;
+  status: FeaturePlanIntegrationItemStatus;
+  appliedCommitSha: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FeaturePlanIntegrationDetails = {
+  integration: FeaturePlanIntegrationRecord;
+  items: FeaturePlanIntegrationItemRecord[];
+};
+
+export type FeaturePlanIntegrationInput = {
+  featurePlanId: number;
+  projectId: number;
+  planRevision: number;
+  branchName: string;
+  worktreePath: string;
+};
+
+export type FeaturePlanIntegrationUpdate = {
+  id: number;
+  status?: FeaturePlanIntegrationStatus;
+  checkpoint?: FeaturePlanIntegrationCheckpoint;
+  baseSha?: string | null;
+  headSha?: string | null;
+  lastError?: string | null;
+  completedAt?: string | null;
+};
+
+export type FeaturePlanIntegrationItemInput = {
+  integrationId: number;
+  featurePlanId: number;
+  taskId: number;
+  position: number;
+  commitSha: string;
+  pullRequestUrl: string;
+  branchName: string;
+};
+
+export type FeaturePlanIntegrationItemUpdate = {
+  id: number;
+  status: FeaturePlanIntegrationItemStatus;
+  appliedCommitSha?: string | null;
+  lastError?: string | null;
 };
 
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
@@ -341,12 +503,12 @@ export function createDatabase(databasePath: string) {
   `);
   const createFeatureStatement = db.prepare(`
     INSERT INTO features (
-      project_id, name, objective, status, branch_name, worktree_path,
+      project_id, feature_plan_id, name, objective, status, branch_name, worktree_path,
       pull_request_url, reviewer_provider, review_summary, reviewed_head_sha,
       last_error, merged_at, created_at, updated_at
     )
     VALUES (
-      @projectId, @name, @objective, 'draft', @branchName, @worktreePath,
+      @projectId, @featurePlanId, @name, @objective, 'draft', @branchName, @worktreePath,
       @pullRequestUrl, NULL, NULL, NULL, NULL, NULL, @now, @now
     )
   `);
@@ -361,6 +523,14 @@ export function createDatabase(databasePath: string) {
         updated_at = @now
     WHERE id = @id
   `);
+  const cancelFeatureStatement = db.prepare(`
+    UPDATE features
+    SET status = 'cancelled',
+        cancelled_at = @now,
+        cancel_reason = @cancelReason,
+        updated_at = @now
+    WHERE id = @id AND status NOT IN ('completed', 'merging', 'cancelled')
+  `);
   const addFeatureItemStatement = db.prepare(`
     INSERT INTO feature_items (
       feature_id, task_id, pull_request_url, branch_name, status, created_at, updated_at
@@ -369,6 +539,88 @@ export function createDatabase(databasePath: string) {
   `);
   const updateFeatureItemStatusStatement = db.prepare(`
     UPDATE feature_items SET status = @status, updated_at = @now WHERE id = @id
+  `);
+  const createFeaturePlanStatement = db.prepare(`
+    INSERT INTO feature_plans (
+      project_id, objective, acceptance_criteria_json, status, source,
+      created_by_user_id, created_by_username, revision,
+      cancelled_at, cancel_reason, created_at, updated_at
+    )
+    VALUES (
+      @projectId, @objective, @acceptanceCriteriaJson, 'planned', @source,
+      @createdByUserId, @createdByUsername, 1,
+      NULL, NULL, @now, @now
+    )
+  `);
+  const addFeaturePlanTaskStatement = db.prepare(`
+    INSERT INTO feature_plan_tasks (feature_plan_id, task_id, position, created_at)
+    VALUES (@featurePlanId, @taskId, @position, @now)
+  `);
+  const cancelFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET status = 'cancelled',
+        cancelled_at = @now,
+        cancel_reason = @cancelReason,
+        updated_at = @now
+    WHERE id = @id AND status = 'planned'
+  `);
+  const replanFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET objective = @objective,
+        acceptance_criteria_json = @acceptanceCriteriaJson,
+        revision = revision + 1,
+        updated_at = @now
+    WHERE id = @id AND status = 'planned'
+  `);
+  const deleteFeaturePlanTasksStatement = db.prepare("DELETE FROM feature_plan_tasks WHERE feature_plan_id = ?");
+  const addFeaturePlanOperationStatement = db.prepare(`
+    INSERT INTO feature_plan_operations (
+      feature_plan_id, operation_type, idempotency_key, request_hash, created_at
+    )
+    VALUES (@featurePlanId, @operationType, @idempotencyKey, @requestHash, @now)
+  `);
+  const createFeaturePlanIntegrationStatement = db.prepare(`
+    INSERT INTO feature_plan_integrations (
+      feature_plan_id, project_id, plan_revision, status, checkpoint,
+      branch_name, worktree_path, base_sha, head_sha, last_error,
+      completed_at, created_at, updated_at
+    )
+    VALUES (
+      @featurePlanId, @projectId, @planRevision, 'preparing', 'created',
+      @branchName, @worktreePath, NULL, NULL, NULL,
+      NULL, @now, @now
+    )
+  `);
+  const updateFeaturePlanIntegrationStatement = db.prepare(`
+    UPDATE feature_plan_integrations
+    SET status = @status,
+        checkpoint = @checkpoint,
+        base_sha = @baseSha,
+        head_sha = @headSha,
+        last_error = @lastError,
+        completed_at = @completedAt,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const addFeaturePlanIntegrationItemStatement = db.prepare(`
+    INSERT INTO feature_plan_integration_items (
+      integration_id, feature_plan_id, task_id, position, commit_sha,
+      pull_request_url, branch_name, status, applied_commit_sha,
+      last_error, created_at, updated_at
+    )
+    VALUES (
+      @integrationId, @featurePlanId, @taskId, @position, @commitSha,
+      @pullRequestUrl, @branchName, 'pending', NULL,
+      NULL, @now, @now
+    )
+  `);
+  const updateFeaturePlanIntegrationItemStatement = db.prepare(`
+    UPDATE feature_plan_integration_items
+    SET status = @status,
+        applied_commit_sha = @appliedCommitSha,
+        last_error = @lastError,
+        updated_at = @now
+    WHERE id = @id
   `);
 
   return {
@@ -448,6 +700,12 @@ export function createDatabase(databasePath: string) {
       if (goalCount.count > 0) {
         throw new Error(`Task #${id} has execution history and cannot be deleted. Cancel it instead.`);
       }
+      const featurePlanLink = db
+        .prepare("SELECT feature_plan_id FROM feature_plan_tasks WHERE task_id = ? ORDER BY feature_plan_id ASC LIMIT 1")
+        .get(id) as { feature_plan_id: number } | undefined;
+      if (featurePlanLink) {
+        throw new Error(`Task #${id} is associated with Feature Plan #${featurePlanLink.feature_plan_id} and cannot be deleted.`);
+      }
       if (!["queued", "cancelled"].includes(task.status)) {
         throw new Error(`Task #${id} must be queued or cancelled before deletion.`);
       }
@@ -515,6 +773,24 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?")
         .all(limit) as EventRow[];
       return rows.map(mapEvent);
+    },
+
+    hasFeaturePlanEvent(
+      type: string,
+      featurePlanId: number,
+      revision: number,
+      eventType?: string | null
+    ): boolean {
+      const row = db.prepare(`
+        SELECT 1
+        FROM events
+        WHERE type = ?
+          AND CAST(json_extract(metadata_json, '$.featurePlanId') AS INTEGER) = ?
+          AND CAST(json_extract(metadata_json, '$.revision') AS INTEGER) = ?
+          AND (? IS NULL OR json_extract(metadata_json, '$.eventType') = ?)
+        LIMIT 1
+      `).get(type, featurePlanId, revision, eventType ?? null, eventType ?? null);
+      return Boolean(row);
     },
 
     addTaskReview(input: TaskReviewInput): TaskReviewRecord {
@@ -756,14 +1032,21 @@ export function createDatabase(databasePath: string) {
       const branchName = input.branchName.trim();
       const worktreePath = path.resolve(input.worktreePath.trim());
       const pullRequestUrl = input.pullRequestUrl.trim();
+      const featurePlanId = input.featurePlanId ?? null;
       if (!name || !objective || !branchName || !pullRequestUrl) {
         throw new Error("Feature requires name, objective, branch, worktree and pull request.");
       }
       const existing = this.findFeatureByPullRequestUrl(pullRequestUrl);
       if (existing) return existing;
+      if (featurePlanId !== null) {
+        const existingForPlan = this.findFeatureByFeaturePlanId(featurePlanId);
+        if (existingForPlan) return existingForPlan;
+        this.getFeaturePlan(featurePlanId);
+      }
       const now = new Date().toISOString();
       const result = createFeatureStatement.run({
         projectId: project.id,
+        featurePlanId,
         name,
         objective,
         branchName,
@@ -784,6 +1067,13 @@ export function createDatabase(databasePath: string) {
       const row = db
         .prepare(featureSelectSql("WHERE features.pull_request_url = ?"))
         .get(pullRequestUrl) as FeatureRow | undefined;
+      return row ? mapFeature(row) : null;
+    },
+
+    findFeatureByFeaturePlanId(featurePlanId: number): FeatureRecord | null {
+      const row = db
+        .prepare(featureSelectSql("WHERE features.feature_plan_id = ?"))
+        .get(featurePlanId) as FeatureRow | undefined;
       return row ? mapFeature(row) : null;
     },
 
@@ -815,6 +1105,23 @@ export function createDatabase(databasePath: string) {
         now: new Date().toISOString()
       });
       return this.getFeature(feature.id);
+    },
+
+    cancelFeature(id: number, reason?: string | null): FeatureRecord {
+      const feature = this.getFeature(id);
+      if (feature.status === "cancelled") return feature;
+      if (["completed", "merging"].includes(feature.status)) {
+        throw new Error(`Feature #${id} cannot be cancelled from status ${feature.status}.`);
+      }
+      const result = cancelFeatureStatement.run({
+        id,
+        cancelReason: reason?.trim() || null,
+        now: new Date().toISOString()
+      });
+      if (result.changes === 0) {
+        throw new Error(`Feature #${id} cannot be cancelled from status ${feature.status}.`);
+      }
+      return this.getFeature(id);
     },
 
     addFeatureItem(input: {
@@ -851,6 +1158,309 @@ export function createDatabase(databasePath: string) {
       this.getFeatureItem(id);
       updateFeatureItemStatusStatement.run({ id, status, now: new Date().toISOString() });
       return this.getFeatureItem(id);
+    },
+
+    createFeaturePlan(input: FeaturePlanInput): FeaturePlanWriteResult {
+      const normalized = normalizeFeaturePlanInput(input);
+      const project = this.getProjectByKey(normalized.projectKey);
+      validateFeaturePlanTasks(project.id, normalized.taskIds, (id) => this.getTask(id));
+      const requestHash = hashFeaturePlanOperation("create", {
+        projectId: project.id,
+        objective: normalized.objective,
+        acceptanceCriteria: normalized.acceptanceCriteria,
+        taskIds: normalized.taskIds
+      });
+      const existingOperation = normalized.idempotencyKey
+        ? findFeaturePlanOperation(db, normalized.idempotencyKey)
+        : null;
+      if (existingOperation) {
+        validateFeaturePlanOperationReuse(existingOperation, "create", requestHash);
+        return { ...this.getFeaturePlanDetails(existingOperation.feature_plan_id), applied: false };
+      }
+      validateFeaturePlanTaskAvailability(db, normalized.taskIds);
+
+      const now = new Date().toISOString();
+      const planId = db.transaction(() => {
+        const result = createFeaturePlanStatement.run({
+          projectId: project.id,
+          objective: normalized.objective,
+          acceptanceCriteriaJson: JSON.stringify(normalized.acceptanceCriteria),
+          source: normalized.source,
+          createdByUserId: normalized.createdByUserId,
+          createdByUsername: normalized.createdByUsername,
+          now
+        });
+        const featurePlanId = Number(result.lastInsertRowid);
+        insertFeaturePlanTasks(addFeaturePlanTaskStatement, featurePlanId, normalized.taskIds, now);
+        if (normalized.idempotencyKey) {
+          addFeaturePlanOperationStatement.run({
+            featurePlanId,
+            operationType: "create",
+            idempotencyKey: normalized.idempotencyKey,
+            requestHash,
+            now
+          });
+        }
+        return featurePlanId;
+      })();
+
+      return { ...this.getFeaturePlanDetails(planId), applied: true };
+    },
+
+    getFeaturePlan(id: number): FeaturePlanRecord {
+      const row = db.prepare(featurePlanSelectSql("WHERE feature_plans.id = ?")).get(id) as FeaturePlanRow | undefined;
+      if (!row) throw new Error(`Feature plan not found: ${id}`);
+      return mapFeaturePlan(row);
+    },
+
+    getFeaturePlanDetails(id: number): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      return { plan, tasks: this.listFeaturePlanTasks(plan.id) };
+    },
+
+    listFeaturePlans(limit = 30): FeaturePlanRecord[] {
+      const rows = db
+        .prepare(featurePlanSelectSql("ORDER BY feature_plans.id DESC LIMIT ?"))
+        .all(limit) as FeaturePlanRow[];
+      return rows.map(mapFeaturePlan);
+    },
+
+    listFeaturePlansByProject(projectKey: string, limit = 30): FeaturePlanRecord[] {
+      const rows = db
+        .prepare(featurePlanSelectSql("WHERE projects.key = ? ORDER BY feature_plans.id DESC LIMIT ?"))
+        .all(projectKey, limit) as FeaturePlanRow[];
+      return rows.map(mapFeaturePlan);
+    },
+
+    listFeaturePlanTasks(featurePlanId: number): FeaturePlanTaskRecord[] {
+      const rows = db
+        .prepare(featurePlanTasksSelectSql("WHERE feature_plan_tasks.feature_plan_id = ? ORDER BY feature_plan_tasks.position ASC"))
+        .all(featurePlanId) as FeaturePlanTaskRow[];
+      return rows.map(mapFeaturePlanTask);
+    },
+
+    countFeaturePlansByStatus(): Record<string, number> {
+      const rows = db
+        .prepare("SELECT status, COUNT(*) as count FROM feature_plans GROUP BY status")
+        .all() as Array<{ status: string; count: number }>;
+      return Object.fromEntries(rows.map((row) => [row.status, row.count]));
+    },
+
+    cancelFeaturePlan(id: number, reason?: string | null): FeaturePlanWriteResult {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === "cancelled") {
+        return { ...this.getFeaturePlanDetails(id), applied: false };
+      }
+      assertFeaturePlanIntegrationNotStarted(db, id);
+      const result = cancelFeaturePlanStatement.run({
+        id,
+        cancelReason: reason?.trim() || null,
+        now: new Date().toISOString()
+      });
+      if (result.changes === 0) {
+        throw new Error(`Feature plan #${id} cannot be cancelled from status ${plan.status}.`);
+      }
+      return { ...this.getFeaturePlanDetails(id), applied: true };
+    },
+
+    replanFeaturePlan(input: FeaturePlanReplanInput): FeaturePlanWriteResult {
+      const plan = this.getFeaturePlan(input.id);
+      const normalized = normalizeFeaturePlanInput({
+        projectKey: plan.projectKey,
+        objective: input.objective,
+        acceptanceCriteria: input.acceptanceCriteria,
+        taskIds: input.taskIds,
+        idempotencyKey: input.idempotencyKey
+      });
+      const requestHash = hashFeaturePlanOperation("replan", {
+        featurePlanId: plan.id,
+        objective: normalized.objective,
+        acceptanceCriteria: normalized.acceptanceCriteria,
+        taskIds: normalized.taskIds
+      });
+      const existingOperation = normalized.idempotencyKey
+        ? findFeaturePlanOperation(db, normalized.idempotencyKey)
+        : null;
+      if (existingOperation) {
+        validateFeaturePlanOperationReuse(existingOperation, "replan", requestHash, plan.id);
+        return { ...this.getFeaturePlanDetails(existingOperation.feature_plan_id), applied: false };
+      }
+      if (plan.status !== "planned") {
+        throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
+      }
+      assertFeaturePlanIntegrationNotStarted(db, plan.id);
+      validateFeaturePlanTasks(plan.projectId, normalized.taskIds, (id) => this.getTask(id));
+      validateFeaturePlanTaskAvailability(db, normalized.taskIds, plan.id);
+
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        const result = replanFeaturePlanStatement.run({
+          id: plan.id,
+          objective: normalized.objective,
+          acceptanceCriteriaJson: JSON.stringify(normalized.acceptanceCriteria),
+          now
+        });
+        if (result.changes === 0) {
+          throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
+        }
+        deleteFeaturePlanTasksStatement.run(plan.id);
+        insertFeaturePlanTasks(addFeaturePlanTaskStatement, plan.id, normalized.taskIds, now);
+        if (normalized.idempotencyKey) {
+          addFeaturePlanOperationStatement.run({
+            featurePlanId: plan.id,
+            operationType: "replan",
+            idempotencyKey: normalized.idempotencyKey,
+            requestHash,
+            now
+          });
+        }
+      })();
+
+      return { ...this.getFeaturePlanDetails(plan.id), applied: true };
+    },
+
+    createFeaturePlanIntegration(input: FeaturePlanIntegrationInput): FeaturePlanIntegrationRecord {
+      const plan = this.getFeaturePlan(input.featurePlanId);
+      if (plan.projectId !== input.projectId) {
+        throw new Error(`Feature Plan #${input.featurePlanId} does not belong to project #${input.projectId}.`);
+      }
+      const existing = this.findFeaturePlanIntegrationByFeaturePlan(input.featurePlanId);
+      if (existing) {
+        if (
+          existing.projectId !== input.projectId
+          || existing.planRevision !== input.planRevision
+          || existing.branchName !== input.branchName.trim()
+          || existing.worktreePath !== path.resolve(input.worktreePath.trim())
+        ) {
+          throw new Error(`Feature Plan #${input.featurePlanId} already has a different integration checkpoint.`);
+        }
+        return existing;
+      }
+      const branchName = input.branchName.trim();
+      const worktreePathInput = input.worktreePath.trim();
+      if (!branchName || !worktreePathInput) {
+        throw new Error("Feature Plan integration requires branch and worktree path.");
+      }
+      const worktreePath = path.resolve(worktreePathInput);
+      const now = new Date().toISOString();
+      const result = createFeaturePlanIntegrationStatement.run({
+        featurePlanId: input.featurePlanId,
+        projectId: input.projectId,
+        planRevision: input.planRevision,
+        branchName,
+        worktreePath,
+        now
+      });
+      return this.getFeaturePlanIntegration(Number(result.lastInsertRowid));
+    },
+
+    getFeaturePlanIntegration(id: number): FeaturePlanIntegrationRecord {
+      const row = db
+        .prepare(featurePlanIntegrationSelectSql("WHERE feature_plan_integrations.id = ?"))
+        .get(id) as FeaturePlanIntegrationRow | undefined;
+      if (!row) throw new Error(`Feature Plan integration not found: ${id}`);
+      return mapFeaturePlanIntegration(row);
+    },
+
+    findFeaturePlanIntegrationByFeaturePlan(featurePlanId: number): FeaturePlanIntegrationRecord | null {
+      const row = db
+        .prepare(featurePlanIntegrationSelectSql("WHERE feature_plan_integrations.feature_plan_id = ?"))
+        .get(featurePlanId) as FeaturePlanIntegrationRow | undefined;
+      return row ? mapFeaturePlanIntegration(row) : null;
+    },
+
+    getFeaturePlanIntegrationDetails(id: number): FeaturePlanIntegrationDetails {
+      const integration = this.getFeaturePlanIntegration(id);
+      return { integration, items: this.listFeaturePlanIntegrationItems(integration.id) };
+    },
+
+    getFeaturePlanIntegrationDetailsByFeaturePlan(featurePlanId: number): FeaturePlanIntegrationDetails | null {
+      const integration = this.findFeaturePlanIntegrationByFeaturePlan(featurePlanId);
+      return integration ? { integration, items: this.listFeaturePlanIntegrationItems(integration.id) } : null;
+    },
+
+    listFeaturePlanIntegrationItems(integrationId: number): FeaturePlanIntegrationItemRecord[] {
+      const rows = db
+        .prepare(featurePlanIntegrationItemsSelectSql(
+          "WHERE feature_plan_integration_items.integration_id = ? ORDER BY feature_plan_integration_items.position ASC"
+        ))
+        .all(integrationId) as FeaturePlanIntegrationItemRow[];
+      return rows.map(mapFeaturePlanIntegrationItem);
+    },
+
+    ensureFeaturePlanIntegrationItem(input: FeaturePlanIntegrationItemInput): FeaturePlanIntegrationItemRecord {
+      this.getFeaturePlanIntegration(input.integrationId);
+      this.getTask(input.taskId);
+      const normalized = normalizeFeaturePlanIntegrationItemInput(input);
+      const existing = db
+        .prepare("SELECT * FROM feature_plan_integration_items WHERE integration_id = ? AND task_id = ?")
+        .get(normalized.integrationId, normalized.taskId) as FeaturePlanIntegrationItemBaseRow | undefined;
+      if (existing) {
+        if (
+          existing.feature_plan_id !== normalized.featurePlanId
+          || existing.position !== normalized.position
+          || existing.commit_sha !== normalized.commitSha
+          || existing.pull_request_url !== normalized.pullRequestUrl
+          || existing.branch_name !== normalized.branchName
+        ) {
+          throw new Error(`Task #${normalized.taskId} already has a different integration item checkpoint.`);
+        }
+        return this.getFeaturePlanIntegrationItem(existing.id);
+      }
+      const result = addFeaturePlanIntegrationItemStatement.run({
+        ...normalized,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegrationItem(Number(result.lastInsertRowid));
+    },
+
+    getFeaturePlanIntegrationItem(id: number): FeaturePlanIntegrationItemRecord {
+      const row = db
+        .prepare(featurePlanIntegrationItemsSelectSql("WHERE feature_plan_integration_items.id = ?"))
+        .get(id) as FeaturePlanIntegrationItemRow | undefined;
+      if (!row) throw new Error(`Feature Plan integration item not found: ${id}`);
+      return mapFeaturePlanIntegrationItem(row);
+    },
+
+    updateFeaturePlanIntegration(input: FeaturePlanIntegrationUpdate): FeaturePlanIntegrationRecord {
+      const integration = this.getFeaturePlanIntegration(input.id);
+      updateFeaturePlanIntegrationStatement.run({
+        id: integration.id,
+        status: input.status ?? integration.status,
+        checkpoint: input.checkpoint ?? integration.checkpoint,
+        baseSha: input.baseSha === undefined ? integration.baseSha : input.baseSha,
+        headSha: input.headSha === undefined ? integration.headSha : input.headSha,
+        lastError: input.lastError === undefined ? integration.lastError : input.lastError,
+        completedAt: input.completedAt === undefined ? integration.completedAt : input.completedAt,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegration(integration.id);
+    },
+
+    updateFeaturePlanIntegrationItem(input: FeaturePlanIntegrationItemUpdate): FeaturePlanIntegrationItemRecord {
+      const item = this.getFeaturePlanIntegrationItem(input.id);
+      updateFeaturePlanIntegrationItemStatement.run({
+        id: item.id,
+        status: input.status,
+        appliedCommitSha: input.appliedCommitSha === undefined ? item.appliedCommitSha : input.appliedCommitSha,
+        lastError: input.lastError === undefined ? item.lastError : input.lastError,
+        now: new Date().toISOString()
+      });
+      return this.getFeaturePlanIntegrationItem(item.id);
+    },
+
+    findLatestCompletedGoalRunForTask(taskId: number): GoalRunRecord | null {
+      const row = db
+        .prepare(`
+          SELECT *
+          FROM goal_runs
+          WHERE task_id = ?
+            AND status = 'completed'
+          ORDER BY id DESC
+          LIMIT 1
+        `)
+        .get(taskId) as GoalRunRow | undefined;
+      return row ? mapGoalRun(row) : null;
     }
   };
 }
@@ -976,6 +1586,8 @@ function migrate(db: Database.Database) {
       reviewed_head_sha TEXT,
       last_error TEXT,
       merged_at TEXT,
+      cancelled_at TEXT,
+      cancel_reason TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -994,6 +1606,95 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (feature_id) REFERENCES features(id),
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
+
+    CREATE TABLE IF NOT EXISTS feature_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      objective TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'planned',
+      source TEXT NOT NULL,
+      created_by_user_id TEXT,
+      created_by_username TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
+      cancelled_at TEXT,
+      cancel_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(feature_plan_id, task_id),
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      operation_type TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_integrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL UNIQUE,
+      project_id INTEGER NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing',
+      checkpoint TEXT NOT NULL DEFAULT 'created',
+      branch_name TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      base_sha TEXT,
+      head_sha TEXT,
+      last_error TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_integration_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      integration_id INTEGER NOT NULL,
+      feature_plan_id INTEGER NOT NULL,
+      task_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      commit_sha TEXT NOT NULL,
+      pull_request_url TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      applied_commit_sha TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(integration_id, task_id),
+      UNIQUE(integration_id, commit_sha),
+      FOREIGN KEY (integration_id) REFERENCES feature_plan_integrations(id),
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
+      ON feature_plan_tasks(task_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
+      ON feature_plan_operations(feature_plan_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integrations_plan_id
+      ON feature_plan_integrations(feature_plan_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_integration_id
+      ON feature_plan_integration_items(integration_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_task_id
+      ON feature_plan_integration_items(task_id);
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -1001,6 +1702,15 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
+  addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
+  addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
+  addColumnIfMissing(db, "features", "cancel_reason", "TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
+      ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
+  `);
 }
 
 type ProjectRow = {
@@ -1108,6 +1818,7 @@ type FeatureRow = {
   project_id: number;
   project_key: string;
   project_name: string;
+  feature_plan_id: number | null;
   name: string;
   objective: string;
   status: FeatureStatus;
@@ -1119,6 +1830,8 @@ type FeatureRow = {
   reviewed_head_sha: string | null;
   last_error: string | null;
   merged_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -1132,6 +1845,83 @@ type FeatureItemRow = {
   status: FeatureItemStatus;
   created_at: string;
   updated_at: string;
+};
+
+type FeaturePlanRow = {
+  id: number;
+  project_id: number;
+  project_key: string;
+  project_name: string;
+  objective: string;
+  acceptance_criteria_json: string;
+  status: FeaturePlanStatus;
+  source: string;
+  created_by_user_id: string | null;
+  created_by_username: string | null;
+  revision: number;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanTaskRow = {
+  id: number;
+  feature_plan_id: number;
+  task_id: number;
+  task_text: string;
+  task_status: TaskStatus;
+  position: number;
+  created_at: string;
+};
+
+type FeaturePlanOperationRow = {
+  id: number;
+  feature_plan_id: number;
+  operation_type: "create" | "replan";
+  idempotency_key: string;
+  request_hash: string;
+  created_at: string;
+};
+
+type FeaturePlanIntegrationRow = {
+  id: number;
+  feature_plan_id: number;
+  project_id: number;
+  project_key: string;
+  project_name: string;
+  plan_revision: number;
+  status: FeaturePlanIntegrationStatus;
+  checkpoint: FeaturePlanIntegrationCheckpoint;
+  branch_name: string;
+  worktree_path: string;
+  base_sha: string | null;
+  head_sha: string | null;
+  last_error: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanIntegrationItemBaseRow = {
+  id: number;
+  integration_id: number;
+  feature_plan_id: number;
+  task_id: number;
+  position: number;
+  commit_sha: string;
+  pull_request_url: string;
+  branch_name: string;
+  status: FeaturePlanIntegrationItemStatus;
+  applied_commit_sha: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeaturePlanIntegrationItemRow = FeaturePlanIntegrationItemBaseRow & {
+  task_text: string;
+  task_status: TaskStatus;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -1182,6 +1972,176 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     risk,
     source: input.source?.trim() || "dashboard"
   };
+}
+
+function normalizeFeaturePlanInput(input: FeaturePlanInput): Required<FeaturePlanInput> {
+  const projectKey = input.projectKey.trim().toLowerCase();
+  if (!projectKey) throw new Error("Feature plan project is required.");
+
+  const objective = input.objective.trim();
+  const acceptanceCriteria = input.acceptanceCriteria
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const taskIds = uniqueTaskIds(input.taskIds);
+  const source = input.source?.trim() || "dashboard";
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
+
+  if (objective.length < 8) {
+    throw new Error("Feature plan objective must be at least 8 characters.");
+  }
+  if (acceptanceCriteria.length === 0) {
+    throw new Error("Feature plan requires at least one acceptance criterion.");
+  }
+  if (taskIds.length === 0) {
+    throw new Error("Feature plan requires at least one explicit task association.");
+  }
+  if (idempotencyKey && idempotencyKey.length > 120) {
+    throw new Error("Feature plan idempotency key must be 120 characters or fewer.");
+  }
+
+  return {
+    projectKey,
+    objective,
+    acceptanceCriteria,
+    taskIds,
+    source,
+    createdByUserId: input.createdByUserId?.trim() || null,
+    createdByUsername: input.createdByUsername?.trim() || null,
+    idempotencyKey
+  };
+}
+
+function uniqueTaskIds(taskIds: number[]): number[] {
+  const seen = new Set<number>();
+  const normalized: number[] = [];
+  for (const taskId of taskIds) {
+    if (!Number.isInteger(taskId) || taskId <= 0) {
+      throw new Error("Feature plan task ids must be positive integers.");
+    }
+    if (seen.has(taskId)) {
+      throw new Error(`Feature plan task #${taskId} was provided more than once.`);
+    }
+    seen.add(taskId);
+    normalized.push(taskId);
+  }
+  return normalized;
+}
+
+function validateFeaturePlanTasks(
+  projectId: number,
+  taskIds: number[],
+  getTask: (id: number) => TaskRecord
+): void {
+  for (const taskId of taskIds) {
+    const task = getTask(taskId);
+    if (task.projectId !== projectId) {
+      throw new Error(`Task #${taskId} does not belong to the Feature Plan project.`);
+    }
+  }
+}
+
+function validateFeaturePlanTaskAvailability(
+  db: Database.Database,
+  taskIds: number[],
+  currentFeaturePlanId?: number
+): void {
+  for (const taskId of taskIds) {
+    const row = db.prepare(`
+      SELECT feature_plans.id AS feature_plan_id
+      FROM feature_plan_tasks
+      JOIN feature_plans ON feature_plans.id = feature_plan_tasks.feature_plan_id
+      WHERE feature_plan_tasks.task_id = ?
+        AND feature_plans.status = 'planned'
+        AND feature_plans.id <> ?
+      ORDER BY feature_plans.id ASC
+      LIMIT 1
+    `).get(taskId, currentFeaturePlanId ?? -1) as { feature_plan_id: number } | undefined;
+    if (row) {
+      throw new Error(`Task #${taskId} is already associated with active Feature Plan #${row.feature_plan_id}.`);
+    }
+  }
+}
+
+function assertFeaturePlanIntegrationNotStarted(db: Database.Database, featurePlanId: number): void {
+  const row = db
+    .prepare("SELECT id FROM feature_plan_integrations WHERE feature_plan_id = ? LIMIT 1")
+    .get(featurePlanId) as { id: number } | undefined;
+  if (row) {
+    throw new Error(`Feature plan #${featurePlanId} already has integration checkpoint #${row.id}.`);
+  }
+}
+
+function insertFeaturePlanTasks(
+  statement: Database.Statement,
+  featurePlanId: number,
+  taskIds: number[],
+  now: string
+): void {
+  taskIds.forEach((taskId, index) => {
+    statement.run({ featurePlanId, taskId, position: index + 1, now });
+  });
+}
+
+function normalizeFeaturePlanIntegrationItemInput(
+  input: FeaturePlanIntegrationItemInput
+): FeaturePlanIntegrationItemInput {
+  const commitSha = input.commitSha.trim();
+  const pullRequestUrl = input.pullRequestUrl.trim();
+  const branchName = input.branchName.trim();
+  if (!Number.isInteger(input.position) || input.position <= 0) {
+    throw new Error("Feature Plan integration item position must be a positive integer.");
+  }
+  if (!/^[a-f0-9]{40}$/i.test(commitSha)) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} has an invalid commit SHA.`);
+  }
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/i.test(pullRequestUrl)) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} has an invalid Work PR URL.`);
+  }
+  if (!branchName) {
+    throw new Error(`Feature Plan integration item for task #${input.taskId} requires a branch name.`);
+  }
+
+  return {
+    integrationId: input.integrationId,
+    featurePlanId: input.featurePlanId,
+    taskId: input.taskId,
+    position: input.position,
+    commitSha: commitSha.toLowerCase(),
+    pullRequestUrl,
+    branchName
+  };
+}
+
+function findFeaturePlanOperation(
+  db: Database.Database,
+  idempotencyKey: string
+): FeaturePlanOperationRow | null {
+  const row = db
+    .prepare("SELECT * FROM feature_plan_operations WHERE idempotency_key = ?")
+    .get(idempotencyKey) as FeaturePlanOperationRow | undefined;
+  return row ?? null;
+}
+
+function validateFeaturePlanOperationReuse(
+  operation: FeaturePlanOperationRow,
+  operationType: "create" | "replan",
+  requestHash: string,
+  expectedFeaturePlanId?: number
+): void {
+  if (
+    operation.operation_type !== operationType
+    || operation.request_hash !== requestHash
+    || (expectedFeaturePlanId !== undefined && operation.feature_plan_id !== expectedFeaturePlanId)
+  ) {
+    throw new Error("Feature plan idempotency key was already used for a different operation.");
+  }
+}
+
+function hashFeaturePlanOperation(operationType: "create" | "replan", payload: Record<string, unknown>): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ operationType, ...payload }))
+    .digest("hex");
 }
 
 function mapProject(row: ProjectRow): ProjectRecord {
@@ -1306,6 +2266,7 @@ function mapFeature(row: FeatureRow): FeatureRecord {
     projectId: row.project_id,
     projectKey: row.project_key,
     projectName: row.project_name,
+    featurePlanId: row.feature_plan_id,
     name: row.name,
     objective: row.objective,
     status: row.status,
@@ -1317,6 +2278,8 @@ function mapFeature(row: FeatureRow): FeatureRecord {
     reviewedHeadSha: row.reviewed_head_sha,
     lastError: row.last_error,
     mergedAt: row.merged_at,
+    cancelledAt: row.cancelled_at,
+    cancelReason: row.cancel_reason,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1335,6 +2298,92 @@ function mapFeatureItem(row: FeatureItemRow): FeatureItemRecord {
   };
 }
 
+function mapFeaturePlan(row: FeaturePlanRow): FeaturePlanRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name,
+    objective: row.objective,
+    acceptanceCriteria: parseStringArrayJson(row.acceptance_criteria_json),
+    status: row.status,
+    source: row.source,
+    createdByUserId: row.created_by_user_id,
+    createdByUsername: row.created_by_username,
+    revision: row.revision,
+    cancelledAt: row.cancelled_at,
+    cancelReason: row.cancel_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function parseStringArrayJson(value: string | null): string[] {
+  try {
+    const parsed = JSON.parse(value || "[]") as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapFeaturePlanTask(row: FeaturePlanTaskRow): FeaturePlanTaskRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    taskId: row.task_id,
+    taskText: row.task_text,
+    taskStatus: row.task_status,
+    position: row.position,
+    createdAt: row.created_at
+  };
+}
+
+function mapFeaturePlanIntegration(row: FeaturePlanIntegrationRow): FeaturePlanIntegrationRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name,
+    planRevision: row.plan_revision,
+    status: row.status,
+    checkpoint: row.checkpoint,
+    branchName: row.branch_name,
+    worktreePath: row.worktree_path,
+    baseSha: row.base_sha,
+    headSha: row.head_sha,
+    lastError: row.last_error,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFeaturePlanIntegrationItem(
+  row: FeaturePlanIntegrationItemRow
+): FeaturePlanIntegrationItemRecord {
+  return {
+    id: row.id,
+    integrationId: row.integration_id,
+    featurePlanId: row.feature_plan_id,
+    taskId: row.task_id,
+    taskText: row.task_text,
+    taskStatus: row.task_status,
+    position: row.position,
+    commitSha: row.commit_sha,
+    pullRequestUrl: row.pull_request_url,
+    branchName: row.branch_name,
+    status: row.status,
+    appliedCommitSha: row.applied_commit_sha,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function featureSelectSql(suffix = ""): string {
   return `
     SELECT features.*,
@@ -1342,6 +2391,50 @@ function featureSelectSql(suffix = ""): string {
            projects.name AS project_name
     FROM features
     JOIN projects ON projects.id = features.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plans.*,
+           projects.key AS project_key,
+           projects.name AS project_name
+    FROM feature_plans
+    JOIN projects ON projects.id = feature_plans.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanTasksSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_tasks.*,
+           tasks.text AS task_text,
+           tasks.status AS task_status
+    FROM feature_plan_tasks
+    JOIN tasks ON tasks.id = feature_plan_tasks.task_id
+    ${suffix}
+  `;
+}
+
+function featurePlanIntegrationSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_integrations.*,
+           projects.key AS project_key,
+           projects.name AS project_name
+    FROM feature_plan_integrations
+    JOIN projects ON projects.id = feature_plan_integrations.project_id
+    ${suffix}
+  `;
+}
+
+function featurePlanIntegrationItemsSelectSql(suffix = ""): string {
+  return `
+    SELECT feature_plan_integration_items.*,
+           tasks.text AS task_text,
+           tasks.status AS task_status
+    FROM feature_plan_integration_items
+    JOIN tasks ON tasks.id = feature_plan_integration_items.task_id
     ${suffix}
   `;
 }

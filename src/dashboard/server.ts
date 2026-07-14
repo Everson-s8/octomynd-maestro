@@ -19,6 +19,7 @@ import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
+import { FeatureGitHubGateway } from "../features/github.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -28,13 +29,14 @@ export type DashboardServerOptions = {
   goalCoordinator?: GoalCoordinator;
   reviewCoordinator?: ReviewCoordinator;
   featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
+  featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
-  const commands = new ApplicationCommands(options.database);
+  const commands = new ApplicationCommands(options.database, options.featureGithub);
 
   return http.createServer(async (request, response) => {
     try {
@@ -217,6 +219,111 @@ async function routeRequest(
         error: "improvement_decision_failed",
         details: message
       });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/feature-plans") {
+    const projectKey = url.searchParams.get("projectKey");
+    try {
+      sendJson(response, 200, { featurePlans: commands.listFeaturePlans(projectKey) });
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_list_failed");
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/feature-plans") {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: readString(body.projectKey),
+        objective: readString(body.objective),
+        acceptanceCriteria: readStringArray(body.acceptanceCriteria),
+        taskIds: readNumberArray(body.taskIds),
+        idempotencyKey: readString(body.idempotencyKey) || null
+      });
+      sendJson(response, result.applied ? 201 : 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_create_failed");
+    }
+    return;
+  }
+
+  const featurePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)$/);
+  if (request.method === "GET" && featurePlanMatch) {
+    try {
+      sendJson(response, 200, commands.getFeaturePlan(Number(featurePlanMatch[1])));
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_get_failed");
+    }
+    return;
+  }
+
+  const cancelFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.cancelFeaturePlan(
+        { channel: "dashboard" },
+        Number(cancelFeaturePlanMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_cancel_failed");
+    }
+    return;
+  }
+
+  const replanFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/replan$/);
+  if (request.method === "POST" && replanFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.replanFeaturePlan(
+        { channel: "dashboard" },
+        Number(replanFeaturePlanMatch[1]),
+        {
+          objective: readString(body.objective),
+          acceptanceCriteria: readStringArray(body.acceptanceCriteria),
+          taskIds: readNumberArray(body.taskIds),
+          idempotencyKey: readString(body.idempotencyKey) || null
+        }
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_replan_failed");
+    }
+    return;
+  }
+
+  const integrateFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/integrate$/);
+  if (request.method === "POST" && integrateFeaturePlanMatch) {
+    try {
+      const result = await commands.integrateFeaturePlan(
+        { channel: "dashboard" },
+        Number(integrateFeaturePlanMatch[1]),
+        options.config.worktreesPath
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_integration_failed");
+    }
+    return;
+  }
+
+  const cancelFeatureMatch = url.pathname.match(/^\/api\/features\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelFeatureMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const feature = await commands.cancelFeature(
+        { channel: "dashboard" },
+        Number(cancelFeatureMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, { feature });
+    } catch (error) {
+      sendCommandError(response, error, "feature_cancel_failed");
     }
     return;
   }
@@ -425,6 +532,18 @@ function readString(value: unknown): string {
 
 function readEnum(value: unknown, options: readonly string[]): string | null {
   return typeof value === "string" && options.includes(value) ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === "number")
+    : [];
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {
