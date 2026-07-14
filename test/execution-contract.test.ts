@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -67,7 +68,7 @@ describe("execution contract", () => {
   it("creates an idempotent marker without storing host paths", () => {
     const rootPath = process.platform === "win32"
       ? path.join(path.parse(process.cwd()).root, "MaestroRuntime", `.test-${process.pid}`)
-      : path.join(process.cwd(), ".tmp-execution-contract-test");
+      : path.join(os.tmpdir(), `maestro-execution-contract-${process.pid}`);
     const contract = {
       rootPath,
       worktreesPath: path.join(rootPath, "worktrees"),
