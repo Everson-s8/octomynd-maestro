@@ -265,18 +265,16 @@ function recommendedAction(status: EnvironmentReadinessStatus, checks: Environme
 }
 
 function findPreparedDependencyRoot(workspacePath: string, projectPath: string): string | null {
-  const candidates = new Set<string>();
-  for (const start of [workspacePath, projectPath]) {
-    let current = path.resolve(start);
-    while (true) {
-      candidates.add(current);
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-  for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "node_modules", ".bin"))) return candidate;
+  const workspaceRoot = path.resolve(workspacePath);
+  const projectRoot = path.resolve(projectPath);
+  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) return workspaceRoot;
+  if (workspaceRoot !== projectRoot && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
+  let current = projectRoot;
+  while (true) {
+    if (fs.existsSync(path.join(current, "node_modules", ".bin"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
   return null;
 }
