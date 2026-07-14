@@ -95,7 +95,10 @@ service can still enforce the limits of the user's plan.
   divergent major/minor blocks startup before a long Goal can begin.
 - `EnvironmentDoctor` is the single readiness seam used by Goal preflight,
   Dashboard and Telegram. It verifies execution/worktree writes, Git, Node,
-  npm, dependency preparation, TypeScript, Vitest and provider readiness.
+  npm, dependency preparation, native runtime bindings, TypeScript, Vitest and
+  provider readiness. Deterministic `npm ci` keeps lifecycle scripts from the
+  trusted lockfile enabled because native modules such as `better-sqlite3`
+  otherwise install without a usable binding.
 - Goal preflight runs before `goal_runs` is created. Unsafe legacy worktrees,
   missing toolchains or dependency failures become `environment_blocked`
   evidence instead of consuming provider time.
