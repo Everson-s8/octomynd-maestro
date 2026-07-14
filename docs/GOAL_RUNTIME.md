@@ -39,6 +39,19 @@ fact. It never installs, downloads or updates RTK. When RTK is absent, the inter
 transparently. The adapter can be disabled with `MAESTRO_TOKEN_RUNTIME_ENABLED=false`, without
 changing delivery gates, review gates or final Feature PR completion rules.
 
+## Deterministic validation
+
+The testing phase first calls one deep Maestro module with an allowlisted command
+catalog: `git diff --check`, changed-file secret scan, backend/UI typecheck, Vitest
+and the UI build. Commands run without a shell and cannot be supplied by a model.
+Raw sanitized output is retained as an artifact while only a compact actionable
+failure is handed to a provider.
+
+Diff and secret checks are cheap fail-closed gates. When either fails, expensive
+typecheck, test and build commands do not run. A clean validation advances directly
+to review without spending a testing-provider call. A failed validation permits one
+testing provider to repair the worktree, then the deterministic checks run again.
+
 ## Routing
 
 Providers advertise capabilities. The registry selects a ready provider using this preference order:

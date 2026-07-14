@@ -20,6 +20,7 @@ import {
   createTelegramFeatureBlockedNotifier,
   createTelegramFeatureNotifier
 } from "./telegram/notifications.js";
+import { DeterministicValidationRunner } from "./validation/runner.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -33,6 +34,7 @@ if (errors.length > 0) {
 
 const database = createDatabase(config.databasePath);
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
+const validationRunner = new DeterministicValidationRunner();
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
 const bot = createTelegramBot(config, database, {
@@ -58,7 +60,8 @@ goalCoordinator = new GoalCoordinator(
   goalNotifier,
   goalProgressNotifier,
   undefined,
-  { enabled: config.runtime.tokenEfficient }
+  { enabled: config.runtime.tokenEfficient },
+  validationRunner
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,

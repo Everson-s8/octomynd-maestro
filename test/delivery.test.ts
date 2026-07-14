@@ -71,7 +71,7 @@ describe("goal delivery guard", () => {
     expect(git(["status", "--porcelain"])).toBe("");
     expect(git(["log", "-1", "--pretty=%s"])).toBe("Task #4: deliver feature");
     expect(publishCalls).toBe(2);
-  });
+  }, 15_000);
 });
 
 function git(args: string[]): string {

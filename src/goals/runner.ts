@@ -13,6 +13,7 @@ import { redactSensitiveText, truncateForDisplay } from "../security/redaction.j
 import { compressStepOutput } from "../runtime/compression.js";
 import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
+import type { DeterministicValidationRunner } from "../validation/runner.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 
@@ -30,6 +31,7 @@ export type GoalRunnerOptions = {
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
   tokenRuntime?: { enabled?: boolean } | false;
+  validationRunner?: Pick<DeterministicValidationRunner, "run">;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -75,6 +77,95 @@ export async function runTaskGoal(
           stepCount
         });
       });
+      if (phase === "testing" && options.validationRunner) {
+        const validationStep = database.createGoalStep(run.id, phase, "maestro-validation");
+        let validation;
+        try {
+          validation = await options.validationRunner.run({
+            workspacePath: task.worktreePath,
+            artifactsRoot: path.resolve(options.artifactsRoot),
+            signal: options.signal
+          });
+        } catch (error) {
+          const message = sanitizeForRunSummary(
+            error instanceof Error ? error.message : "Deterministic validation failed unexpectedly."
+          );
+          database.finishGoalStep({
+            id: validationStep.id,
+            status: "failed",
+            summary: "Deterministic validation runner failed closed.",
+            output: "",
+            error: message,
+            durationMs: 0
+          });
+          return finishRun(database, currentRun, "blocked", phase, stepCount, message, task.id);
+        }
+        stepCount += 1;
+        const validationStatus: Exclude<GoalStepStatus, "running"> = validation.status === "passed"
+          ? "completed"
+          : "failed";
+        const validationOutput = validation.compactFailure ?? validation.summary;
+        const completedValidationStep = {
+          ...validationStep,
+          status: validationStatus,
+          summary: validation.summary,
+          output: validationOutput,
+          error: null
+        };
+        const compressedValidation = compressStepOutput({
+          step: completedValidationStep,
+          rtk,
+          rawOutputArtifact: rawOutputArtifactKey(completedValidationStep),
+          enabled: tokenRuntimeEnabled
+        });
+        const validationArtifactKeys = writeGoalStepRuntimeArtifacts({
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          step: completedValidationStep,
+          rawOutput: [
+            `summary: ${validation.summary}`,
+            validationOutput,
+            `validation-report: artifact:${validation.reportArtifactKey}`
+          ].join("\n\n"),
+          compactHandoff: compressedValidation.compactOutput,
+          telemetry: compressedValidation.telemetry
+        });
+        database.withTransaction(() => {
+          database.finishGoalStep({
+            id: validationStep.id,
+            status: validationStatus,
+            summary: validation.summary,
+            output: validationOutput,
+            durationMs: validation.durationMs
+          });
+          database.addEvent({
+            source: "maestro",
+            type: `goal.validation_${validation.status}`,
+            text: validation.summary,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: validationStep.id,
+              durationMs: validation.durationMs,
+              checks: validation.checks.map((check) => ({
+                id: check.id,
+                status: check.status,
+                durationMs: check.durationMs,
+                artifactKey: check.artifactKey
+              })),
+              reportArtifactKey: validation.reportArtifactKey,
+              tokenRuntime: {
+                ...compressedValidation.telemetry,
+                artifacts: validationArtifactKeys
+              }
+            }
+          });
+        });
+        if (validation.status === "passed") {
+          phase = "reviewing";
+          excluded = new Set();
+          continue;
+        }
+      }
       let routed = await registry.acquire(CAPABILITIES[phase], excluded);
       if (!routed && excluded.size > 0) {
         excluded = new Set();
@@ -232,6 +323,11 @@ export async function runTaskGoal(
           );
         }
         phase = "implementing";
+        excluded = new Set();
+        continue;
+      }
+
+      if (phase === "testing" && options.validationRunner) {
         excluded = new Set();
         continue;
       }

@@ -165,6 +165,10 @@ Required checks (all must pass):
    run if any match. Only filenames are reported; matched secret values are never
    printed to logs.
 
+The Goal runtime applies the same validation policy before review. Passing checks
+skip a separate LLM testing pass; failures are stored as sanitized artifacts and
+summarized into a compact correction handoff.
+
 The workflow uses `permissions: contents: read` (no write access), a `concurrency`
 group keyed on workflow and ref to cancel superseded runs, and `actions/setup-node`
 with `cache: npm` keyed on `package-lock.json` for safe, deterministic caching.

@@ -5,6 +5,7 @@ import type { GoalRunnerOptions } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
+import type { DeterministicValidationRunner } from "../validation/runner.js";
 
 export class GoalCoordinator {
   private readonly active = new Map<number, { promise: Promise<GoalRunRecord>; controller: AbortController }>();
@@ -19,7 +20,8 @@ export class GoalCoordinator {
     private readonly notify?: GoalNotificationHandler,
     private readonly notifyProgress?: GoalProgressNotificationHandler,
     private readonly scheduler: Scheduler = new SystemScheduler(),
-    private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"]
+    private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"],
+    private readonly validationRunner?: Pick<DeterministicValidationRunner, "run">
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -143,6 +145,7 @@ export class GoalCoordinator {
       existingRun: run,
       delivery: this.delivery,
       tokenRuntime: this.tokenRuntime,
+      validationRunner: this.validationRunner,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;
