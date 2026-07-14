@@ -22,6 +22,7 @@ import {
   createTelegramFeatureNotifier
 } from "./telegram/notifications.js";
 import { EnvironmentDoctor } from "./environment/doctor.js";
+import { DeterministicValidationRunner } from "./validation/runner.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -44,6 +45,7 @@ database.addEvent({
 });
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
+const validationRunner = new DeterministicValidationRunner();
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
 const bot = createTelegramBot(config, database, {
@@ -71,7 +73,8 @@ goalCoordinator = new GoalCoordinator(
   goalProgressNotifier,
   undefined,
   { enabled: config.runtime.tokenEfficient },
-  (taskId) => environmentDoctor.preflightTask(taskId)
+  (taskId) => environmentDoctor.preflightTask(taskId),
+  validationRunner
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,

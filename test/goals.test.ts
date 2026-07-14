@@ -15,6 +15,7 @@ import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
 import { ManualScheduler } from "../src/goals/scheduler.js";
 import { recoverGoalStepRawOutput } from "../src/runtime/artifacts.js";
+import type { ValidationReport } from "../src/validation/runner.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -73,6 +74,60 @@ describe("goal runner", () => {
       "reviewing"
     ]);
     expect(database.listEvents().some((event) => event.type === "goal.completed")).toBe(true);
+  });
+
+  it("uses deterministic validation before spending a testing provider call", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "validated", path: projectDir, defaultBranch: "main" });
+    const task = database.createTask("validate centrally", "dashboard", "validated");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-validated",
+      worktreePath: worktreeDir
+    });
+    let testingProviderCalls = 0;
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "testing") testingProviderCalls += 1;
+        return completed("provider completed");
+      }
+    );
+    let validationCalls = 0;
+    const validationRunner = {
+      run: async (): Promise<ValidationReport> => {
+        validationCalls += 1;
+        return validationReport(validationCalls === 1 ? "failed" : "passed");
+      }
+    };
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8,
+      validationRunner
+    });
+
+    expect(run.status).toBe("completed");
+    expect(validationCalls).toBe(2);
+    expect(testingProviderCalls).toBe(1);
+    expect(database.listGoalSteps(run.id).map((step) => `${step.phase}/${step.provider}/${step.status}`)).toEqual([
+      "planning/codex/completed",
+      "implementing/codex/completed",
+      "testing/maestro-validation/failed",
+      "testing/codex/completed",
+      "testing/maestro-validation/completed",
+      "reviewing/codex/completed"
+    ]);
+    expect(database.listEvents().some((event) => event.type === "goal.validation_failed")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.validation_passed")).toBe(true);
+    const validationStep = database.listGoalSteps(run.id).find((step) => step.provider === "maestro-validation");
+    expect(recoverGoalStepRawOutput(path.join(tempDir, "artifacts"), validationStep!))
+      .toContain("validation-report: artifact:validation/test/report.json");
   });
 
   it("falls back to another provider when the preferred provider fails", async () => {
@@ -545,6 +600,24 @@ function completed(summary: string): AgentExecutionResult {
     error: null,
     durationMs: 1,
     retryable: false
+  };
+}
+
+function validationReport(status: "passed" | "failed"): ValidationReport {
+  const failed = status === "failed";
+  return {
+    status,
+    summary: failed ? "1/1 deterministic checks failed: typecheck_backend." : "1/1 deterministic checks passed.",
+    compactFailure: failed ? "typecheck_backend: expected string" : null,
+    durationMs: 1,
+    checks: [{
+      id: "typecheck_backend",
+      status,
+      durationMs: 1,
+      summary: failed ? "expected string" : "passed",
+      artifactKey: `validation/test/typecheck_backend.raw.txt`
+    }],
+    reportArtifactKey: "validation/test/report.json"
   };
 }
 

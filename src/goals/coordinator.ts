@@ -7,6 +7,7 @@ import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../tel
 import { Scheduler, SystemScheduler } from "./scheduler.js";
 import { EnvironmentBlockedError } from "../environment/doctor.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
+import type { DeterministicValidationRunner } from "../validation/runner.js";
 
 export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
 
@@ -24,7 +25,8 @@ export class GoalCoordinator {
     private readonly notifyProgress?: GoalProgressNotificationHandler,
     private readonly scheduler: Scheduler = new SystemScheduler(),
     private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"],
-    private readonly preflight?: GoalPreflight
+    private readonly preflight?: GoalPreflight,
+    private readonly validationRunner?: Pick<DeterministicValidationRunner, "run">
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -162,6 +164,7 @@ export class GoalCoordinator {
       existingRun: run,
       delivery: this.delivery,
       tokenRuntime: this.tokenRuntime,
+      validationRunner: this.validationRunner,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;
