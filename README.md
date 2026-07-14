@@ -56,6 +56,20 @@ npm run dev:platform
 - Build: `npm run build:ui`
 - Typecheck: `npm run typecheck:ui`
 
+Para executar o runtime completo no Windows com PID, logs e health check:
+
+```powershell
+.\scripts\maestro-runtime.ps1 start
+.\scripts\maestro-runtime.ps1 status
+.\scripts\maestro-runtime.ps1 restart
+.\scripts\maestro-runtime.ps1 stop
+```
+
+O controlador considera o startup concluido somente quando
+`http://127.0.0.1:4787/api/dashboard` responde. Logs e PID ficam sob
+`.maestro/runtime/`, fora do Git. Manutencoes devem terminar com `status` verde;
+parar o processo tambem interrompe Dashboard, Telegram e coordenadores.
+
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
 isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,

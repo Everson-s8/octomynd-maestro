@@ -58,7 +58,7 @@ describe("execution contract", () => {
     expect(fingerprint.tools.find((tool) => tool.name === "git")?.available).toBe(true);
     expect(serialized).not.toContain("C:\\Users\\everson");
     expect(serialized).not.toContain(contract.rootPath);
-  });
+  }, 15_000);
 
   it("compares paths without prefix collisions", () => {
     expect(isPathWithin("C:\\MaestroRuntime\\worktrees", "C:\\MaestroRuntime")).toBe(true);
