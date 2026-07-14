@@ -78,6 +78,24 @@ describe("Environment Doctor", () => {
     expect(report.recommendedAction).toContain("quota");
   });
 
+  it("does not borrow project dependencies for an isolated task worktree", () => {
+    const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-9");
+    fs.mkdirSync(isolatedWorktree, { recursive: true });
+    fs.writeFileSync(path.join(isolatedWorktree, "package-lock.json"), "{}", "utf8");
+
+    const report = runEnvironmentDoctor({
+      config: doctorConfig(),
+      project: project(process.cwd()),
+      task: task(isolatedWorktree)
+    });
+
+    expect(report.status).toBe("environment_blocked");
+    expect(report.checks).toContainEqual(expect.objectContaining({
+      name: "typescript",
+      status: "failed"
+    }));
+  });
+
   it("prevents Goal creation when preflight is blocked", () => {
     const database = createDatabase(path.join(tempDir, "maestro.db"));
     try {
