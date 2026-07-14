@@ -1,0 +1,178 @@
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet("start", "status", "restart", "stop")]
+    [string]$Action = "status",
+
+    [ValidateRange(1, 120)]
+    [int]$WaitSeconds = 20
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$runtimeDir = Join-Path $repoRoot ".maestro\runtime"
+$pidPath = Join-Path $runtimeDir "maestro.pid"
+$stdoutPath = Join-Path $runtimeDir "maestro.stdout.log"
+$stderrPath = Join-Path $runtimeDir "maestro.stderr.log"
+$dashboardPort = 4787
+$envPath = Join-Path $repoRoot ".env.local"
+
+if ($env:MAESTRO_DASHBOARD_PORT -match '^[0-9]+$') {
+    $candidatePort = [int]$env:MAESTRO_DASHBOARD_PORT
+    if ($candidatePort -ge 1 -and $candidatePort -le 65535) {
+        $dashboardPort = $candidatePort
+    }
+}
+elseif (Test-Path -LiteralPath $envPath) {
+    $configuredPort = Get-Content -LiteralPath $envPath |
+        Where-Object { $_ -match '^\s*MAESTRO_DASHBOARD_PORT\s*=\s*([0-9]+)\s*$' } |
+        Select-Object -First 1
+    if ($configuredPort -and $configuredPort -match '=\s*([0-9]+)\s*$') {
+        $candidatePort = [int]$Matches[1]
+        if ($candidatePort -ge 1 -and $candidatePort -le 65535) {
+            $dashboardPort = $candidatePort
+        }
+    }
+}
+
+$healthUrl = "http://127.0.0.1:$dashboardPort/api/dashboard"
+
+function Test-MaestroHealth {
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+        return $response.StatusCode -eq 200
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-StoredProcessId {
+    if (-not (Test-Path -LiteralPath $pidPath)) {
+        return $null
+    }
+
+    $stored = (Get-Content -LiteralPath $pidPath -Raw).Trim()
+    if ($stored -notmatch '^[0-9]+$') {
+        return $null
+    }
+    return [int]$stored
+}
+
+function Get-MaestroProcess([int]$ProcessId) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) {
+        return $null
+    }
+    if ($process.CommandLine.IndexOf($repoRoot, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        return $null
+    }
+    return $process
+}
+
+function Get-DescendantProcessIds([int]$ParentProcessId) {
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ParentProcessId" -ErrorAction SilentlyContinue)
+    $result = [System.Collections.Generic.List[int]]::new()
+    foreach ($child in $children) {
+        foreach ($descendant in Get-DescendantProcessIds -ParentProcessId $child.ProcessId) {
+            $result.Add($descendant)
+        }
+        $result.Add([int]$child.ProcessId)
+    }
+    return $result
+}
+
+function Stop-MaestroRuntime {
+    $processId = Get-StoredProcessId
+    if ($null -eq $processId) {
+        Write-Output "Maestro runtime: stopped (no PID)."
+        return
+    }
+
+    $process = Get-MaestroProcess -ProcessId $processId
+    if ($null -eq $process) {
+        Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+        Write-Output "Maestro runtime: stopped (stale PID removed)."
+        return
+    }
+
+    foreach ($descendantId in Get-DescendantProcessIds -ParentProcessId $processId) {
+        Stop-Process -Id $descendantId -Force -ErrorAction SilentlyContinue
+    }
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+    Write-Output "Maestro runtime: stopped."
+}
+
+function Start-MaestroRuntime {
+    if (Test-MaestroHealth) {
+        Write-Output "Maestro runtime: already healthy at $healthUrl"
+        return
+    }
+
+    $existingProcessId = Get-StoredProcessId
+    if ($null -ne $existingProcessId -and $null -ne (Get-MaestroProcess -ProcessId $existingProcessId)) {
+        throw "Maestro process exists but health check failed. Run restart and inspect $stderrPath."
+    }
+
+    New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+
+    $escapedRepoRoot = $repoRoot.Replace("'", "''")
+    $command = "Set-Location -LiteralPath '$escapedRepoRoot'; & npm.cmd run dev; exit `$LASTEXITCODE"
+    $process = Start-Process `
+        -FilePath "powershell.exe" `
+        -ArgumentList @("-NoProfile", "-Command", $command) `
+        -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath `
+        -PassThru
+
+    Set-Content -LiteralPath $pidPath -Value $process.Id -Encoding ascii
+
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    do {
+        if (Test-MaestroHealth) {
+            Write-Output "Maestro runtime: healthy at $healthUrl (PID $($process.Id))."
+            Write-Output "stdout: $stdoutPath"
+            Write-Output "stderr: $stderrPath"
+            return
+        }
+        if ($process.HasExited) {
+            throw "Maestro exited during startup. Inspect $stderrPath."
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Maestro did not become healthy within $WaitSeconds seconds. Inspect $stderrPath."
+}
+
+function Show-MaestroStatus {
+    $processId = Get-StoredProcessId
+    $process = if ($null -ne $processId) { Get-MaestroProcess -ProcessId $processId } else { $null }
+    $healthy = Test-MaestroHealth
+    [pscustomobject]@{
+        healthy = $healthy
+        processRunning = $null -ne $process
+        processId = if ($null -ne $process) { $processId } else { $null }
+        healthUrl = $healthUrl
+        stdout = $stdoutPath
+        stderr = $stderrPath
+    } | ConvertTo-Json
+    if (-not $healthy) {
+        exit 1
+    }
+}
+
+switch ($Action) {
+    "start" { Start-MaestroRuntime }
+    "status" { Show-MaestroStatus }
+    "restart" {
+        Stop-MaestroRuntime
+        Start-MaestroRuntime
+    }
+    "stop" { Stop-MaestroRuntime }
+}

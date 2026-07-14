@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   formatQueue,
+  formatEnvironmentReport,
   formatStatus,
   executeCancelCommand,
   isUserAllowed,
   parseProjectAddText,
   parseFeatureCancelText,
   parseFeaturesProjectKey,
+  parseDoctorProjectKey,
   parseQueueProjectKey,
   parseStatusProjectKey,
   parseTaskId,
@@ -68,6 +70,26 @@ describe("telegram helpers", () => {
       reason: "prioridade mudou"
     });
     expect(parseFeatureCancelText("/feature_cancel nope")).toBeNull();
+  });
+
+  it("formats a short path-private Environment Doctor report", () => {
+    expect(parseDoctorProjectKey("/doctor @boo")).toBe("boo");
+    expect(parseDoctorProjectKey("/doctor")).toBeNull();
+    const message = formatEnvironmentReport({
+      status: "environment_blocked",
+      summary: "Execution environment blocked.",
+      recommendedAction: "Move the worktree.",
+      checkedAt: "now",
+      projectKey: "boo",
+      taskId: 4,
+      fingerprintId: "0123456789abcdef",
+      requiredCapabilities: ["planning"],
+      checks: [{ name: "worktree", status: "failed", summary: "unsafe", evidence: [] }]
+    });
+
+    expect(message).toContain("Environment Doctor @boo: environment_blocked");
+    expect(message).toContain("Move the worktree");
+    expect(message).not.toContain("C:\\Users");
   });
 
   it("parses task ids", () => {
@@ -243,6 +265,12 @@ function telegramConfig(): MaestroConfig {
     projectName: "test",
     databasePath: ":memory:",
     worktreesPath: "worktrees",
+    execution: {
+      rootPath: "runtime",
+      worktreesPath: "worktrees",
+      expectedNodeVersion: "20.17.0",
+      supportedNodeRange: ">=20.17.0 <21"
+    },
     dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },

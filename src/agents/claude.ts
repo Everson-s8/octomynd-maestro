@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
-import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
@@ -85,7 +85,7 @@ export class ClaudeProvider implements AgentProvider {
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
-  constructor(private readonly executionTimeoutMs = 20 * 60_000) {}
+  constructor(private readonly executionTimeoutMs = 6 * 60_000) {}
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -105,11 +105,16 @@ export class ClaudeProvider implements AgentProvider {
         output: "",
         error: null,
         durationMs: result.durationMs,
-        retryable: false
+        retryable: false,
+        processRuntime: processRuntime(result)
       };
     }
     if (result.exitCode !== 0 || !result.stdout.trim()) {
-      const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      const errorText = [
+        result.stderr,
+        result.stdout,
+        result.breakerReason ? `process breaker: ${result.breakerReason}` : ""
+      ].filter(Boolean).join("\n").trim();
       const category = classifyFailure(errorText, result.timedOut);
       const retryable = isRetryableFailureCategory(category);
       const summary = buildFailureSummary(this.label, request.phase, category);
@@ -124,7 +129,8 @@ export class ClaudeProvider implements AgentProvider {
         output: errorText,
         error: errorText || summary,
         durationMs: result.durationMs,
-        retryable
+        retryable,
+        processRuntime: processRuntime(result)
       };
     }
 
@@ -146,7 +152,8 @@ export class ClaudeProvider implements AgentProvider {
       output: content,
       error: null,
       durationMs: result.durationMs,
-      retryable: false
+      retryable: false,
+      processRuntime: processRuntime(result)
     };
   }
 
@@ -337,6 +344,8 @@ async function executeClaudeGoal(request: AgentExecutionRequest, timeoutMs: numb
       stderr: !cli ? "Claude Code CLI was not found." : `Task workspace does not exist: ${cwd}`,
       aborted: false,
       timedOut: false,
+      breakerReason: null,
+      outputStats: { receivedChars: 0, retainedChars: 0, duplicateChunks: 0, truncatedChars: 0 },
       durationMs: 0
     };
   }
@@ -345,9 +354,14 @@ async function executeClaudeGoal(request: AgentExecutionRequest, timeoutMs: numb
     args: buildClaudeGoalArgs(cli, request, cwd),
     cwd,
     timeoutMs,
+    deadlineAt: request.deadlineAt,
     signal: request.signal,
     env: buildRestrictedAgentEnvironment()
   });
+}
+
+function processRuntime(result: AgentProcessResult): NonNullable<AgentExecutionResult["processRuntime"]> {
+  return { breakerReason: result.breakerReason, outputStats: result.outputStats };
 }
 
 function resolveClaudeCliCommand(): ClaudeCliCommand | null {

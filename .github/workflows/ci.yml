@@ -15,8 +15,14 @@ concurrency:
 
 jobs:
   ci:
-    name: Build, typecheck, test, and secret scan
-    runs-on: ubuntu-latest
+    name: Build, typecheck, and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -24,7 +30,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20.17.0"
           cache: "npm"
 
       - name: Install dependencies (fail-closed)
@@ -43,6 +49,7 @@ jobs:
         run: npm run build:ui
 
       - name: Secret scan (no secret values are printed)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail

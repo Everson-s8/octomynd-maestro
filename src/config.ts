@@ -1,10 +1,17 @@
 import dotenv from "dotenv";
 import path from "node:path";
+import {
+  assessExecutionPaths,
+  ExecutionContract,
+  isSupportedNodeVersion,
+  resolveExecutionContract
+} from "./execution/contract.js";
 
 export type MaestroConfig = {
   projectName: string;
   databasePath: string;
   worktreesPath: string;
+  execution: ExecutionContract;
   dashboard: {
     enabled: boolean;
     host: string;
@@ -28,10 +35,14 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
   dotenv.config({ path: path.join(cwd, ".env.local"), override: false });
   dotenv.config({ path: path.join(cwd, ".env"), override: false });
 
+  const projectName = env.MAESTRO_PROJECT_NAME?.trim() || "octomynd-maestro";
+  const execution = resolveExecutionContract(cwd, projectName, env);
+
   return {
-    projectName: env.MAESTRO_PROJECT_NAME?.trim() || "octomynd-maestro",
+    projectName,
     databasePath: path.resolve(cwd, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
-    worktreesPath: path.resolve(cwd, env.MAESTRO_WORKTREES_PATH?.trim() || ".maestro/worktrees"),
+    worktreesPath: execution.worktreesPath,
+    execution,
     dashboard: {
       enabled: normalizeBoolean(env.MAESTRO_DASHBOARD_ENABLED, true),
       host: env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1",
@@ -52,7 +63,10 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
   };
 }
 
-export function validateRuntimeConfig(config: MaestroConfig): string[] {
+export function validateRuntimeConfig(
+  config: MaestroConfig,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
   const errors: string[] = [];
 
   if (!config.telegram.botToken) {
@@ -65,6 +79,16 @@ export function validateRuntimeConfig(config: MaestroConfig): string[] {
 
   if (config.dashboard.host !== "127.0.0.1" && config.dashboard.host !== "localhost") {
     errors.push("MAESTRO_DASHBOARD_HOST must stay local: use 127.0.0.1 or localhost.");
+  }
+
+  if (!isSupportedNodeVersion(process.version, config.execution.expectedNodeVersion)) {
+    errors.push(
+      `Node ${config.execution.expectedNodeVersion}.x is required; current runtime is ${process.version}.`
+    );
+  }
+
+  if (process.platform === "win32") {
+    errors.push(...assessExecutionPaths(config.execution, env).reasons);
   }
 
   return errors;

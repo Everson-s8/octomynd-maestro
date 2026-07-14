@@ -151,7 +151,7 @@ export default function App() {
             <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={() => refresh(true)} />
             <FeatureBoard features={data.features} onChanged={() => refresh(true)} />
             <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
-            <AgentDock agents={data.agents} />
+            <AgentDock agents={data.agents} environments={data.environments} />
             <ProjectDeck projects={data.projects} />
             <ImprovementLab improvements={data.improvements} onChanged={() => refresh(true)} />
             <EventStream events={data.events} />
@@ -660,7 +660,13 @@ function TaskRow({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) 
   );
 }
 
-function AgentDock({ agents }: { agents: DashboardData["agents"] }) {
+function AgentDock({
+  agents,
+  environments
+}: {
+  agents: DashboardData["agents"];
+  environments: DashboardData["environments"];
+}) {
   return (
     <section className="panel agent-dock" aria-labelledby="agents-title">
       <SectionHeader eyebrow="Equipe" title="Agentes conectados" />
@@ -670,6 +676,18 @@ function AgentDock({ agents }: { agents: DashboardData["agents"] }) {
             <div className="agent-avatar">{agent.id === "telegram" ? <Icon name="send" /> : agent.label.slice(0, 1)}</div>
             <div><strong>{agent.label}</strong><small>{agent.detail}</small></div>
             <span className={`agent-state state-${agent.state}`}>{agent.state === "working" ? "trabalhando" : agent.state === "ready" ? "pronto" : agent.state === "attention" ? "atenção" : "offline"}</span>
+          </article>
+        ))}
+        {environments.map((environment) => (
+          <article className="agent-card agent-environment" key={`environment-${environment.projectKey}`}>
+            <div className="agent-avatar"><Icon name="pulse" /></div>
+            <div>
+              <strong>Ambiente @{environment.projectKey}</strong>
+              <small>{environment.status === "ready" ? environment.summary : environment.recommendedAction}</small>
+            </div>
+            <span className={`agent-state state-${environment.status === "ready" ? "ready" : "attention"}`}>
+              {environment.status === "ready" ? "pronto" : "atencao"}
+            </span>
           </article>
         ))}
       </div>

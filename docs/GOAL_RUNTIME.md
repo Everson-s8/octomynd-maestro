@@ -28,6 +28,8 @@ provider output in SQLite, writes a sanitized raw output artifact under `.maestr
 only a compact structured handoff to the next worker. The compact handoff preserves concrete errors,
 review decisions, changed-file evidence, search hits, Git evidence and test failures while omitting
 bulk diff/log/test noise. Raw artifacts can be recovered on demand from the step artifact key.
+Equivalent handoffs are deduplicated before the next provider call, keeping the newest evidence and
+recording `goal.handoff_deduplicated` without deleting the original steps or artifacts.
 
 The runtime records paired A/B telemetry for every step: the legacy 2,000-character slice as control
 and the compact handoff as treatment. Telemetry includes estimated bytes and tokens by provider,
@@ -38,6 +40,19 @@ If a local `rtk` executable or npm-global RTK package is already present, the ru
 fact. It never installs, downloads or updates RTK. When RTK is absent, the internal compressor is used
 transparently. The adapter can be disabled with `MAESTRO_TOKEN_RUNTIME_ENABLED=false`, without
 changing delivery gates, review gates or final Feature PR completion rules.
+
+## Deterministic validation
+
+The testing phase first calls one deep Maestro module with an allowlisted command
+catalog: `git diff --check`, changed-file secret scan, backend/UI typecheck, Vitest
+and the UI build. Commands run without a shell and cannot be supplied by a model.
+Raw sanitized output is retained as an artifact while only a compact actionable
+failure is handed to a provider.
+
+Diff and secret checks are cheap fail-closed gates. When either fails, expensive
+typecheck, test and build commands do not run. A clean validation advances directly
+to review without spending a testing-provider call. A failed validation permits one
+testing provider to repair the worktree, then the deterministic checks run again.
 
 ## Routing
 
@@ -77,6 +92,24 @@ and Windows-hidden subprocess execution. Provider adapters only define CLI argum
 prompting, and result classification. Credential-shaped environment variables are removed before
 either worker process starts; subscription authentication continues through the installed CLIs.
 
+## Circuit breakers and bounded execution
+
+Provider execution has independent limits instead of one large timeout:
+
+- inactivity stops a silent provider after two minutes by default;
+- a provider phase is bounded to six minutes by default;
+- each active goal execution attempt has a thirty-minute absolute deadline by default; a persisted
+  `waiting_provider` run receives a new bounded window when resumed;
+- repeated identical output and excessive received output stop the process early;
+- the same normalized provider failure stops after two occurrences;
+- implementation or testing that completes twice without worktree progress blocks the goal.
+
+All stops preserve the isolated worktree. The runner does not reset, clean, or discard partial work.
+Every step records bounded process output statistics and whether a worktree change was observed.
+Fallbacks emit `goal.provider_fallback`; circuit breakers emit `goal.circuit_breaker` with the reason
+and `worktreePreserved=true`. This makes quota, timeout, output flood, repeated failure, and no-progress
+conditions distinguishable without another LLM call.
+
 The Maestro does not use the OpenAI API and does not require `OPENAI_API_KEY`. Codex uses the user's
 existing Codex/ChatGPT authentication, while Claude uses its own installed CLI authentication. Each
 service can still enforce the limits of the user's plan.
@@ -84,8 +117,31 @@ service can still enforce the limits of the user's plan.
 ## Safety boundaries
 
 - A task must have a prepared isolated worktree.
+- New Windows worktrees default to
+  `C:\MaestroRuntime\<project>\worktrees`, outside the user profile and
+  cloud-synced folders. Existing Tasks keep their persisted worktree path;
+  Maestro never moves an active worktree implicitly.
+- `.maestro-execution.json` records the versioned execution contract without
+  storing private host paths. Startup emits a sanitized environment fingerprint
+  containing only versions, availability flags and path hashes.
+- Node `20.17.x` is the pinned runtime line for local execution and CI. A
+  divergent major/minor blocks startup before a long Goal can begin.
+- `EnvironmentDoctor` is the single readiness seam used by Goal preflight,
+  Dashboard and Telegram. It verifies execution/worktree writes, Git, Node,
+  npm, dependency preparation, native runtime bindings, TypeScript, Vitest and
+  provider readiness. Deterministic `npm ci` keeps lifecycle scripts from the
+  trusted lockfile enabled because native modules such as `better-sqlite3`
+  otherwise install without a usable binding.
+- Goal preflight runs before `goal_runs` is created. Unsafe legacy worktrees,
+  missing toolchains or dependency failures become `environment_blocked`
+  evidence instead of consuming provider time.
+- `/doctor [@project]` reports `ready`, `environment_blocked`,
+  `auth_required`, `quota` or `offline` with a short recommended action. The
+  Dashboard shows the latest persisted report by project.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
+- Every goal and provider phase has a bounded deadline, inactivity limit, and output budget.
+- Repeated failures and repeated no-progress phases stop before another provider cycle is spent.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
 - Goal artifacts, database, logs, environment files, and credentials remain ignored by Git.
 - Completion means all phases succeeded; a planning or implementation response alone cannot finish a goal.

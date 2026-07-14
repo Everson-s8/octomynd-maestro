@@ -3,6 +3,7 @@ import { MaestroDatabase, TaskRecord } from "../db.js";
 import { listReviewQueue } from "../reviews/evidence.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
+import type { EnvironmentDoctorReport } from "../environment/types.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -24,7 +25,8 @@ export function buildDashboardSnapshot(
 ) {
   const projects = database.listProjects();
   const tasks = database.listTasks(80);
-  const events = database.listEvents(40);
+  const allEvents = database.listEvents(200);
+  const events = allEvents.slice(0, 40);
   const improvements = database.listImprovementProposals(40);
   const goals = database.listGoalRuns(30);
   const counts = database.countTasksByStatus();
@@ -192,9 +194,30 @@ export function buildDashboardSnapshot(
         updatedAt: plan.updatedAt
       };
     }),
+    environments: latestEnvironmentReports(allEvents),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)
   };
+}
+
+function latestEnvironmentReports(events: ReturnType<MaestroDatabase["listEvents"]>): EnvironmentDoctorReport[] {
+  const reports = new Map<string, EnvironmentDoctorReport>();
+  for (const event of events) {
+    if (event.type !== "environment.doctor") continue;
+    const report = event.metadata.report as EnvironmentDoctorReport | undefined;
+    if (!report?.projectKey || reports.has(report.projectKey)) continue;
+    reports.set(report.projectKey, report);
+  }
+  return [...reports.values()].map((report) => ({
+    ...report,
+    summary: truncateForDisplay(redactSensitiveText(report.summary), EVENT_TEXT_MAX_LENGTH),
+    recommendedAction: truncateForDisplay(redactSensitiveText(report.recommendedAction), EVENT_TEXT_MAX_LENGTH),
+    checks: report.checks.map((item) => ({
+      ...item,
+      summary: truncateForDisplay(redactSensitiveText(item.summary), EVENT_TEXT_MAX_LENGTH),
+      evidence: []
+    }))
+  }));
 }
 
 function defaultAgentPresence(

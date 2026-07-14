@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,6 +16,7 @@ import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { runTaskGoal } from "../src/goals/runner.js";
 import { ManualScheduler } from "../src/goals/scheduler.js";
 import { recoverGoalStepRawOutput } from "../src/runtime/artifacts.js";
+import type { ValidationReport } from "../src/validation/runner.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -30,6 +32,88 @@ afterEach(() => {
 });
 
 describe("goal runner", () => {
+  it("blocks before provider execution when the absolute goal deadline is exhausted", async () => {
+    const projectDir = path.join(tempDir, "deadline-project");
+    const worktreeDir = path.join(tempDir, "deadline-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "deadline", path: projectDir });
+    const task = database.createTask("bounded task", "dashboard", "deadline");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let calls = 0;
+    const provider = new FakeProvider("codex", ["planning"], () => {
+      calls += 1;
+      return completed("unexpected");
+    });
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      deadlineMs: -1
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(calls).toBe(0);
+    expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata.reason)
+      .toBe("deadline");
+  });
+
+  it("stops repeated provider failures instead of spending another fallback cycle", async () => {
+    const projectDir = path.join(tempDir, "failure-project");
+    const worktreeDir = path.join(tempDir, "failure-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "failure", path: projectDir });
+    const task = database.createTask("failing task", "dashboard", "failure");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const failure = () => ({
+      outcome: "failed" as const,
+      summary: "same provider timeout 123",
+      output: "",
+      error: "same provider timeout 456",
+      durationMs: 1,
+      retryable: true
+    });
+    const codex = new FakeProvider("codex", ["planning"], failure);
+    const claude = new FakeProvider("claude", ["planning"], failure);
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts")
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(database.listGoalSteps(run.id)).toHaveLength(2);
+    expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata.reason)
+      .toBe("repeated_failure");
+  });
+
+  it("blocks repeated no-progress implementation while preserving the worktree", async () => {
+    const projectDir = path.join(tempDir, "progress-project");
+    const worktreeDir = path.join(tempDir, "progress-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "progress", path: projectDir });
+    const task = database.createTask("task without progress", "dashboard", "progress");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => request.phase === "reviewing"
+        ? { ...completed("review requests retry"), outcome: "changes_requested" }
+        : completed("claimed completion without edits")
+    );
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 10
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(fs.existsSync(path.join(worktreeDir, "README.md"))).toBe(true);
+    expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata)
+      .toMatchObject({ reason: "no_progress", worktreePreserved: true });
+  }, 15_000);
+
   it("routes phases and completes a review-adjustment loop without manual status updates", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");
@@ -75,6 +159,60 @@ describe("goal runner", () => {
     expect(database.listEvents().some((event) => event.type === "goal.completed")).toBe(true);
   });
 
+  it("uses deterministic validation before spending a testing provider call", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "validated", path: projectDir, defaultBranch: "main" });
+    const task = database.createTask("validate centrally", "dashboard", "validated");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-validated",
+      worktreePath: worktreeDir
+    });
+    let testingProviderCalls = 0;
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "testing") testingProviderCalls += 1;
+        return completed("provider completed");
+      }
+    );
+    let validationCalls = 0;
+    const validationRunner = {
+      run: async (): Promise<ValidationReport> => {
+        validationCalls += 1;
+        return validationReport(validationCalls === 1 ? "failed" : "passed");
+      }
+    };
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8,
+      validationRunner
+    });
+
+    expect(run.status).toBe("completed");
+    expect(validationCalls).toBe(2);
+    expect(testingProviderCalls).toBe(1);
+    expect(database.listGoalSteps(run.id).map((step) => `${step.phase}/${step.provider}/${step.status}`)).toEqual([
+      "planning/codex/completed",
+      "implementing/codex/completed",
+      "testing/maestro-validation/failed",
+      "testing/codex/completed",
+      "testing/maestro-validation/completed",
+      "reviewing/codex/completed"
+    ]);
+    expect(database.listEvents().some((event) => event.type === "goal.validation_failed")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.validation_passed")).toBe(true);
+    const validationStep = database.listGoalSteps(run.id).find((step) => step.provider === "maestro-validation");
+    expect(recoverGoalStepRawOutput(path.join(tempDir, "artifacts"), validationStep!))
+      .toContain("validation-report: artifact:validation/test/report.json");
+  });
+
   it("falls back to another provider when the preferred provider fails", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");
@@ -88,7 +226,18 @@ describe("goal runner", () => {
       "codex",
       ["planning", "coding", "testing", "reviewing"],
       (request) => request.phase === "implementing"
-        ? { outcome: "failed", summary: "quota", output: "", error: "quota", durationMs: 1, retryable: true }
+        ? {
+          outcome: "failed",
+          summary: "quota",
+          output: "",
+          error: "quota",
+          durationMs: 1,
+          retryable: true,
+          processRuntime: {
+            breakerReason: null,
+            outputStats: { receivedChars: 5, retainedChars: 5, duplicateChunks: 0, truncatedChars: 0 }
+          }
+        }
         : completed("Codex step")
     );
     const claude = new FakeProvider("claude", ["coding"], () => completed("Claude fallback"));
@@ -106,6 +255,21 @@ describe("goal runner", () => {
       .filter((step) => step.phase === "implementing")
       .map((step) => step.provider);
     expect(implementationProviders).toEqual(["codex", "claude"]);
+    const fallbackEvent = database.listEvents().find((event) => event.type === "goal.provider_fallback");
+    expect(fallbackEvent?.metadata).toMatchObject({
+      fromProvider: "codex",
+      toProvider: "claude",
+      retryable: true
+    });
+    const failedStep = database.listGoalSteps(run.id).find((step) => (
+      step.phase === "implementing" && step.provider === "codex"
+    ));
+    const failedStepEvent = database.listEvents().find((event) => (
+      event.type === "goal.step_failed" && event.metadata.stepId === failedStep?.id
+    ));
+    expect(failedStepEvent?.metadata.processRuntime).toMatchObject({
+      outputStats: { receivedChars: 5, retainedChars: 5 }
+    });
   });
 
   it("delivers an approved goal to a draft pull request and leaves merge as the human gate", async () => {
@@ -546,6 +710,33 @@ function completed(summary: string): AgentExecutionResult {
     durationMs: 1,
     retryable: false
   };
+}
+
+function validationReport(status: "passed" | "failed"): ValidationReport {
+  const failed = status === "failed";
+  return {
+    status,
+    summary: failed ? "1/1 deterministic checks failed: typecheck_backend." : "1/1 deterministic checks passed.",
+    compactFailure: failed ? "typecheck_backend: expected string" : null,
+    durationMs: 1,
+    checks: [{
+      id: "typecheck_backend",
+      status,
+      durationMs: 1,
+      summary: failed ? "expected string" : "passed",
+      artifactKey: `validation/test/typecheck_backend.raw.txt`
+    }],
+    reportArtifactKey: "validation/test/report.json"
+  };
+}
+
+function initializeRepository(directory: string): void {
+  execFileSync("git", ["init"], { cwd: directory, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "maestro@example.test"], { cwd: directory });
+  execFileSync("git", ["config", "user.name", "Maestro Test"], { cwd: directory });
+  fs.writeFileSync(path.join(directory, "README.md"), "fixture", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: directory });
+  execFileSync("git", ["commit", "-m", "fixture"], { cwd: directory, stdio: "ignore" });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {

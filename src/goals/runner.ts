@@ -10,11 +10,14 @@ import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
-import { compressStepOutput } from "../runtime/compression.js";
+import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../runtime/compression.js";
 import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
+import type { DeterministicValidationRunner } from "../validation/runner.js";
+import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
+const DEFAULT_GOAL_DEADLINE_MS = 30 * 60_000;
 
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
 const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
@@ -27,9 +30,11 @@ const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
 export type GoalRunnerOptions = {
   artifactsRoot: string;
   maxSteps?: number;
+  deadlineMs?: number;
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
   tokenRuntime?: { enabled?: boolean } | false;
+  validationRunner?: Pick<DeterministicValidationRunner, "run">;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -52,6 +57,8 @@ export async function runTaskGoal(
   let excluded = initialExcludedProviders(database, run, phase);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
+  const goalDeadlineAt = Date.now() + (options.deadlineMs ?? DEFAULT_GOAL_DEADLINE_MS);
+  const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id));
 
   database.addEvent({
     source: "maestro",
@@ -66,6 +73,17 @@ export async function runTaskGoal(
       if (options.signal?.aborted) {
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
+      if (Date.now() >= goalDeadlineAt) {
+        return finishCircuitBreak(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          task.id,
+          "deadline",
+          "Goal deadline reached before starting another provider step."
+        );
+      }
       currentRun = database.withTransaction(() => {
         database.updateTaskStatus(task.id, taskStatusForPhase(phase));
         return database.updateGoalRun({
@@ -75,6 +93,95 @@ export async function runTaskGoal(
           stepCount
         });
       });
+      if (phase === "testing" && options.validationRunner) {
+        const validationStep = database.createGoalStep(run.id, phase, "maestro-validation");
+        let validation;
+        try {
+          validation = await options.validationRunner.run({
+            workspacePath: task.worktreePath,
+            artifactsRoot: path.resolve(options.artifactsRoot),
+            signal: options.signal
+          });
+        } catch (error) {
+          const message = sanitizeForRunSummary(
+            error instanceof Error ? error.message : "Deterministic validation failed unexpectedly."
+          );
+          database.finishGoalStep({
+            id: validationStep.id,
+            status: "failed",
+            summary: "Deterministic validation runner failed closed.",
+            output: "",
+            error: message,
+            durationMs: 0
+          });
+          return finishRun(database, currentRun, "blocked", phase, stepCount, message, task.id);
+        }
+        stepCount += 1;
+        const validationStatus: Exclude<GoalStepStatus, "running"> = validation.status === "passed"
+          ? "completed"
+          : "failed";
+        const validationOutput = validation.compactFailure ?? validation.summary;
+        const completedValidationStep = {
+          ...validationStep,
+          status: validationStatus,
+          summary: validation.summary,
+          output: validationOutput,
+          error: null
+        };
+        const compressedValidation = compressStepOutput({
+          step: completedValidationStep,
+          rtk,
+          rawOutputArtifact: rawOutputArtifactKey(completedValidationStep),
+          enabled: tokenRuntimeEnabled
+        });
+        const validationArtifactKeys = writeGoalStepRuntimeArtifacts({
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          step: completedValidationStep,
+          rawOutput: [
+            `summary: ${validation.summary}`,
+            validationOutput,
+            `validation-report: artifact:${validation.reportArtifactKey}`
+          ].join("\n\n"),
+          compactHandoff: compressedValidation.compactOutput,
+          telemetry: compressedValidation.telemetry
+        });
+        database.withTransaction(() => {
+          database.finishGoalStep({
+            id: validationStep.id,
+            status: validationStatus,
+            summary: validation.summary,
+            output: validationOutput,
+            durationMs: validation.durationMs
+          });
+          database.addEvent({
+            source: "maestro",
+            type: `goal.validation_${validation.status}`,
+            text: validation.summary,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: validationStep.id,
+              durationMs: validation.durationMs,
+              checks: validation.checks.map((check) => ({
+                id: check.id,
+                status: check.status,
+                durationMs: check.durationMs,
+                artifactKey: check.artifactKey
+              })),
+              reportArtifactKey: validation.reportArtifactKey,
+              tokenRuntime: {
+                ...compressedValidation.telemetry,
+                artifacts: validationArtifactKeys
+              }
+            }
+          });
+        });
+        if (validation.status === "passed") {
+          phase = "reviewing";
+          excluded = new Set();
+          continue;
+        }
+      }
       let routed = await registry.acquire(CAPABILITIES[phase], excluded);
       if (!routed && excluded.size > 0) {
         excluded = new Set();
@@ -99,17 +206,37 @@ export async function runTaskGoal(
       options.onProgress?.(currentRun, routed.provider.id);
 
       const startedAt = Date.now();
+      const tracksWorkspaceProgress = phase === "implementing" || phase === "testing";
+      const workspaceBefore = tracksWorkspaceProgress
+        ? captureWorkspaceProgress(task.worktreePath)
+        : null;
       let result: AgentExecutionResult;
       try {
         const previousSteps = database.listGoalSteps(run.id).filter((step) => step.id !== goalStep.id);
-        const previousStepHandoff = tokenRuntimeEnabled
-          ? previousSteps.map((step) => compressStepOutput({
+        const compressedHandoffs = tokenRuntimeEnabled
+          ? dedupeTokenEfficientHandoffs(previousSteps.map((step) => compressStepOutput({
             step,
             rtk,
             rawOutputArtifact: rawOutputArtifactKey(step),
             enabled: true
-          }).handoff)
-          : undefined;
+          }).handoff))
+          : null;
+        const previousStepHandoff = compressedHandoffs?.steps;
+        if (compressedHandoffs && compressedHandoffs.removed > 0) {
+          database.addEvent({
+            source: "maestro",
+            type: "goal.handoff_deduplicated",
+            text: `Removed ${compressedHandoffs.removed} duplicate handoff(s) before ${phase}.`,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              before: previousSteps.length,
+              after: compressedHandoffs.steps.length
+            }
+          });
+        }
         result = await routed.provider.execute({
           runId: run.id,
           stepNumber: stepCount + 1,
@@ -125,6 +252,7 @@ export async function runTaskGoal(
           },
           humanFeedback: latestChangeRequest(database, run.id),
           artifactsRoot: path.resolve(options.artifactsRoot),
+          deadlineAt: goalDeadlineAt,
           signal: options.signal
         });
       } catch (error) {
@@ -139,6 +267,9 @@ export async function runTaskGoal(
       } finally {
         routed.release();
       }
+      const workspaceAfter = tracksWorkspaceProgress
+        ? captureWorkspaceProgress(task.worktreePath)
+        : null;
       const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
       const safeSummary = redactSensitiveText(result.summary);
@@ -188,6 +319,13 @@ export async function runTaskGoal(
             stepId: goalStep.id,
             phase,
             durationMs: result.durationMs,
+            processRuntime: result.processRuntime ?? null,
+            workspaceProgress: {
+              known: workspaceBefore !== null && workspaceAfter !== null,
+              changed: workspaceBefore !== null
+                && workspaceAfter !== null
+                && workspaceBefore !== workspaceAfter
+            },
             tokenRuntime: {
               ...compressed.telemetry,
               artifacts: artifactKeys
@@ -200,13 +338,48 @@ export async function runTaskGoal(
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
 
+      const circuitDecision = circuitBreaker.observe({
+        phase,
+        result,
+        workspaceBefore,
+        workspaceAfter
+      });
+      if (circuitDecision) {
+        return finishCircuitBreak(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          task.id,
+          circuitDecision.reason,
+          circuitDecision.summary
+        );
+      }
+
       if (result.outcome === "blocked") {
         return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
       }
       if (result.outcome === "failed") {
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
-        if (fallback) continue;
+        if (fallback) {
+          database.addEvent({
+            source: "maestro",
+            type: "goal.provider_fallback",
+            text: `${routed.provider.label} failed during ${phase}; routing to ${fallback.provider.label}.`,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              fromProvider: routed.provider.id,
+              toProvider: fallback.provider.id,
+              retryable: result.retryable,
+              breakerReason: result.processRuntime?.breakerReason ?? null
+            }
+          });
+          continue;
+        }
         if (result.retryable) {
           return pauseRun(
             database,
@@ -232,6 +405,11 @@ export async function runTaskGoal(
           );
         }
         phase = "implementing";
+        excluded = new Set();
+        continue;
+      }
+
+      if (phase === "testing" && options.validationRunner) {
         excluded = new Set();
         continue;
       }
@@ -323,6 +501,26 @@ export async function runTaskGoal(
       task.id
     );
   }
+}
+
+function finishCircuitBreak(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase,
+  stepCount: number,
+  taskId: number,
+  reason: string,
+  summary: string
+): GoalRunRecord {
+  const safeSummary = sanitizeForRunSummary(summary);
+  database.addEvent({
+    source: "maestro",
+    type: "goal.circuit_breaker",
+    text: safeSummary,
+    taskId,
+    metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
+  });
+  return finishRun(database, run, "blocked", phase, stepCount, safeSummary, taskId);
 }
 
 function latestChangeRequest(database: MaestroDatabase, runId: number): string | null {

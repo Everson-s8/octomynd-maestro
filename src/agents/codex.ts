@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
+import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
@@ -36,7 +36,7 @@ export class CodexProvider implements AgentProvider {
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
-  constructor(private readonly executionTimeoutMs = 20 * 60_000) {}
+  constructor(private readonly executionTimeoutMs = 6 * 60_000) {}
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -95,6 +95,7 @@ export class CodexProvider implements AgentProvider {
       cwd,
       stdin: buildPrompt(request),
       timeoutMs: this.executionTimeoutMs,
+      deadlineAt: request.deadlineAt,
       signal: request.signal,
       env: buildRestrictedAgentEnvironment()
     });
@@ -105,10 +106,15 @@ export class CodexProvider implements AgentProvider {
         output: "",
         error: null,
         durationMs: Date.now() - startedAt,
-        retryable: false
+        retryable: false,
+        processRuntime: processRuntime(processResult)
       };
     }
-    const combined = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
+    const combined = [
+      processResult.stderr,
+      processResult.stdout,
+      processResult.breakerReason ? `process breaker: ${processResult.breakerReason}` : ""
+    ].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
       const category = classifyFailure(combined, processResult.timedOut);
       const retryable = isRetryableFailureCategory(category);
@@ -121,7 +127,8 @@ export class CodexProvider implements AgentProvider {
         output: combined,
         error: combined || summary,
         durationMs: processResult.durationMs,
-        retryable
+        retryable,
+        processRuntime: processRuntime(processResult)
       };
     }
 
@@ -138,7 +145,8 @@ export class CodexProvider implements AgentProvider {
         output: parsed.details.trim(),
         error: parsed.outcome === "failed" ? parsed.details.trim() : null,
         durationMs: Date.now() - startedAt,
-        retryable: false
+        retryable: false,
+        processRuntime: processRuntime(processResult)
       };
     } catch (error) {
       const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
@@ -147,7 +155,8 @@ export class CodexProvider implements AgentProvider {
         startedAt,
         false,
         combined || detail,
-        detail
+        detail,
+        processRuntime(processResult)
       );
     }
   }
@@ -156,6 +165,10 @@ export class CodexProvider implements AgentProvider {
     this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
     this.healthExpiresAt = Date.now() + ttlMs;
   }
+}
+
+function processRuntime(result: AgentProcessResult): NonNullable<AgentExecutionResult["processRuntime"]> {
+  return { breakerReason: result.breakerReason, outputStats: result.outputStats };
 }
 
 export function buildCodexGoalPrompt(request: AgentExecutionRequest): string {
@@ -221,7 +234,8 @@ function failure(
   startedAt: number,
   retryable: boolean,
   output = "",
-  error = summary
+  error = summary,
+  runtime?: NonNullable<AgentExecutionResult["processRuntime"]>
 ): AgentExecutionResult {
   return {
     outcome: "failed",
@@ -229,6 +243,7 @@ function failure(
     output,
     error,
     durationMs: Date.now() - startedAt,
-    retryable
+    retryable,
+    processRuntime: runtime
   };
 }

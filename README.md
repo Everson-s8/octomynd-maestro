@@ -14,7 +14,8 @@ request, the Maestro sends the restricted Telegram user a review notification wi
 
 ## Requirements
 
-- Node.js 20.17+ for local development. Node 24 is the target for future CI.
+- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`
+  and GitHub Actions share the same runtime contract.
 - A Telegram bot token from BotFather.
 
 ## Setup
@@ -54,6 +55,20 @@ npm run dev:platform
 - API local: `http://127.0.0.1:4787`
 - Build: `npm run build:ui`
 - Typecheck: `npm run typecheck:ui`
+
+Para executar o runtime completo no Windows com PID, logs e health check:
+
+```powershell
+.\scripts\maestro-runtime.ps1 start
+.\scripts\maestro-runtime.ps1 status
+.\scripts\maestro-runtime.ps1 restart
+.\scripts\maestro-runtime.ps1 stop
+```
+
+O controlador considera o startup concluido somente quando
+`http://127.0.0.1:4787/api/dashboard` responde. Logs e PID ficam sob
+`.maestro/runtime/`, fora do Git. Manutencoes devem terminar com `status` verde;
+parar o processo tambem interrompe Dashboard, Telegram e coordenadores.
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
@@ -115,6 +130,7 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/queue` lists recent tasks.
 - `/queue @<key>` lists recent tasks for a project.
 - `/cancel <id>` cancels an active, waiting, or queued task without deleting its history.
+- `/doctor [@<key>]` verifies deterministic execution and provider readiness.
 
 The governed backlog autopilot is enabled by default. It starts at most one running goal at a time,
 keeps `waiting_provider` goals from consuming that global slot, and never starts a second task for a
@@ -164,6 +180,10 @@ Required checks (all must pass):
    `src/security/redaction.ts` (API keys, bot tokens, private key headers) and fails the
    run if any match. Only filenames are reported; matched secret values are never
    printed to logs.
+
+The Goal runtime applies the same validation policy before review. Passing checks
+skip a separate LLM testing pass; failures are stored as sanitized artifacts and
+summarized into a compact correction handoff.
 
 The workflow uses `permissions: contents: read` (no write access), a `concurrency`
 group keyed on workflow and ref to cancel superseded runs, and `actions/setup-node`

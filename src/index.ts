@@ -1,4 +1,5 @@
 import path from "node:path";
+import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
 import { ClaudeProvider } from "./agents/claude.js";
 import { CodexProvider } from "./agents/codex.js";
 import { AgentRegistry } from "./agents/registry.js";
@@ -20,6 +21,8 @@ import {
   createTelegramFeatureBlockedNotifier,
   createTelegramFeatureNotifier
 } from "./telegram/notifications.js";
+import { EnvironmentDoctor } from "./environment/doctor.js";
+import { DeterministicValidationRunner } from "./validation/runner.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -31,13 +34,24 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+ensureExecutionContract(config.execution);
 const database = createDatabase(config.databasePath);
+const environmentFingerprint = captureEnvironmentFingerprint(config.execution);
+database.addEvent({
+  source: "maestro",
+  type: "environment.fingerprint",
+  text: environmentFingerprint.id,
+  metadata: { fingerprint: environmentFingerprint }
+});
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
+const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
+const validationRunner = new DeterministicValidationRunner();
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),
-  autopilotStatus: () => backlogAutopilot?.snapshot() ?? null
+  autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
+  environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey)
 });
 const goalNotifier = createTelegramGoalNotifier(
   config,
@@ -58,7 +72,9 @@ goalCoordinator = new GoalCoordinator(
   goalNotifier,
   goalProgressNotifier,
   undefined,
-  { enabled: config.runtime.tokenEfficient }
+  { enabled: config.runtime.tokenEfficient },
+  (taskId) => environmentDoctor.preflightTask(taskId),
+  validationRunner
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,
@@ -122,10 +138,18 @@ const dashboardServer = config.dashboard.enabled
     goalCoordinator,
     reviewCoordinator,
     featureCoordinator,
-    backlogAutopilot
+    backlogAutopilot,
+    environmentDoctor
   })
   : null;
 backlogAutopilot.start();
+void environmentDoctor.inspectAll().catch((error) => {
+  database.addEvent({
+    source: "maestro",
+    type: "environment.doctor_failed",
+    text: error instanceof Error ? error.message : "Environment Doctor failed."
+  });
+});
 
 bot.catch((error) => {
   console.error("Telegram bot error:", error.error instanceof Error ? error.error.message : "unknown error");
@@ -145,6 +169,7 @@ if (recoveredGoals > 0) {
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
 console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
+console.log(`Execution environment: ${environmentFingerprint.id}.`);
 
 void bot.start({
   onStart: (botInfo) => {

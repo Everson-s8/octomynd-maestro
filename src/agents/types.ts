@@ -1,6 +1,7 @@
 import type { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db.js";
 import type { TokenEfficientHandoffStep } from "../runtime/compression.js";
 import type { RtkDetection } from "../runtime/rtk.js";
+import type { AgentProcessBreakerReason, AgentProcessResult } from "./process.js";
 
 export type AgentProviderId = "codex" | "claude";
 export type AgentCapability = "planning" | "coding" | "testing" | "reviewing" | "research" | "conversation";
@@ -28,6 +29,7 @@ export type AgentExecutionRequest = {
   };
   humanFeedback?: string | null;
   artifactsRoot: string;
+  deadlineAt?: number;
   signal?: AbortSignal;
 };
 
@@ -38,6 +40,10 @@ export type AgentExecutionResult = {
   error: string | null;
   durationMs: number;
   retryable: boolean;
+  processRuntime?: {
+    breakerReason: AgentProcessBreakerReason | null;
+    outputStats: AgentProcessResult["outputStats"];
+  };
 };
 
 export interface AgentProvider {

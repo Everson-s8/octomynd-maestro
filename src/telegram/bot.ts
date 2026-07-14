@@ -7,11 +7,13 @@ import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import { FeatureGitHubGateway } from "../features/github.js";
+import type { EnvironmentDoctorReport } from "../environment/types.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
   autopilotStatus?: () => BacklogAutopilotSnapshot | null;
   featureGithub?: FeatureGitHubGateway;
+  environmentDoctor?: (projectKey: string) => Promise<EnvironmentDoctorReport>;
 };
 
 export function createTelegramBot(
@@ -89,6 +91,21 @@ export function createTelegramBot(
     });
 
     await ctx.reply(formatProjects(database.listProjects()));
+  });
+
+  bot.command("doctor", async (ctx) => {
+    if (!options.environmentDoctor) {
+      await ctx.reply("Environment Doctor indisponivel.");
+      return;
+    }
+    const requestedKey = parseDoctorProjectKey(ctx.message?.text ?? "");
+    const project = requestedKey ? database.findProjectByKey(requestedKey) : database.getDefaultProject();
+    if (!project) {
+      await ctx.reply(requestedKey ? `Projeto @${requestedKey} nao encontrado.` : "Nenhum projeto cadastrado.");
+      return;
+    }
+    const report = await options.environmentDoctor(project.key);
+    await ctx.reply(formatEnvironmentReport(report));
   });
 
   bot.command("project_add", async (ctx) => {
@@ -331,6 +348,13 @@ export function parseFeaturesProjectKey(messageText: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
+export function parseDoctorProjectKey(messageText: string): string | null {
+  const text = messageText.replace(/^\/doctor(?:@\w+)?\s*/i, "").trim();
+  if (!text) return null;
+  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 export function parseFeatureCancelText(
   messageText: string
 ): { featureId: number; reason: string | null } | null {
@@ -439,7 +463,19 @@ function formatHelp(): string {
     "/queue @projeto - listar tasks do projeto",
     "/features - listar Feature Plans e Feature PRs",
     "/features @projeto - listar Feature Plans e Feature PRs do projeto",
+    "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
     "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria"
+  ].join("\n");
+}
+
+export function formatEnvironmentReport(report: EnvironmentDoctorReport): string {
+  const failed = report.checks.filter((item) => item.status === "failed");
+  return [
+    `Environment Doctor @${report.projectKey}: ${report.status}`,
+    report.summary,
+    `Fingerprint: ${report.fingerprintId}`,
+    `Acao: ${report.recommendedAction}`,
+    ...(failed.length > 0 ? ["", "Falhas:", ...failed.map((item) => `- ${item.name}: ${item.summary}`)] : [])
   ].join("\n");
 }
 
