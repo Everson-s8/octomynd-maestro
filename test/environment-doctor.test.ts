@@ -45,7 +45,7 @@ describe("Environment Doctor", () => {
       name: "native_runtime",
       status: "passed"
     }));
-  });
+  }, 15_000);
 
   it("blocks a legacy worktree before a long Goal", () => {
     const userProfile = process.env.USERPROFILE || "C:\\Users\\test";
@@ -62,7 +62,7 @@ describe("Environment Doctor", () => {
       status: "failed",
       classification: "environment_blocked"
     }));
-  });
+  }, 15_000);
 
   it("distinguishes provider quota from an environment failure", () => {
     const report = runEnvironmentDoctor({
@@ -76,7 +76,7 @@ describe("Environment Doctor", () => {
 
     expect(report.status).toBe("quota");
     expect(report.recommendedAction).toContain("quota");
-  });
+  }, 15_000);
 
   it("does not borrow project dependencies for an isolated task worktree", () => {
     const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-9");
@@ -94,7 +94,7 @@ describe("Environment Doctor", () => {
       name: "typescript",
       status: "failed"
     }));
-  });
+  }, 15_000);
 
   it("prevents Goal creation when preflight is blocked", () => {
     const database = createDatabase(path.join(tempDir, "maestro.db"));

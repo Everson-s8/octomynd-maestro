@@ -96,6 +96,33 @@ describe("DeterministicValidationRunner", () => {
     expect(report.compactFailure).not.toContain("sk-proj-");
     expect(processCalls).toBe(1);
   });
+
+  it("scans committed Feature changes relative to a validated base ref", async () => {
+    git(["branch", "validation-base"]);
+    fs.writeFileSync(path.join(workspacePath, "committed.txt"), "feature content\n", "utf8");
+    git(["add", "committed.txt"]);
+    git(["commit", "-m", "feature change"]);
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("--name-only")) return completedProcess("committed.txt\n");
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, baseRef: "validation-base" });
+
+    expect(report.status).toBe("passed");
+    expect(report.checks.find((check) => check.id === "secret_scan")?.summary)
+      .toBe("passed (1 changed files)");
+  });
+
+  it("rejects an unsafe Feature base ref before running commands", async () => {
+    const runner = new DeterministicValidationRunner(async () => completedProcess("ok"));
+
+    await expect(runner.run({
+      workspacePath,
+      artifactsRoot,
+      baseRef: "--output=/tmp/escape"
+    })).rejects.toThrow("safe Git reference");
+  });
 });
 
 function git(args: string[]): void {

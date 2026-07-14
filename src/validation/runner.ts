@@ -40,6 +40,7 @@ export type ValidationRequest = {
   artifactsRoot: string;
   mode?: "focused" | "full";
   focusedTests?: string[];
+  baseRef?: string;
   signal?: AbortSignal;
 };
 
@@ -53,6 +54,7 @@ type CommandSpec = {
 const RAW_OUTPUT_MAX_CHARS = 400_000;
 const COMPACT_FAILURE_MAX_CHARS = 2_400;
 const ALLOWED_FOCUSED_TEST = /^test\/[a-z0-9][a-z0-9._/-]*\.test\.ts$/i;
+const ALLOWED_GIT_REF = /^[a-z0-9][a-z0-9._/-]*$/i;
 
 export class DeterministicValidationRunner {
   constructor(private readonly executeProcess = runAgentProcess) {}
@@ -74,7 +76,7 @@ export class DeterministicValidationRunner {
       invocationKey,
       request.signal
     ));
-    checks.push(runSecretScan(workspacePath, invocationRoot, invocationKey));
+    checks.push(runSecretScan(workspacePath, invocationRoot, invocationKey, request.baseRef));
     if (checks.every((check) => check.status === "passed")) {
       for (const spec of specs.slice(1)) {
         checks.push(await runCommandCheck(
@@ -116,11 +118,12 @@ function commandSpecs(workspacePath: string, request: ValidationRequest): Comman
     ? validatedFocusedTests(request.focusedTests)
     : [];
   const testId: "tests_focused" | "tests_full" = tests.length > 0 ? "tests_focused" : "tests_full";
+  const diffTarget = validatedBaseRef(request.baseRef);
   return [
     {
       id: "diff_check",
       command: "git",
-      args: ["-C", workspacePath, "diff", "--check"],
+      args: ["-C", workspacePath, "diff", "--check", ...(diffTarget ? [diffTarget] : [])],
       timeoutMs: 30_000
     },
     {
@@ -158,6 +161,14 @@ function validatedFocusedTests(values: string[] | undefined): string[] {
   return tests;
 }
 
+function validatedBaseRef(baseRef: string | undefined): string | null {
+  if (!baseRef) return null;
+  if (!ALLOWED_GIT_REF.test(baseRef) || baseRef.includes("..") || baseRef.endsWith("/")) {
+    throw new Error("Validation baseRef must be a safe Git reference.");
+  }
+  return baseRef;
+}
+
 async function runCommandCheck(
   executeProcess: typeof runAgentProcess,
   spec: CommandSpec,
@@ -192,10 +203,11 @@ async function runCommandCheck(
 function runSecretScan(
   workspacePath: string,
   invocationRoot: string,
-  invocationKey: string
+  invocationKey: string,
+  baseRef: string | undefined
 ): ValidationCheckResult {
   const startedAt = Date.now();
-  const changedFiles = listChangedFiles(workspacePath);
+  const changedFiles = listChangedFiles(workspacePath, validatedBaseRef(baseRef));
   const findings = scanWorktreePathsForSecrets(workspacePath, changedFiles);
   const output = findings.map(formatSecretScanFinding).join("\n");
   const artifactKey = path.posix.join(invocationKey, "secret_scan.raw.txt");
@@ -211,8 +223,13 @@ function runSecretScan(
   };
 }
 
-function listChangedFiles(workspacePath: string): string[] {
-  const tracked = runGitLines(workspacePath, ["diff", "--name-only", "--diff-filter=ACMR", "HEAD"]);
+function listChangedFiles(workspacePath: string, diffTarget: string | null): string[] {
+  const tracked = runGitLines(workspacePath, [
+    "diff",
+    "--name-only",
+    "--diff-filter=ACMR",
+    diffTarget ?? "HEAD"
+  ]);
   const untracked = runGitLines(workspacePath, ["ls-files", "--others", "--exclude-standard"]);
   return [...new Set([...tracked, ...untracked])];
 }
