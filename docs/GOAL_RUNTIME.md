@@ -28,6 +28,8 @@ provider output in SQLite, writes a sanitized raw output artifact under `.maestr
 only a compact structured handoff to the next worker. The compact handoff preserves concrete errors,
 review decisions, changed-file evidence, search hits, Git evidence and test failures while omitting
 bulk diff/log/test noise. Raw artifacts can be recovered on demand from the step artifact key.
+Equivalent handoffs are deduplicated before the next provider call, keeping the newest evidence and
+recording `goal.handoff_deduplicated` without deleting the original steps or artifacts.
 
 The runtime records paired A/B telemetry for every step: the legacy 2,000-character slice as control
 and the compact handoff as treatment. Telemetry includes estimated bytes and tokens by provider,
@@ -90,6 +92,24 @@ and Windows-hidden subprocess execution. Provider adapters only define CLI argum
 prompting, and result classification. Credential-shaped environment variables are removed before
 either worker process starts; subscription authentication continues through the installed CLIs.
 
+## Circuit breakers and bounded execution
+
+Provider execution has independent limits instead of one large timeout:
+
+- inactivity stops a silent provider after two minutes by default;
+- a provider phase is bounded to six minutes by default;
+- each active goal execution attempt has a thirty-minute absolute deadline by default; a persisted
+  `waiting_provider` run receives a new bounded window when resumed;
+- repeated identical output and excessive received output stop the process early;
+- the same normalized provider failure stops after two occurrences;
+- implementation or testing that completes twice without worktree progress blocks the goal.
+
+All stops preserve the isolated worktree. The runner does not reset, clean, or discard partial work.
+Every step records bounded process output statistics and whether a worktree change was observed.
+Fallbacks emit `goal.provider_fallback`; circuit breakers emit `goal.circuit_breaker` with the reason
+and `worktreePreserved=true`. This makes quota, timeout, output flood, repeated failure, and no-progress
+conditions distinguishable without another LLM call.
+
 The Maestro does not use the OpenAI API and does not require `OPENAI_API_KEY`. Codex uses the user's
 existing Codex/ChatGPT authentication, while Claude uses its own installed CLI authentication. Each
 service can still enforce the limits of the user's plan.
@@ -120,6 +140,8 @@ service can still enforce the limits of the user's plan.
   Dashboard shows the latest persisted report by project.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
+- Every goal and provider phase has a bounded deadline, inactivity limit, and output budget.
+- Repeated failures and repeated no-progress phases stop before another provider cycle is spent.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
 - Goal artifacts, database, logs, environment files, and credentials remain ignored by Git.
 - Completion means all phases succeeded; a planning or implementation response alone cannot finish a goal.

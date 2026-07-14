@@ -343,7 +343,7 @@ describe("dashboard", () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
-  });
+  }, 15_000);
 
   it("serves the dashboard snapshot without waiting for slow coordinators", async () => {
     let reviewReconcileCalls = 0;

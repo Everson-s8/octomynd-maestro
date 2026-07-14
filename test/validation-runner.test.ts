@@ -110,6 +110,13 @@ function completedProcess(output: string, exitCode = 0): AgentProcessResult {
     stderr: "",
     aborted: false,
     timedOut: false,
+    breakerReason: null,
+    outputStats: {
+      receivedChars: output.length,
+      retainedChars: output.length,
+      duplicateChunks: 0,
+      truncatedChars: 0
+    },
     durationMs: 1
   };
 }
