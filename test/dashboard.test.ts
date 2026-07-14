@@ -99,6 +99,44 @@ describe("dashboard", () => {
     expect(snapshot.projects[0].currentWork[0].taskId).toBe(task.id);
   });
 
+  it("shows the latest persisted Environment Doctor report", () => {
+    const report = doctorReport();
+    database.addEvent({
+      source: "maestro",
+      type: "environment.doctor",
+      text: report.summary,
+      metadata: { projectKey: "boo", report }
+    });
+
+    const snapshot = buildDashboardSnapshot(config, database);
+
+    expect(snapshot.environments).toEqual([expect.objectContaining({
+      projectKey: "boo",
+      status: "ready",
+      fingerprintId: "0123456789abcdef"
+    })]);
+  });
+
+  it("serves an Environment Doctor report on demand", async () => {
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      environmentDoctor: { inspectProject: async () => doctorReport() }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/environment/doctor?projectKey=boo`);
+      const payload = await response.json() as { report: ReturnType<typeof doctorReport> };
+      expect(response.status).toBe(200);
+      expect(payload.report.status).toBe("ready");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("shows Feature Plan tasks, eligibility, integration blockers and consolidated PR linkage", () => {
     const first = database.createTask("primeiro bloco", "maestro", "boo");
     const second = database.createTask("segundo bloco", "maestro", "boo");
@@ -430,6 +468,25 @@ const successfulGoalProvider: AgentProvider = {
     retryable: false
   })
 };
+
+function doctorReport() {
+  return {
+    status: "ready" as const,
+    summary: "Execution environment ready.",
+    recommendedAction: "No action required.",
+    checkedAt: new Date().toISOString(),
+    projectKey: "boo",
+    taskId: null,
+    fingerprintId: "0123456789abcdef",
+    requiredCapabilities: ["planning" as const],
+    checks: [{
+      name: "execution_paths" as const,
+      status: "passed" as const,
+      summary: "safe",
+      evidence: []
+    }]
+  };
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;

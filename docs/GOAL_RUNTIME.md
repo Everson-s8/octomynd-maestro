@@ -93,6 +93,15 @@ service can still enforce the limits of the user's plan.
   containing only versions, availability flags and path hashes.
 - Node `20.17.x` is the pinned runtime line for local execution and CI. A
   divergent major/minor blocks startup before a long Goal can begin.
+- `EnvironmentDoctor` is the single readiness seam used by Goal preflight,
+  Dashboard and Telegram. It verifies execution/worktree writes, Git, Node,
+  npm, dependency preparation, TypeScript, Vitest and provider readiness.
+- Goal preflight runs before `goal_runs` is created. Unsafe legacy worktrees,
+  missing toolchains or dependency failures become `environment_blocked`
+  evidence instead of consuming provider time.
+- `/doctor [@project]` reports `ready`, `environment_blocked`,
+  `auth_required`, `quota` or `offline` with a short recommended action. The
+  Dashboard shows the latest persisted report by project.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.

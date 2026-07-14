@@ -20,6 +20,7 @@ import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
+import { EnvironmentDoctor } from "../environment/doctor.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -31,6 +32,7 @@ export type DashboardServerOptions = {
   featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
   featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
+  environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -82,6 +84,23 @@ async function routeRequest(
       undefined,
       options.backlogAutopilot?.snapshot()
     ));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/environment/doctor") {
+    if (!options.environmentDoctor) {
+      sendJson(response, 503, { error: "environment_doctor_unavailable" });
+      return;
+    }
+    const requestedKey = url.searchParams.get("projectKey")?.trim().toLowerCase();
+    const project = requestedKey
+      ? options.database.findProjectByKey(requestedKey)
+      : options.database.getDefaultProject();
+    if (!project) {
+      sendJson(response, 404, { error: "project_not_found" });
+      return;
+    }
+    sendJson(response, 200, { report: await options.environmentDoctor.inspectProject(project.key) });
     return;
   }
 
