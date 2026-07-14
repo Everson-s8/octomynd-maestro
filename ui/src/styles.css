@@ -292,6 +292,7 @@ a { color: inherit; text-decoration: none; }
 .agent-card > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
 .agent-card strong { font-size: .9rem; }
 .agent-card small { overflow: hidden; color: var(--muted); font-size: .68rem; line-height: 1.4; text-overflow: ellipsis; }
+.agent-environment { border-color: rgba(18, 164, 132, .22); }
 .agent-state { grid-column: 2; width: fit-content; padding: 5px 9px; border-radius: 999px; font-family: var(--mono); font-size: .6rem; font-weight: 750; text-transform: uppercase; }
 .state-ready { color: #087d54; background: rgba(67,228,155,.18); }.state-working { color: #075f75; background: rgba(39,227,255,.2); }.state-attention { color: #8a5a00; background: rgba(255,184,61,.2); }.state-offline { color: #9d2830; background: rgba(255,92,103,.18); }
 

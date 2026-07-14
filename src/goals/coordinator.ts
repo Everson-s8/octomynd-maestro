@@ -5,6 +5,10 @@ import type { GoalRunnerOptions } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
+import { EnvironmentBlockedError } from "../environment/doctor.js";
+import type { EnvironmentDoctorReport } from "../environment/types.js";
+
+export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
 
 export class GoalCoordinator {
   private readonly active = new Map<number, { promise: Promise<GoalRunRecord>; controller: AbortController }>();
@@ -19,7 +23,8 @@ export class GoalCoordinator {
     private readonly notify?: GoalNotificationHandler,
     private readonly notifyProgress?: GoalProgressNotificationHandler,
     private readonly scheduler: Scheduler = new SystemScheduler(),
-    private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"]
+    private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"],
+    private readonly preflight?: GoalPreflight
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -30,6 +35,20 @@ export class GoalCoordinator {
     const task = this.database.getTask(taskId);
     if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
+    const readiness = this.preflight?.(taskId);
+    if (readiness && readiness.status !== "ready") {
+      this.database.withTransaction(() => {
+        this.database.updateTaskStatus(taskId, readiness.status === "quota" ? "waiting_quota" : "blocked");
+        this.database.addEvent({
+          source: "maestro",
+          type: "goal.environment_blocked",
+          text: readiness.summary,
+          taskId,
+          metadata: { report: readiness }
+        });
+      });
+      throw new EnvironmentBlockedError(readiness);
+    }
     const run = this.database.createGoalRun(taskId, maxSteps);
     this.execute(run);
     return run;

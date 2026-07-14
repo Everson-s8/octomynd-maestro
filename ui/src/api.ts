@@ -143,6 +143,21 @@ export type DashboardEvent = {
   metadata: Record<string, unknown>;
 };
 
+export type EnvironmentDoctorReport = {
+  status: "ready" | "environment_blocked" | "auth_required" | "quota" | "offline";
+  summary: string;
+  recommendedAction: string;
+  checkedAt: string;
+  projectKey: string;
+  taskId: number | null;
+  fingerprintId: string;
+  checks: Array<{
+    name: string;
+    status: "passed" | "warning" | "failed" | "skipped";
+    summary: string;
+  }>;
+};
+
 export type DashboardData = {
   generatedAt: string;
   daemon: {
@@ -179,6 +194,7 @@ export type DashboardData = {
   goals: GoalRun[];
   features: DashboardFeature[];
   featurePlans: DashboardFeaturePlan[];
+  environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{
     id: "codex" | "claude" | "telegram";

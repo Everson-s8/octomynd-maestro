@@ -116,6 +116,7 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/queue` lists recent tasks.
 - `/queue @<key>` lists recent tasks for a project.
 - `/cancel <id>` cancels an active, waiting, or queued task without deleting its history.
+- `/doctor [@<key>]` verifies deterministic execution and provider readiness.
 
 The governed backlog autopilot is enabled by default. It starts at most one running goal at a time,
 keeps `waiting_provider` goals from consuming that global slot, and never starts a second task for a
