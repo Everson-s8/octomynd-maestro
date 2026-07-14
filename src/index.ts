@@ -1,4 +1,5 @@
 import path from "node:path";
+import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
 import { ClaudeProvider } from "./agents/claude.js";
 import { CodexProvider } from "./agents/codex.js";
 import { AgentRegistry } from "./agents/registry.js";
@@ -31,7 +32,15 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+ensureExecutionContract(config.execution);
 const database = createDatabase(config.databasePath);
+const environmentFingerprint = captureEnvironmentFingerprint(config.execution);
+database.addEvent({
+  source: "maestro",
+  type: "environment.fingerprint",
+  text: environmentFingerprint.id,
+  metadata: { fingerprint: environmentFingerprint }
+});
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
@@ -145,6 +154,7 @@ if (recoveredGoals > 0) {
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
 console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
+console.log(`Execution environment: ${environmentFingerprint.id}.`);
 
 void bot.start({
   onStart: (botInfo) => {

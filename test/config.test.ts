@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 import { loadConfig, validateRuntimeConfig } from "../src/config.js";
 
 describe("config", () => {
@@ -21,6 +22,11 @@ describe("config", () => {
     expect(config.runtime).toEqual({
       tokenEfficient: true
     });
+    expect(config.execution.expectedNodeVersion).toBe("20.17.0");
+    expect(config.worktreesPath).toBe(config.execution.worktreesPath);
+    if (process.platform === "win32") {
+      expect(config.execution.rootPath).toBe(path.resolve("C:\\MaestroRuntime\\octomynd-maestro"));
+    }
   });
 
   it("validates missing token", () => {
@@ -69,5 +75,30 @@ describe("config", () => {
     });
 
     expect(config.runtime.tokenEfficient).toBe(false);
+  });
+
+  it("blocks unsafe Windows execution roots before long-running work", () => {
+    if (process.platform !== "win32") return;
+    const config = loadConfig(process.cwd(), {
+      TELEGRAM_BOT_TOKEN: "configured",
+      USERPROFILE: "C:\\Users\\everson",
+      MAESTRO_EXECUTION_ROOT: "C:\\Users\\everson\\OneDrive\\runtime"
+    });
+
+    const errors = validateRuntimeConfig(config, { USERPROFILE: "C:\\Users\\everson" });
+    expect(errors).toContain("Execution roots must stay outside the user profile.");
+    expect(errors).toContain("Execution roots must stay outside cloud-synced folders.");
+  });
+
+  it("accepts an explicit dedicated execution root", () => {
+    const root = path.join(process.cwd(), "dedicated-runtime");
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_EXECUTION_ROOT: root,
+      MAESTRO_NODE_VERSION: "20.17.2"
+    });
+
+    expect(config.execution.rootPath).toBe(root);
+    expect(config.worktreesPath).toBe(path.join(root, "worktrees"));
+    expect(config.execution.expectedNodeVersion).toBe("20.17.2");
   });
 });

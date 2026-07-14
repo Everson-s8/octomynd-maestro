@@ -32,6 +32,12 @@ beforeEach(() => {
     projectName: "maestro-test",
     databasePath: path.join(tempDir, "maestro.db"),
     worktreesPath: path.join(tempDir, "worktrees"),
+    execution: {
+      rootPath: tempDir,
+      worktreesPath: path.join(tempDir, "worktrees"),
+      expectedNodeVersion: "20.17.0",
+      supportedNodeRange: ">=20.17.0 <21"
+    },
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },

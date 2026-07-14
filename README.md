@@ -14,7 +14,8 @@ request, the Maestro sends the restricted Telegram user a review notification wi
 
 ## Requirements
 
-- Node.js 20.17+ for local development. Node 24 is the target for future CI.
+- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`
+  and GitHub Actions share the same runtime contract.
 - A Telegram bot token from BotFather.
 
 ## Setup

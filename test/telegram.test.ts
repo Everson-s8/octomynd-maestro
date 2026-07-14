@@ -243,6 +243,12 @@ function telegramConfig(): MaestroConfig {
     projectName: "test",
     databasePath: ":memory:",
     worktreesPath: "worktrees",
+    execution: {
+      rootPath: "runtime",
+      worktreesPath: "worktrees",
+      expectedNodeVersion: "20.17.0",
+      supportedNodeRange: ">=20.17.0 <21"
+    },
     dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
