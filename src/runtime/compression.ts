@@ -211,6 +211,21 @@ export function formatTokenEfficientPreviousSteps(steps: TokenEfficientHandoffSt
   ].join("\n")).join("\n");
 }
 
+export function dedupeTokenEfficientHandoffs(steps: TokenEfficientHandoffStep[]): {
+  steps: TokenEfficientHandoffStep[];
+  removed: number;
+} {
+  const fingerprints = new Set<string>();
+  const deduplicated: TokenEfficientHandoffStep[] = [];
+  for (const step of [...steps].reverse()) {
+    const fingerprint = handoffFingerprint(step);
+    if (fingerprints.has(fingerprint)) continue;
+    fingerprints.add(fingerprint);
+    deduplicated.unshift(step);
+  }
+  return { steps: deduplicated, removed: steps.length - deduplicated.length };
+}
+
 export function formatLegacyPreviousSteps(steps: GoalStepRecord[]): string {
   if (steps.length === 0) return "Nenhuma etapa anterior.";
   return steps.map((step) => (
@@ -333,4 +348,12 @@ function countCompactEvidenceLines(text: string): number {
 function test(pattern: RegExp, text: string): boolean {
   pattern.lastIndex = 0;
   return pattern.test(text);
+}
+
+function handoffFingerprint(step: TokenEfficientHandoffStep): string {
+  return [step.phase, step.status, step.summary, step.compactOutput]
+    .join("|")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }

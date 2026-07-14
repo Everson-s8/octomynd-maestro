@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rawOutputArtifactKey, recoverGoalStepRawOutput, writeGoalStepRuntimeArtifacts } from "../src/runtime/artifacts.js";
-import { compressStepOutput } from "../src/runtime/compression.js";
+import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../src/runtime/compression.js";
 import { detectLocalRtk } from "../src/runtime/rtk.js";
 import { estimateTokenUsage } from "../src/runtime/tokens.js";
 
@@ -69,6 +69,27 @@ describe("local RTK detection", () => {
 });
 
 describe("output compression", () => {
+  it("keeps only the latest equivalent handoff", () => {
+    const base = compressStepOutput({
+      step: {
+        id: 1,
+        phase: "testing",
+        provider: "codex",
+        status: "failed",
+        summary: "same failure",
+        output: "FAIL same test",
+        error: "same failure"
+      },
+      rtk: detectLocalRtk({ PATH: "" })
+    }).handoff;
+    const latest = { ...base, stepId: 2, provider: "claude" };
+
+    const result = dedupeTokenEfficientHandoffs([base, latest]);
+
+    expect(result.removed).toBe(1);
+    expect(result.steps).toEqual([latest]);
+  });
+
   it("keeps errors and relevant evidence while reducing the handoff payload", () => {
     const fakeSecret = `${["sk", "proj"].join("-")}-${"a".repeat(24)}`;
     const noisyOutput = [

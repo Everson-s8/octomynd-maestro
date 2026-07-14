@@ -28,6 +28,65 @@ describe("agent process runtime", () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.aborted).toBe(false);
+    expect(result.breakerReason).toBe("phase_timeout");
+  });
+
+  it("stops a silent process on inactivity before the phase timeout", async () => {
+    const result = await runAgentProcess({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000);"],
+      cwd: process.cwd(),
+      timeoutMs: 2_000,
+      inactivityTimeoutMs: 60
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.breakerReason).toBe("inactivity");
+    expect(result.durationMs).toBeLessThan(1_000);
+  });
+
+  it("distinguishes an absolute deadline from phase and inactivity limits", async () => {
+    const result = await runAgentProcess({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => process.stdout.write('alive\\n'), 20);"],
+      cwd: process.cwd(),
+      timeoutMs: 2_000,
+      inactivityTimeoutMs: 200,
+      deadlineAt: Date.now() + 80
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.breakerReason).toBe("deadline");
+  });
+
+  it("stops output flood while retaining bounded evidence", async () => {
+    const result = await runAgentProcess({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(10000)); setInterval(() => {}, 1000);"],
+      cwd: process.cwd(),
+      timeoutMs: 2_000,
+      maxOutputChars: 100,
+      maxReceivedChars: 500
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.breakerReason).toBe("output_limit");
+    expect(result.stdout.length).toBeLessThanOrEqual(100);
+    expect(result.outputStats.truncatedChars).toBeGreaterThan(0);
+  });
+
+  it("stops a process that repeats the same output chunk", async () => {
+    const result = await runAgentProcess({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => process.stdout.write('same\\n'), 30);"],
+      cwd: process.cwd(),
+      timeoutMs: 2_000,
+      inactivityTimeoutMs: 500,
+      maxDuplicateChunks: 2
+    });
+
+    expect(result.breakerReason).toBe("duplicate_output");
+    expect(result.outputStats.duplicateChunks).toBeGreaterThanOrEqual(2);
   });
 
   it("marks a process cancelled through AbortSignal", async () => {
