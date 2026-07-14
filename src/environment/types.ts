@@ -16,6 +16,7 @@ export type EnvironmentCheckName =
   | "git"
   | "node"
   | "npm"
+  | "native_runtime"
   | "typescript"
   | "test_runner"
   | "providers";

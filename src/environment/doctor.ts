@@ -129,7 +129,7 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
   if (!dependencyRoot && input.prepareDependencies && fs.existsSync(path.join(workspacePath, "package-lock.json"))) {
     const prepared = runCommand(
       "npm",
-      ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+      ["ci", "--no-audit", "--no-fund"],
       workspacePath,
       180_000
     );
@@ -139,6 +139,7 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
   }
 
+  checks.push(nativeRuntimeCheck(dependencyRoot));
   checks.push(binaryCheck("typescript", dependencyRoot, executableName("tsc")));
   checks.push(binaryCheck("test_runner", dependencyRoot, executableName("vitest")));
   checks.push(providerCheck(input.providers));
@@ -156,6 +157,31 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     requiredCapabilities: ["planning", "coding", "testing", "reviewing"],
     checks
   };
+}
+
+function nativeRuntimeCheck(dependencyRoot: string | null): EnvironmentCheck {
+  if (!dependencyRoot) {
+    return check("native_runtime", "failed", "Dependencies are unavailable for native runtime validation.", "environment_blocked");
+  }
+  const packageJsonPath = path.join(dependencyRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) return check("native_runtime", "skipped", "No package manifest requires a native runtime probe.");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const usesBetterSqlite = Boolean(packageJson.dependencies?.["better-sqlite3"] || packageJson.devDependencies?.["better-sqlite3"]);
+  if (!usesBetterSqlite) return check("native_runtime", "skipped", "No allowlisted native dependency requires a probe.");
+  const probe = runCommand(
+    process.execPath,
+    ["-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
+    dependencyRoot
+  );
+  return check(
+    "native_runtime",
+    probe.ok ? "passed" : "failed",
+    probe.ok ? "better-sqlite3 native binding is loadable." : compactFailure(probe.output),
+    probe.ok ? undefined : "environment_blocked"
+  );
 }
 
 function check(

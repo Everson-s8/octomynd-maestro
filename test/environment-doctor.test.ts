@@ -41,6 +41,10 @@ describe("Environment Doctor", () => {
     expect(report.status).toBe("ready");
     expect(report.fingerprintId).toHaveLength(16);
     expect(report.checks.filter((item) => item.status === "failed")).toEqual([]);
+    expect(report.checks).toContainEqual(expect.objectContaining({
+      name: "native_runtime",
+      status: "passed"
+    }));
   });
 
   it("blocks a legacy worktree before a long Goal", () => {
