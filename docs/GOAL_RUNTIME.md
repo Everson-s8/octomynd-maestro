@@ -84,6 +84,15 @@ service can still enforce the limits of the user's plan.
 ## Safety boundaries
 
 - A task must have a prepared isolated worktree.
+- New Windows worktrees default to
+  `C:\MaestroRuntime\<project>\worktrees`, outside the user profile and
+  cloud-synced folders. Existing Tasks keep their persisted worktree path;
+  Maestro never moves an active worktree implicitly.
+- `.maestro-execution.json` records the versioned execution contract without
+  storing private host paths. Startup emits a sanitized environment fingerprint
+  containing only versions, availability flags and path hashes.
+- Node `20.17.x` is the pinned runtime line for local execution and CI. A
+  divergent major/minor blocks startup before a long Goal can begin.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
