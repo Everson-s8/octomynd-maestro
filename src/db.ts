@@ -11,6 +11,15 @@ import {
   CompletionReviewSubjectType,
   CompletionReviewStatus
 } from "./improvements/types.js";
+import { createSkillPersistence, migrateSkillPersistence } from "./skills/persistence.js";
+export type {
+  GoalSkillInvocationMode,
+  GoalSkillPinRecord,
+  SkillRecord,
+  SkillVersionLifecycleStatus,
+  SkillVersionRecord,
+  SkillVersionRegistrationInput
+} from "./skills/persistence.js";
 
 export type TaskStatus =
   | "queued"
@@ -433,6 +442,7 @@ export function createDatabase(databasePath: string) {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   migrate(db);
+  const skillPersistence = createSkillPersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -689,6 +699,8 @@ export function createDatabase(databasePath: string) {
 
   return {
     close: () => db.close(),
+
+    ...skillPersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
@@ -1984,6 +1996,8 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_completion_review_outbox_claim
       ON completion_review_outbox(status, available_at, lease_expires_at, id);
   `);
+
+  migrateSkillPersistence(db);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");

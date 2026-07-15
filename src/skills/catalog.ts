@@ -115,24 +115,25 @@ export class SkillCatalog {
   }
 }
 
-function inspectSkillPackage(
+export function inspectSkillPackage(
   root: SkillCatalogRoot,
   packagePath: string,
-  limits: SkillCatalogLimits
+  limits: Partial<SkillCatalogLimits> = {}
 ): SkillMetadata {
+  const effectiveLimits = { ...DEFAULT_SKILL_CATALOG_LIMITS, ...limits };
   const packageStat = fs.lstatSync(packagePath);
   if (packageStat.isSymbolicLink() || !packageStat.isDirectory()) {
     throw new Error("Skill package root must be a real directory.");
   }
 
-  const files = collectPackageFiles(packagePath, limits);
+  const files = collectPackageFiles(packagePath, effectiveLimits);
   const skillFile = files.find((file) => file.relativePath === "SKILL.md");
   if (!skillFile) throw new Error("SKILL.md is required.");
-  if (skillFile.size > limits.maxSkillMarkdownBytes) {
+  if (skillFile.size > effectiveLimits.maxSkillMarkdownBytes) {
     throw new Error("SKILL.md exceeds the configured size limit.");
   }
   const policyFile = files.find((file) => file.relativePath === "maestro.yaml");
-  if (policyFile && policyFile.size > limits.maxPolicyBytes) {
+  if (policyFile && policyFile.size > effectiveLimits.maxPolicyBytes) {
     throw new Error("maestro.yaml exceeds the configured size limit.");
   }
 
