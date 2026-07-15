@@ -27,6 +27,12 @@ export function isRetryableFailureCategory(category: FailureCategory): boolean {
   return category === "quota" || category === "auth_required" || category === "timeout";
 }
 
+export function retryAfterMsForFailure(category: FailureCategory): number | undefined {
+  if (category === "timeout") return 15_000;
+  if (category === "quota" || category === "auth_required") return 10 * 60_000;
+  return undefined;
+}
+
 export function buildFailureSummary(providerLabel: string, phase: string, category: FailureCategory): string {
   const summary = `${providerLabel} (${phase}): ${failureCategoryLabel(category)}.`;
   return summary.length <= SUMMARY_MAX_LENGTH ? summary : `${summary.slice(0, SUMMARY_MAX_LENGTH - 1)}.`;

@@ -76,6 +76,13 @@ budget. When a waiting run resumes, the last failed provider is temporarily excl
 available fallback is tried first. If no alternative exists, the original provider remains eligible
 for a later retry.
 
+The `AgentRegistry` is also the provider control plane. It owns concurrency leases and transient
+cooldowns, and exposes one operational snapshot with `ready`, `working`, `quota`, `auth_required`,
+`cooldown`, or `offline`. Dashboard and Telegram consume this same snapshot instead of inferring
+provider state independently. A provider adapter must report an explicit `retryAfterMs` before a
+retryable failure creates a cooldown; this preserves immediate fallback while preventing known
+timeouts or quota failures from being selected repeatedly.
+
 ## Current providers
 
 - **Codex**: real non-interactive CLI adapter for planning, coding, testing, review, and research.
@@ -96,7 +103,8 @@ either worker process starts; subscription authentication continues through the 
 
 Provider execution has independent limits instead of one large timeout:
 
-- inactivity stops a silent provider after two minutes by default;
+- inactivity stops silent provider processes after two minutes by default; Claude `--print`
+  execution uses the bounded phase timeout because it can remain silent while still working;
 - a provider phase is bounded to six minutes by default;
 - each active goal execution attempt has a thirty-minute absolute deadline by default; a persisted
   `waiting_provider` run receives a new bounded window when resumed;
@@ -167,6 +175,11 @@ Delivery is intentionally outside the LLM worker. It is deterministic and idempo
 continue from an existing task commit if push or PR creation failed. The secret guard blocks env
 files, credential filenames, private keys, and common provider token formats before staging.
 GitHub publication requires an authenticated `gh` CLI. The pull request is always created as draft.
+
+Feature Plans can persist GitHub issue links for both the consolidated Feature and its Tasks. The
+Draft Feature PR includes closing references, and post-merge cleanup closes Work PRs, branches and
+linked issues idempotently. If any cleanup operation fails, the Feature remains in `merging` and is
+retried; completion and Telegram notification happen only after the full lifecycle succeeds.
 
 ## Dashboard API
 

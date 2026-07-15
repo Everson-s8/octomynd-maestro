@@ -51,6 +51,7 @@ export type AgentExecutionResult = {
   error: string | null;
   durationMs: number;
   retryable: boolean;
+  retryAfterMs?: number;
   processRuntime?: {
     breakerReason: AgentProcessBreakerReason | null;
     outputStats: AgentProcessResult["outputStats"];

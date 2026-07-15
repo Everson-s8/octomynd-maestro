@@ -14,13 +14,14 @@ import {
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
-import { buildDashboardSnapshot } from "./snapshot.js";
+import { buildDashboardSnapshot, providerAgentPresence } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
+import { AgentRegistry } from "../agents/registry.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -34,6 +35,7 @@ export type DashboardServerOptions = {
   featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
+  agentRegistry?: Pick<AgentRegistry, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -80,10 +82,13 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
+    const agents = options.agentRegistry
+      ? providerAgentPresence(options.config, options.database, await options.agentRegistry.snapshot())
+      : undefined;
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,
-      undefined,
+      agents,
       options.backlogAutopilot?.snapshot()
     ));
     return;

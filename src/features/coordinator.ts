@@ -183,7 +183,7 @@ export class FeatureCoordinator {
       try {
         result = await lease.provider.execute(this.buildReviewRequest(feature, state));
       } finally {
-        lease.release();
+        lease.release(result);
       }
 
       const reviewSummary = truncateForDisplay(
@@ -330,6 +330,13 @@ export class FeatureCoordinator {
       completedItems.push({ item: this.database.getFeatureItem(item.id), task: this.database.getTask(task.id), cleanup });
     }
 
+    if (workPullRequestPending) {
+      const message = "Feature merged, but one or more integrated branches or issues still need cleanup.";
+      this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
+      this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
+      return;
+    }
+
     try {
       await this.github.deleteHeadBranch(feature.pullRequestUrl);
       if (issueLinks.featureIssueNumber) {
@@ -345,7 +352,7 @@ export class FeatureCoordinator {
     }
 
     if (workPullRequestPending) {
-      const message = "Feature merged, but one or more integrated branches still need cleanup.";
+      const message = "Feature merged, but its branch or GitHub issue still needs cleanup.";
       this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
       this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
       return;

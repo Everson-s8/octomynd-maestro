@@ -87,6 +87,45 @@ describe("dashboard", () => {
     }
   });
 
+  it("serves provider state from the shared Agent Registry snapshot", async () => {
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full",
+      agentRegistry: {
+        snapshot: async () => [{
+          id: "claude",
+          label: "Claude",
+          capabilities: ["reviewing"],
+          health: { state: "ready", detail: "Claude CLI autenticado", checkedAt: new Date().toISOString() },
+          state: "cooldown",
+          activeCount: 0,
+          cooldownUntil: "2026-07-15T12:00:00.000Z",
+          detail: "Claude atingiu timeout transitorio."
+        }]
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/dashboard`);
+      const payload = await response.json() as {
+        agents: Array<{ id: string; state: string; detail: string }>;
+      };
+
+      expect(payload.agents.find((agent) => agent.id === "claude")).toMatchObject({
+        state: "attention",
+        detail: expect.stringContaining("Cooldown ate 2026-07-15T12:00:00.000Z")
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
   it("builds an operational snapshot without private telegram identifiers", () => {
     const snapshot = buildDashboardSnapshot(config, database);
 
