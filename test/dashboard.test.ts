@@ -54,6 +54,39 @@ afterEach(() => {
 });
 
 describe("dashboard", () => {
+  it("distinguishes the dashboard-only process from the full Maestro runtime", async () => {
+    const dashboardOnly = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => dashboardOnly.listen(0, "127.0.0.1", resolve));
+    const dashboardPort = (dashboardOnly.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/health`);
+      expect(await response.json()).toMatchObject({ ok: true, runtimeMode: "dashboard" });
+    } finally {
+      await new Promise<void>((resolve, reject) => dashboardOnly.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+
+    const fullRuntime = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full"
+    });
+    await new Promise<void>((resolve) => fullRuntime.listen(0, "127.0.0.1", resolve));
+    const runtimePort = (fullRuntime.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${runtimePort}/api/health`);
+      expect(await response.json()).toMatchObject({ ok: true, runtimeMode: "full" });
+    } finally {
+      await new Promise<void>((resolve, reject) => fullRuntime.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
   it("builds an operational snapshot without private telegram identifiers", () => {
     const snapshot = buildDashboardSnapshot(config, database);
 

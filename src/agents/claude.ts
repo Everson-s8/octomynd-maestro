@@ -124,11 +124,25 @@ export class ClaudeProvider implements AgentProvider {
       const category = classifyFailure(errorText, result.timedOut);
       const retryable = isRetryableFailureCategory(category);
       const summary = buildFailureSummary(this.label, request.phase, category);
-      this.cacheHealth({
-        state: category === "auth_required" ? "auth_required" : category === "quota" ? "quota" : "offline",
-        detail: summary,
-        checkedAt: new Date().toISOString()
-      }, retryable ? 10 * 60_000 : 30_000);
+      if (category === "auth_required" || category === "quota") {
+        this.cacheHealth({
+          state: category,
+          detail: summary,
+          checkedAt: new Date().toISOString()
+        }, 10 * 60_000);
+      } else if (category === "timeout") {
+        this.cacheHealth({
+          state: "ready",
+          detail: "Claude CLI disponivel; a ultima execucao atingiu o limite de tempo.",
+          checkedAt: new Date().toISOString()
+        }, 15_000);
+      } else {
+        this.cacheHealth({
+          state: "offline",
+          detail: summary,
+          checkedAt: new Date().toISOString()
+        }, 30_000);
+      }
       return {
         outcome: "failed",
         summary,
@@ -426,6 +440,10 @@ async function executeClaudeGoal(request: AgentExecutionRequest, timeoutMs: numb
     args: buildClaudeGoalArgs(cli, request, cwd),
     cwd,
     timeoutMs,
+    // Claude --print commonly buffers the response until completion. Silence is
+    // therefore not evidence that the process is stuck; the phase timeout is
+    // the deterministic upper bound for this provider.
+    inactivityTimeoutMs: timeoutMs,
     deadlineAt: request.deadlineAt,
     signal: request.signal,
     env: buildRestrictedAgentEnvironment()

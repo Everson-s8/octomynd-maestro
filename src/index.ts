@@ -149,6 +149,7 @@ const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({
     config,
     database,
+    runtimeMode: "full",
     goalCoordinator,
     reviewCoordinator,
     featureCoordinator,
