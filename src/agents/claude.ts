@@ -11,6 +11,11 @@ import {
   AgentHealth,
   AgentProvider
 } from "./types.js";
+import type {
+  ImprovementReviewExecutionRequest,
+  ImprovementReviewExecutionResult
+} from "../improvements/reviewer.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -31,6 +36,7 @@ const CLAUDE_CAPABILITIES = new Set<AgentCapability>([
   "coding",
   "testing",
   "reviewing",
+  "improvement_reviewing",
   "research"
 ]);
 
@@ -154,6 +160,52 @@ export class ClaudeProvider implements AgentProvider {
       durationMs: result.durationMs,
       retryable: false,
       processRuntime: processRuntime(result)
+    };
+  }
+
+  async reviewImprovements(
+    request: ImprovementReviewExecutionRequest
+  ): Promise<ImprovementReviewExecutionResult> {
+    const startedAt = Date.now();
+    const cli = resolveClaudeCliCommand();
+    if (!cli) return improvementFailure("Claude Code CLI was not found.", startedAt, false);
+    if (!fs.existsSync(request.workspacePath)) {
+      return improvementFailure(`Workspace nao existe: ${request.workspacePath}`, startedAt, false);
+    }
+    const result = await runAgentProcess({
+      command: cli.command,
+      args: buildClaudeImprovementReviewArgs(cli, request),
+      cwd: request.workspacePath,
+      timeoutMs: request.timeoutMs,
+      signal: request.signal,
+      maxOutputChars: request.maxOutputChars,
+      maxReceivedChars: request.maxOutputChars * 2,
+      env: buildRestrictedAgentEnvironment()
+    });
+    if (result.aborted || request.signal?.aborted) {
+      return {
+        status: "cancelled",
+        output: "",
+        error: null,
+        durationMs: result.durationMs,
+        retryable: false
+      };
+    }
+    if (result.exitCode !== 0 || !result.stdout.trim()) {
+      const diagnostics = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      const category = classifyFailure(diagnostics, result.timedOut);
+      return improvementFailure(
+        diagnostics || buildFailureSummary(this.label, "reviewing", category),
+        startedAt,
+        isRetryableFailureCategory(category)
+      );
+    }
+    return {
+      status: "completed",
+      output: result.stdout.trim(),
+      error: null,
+      durationMs: result.durationMs,
+      retryable: false
     };
   }
 
@@ -314,6 +366,26 @@ export function buildClaudeGoalArgs(
   ];
 }
 
+export function buildClaudeImprovementReviewArgs(
+  cli: ClaudeCliCommand,
+  request: ImprovementReviewExecutionRequest
+): string[] {
+  return [
+    ...cli.argsPrefix,
+    "--print",
+    "--output-format",
+    "text",
+    "--permission-mode",
+    "plan",
+    "--tools",
+    READ_ONLY_TOOLS.join(","),
+    "--add-dir",
+    request.workspacePath,
+    "--no-session-persistence",
+    request.prompt
+  ];
+}
+
 export function parseClaudeReviewDecision(content: string): "approved" | "changes_requested" | null {
   const matches = [...content.matchAll(/FINAL_REVIEW_DECISION:\s*(approved|changes_requested)\b/gi)];
   if (matches.length !== 1) return null;
@@ -379,4 +451,18 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
   ]);
   const cliEntry = candidates.find((candidate) => fs.existsSync(candidate));
   return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
+}
+
+function improvementFailure(
+  error: string,
+  startedAt: number,
+  retryable: boolean
+): ImprovementReviewExecutionResult {
+  return {
+    status: "failed",
+    output: "",
+    error: redactSensitiveText(error).slice(0, 2_000),
+    durationMs: Date.now() - startedAt,
+    retryable
+  };
 }

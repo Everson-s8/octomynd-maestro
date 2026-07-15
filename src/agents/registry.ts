@@ -10,6 +10,7 @@ const ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
   coding: ["codex", "claude"],
   testing: ["codex", "claude"],
   reviewing: ["claude", "codex"],
+  improvement_reviewing: ["claude", "codex"],
   research: ["claude", "codex"],
   conversation: ["claude", "codex"]
 };
