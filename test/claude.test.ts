@@ -176,6 +176,10 @@ describe("claude provider telemetry", () => {
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Claude (reviewing): tempo limite excedido.");
     expect(result.retryable).toBe(true);
+    expect(await provider.health()).toMatchObject({
+      state: "ready",
+      detail: expect.stringContaining("ultima execucao atingiu o limite de tempo")
+    });
   }, 10_000);
 
   it("falls back to an unknown, non-retryable failure for unrecognized errors", async () => {
