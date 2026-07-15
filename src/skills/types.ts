@@ -47,6 +47,26 @@ export type SkillMetadata = {
   resourcePaths: string[];
 };
 
+export type SkillDiscoveryEntry = {
+  qualifiedName: string;
+  description: string;
+  versionId: string;
+  scope: SkillScope;
+  risk: SkillRisk;
+};
+
+export type LoadedSkillContext = {
+  qualifiedName: string;
+  versionId: string;
+  triggerReason: string;
+  instructions: string;
+};
+
+export type SkillExecutionContext = {
+  available: SkillDiscoveryEntry[];
+  loaded: LoadedSkillContext[];
+};
+
 export type SkillCatalogIssueCode =
   | "root_missing"
   | "invalid_package"

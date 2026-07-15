@@ -27,11 +27,15 @@ describe("codex provider", () => {
   });
 
   it("builds a phase-scoped prompt that forbids delivery mutations", () => {
-    const prompt = buildCodexGoalPrompt(executionRequest());
+    const request = executionRequest();
+    request.skillContext = skillContext();
+    const prompt = buildCodexGoalPrompt(request);
 
     expect(prompt).toContain("Fase: implementing");
     expect(prompt).toContain("Nunca faca");
     expect(prompt).toContain("commit, push, merge, deploy");
+    expect(prompt).toContain("repository:implement-task");
+    expect(prompt).toContain("PINNED SKILL PROCEDURE");
   });
 
   it("prefers the token-efficient handoff over raw previous-step output", () => {
@@ -189,5 +193,24 @@ function executionRequest(
     },
     previousSteps: [],
     artifactsRoot: path.join(worktreePath, "..", "artifacts")
+  };
+}
+
+function skillContext(): NonNullable<AgentExecutionRequest["skillContext"]> {
+  const versionId = `sha256:${"a".repeat(64)}`;
+  return {
+    available: [{
+      qualifiedName: "repository:implement-task",
+      description: "Implement one bounded task.",
+      versionId,
+      scope: "repository",
+      risk: "low"
+    }],
+    loaded: [{
+      qualifiedName: "repository:implement-task",
+      versionId,
+      triggerReason: "Explicit implementation.",
+      instructions: "PINNED SKILL PROCEDURE"
+    }]
   };
 }

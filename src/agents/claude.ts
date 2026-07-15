@@ -20,6 +20,7 @@ import type {
   ImprovementReviewExecutionRequest,
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
+import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
 export type ClaudeReviewResult = {
@@ -352,6 +353,7 @@ export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
     "",
     "Historico resumido das etapas:",
     previous,
+    ...formatSkillPromptContext(request.skillContext),
     ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
     "",
     "Entregue um resumo em portugues com arquivos alterados, testes, bloqueios e evidencias."

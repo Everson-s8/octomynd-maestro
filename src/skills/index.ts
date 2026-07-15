@@ -1,5 +1,7 @@
 export { inspectSkillPackage, SkillCatalog } from "./catalog.js";
 export { SkillVersionStore } from "./store.js";
+export { SkillRuntime } from "./runtime.js";
+export { formatSkillPromptContext } from "./prompt.js";
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
@@ -13,7 +15,10 @@ export type {
   SkillCatalogLimits,
   SkillCatalogRoot,
   SkillCatalogSnapshot,
+  SkillDiscoveryEntry,
+  SkillExecutionContext,
   SkillMetadata,
+  LoadedSkillContext,
   SkillNetworkPolicy,
   SkillOperatingSystem,
   SkillOwner,

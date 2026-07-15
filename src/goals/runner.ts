@@ -15,6 +15,7 @@ import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
+import type { SkillRuntime } from "../skills/runtime.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 const DEFAULT_GOAL_DEADLINE_MS = 30 * 60_000;
@@ -35,6 +36,7 @@ export type GoalRunnerOptions = {
   delivery?: GoalDeliveryHandler;
   tokenRuntime?: { enabled?: boolean } | false;
   validationRunner?: Pick<DeterministicValidationRunner, "run">;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -237,6 +239,35 @@ export async function runTaskGoal(
             }
           });
         }
+        const skillContext = options.skillRuntime?.prepareContext({
+          runId: run.id,
+          phase,
+          capability: CAPABILITIES[phase],
+          taskText: task.text,
+          projectKey: project.key
+        });
+        if (skillContext && (skillContext.available.length > 0 || skillContext.loaded.length > 0)) {
+          database.addEvent({
+            source: "maestro",
+            type: "goal.skill_context_prepared",
+            text: `Prepared governed Skill context for ${phase}.`,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              available: skillContext.available.map((skill) => ({
+                qualifiedName: skill.qualifiedName,
+                versionId: skill.versionId,
+                risk: skill.risk
+              })),
+              loaded: skillContext.loaded.map((skill) => ({
+                qualifiedName: skill.qualifiedName,
+                versionId: skill.versionId
+              }))
+            }
+          });
+        }
         result = await routed.provider.execute({
           runId: run.id,
           stepNumber: stepCount + 1,
@@ -251,6 +282,7 @@ export async function runTaskGoal(
             rtk
           },
           humanFeedback: latestChangeRequest(database, run.id),
+          skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
           deadlineAt: goalDeadlineAt,
           signal: options.signal
