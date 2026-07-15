@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
-import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
+import {
+  buildFailureSummary,
+  classifyFailure,
+  isRetryableFailureCategory,
+  retryAfterMsForFailure
+} from "./failure.js";
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
   AgentCapability,
@@ -150,6 +155,7 @@ export class ClaudeProvider implements AgentProvider {
         error: errorText || summary,
         durationMs: result.durationMs,
         retryable,
+        retryAfterMs: retryAfterMsForFailure(category),
         processRuntime: processRuntime(result)
       };
     }
@@ -211,7 +217,8 @@ export class ClaudeProvider implements AgentProvider {
       return improvementFailure(
         diagnostics || buildFailureSummary(this.label, "reviewing", category),
         startedAt,
-        isRetryableFailureCategory(category)
+        isRetryableFailureCategory(category),
+        retryAfterMsForFailure(category)
       );
     }
     return {
@@ -474,13 +481,15 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
 function improvementFailure(
   error: string,
   startedAt: number,
-  retryable: boolean
+  retryable: boolean,
+  retryAfterMs?: number
 ): ImprovementReviewExecutionResult {
   return {
     status: "failed",
     output: "",
     error: redactSensitiveText(error).slice(0, 2_000),
     durationMs: Date.now() - startedAt,
-    retryable
+    retryable,
+    retryAfterMs
   };
 }

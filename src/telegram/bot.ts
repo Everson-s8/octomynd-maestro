@@ -8,12 +8,14 @@ import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
+import type { AgentProviderSnapshot } from "../agents/registry.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
   autopilotStatus?: () => BacklogAutopilotSnapshot | null;
   featureGithub?: FeatureGitHubGateway;
   environmentDoctor?: (projectKey: string) => Promise<EnvironmentDoctorReport>;
+  providerStatus?: () => Promise<AgentProviderSnapshot[]>;
 };
 
 export function createTelegramBot(
@@ -78,7 +80,14 @@ export function createTelegramBot(
       await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
       return;
     }
-    await ctx.reply(formatStatus(config.projectName, database, projectKey, options.autopilotStatus?.() ?? null));
+    const providers = options.providerStatus ? await options.providerStatus() : [];
+    await ctx.reply(formatStatus(
+      config.projectName,
+      database,
+      projectKey,
+      options.autopilotStatus?.() ?? null,
+      providers
+    ));
   });
 
   bot.command("projects", async (ctx) => {
@@ -427,7 +436,8 @@ export function formatStatus(
   projectName: string,
   database: MaestroDatabase,
   projectKey: string | null = null,
-  autopilot: BacklogAutopilotSnapshot | null = null
+  autopilot: BacklogAutopilotSnapshot | null = null,
+  providers: AgentProviderSnapshot[] = []
 ): string {
   const counts = database.countTasksByStatus();
   const lastEvent = database.getLastEvent();
@@ -460,6 +470,13 @@ export function formatStatus(
     "",
     "Trabalhando agora:",
     ...(working.length > 0 ? working : ["- nenhum agente executando"]),
+    ...(providers.length > 0 ? [
+      "",
+      "Providers:",
+      ...providers.map((provider) => (
+        `- ${provider.label}: ${provider.state}${provider.activeCount > 0 ? ` (${provider.activeCount} ativo)` : ""} - ${provider.detail}`
+      ))
+    ] : []),
     "",
     `Ultimo evento: ${lastEvent ? `${lastEvent.type} em ${lastEvent.createdAt}` : "nenhum"}`
   ].join("\n");

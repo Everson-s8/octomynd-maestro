@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
-import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
+import {
+  buildFailureSummary,
+  classifyFailure,
+  isRetryableFailureCategory,
+  retryAfterMsForFailure
+} from "./failure.js";
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
   AgentExecutionRequest,
@@ -135,6 +140,7 @@ export class CodexProvider implements AgentProvider {
         error: combined || summary,
         durationMs: processResult.durationMs,
         retryable,
+        retryAfterMs: retryAfterMsForFailure(category),
         processRuntime: processRuntime(processResult)
       };
     }
@@ -209,7 +215,8 @@ export class CodexProvider implements AgentProvider {
         return improvementFailure(
           diagnostics || buildFailureSummary(this.label, "reviewing", category),
           startedAt,
-          isRetryableFailureCategory(category)
+          isRetryableFailureCategory(category),
+          retryAfterMsForFailure(category)
         );
       }
       if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size > request.maxOutputChars) {
@@ -343,13 +350,15 @@ function failure(
 function improvementFailure(
   error: string,
   startedAt: number,
-  retryable: boolean
+  retryable: boolean,
+  retryAfterMs?: number
 ): ImprovementReviewExecutionResult {
   return {
     status: "failed",
     output: "",
     error: redactSensitiveText(error).slice(0, 2_000),
     durationMs: Date.now() - startedAt,
-    retryable
+    retryable,
+    retryAfterMs
   };
 }

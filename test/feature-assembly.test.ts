@@ -98,7 +98,12 @@ describe("FeatureAssemblyCoordinator", () => {
       projectKey: "boo",
       objective: "Assemble alpha and beta into one Feature PR.",
       acceptanceCriteria: ["Both tasks are integrated"],
-      taskIds: [first.task.id, second.task.id]
+      taskIds: [first.task.id, second.task.id],
+      featureIssueNumber: 35,
+      taskIssueNumbers: {
+        [first.task.id]: 36,
+        [second.task.id]: 37
+      }
     });
 
     const coordinator = new FeatureAssemblyCoordinator(
@@ -136,6 +141,11 @@ describe("FeatureAssemblyCoordinator", () => {
     expect(created.body).toContain(`Task #${second.task.id}`);
     expect(created.body).toContain(second.commitSha);
     expect(created.body).toContain(second.pullRequestUrl);
+    expect(created.body).toContain("Closes #35");
+    expect(created.body).toContain("Closes #36");
+    expect(created.body).toContain("Closes #37");
+    expect(created.body).toContain(`GitHub #36`);
+    expect(created.body).toContain(`GitHub #37`);
   }, FEATURE_ASSEMBLY_TEST_TIMEOUT_MS);
 
   it("is idempotent across repeated reconciliation", async () => {

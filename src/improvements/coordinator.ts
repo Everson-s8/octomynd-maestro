@@ -87,9 +87,12 @@ export class RestrictedImprovementReviewCoordinator implements RestrictedImprove
           durationMs: 0,
           retryable: true
         };
-      } finally {
-        lease.release();
       }
+      lease.release({
+        retryable: execution.retryable,
+        retryAfterMs: execution.retryAfterMs,
+        summary: execution.error ?? "Improvement review provider failure."
+      });
 
       if (execution.status === "cancelled" || options.signal?.aborted) {
         attempts.push(attempt(lease.provider.id, "cancelled", execution));

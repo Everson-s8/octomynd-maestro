@@ -22,6 +22,41 @@ describe("agent registry leases", () => {
     expect((await registry.acquire("planning"))?.provider.id).toBe("claude");
     second?.release();
   });
+
+  it("reports working state while a provider lease is active", async () => {
+    const registry = new AgentRegistry([provider("claude", ["planning"])]);
+    const lease = await registry.acquire("planning");
+
+    expect((await registry.snapshot())[0]).toMatchObject({
+      id: "claude",
+      state: "working",
+      activeCount: 1,
+      cooldownUntil: null
+    });
+
+    lease?.release();
+    expect((await registry.snapshot())[0]).toMatchObject({ state: "ready", activeCount: 0 });
+  });
+
+  it("skips a provider during retry cooldown and restores it after expiry", async () => {
+    let now = 1_000;
+    const claude = provider("claude", ["planning"]);
+    const codex = provider("codex", ["planning"]);
+    const registry = new AgentRegistry([claude, codex], undefined, () => now);
+    const lease = await registry.acquire("planning");
+
+    lease?.release({ retryable: true, retryAfterMs: 30_000, summary: "Claude timed out." });
+
+    expect((await registry.snapshot()).find((item) => item.id === "claude")).toMatchObject({
+      state: "cooldown",
+      activeCount: 0,
+      detail: "Claude timed out."
+    });
+    expect((await registry.acquire("planning"))?.provider.id).toBe("codex");
+
+    now += 30_001;
+    expect((await registry.acquire("planning"))?.provider.id).toBe("claude");
+  });
 });
 
 function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentProvider {

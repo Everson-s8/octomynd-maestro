@@ -159,7 +159,11 @@ export class FeatureAssemblyCoordinator {
         branchName: integration.branchName,
         baseBranch: project.defaultBranch,
         title,
-        body: buildFeatureBody(plan, integrationDetails)
+        body: buildFeatureBody(
+          plan,
+          integrationDetails,
+          this.database.getFeaturePlanIssueLinks(plan.id)
+        )
       });
 
     const wasFeatureAlreadyCreated = this.database.findFeatureByFeaturePlanId(plan.id) !== null;
@@ -252,7 +256,11 @@ function buildFeatureTitle(plan: FeaturePlanRecord): string {
   return truncateForDisplay(`Feature Plan #${plan.id}: ${objective}`, FEATURE_NAME_MAX_LENGTH);
 }
 
-function buildFeatureBody(plan: FeaturePlanRecord, details: FeaturePlanIntegrationDetails): string {
+function buildFeatureBody(
+  plan: FeaturePlanRecord,
+  details: FeaturePlanIntegrationDetails,
+  issueLinks: ReturnType<MaestroDatabase["getFeaturePlanIssueLinks"]>
+): string {
   const lines: string[] = [
     `Automated Feature PR assembled from Feature Plan #${plan.id}.`,
     "",
@@ -263,9 +271,21 @@ function buildFeatureBody(plan: FeaturePlanRecord, details: FeaturePlanIntegrati
   if (plan.acceptanceCriteria.length > 0) {
     lines.push("## Acceptance Criteria", ...plan.acceptanceCriteria.map((item) => `- ${item}`), "");
   }
+  const closingReferences = [
+    issueLinks.featureIssueNumber,
+    ...Object.values(issueLinks.taskIssueNumbers)
+  ].filter((issueNumber): issueNumber is number => issueNumber !== null);
+  if (closingReferences.length > 0) {
+    lines.push(
+      "## GitHub lifecycle",
+      ...[...new Set(closingReferences)].map((issueNumber) => `Closes #${issueNumber}`),
+      ""
+    );
+  }
   lines.push("## Tasks");
   for (const item of details.items) {
-    lines.push(`- Task #${item.taskId}: ${singleLine(item.taskText)}`);
+    const issueNumber = issueLinks.taskIssueNumbers[item.taskId];
+    lines.push(`- Task #${item.taskId}${issueNumber ? ` / GitHub #${issueNumber}` : ""}: ${singleLine(item.taskText)}`);
     lines.push(`  - Work PR: ${item.pullRequestUrl}`);
     lines.push(`  - Commit: ${item.commitSha}`);
   }

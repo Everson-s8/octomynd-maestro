@@ -4,6 +4,7 @@ import { listReviewQueue } from "../reviews/evidence.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
+import type { AgentProviderSnapshot } from "../agents/registry.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -14,6 +15,37 @@ export type AgentPresence = {
   projectKey?: string;
   phase?: string;
 };
+
+export function providerAgentPresence(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  providers: AgentProviderSnapshot[]
+): AgentPresence[] {
+  const tasks = database.listTasks(80);
+  const goals = database.listGoalRuns(30);
+  const working = currentProviderWork(database, tasks, goals);
+  return [
+    ...providers.map((provider): AgentPresence => {
+      const current = working.get(provider.id);
+      if (provider.state === "working" && current) return current;
+      return {
+        id: provider.id,
+        label: provider.label,
+        state: provider.state === "ready"
+          ? "ready"
+          : provider.state === "working"
+            ? "working"
+            : provider.state === "offline"
+              ? "offline"
+              : "attention",
+        detail: provider.state === "cooldown" && provider.cooldownUntil
+          ? `${provider.detail} Cooldown ate ${provider.cooldownUntil}.`
+          : provider.detail
+      };
+    }),
+    telegramPresence(config)
+  ];
+}
 
 const EVENT_TEXT_MAX_LENGTH = 500;
 
@@ -226,6 +258,29 @@ function defaultAgentPresence(
   tasks: TaskRecord[],
   goals: ReturnType<MaestroDatabase["listGoalRuns"]>
 ): AgentPresence[] {
+  const working = currentProviderWork(database, tasks, goals);
+  return [
+    working.get("codex") ?? {
+      id: "codex",
+      label: "Codex",
+      state: "attention",
+      detail: "Estado do provider disponivel apenas no runtime completo"
+    },
+    working.get("claude") ?? {
+      id: "claude",
+      label: "Claude",
+      state: "attention",
+      detail: "Estado do provider disponivel apenas no runtime completo"
+    },
+    telegramPresence(config)
+  ];
+}
+
+function currentProviderWork(
+  database: MaestroDatabase,
+  tasks: TaskRecord[],
+  goals: ReturnType<MaestroDatabase["listGoalRuns"]>
+): Map<string, AgentPresence> {
   const working = new Map<string, AgentPresence>();
   for (const goal of goals.filter((item) => item.status === "running")) {
     const task = tasks.find((item) => item.id === goal.taskId);
@@ -241,26 +296,16 @@ function defaultAgentPresence(
       phase: goal.currentPhase
     });
   }
-  return [
-    working.get("codex") ?? {
-      id: "codex",
-      label: "Codex",
-      state: "ready",
-      detail: "CLI local disponivel para delegacao"
-    },
-    working.get("claude") ?? {
-      id: "claude",
-      label: "Claude",
-      state: "attention",
-      detail: "CLI detectado; autenticacao precisa de revisao"
-    },
-    {
-      id: "telegram",
-      label: "Telegram",
-      state: config.telegram.botToken ? "ready" : "offline",
-      detail: config.telegram.allowedUserId ? "Bot restrito ao usuario autorizado" : "Restricao pendente"
-    }
-  ];
+  return working;
+}
+
+function telegramPresence(config: MaestroConfig): AgentPresence {
+  return {
+    id: "telegram",
+    label: "Telegram",
+    state: config.telegram.botToken ? "ready" : "offline",
+    detail: config.telegram.allowedUserId ? "Bot restrito ao usuario autorizado" : "Restricao pendente"
+  };
 }
 
 function isActiveTask(task: TaskRecord): boolean {

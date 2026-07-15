@@ -183,7 +183,7 @@ export class FeatureCoordinator {
       try {
         result = await lease.provider.execute(this.buildReviewRequest(feature, state));
       } finally {
-        lease.release();
+        lease.release(result);
       }
 
       const reviewSummary = truncateForDisplay(
@@ -281,6 +281,9 @@ export class FeatureCoordinator {
   private async completeFeature(feature: FeatureRecord, state: FeaturePullRequestState): Promise<void> {
     if (feature.status === "completed") return;
     const project = this.database.getProjectByKey(feature.projectKey);
+    const issueLinks = feature.featurePlanId === null
+      ? { featureIssueNumber: null, taskIssueNumbers: {} as Record<number, number> }
+      : this.database.getFeaturePlanIssueLinks(feature.featurePlanId);
     const completedItems: FeatureCompletion["items"] = [];
     let workPullRequestPending = false;
     for (const item of this.database.listFeatureItems(feature.id)) {
@@ -299,6 +302,14 @@ export class FeatureCoordinator {
           await this.github.closeSuperseded(item.pullRequestUrl, feature.pullRequestUrl);
         }
         await this.github.deleteHeadBranch(item.pullRequestUrl);
+        const taskIssueNumber = issueLinks.taskIssueNumbers[task.id];
+        if (taskIssueNumber) {
+          await this.github.closeIssue(
+            feature.pullRequestUrl,
+            taskIssueNumber,
+            `Completed by Feature PR ${feature.pullRequestUrl} at ${state.headSha}.`
+          );
+        }
       } catch (error) {
         workPullRequestPending = true;
         this.addEvent(feature, "feature.work_pr_close_failed", safeSummary(error), task.id);
@@ -319,15 +330,29 @@ export class FeatureCoordinator {
       completedItems.push({ item: this.database.getFeatureItem(item.id), task: this.database.getTask(task.id), cleanup });
     }
 
+    if (workPullRequestPending) {
+      const message = "Feature merged, but one or more integrated branches or issues still need cleanup.";
+      this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
+      this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
+      return;
+    }
+
     try {
       await this.github.deleteHeadBranch(feature.pullRequestUrl);
+      if (issueLinks.featureIssueNumber) {
+        await this.github.closeIssue(
+          feature.pullRequestUrl,
+          issueLinks.featureIssueNumber,
+          `Completed by merged Feature PR ${feature.pullRequestUrl} at ${state.headSha}.`
+        );
+      }
     } catch (error) {
       workPullRequestPending = true;
       this.addEvent(feature, "feature.branch_delete_failed", safeSummary(error));
     }
 
     if (workPullRequestPending) {
-      const message = "Feature merged, but one or more integrated branches still need cleanup.";
+      const message = "Feature merged, but its branch or GitHub issue still needs cleanup.";
       this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
       this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
       return;

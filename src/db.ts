@@ -290,11 +290,28 @@ export type FeaturePlanWriteResult = FeaturePlanDetails & {
   applied: boolean;
 };
 
+export type GitHubIssueSubjectType = "feature_plan" | "task";
+
+export type GitHubIssueLinkRecord = {
+  id: number;
+  subjectType: GitHubIssueSubjectType;
+  subjectId: number;
+  issueNumber: number;
+  createdAt: string;
+};
+
+export type FeaturePlanIssueLinks = {
+  featureIssueNumber: number | null;
+  taskIssueNumbers: Record<number, number>;
+};
+
 export type FeaturePlanInput = {
   projectKey: string;
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  featureIssueNumber?: number | null;
+  taskIssueNumbers?: Record<number, number>;
   source?: string;
   createdByUserId?: string | null;
   createdByUsername?: string | null;
@@ -583,6 +600,12 @@ export function createDatabase(databasePath: string) {
   const addFeaturePlanTaskStatement = db.prepare(`
     INSERT INTO feature_plan_tasks (feature_plan_id, task_id, position, created_at)
     VALUES (@featurePlanId, @taskId, @position, @now)
+  `);
+  const addGitHubIssueLinkStatement = db.prepare(`
+    INSERT INTO github_issue_links (subject_type, subject_id, issue_number, created_at)
+    VALUES (@subjectType, @subjectId, @issueNumber, @now)
+    ON CONFLICT(subject_type, subject_id) DO UPDATE SET
+      issue_number = excluded.issue_number
   `);
   const cancelFeaturePlanStatement = db.prepare(`
     UPDATE feature_plans
@@ -1353,7 +1376,9 @@ export function createDatabase(databasePath: string) {
         projectId: project.id,
         objective: normalized.objective,
         acceptanceCriteria: normalized.acceptanceCriteria,
-        taskIds: normalized.taskIds
+        taskIds: normalized.taskIds,
+        featureIssueNumber: normalized.featureIssueNumber,
+        taskIssueNumbers: normalized.taskIssueNumbers
       });
       const existingOperation = normalized.idempotencyKey
         ? findFeaturePlanOperation(db, normalized.idempotencyKey)
@@ -1377,6 +1402,22 @@ export function createDatabase(databasePath: string) {
         });
         const featurePlanId = Number(result.lastInsertRowid);
         insertFeaturePlanTasks(addFeaturePlanTaskStatement, featurePlanId, normalized.taskIds, now);
+        if (normalized.featureIssueNumber !== null) {
+          addGitHubIssueLinkStatement.run({
+            subjectType: "feature_plan",
+            subjectId: featurePlanId,
+            issueNumber: normalized.featureIssueNumber,
+            now
+          });
+        }
+        for (const [taskId, issueNumber] of Object.entries(normalized.taskIssueNumbers)) {
+          addGitHubIssueLinkStatement.run({
+            subjectType: "task",
+            subjectId: Number(taskId),
+            issueNumber,
+            now
+          });
+        }
         if (normalized.idempotencyKey) {
           addFeaturePlanOperationStatement.run({
             featurePlanId,
@@ -1422,6 +1463,28 @@ export function createDatabase(databasePath: string) {
         .prepare(featurePlanTasksSelectSql("WHERE feature_plan_tasks.feature_plan_id = ? ORDER BY feature_plan_tasks.position ASC"))
         .all(featurePlanId) as FeaturePlanTaskRow[];
       return rows.map(mapFeaturePlanTask);
+    },
+
+    getFeaturePlanIssueLinks(featurePlanId: number): FeaturePlanIssueLinks {
+      const plan = this.getFeaturePlan(featurePlanId);
+      const tasks = this.listFeaturePlanTasks(plan.id);
+      const featureLink = db.prepare(`
+        SELECT issue_number FROM github_issue_links
+        WHERE subject_type = 'feature_plan' AND subject_id = ?
+      `).get(plan.id) as { issue_number: number } | undefined;
+      const taskIssueNumbers: Record<number, number> = {};
+      const statement = db.prepare(`
+        SELECT issue_number FROM github_issue_links
+        WHERE subject_type = 'task' AND subject_id = ?
+      `);
+      for (const task of tasks) {
+        const row = statement.get(task.taskId) as { issue_number: number } | undefined;
+        if (row) taskIssueNumbers[task.taskId] = row.issue_number;
+      }
+      return {
+        featureIssueNumber: featureLink?.issue_number ?? null,
+        taskIssueNumbers
+      };
     },
 
     countFeaturePlansByStatus(): Record<string, number> {
@@ -1827,6 +1890,15 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
 
+    CREATE TABLE IF NOT EXISTS github_issue_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL CHECK(subject_type IN ('feature_plan', 'task')),
+      subject_id INTEGER NOT NULL,
+      issue_number INTEGER NOT NULL CHECK(issue_number > 0),
+      created_at TEXT NOT NULL,
+      UNIQUE(subject_type, subject_id)
+    );
+
     CREATE TABLE IF NOT EXISTS feature_plan_operations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       feature_plan_id INTEGER NOT NULL,
@@ -1899,6 +1971,8 @@ function migrate(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
       ON feature_plan_tasks(task_id);
+    CREATE INDEX IF NOT EXISTS idx_github_issue_links_issue_number
+      ON github_issue_links(issue_number);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
       ON feature_plan_operations(feature_plan_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_integrations_plan_id
@@ -2240,7 +2314,15 @@ function normalizeImprovementProposal(input: ImprovementProposalInput) {
   };
 }
 
-function normalizeFeaturePlanInput(input: FeaturePlanInput): Required<FeaturePlanInput> {
+type NormalizedFeaturePlanInput = Required<Omit<
+  FeaturePlanInput,
+  "featureIssueNumber" | "taskIssueNumbers"
+>> & {
+  featureIssueNumber: number | null;
+  taskIssueNumbers: Record<number, number>;
+};
+
+function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePlanInput {
   const projectKey = input.projectKey.trim().toLowerCase();
   if (!projectKey) throw new Error("Feature plan project is required.");
 
@@ -2251,6 +2333,15 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): Required<FeaturePla
   const taskIds = uniqueTaskIds(input.taskIds);
   const source = input.source?.trim() || "dashboard";
   const idempotencyKey = input.idempotencyKey?.trim() || null;
+  const featureIssueNumber = normalizeIssueNumber(input.featureIssueNumber, "Feature");
+  const taskIssueNumbers: Record<number, number> = {};
+  for (const [rawTaskId, rawIssueNumber] of Object.entries(input.taskIssueNumbers ?? {})) {
+    const taskId = Number(rawTaskId);
+    if (!taskIds.includes(taskId)) {
+      throw new Error(`GitHub issue link references Task #${rawTaskId} outside the Feature Plan.`);
+    }
+    taskIssueNumbers[taskId] = normalizeIssueNumber(rawIssueNumber, `Task #${taskId}`)!;
+  }
 
   if (objective.length < 8) {
     throw new Error("Feature plan objective must be at least 8 characters.");
@@ -2273,8 +2364,18 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): Required<FeaturePla
     source,
     createdByUserId: input.createdByUserId?.trim() || null,
     createdByUsername: input.createdByUsername?.trim() || null,
-    idempotencyKey
+    idempotencyKey,
+    featureIssueNumber,
+    taskIssueNumbers
   };
+}
+
+function normalizeIssueNumber(value: number | null | undefined, label: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} GitHub issue number must be a positive integer.`);
+  }
+  return value;
 }
 
 function uniqueTaskIds(taskIds: number[]): number[] {

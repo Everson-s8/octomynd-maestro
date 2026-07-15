@@ -265,7 +265,7 @@ export async function runTaskGoal(
           retryable: false
         };
       } finally {
-        routed.release();
+        routed.release(result!);
       }
       const workspaceAfter = tracksWorkspaceProgress
         ? captureWorkspaceProgress(task.worktreePath)

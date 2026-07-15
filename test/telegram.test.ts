@@ -163,6 +163,27 @@ describe("telegram helpers", () => {
     }
   });
 
+  it("includes the shared provider control-plane state in status", () => {
+    const database = createDatabase(":memory:");
+    try {
+      const status = formatStatus("maestro", database, null, null, [{
+        id: "claude",
+        label: "Claude",
+        capabilities: ["reviewing"],
+        health: { state: "ready", detail: "Claude CLI autenticado", checkedAt: new Date().toISOString() },
+        state: "working",
+        activeCount: 1,
+        cooldownUntil: null,
+        detail: "Claude CLI autenticado"
+      }]);
+
+      expect(status).toContain("Providers:");
+      expect(status).toContain("Claude: working (1 ativo) - Claude CLI autenticado");
+    } finally {
+      database.close();
+    }
+  });
+
   it("formats a review notification without local paths or credentials", () => {
     const message = formatGoalNotification(goalRun(), taskRecord());
 

@@ -14,13 +14,14 @@ import {
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { GoalCoordinator } from "../goals/coordinator.js";
-import { buildDashboardSnapshot } from "./snapshot.js";
+import { buildDashboardSnapshot, providerAgentPresence } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
+import { AgentRegistry } from "../agents/registry.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -34,6 +35,7 @@ export type DashboardServerOptions = {
   featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
+  agentRegistry?: Pick<AgentRegistry, "snapshot">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -80,10 +82,13 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
+    const agents = options.agentRegistry
+      ? providerAgentPresence(options.config, options.database, await options.agentRegistry.snapshot())
+      : undefined;
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,
-      undefined,
+      agents,
       options.backlogAutopilot?.snapshot()
     ));
     return;
@@ -257,6 +262,8 @@ async function routeRequest(
         objective: readString(body.objective),
         acceptanceCriteria: readStringArray(body.acceptanceCriteria),
         taskIds: readNumberArray(body.taskIds),
+        featureIssueNumber: readOptionalPositiveInteger(body.featureIssueNumber),
+        taskIssueNumbers: readTaskIssueNumbers(body.taskIssueNumbers),
         idempotencyKey: readString(body.idempotencyKey) || null
       });
       sendJson(response, result.applied ? 201 : 200, result);
@@ -560,6 +567,22 @@ function readNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((item): item is number => typeof item === "number")
     : [];
+}
+
+function readOptionalPositiveInteger(value: unknown): number | null {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function readTaskIssueNumbers(value: unknown): Record<number, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<number, number> = {};
+  for (const [taskId, issueNumber] of Object.entries(value)) {
+    const normalizedTaskId = Number(taskId);
+    if (!Number.isInteger(normalizedTaskId) || normalizedTaskId <= 0) continue;
+    if (!Number.isInteger(issueNumber) || Number(issueNumber) <= 0) continue;
+    result[normalizedTaskId] = Number(issueNumber);
+  }
+  return result;
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {

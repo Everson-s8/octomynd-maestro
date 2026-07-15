@@ -40,6 +40,8 @@ export type CreateFeaturePlanInput = {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  featureIssueNumber?: number | null;
+  taskIssueNumbers?: Record<number, number>;
   idempotencyKey?: string | null;
 };
 
@@ -144,6 +146,8 @@ export class ApplicationCommands {
         objective: input.objective,
         acceptanceCriteria: input.acceptanceCriteria,
         taskIds: input.taskIds,
+        featureIssueNumber: input.featureIssueNumber,
+        taskIssueNumbers: input.taskIssueNumbers,
         idempotencyKey: input.idempotencyKey,
         source: origin.channel,
         createdByUserId: origin.userId ?? null,
@@ -161,6 +165,7 @@ export class ApplicationCommands {
             featurePlanId: result.plan.id,
             projectKey: result.plan.projectKey,
             taskIds: result.tasks.map((task) => task.taskId),
+            githubIssues: this.database.getFeaturePlanIssueLinks(result.plan.id),
             acceptanceCriteriaCount: result.plan.acceptanceCriteria.length,
             revision: result.plan.revision
           }

@@ -54,7 +54,8 @@ let backlogAutopilot!: BacklogAutopilot;
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),
   autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
-  environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey)
+  environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey),
+  providerStatus: () => agentRegistry.snapshot()
 });
 const goalNotifier = createTelegramGoalNotifier(
   config,
@@ -154,7 +155,8 @@ const dashboardServer = config.dashboard.enabled
     reviewCoordinator,
     featureCoordinator,
     backlogAutopilot,
-    environmentDoctor
+    environmentDoctor,
+    agentRegistry
   })
   : null;
 backlogAutopilot.start();

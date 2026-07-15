@@ -51,6 +51,7 @@ export type ImprovementReviewExecutionResult = {
   error: string | null;
   durationMs: number;
   retryable: boolean;
+  retryAfterMs?: number;
 };
 
 export type ImprovementReviewAttempt = {
