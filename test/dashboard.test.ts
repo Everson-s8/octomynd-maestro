@@ -324,8 +324,11 @@ describe("dashboard", () => {
         }
       );
       expect(decisionResponse.status).toBe(200);
-      expect(database.getImprovementProposal(improvementPayload.improvement.id).status).toBe("approved");
-      expect(database.getLastEvent()?.type).toBe("improvement.approved");
+      const approvedImprovement = database.getImprovementProposal(improvementPayload.improvement.id);
+      expect(approvedImprovement.status).toBe("approved");
+      expect(approvedImprovement.taskId).not.toBeNull();
+      expect(approvedImprovement.featurePlanId).not.toBeNull();
+      expect(database.getLastEvent()?.type).toBe("improvement.activated_as_feature_plan");
 
       const goalResponse = await fetch(
         `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/goal`,

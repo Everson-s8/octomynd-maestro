@@ -809,13 +809,22 @@ function ImprovementLab({
               <header><span>#{item.id} · {item.category}</span><span className={`risk-${item.risk}`}>risco {item.risk}</span></header>
               <strong>{item.title}</strong>
               <p>{item.rationale}</p>
-              <small>{item.evidence.length} evidencia(s) · origem {item.source}</small>
+              <small>
+                {item.evidence.length} evidencia(s) · origem {item.source}
+                {item.confidence === null ? "" : ` · confiança ${Math.round(item.confidence * 100)}%`}
+              </small>
               {item.status === "candidate" ? (
                 <div className="improvement-actions">
                   <button onClick={() => void decide(item.id, "rejected")} disabled={busyId !== null}>Rejeitar</button>
                   <button onClick={() => void decide(item.id, "approved")} disabled={busyId !== null}>Aprovar para implementar</button>
                 </div>
-              ) : <span className={`improvement-decision decision-${item.status}`}>{item.status}</span>}
+              ) : (
+                <span className={`improvement-decision decision-${item.status}`}>
+                  {item.status}
+                  {item.featurePlanId ? ` · Feature Plan #${item.featurePlanId}` : ""}
+                  {item.taskId ? ` · Task #${item.taskId}` : ""}
+                </span>
+              )}
             </article>
           ))}
         </div>

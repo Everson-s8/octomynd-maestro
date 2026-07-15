@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatQueue,
   formatEnvironmentReport,
+  formatImprovementCandidates,
   formatStatus,
   executeCancelCommand,
   isUserAllowed,
@@ -70,6 +71,25 @@ describe("telegram helpers", () => {
       reason: "prioridade mudou"
     });
     expect(parseFeatureCancelText("/feature_cancel nope")).toBeNull();
+  });
+
+  it("formats improvement candidates with the governed activation rule", () => {
+    const database = createDatabase(":memory:");
+    const proposal = database.createImprovementProposal({
+      category: "skill",
+      title: "Improve delivery evidence",
+      rationale: "Completed Features show a repeated evidence gap.",
+      proposedChange: "Add a bounded checklist to the delivery skill.",
+      evidence: ["feature:1:review_summary"],
+      risk: "low",
+      projectKey: "maestro"
+    });
+
+    const message = formatImprovementCandidates([proposal]);
+
+    expect(message).toContain("#1 @maestro [low]");
+    expect(message).toContain("Aprovar cria Task + Feature Plan");
+    database.close();
   });
 
   it("formats a short path-private Environment Doctor report", () => {

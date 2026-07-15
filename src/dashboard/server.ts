@@ -220,18 +220,13 @@ async function routeRequest(
     }
 
     try {
-      const improvement = options.database.decideImprovementProposal(
+      const result = commands.decideImprovementProposal(
+        { channel: "dashboard" },
         improvementId,
         status as Exclude<ImprovementStatus, "candidate">,
         decisionNote
       );
-      options.database.addEvent({
-        source: "human",
-        type: `improvement.${improvement.status}`,
-        text: improvement.title,
-        metadata: { improvementId: improvement.id, decisionNote: improvement.decisionNote }
-      });
-      sendJson(response, 200, { improvement });
+      sendJson(response, 200, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown decision error";
       sendJson(response, message.includes("not found") ? 404 : 409, {
