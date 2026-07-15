@@ -1,6 +1,6 @@
 # Governed Skills and Multi-Agent Work Graph
 
-Status: proposed
+Status: accepted
 
 ## Context
 
