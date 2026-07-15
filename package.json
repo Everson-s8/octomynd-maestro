@@ -23,7 +23,8 @@
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
