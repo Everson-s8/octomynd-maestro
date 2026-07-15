@@ -25,6 +25,7 @@ import { EnvironmentDoctor } from "../environment/doctor.js";
 export type DashboardServerOptions = {
   config: MaestroConfig;
   database: MaestroDatabase;
+  runtimeMode?: "dashboard" | "full";
   staticRoot?: string;
   claudeReviewer?: ClaudeReviewer;
   goalCoordinator?: GoalCoordinator;
@@ -72,6 +73,7 @@ async function routeRequest(
     sendJson(response, 200, {
       ok: true,
       service: options.config.projectName,
+      runtimeMode: options.runtimeMode ?? "dashboard",
       generatedAt: new Date().toISOString()
     });
     return;

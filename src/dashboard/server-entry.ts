@@ -10,7 +10,7 @@ if (errors.length > 0) {
 }
 
 const database = createDatabase(config.databasePath);
-const server = await startDashboardServer({ config, database });
+const server = await startDashboardServer({ config, database, runtimeMode: "dashboard" });
 
 console.log(`Maestro dashboard API: http://${config.dashboard.host}:${config.dashboard.port}`);
 

@@ -37,12 +37,12 @@ elseif (Test-Path -LiteralPath $envPath) {
     }
 }
 
-$healthUrl = "http://127.0.0.1:$dashboardPort/api/dashboard"
+$healthUrl = "http://127.0.0.1:$dashboardPort/api/health"
 
 function Test-MaestroHealth {
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
-        return $response.StatusCode -eq 200
+        $response = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2
+        return $response.ok -eq $true -and $response.runtimeMode -eq "full"
     }
     catch {
         return $false
