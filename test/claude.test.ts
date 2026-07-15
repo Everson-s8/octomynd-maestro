@@ -70,6 +70,7 @@ describe("claude review", () => {
       "coding",
       "testing",
       "reviewing",
+      "improvement_reviewing",
       "research"
     ]);
   });

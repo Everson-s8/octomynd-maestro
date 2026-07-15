@@ -235,6 +235,12 @@ export type ImprovementProposal = {
   evidence: string[];
   risk: ImprovementRisk;
   source: string;
+  projectKey: string | null;
+  targets: string[];
+  confidence: number | null;
+  fingerprint: string | null;
+  taskId: number | null;
+  featurePlanId: number | null;
   status: ImprovementStatus;
   decisionNote: string | null;
   createdAt: string;

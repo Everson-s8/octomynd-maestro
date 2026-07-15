@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import { buildFailureSummary, classifyFailure, isRetryableFailureCategory } from "./failure.js";
@@ -9,12 +10,18 @@ import {
   AgentHealth,
   AgentProvider
 } from "./types.js";
+import type {
+  ImprovementReviewExecutionRequest,
+  ImprovementReviewExecutionResult
+} from "../improvements/reviewer.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 const CODEX_CAPABILITIES = new Set([
   "planning",
   "coding",
   "testing",
   "reviewing",
+  "improvement_reviewing",
   "research"
 ] as const);
 
@@ -161,6 +168,67 @@ export class CodexProvider implements AgentProvider {
     }
   }
 
+  async reviewImprovements(
+    request: ImprovementReviewExecutionRequest
+  ): Promise<ImprovementReviewExecutionResult> {
+    const startedAt = Date.now();
+    const cliEntry = resolveCodexCliEntry();
+    if (!cliEntry) return improvementFailure("Codex CLI nao encontrado.", startedAt, false);
+    if (!fs.existsSync(request.workspacePath)) {
+      return improvementFailure(`Workspace nao existe: ${request.workspacePath}`, startedAt, false);
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-improvement-codex-"));
+    const schemaPath = path.join(tempDir, "result.schema.json");
+    const outputPath = path.join(tempDir, "result.json");
+    try {
+      fs.writeFileSync(schemaPath, JSON.stringify(request.schema), "utf8");
+      const processResult = await runAgentProcess({
+        command: process.execPath,
+        args: buildCodexImprovementReviewArgs(cliEntry, request, schemaPath, outputPath),
+        cwd: request.workspacePath,
+        stdin: request.prompt,
+        timeoutMs: request.timeoutMs,
+        signal: request.signal,
+        maxOutputChars: request.maxOutputChars,
+        maxReceivedChars: request.maxOutputChars * 2,
+        env: buildRestrictedAgentEnvironment()
+      });
+      if (processResult.aborted || request.signal?.aborted) {
+        return {
+          status: "cancelled",
+          output: "",
+          error: null,
+          durationMs: processResult.durationMs,
+          retryable: false
+        };
+      }
+      const diagnostics = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
+      if (processResult.exitCode !== 0) {
+        const category = classifyFailure(diagnostics, processResult.timedOut);
+        return improvementFailure(
+          diagnostics || buildFailureSummary(this.label, "reviewing", category),
+          startedAt,
+          isRetryableFailureCategory(category)
+        );
+      }
+      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size > request.maxOutputChars) {
+        return improvementFailure("Codex improvement output is missing or exceeds the configured limit.", startedAt, false);
+      }
+      return {
+        status: "completed",
+        output: fs.readFileSync(outputPath, "utf8"),
+        error: null,
+        durationMs: Date.now() - startedAt,
+        retryable: false
+      };
+    } catch (error) {
+      return improvementFailure(error instanceof Error ? error.message : "Codex improvement review failed.", startedAt, false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
   private cacheHealth(state: AgentHealth["state"], detail: string, ttlMs: number) {
     this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
     this.healthExpiresAt = Date.now() + ttlMs;
@@ -177,6 +245,30 @@ export function buildCodexGoalPrompt(request: AgentExecutionRequest): string {
 
 export function codexSandboxForCapability(capability: AgentExecutionRequest["capability"]): "read-only" | "workspace-write" {
   return capability === "coding" || capability === "testing" ? "workspace-write" : "read-only";
+}
+
+export function buildCodexImprovementReviewArgs(
+  cliEntry: string,
+  request: ImprovementReviewExecutionRequest,
+  schemaPath: string,
+  outputPath: string
+): string[] {
+  return [
+    cliEntry,
+    "exec",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--output-schema",
+    schemaPath,
+    "--output-last-message",
+    outputPath,
+    "--sandbox",
+    "read-only",
+    "--cd",
+    request.workspacePath,
+    "-"
+  ];
 }
 
 export function isCodexQuotaError(errorText: string): boolean {
@@ -245,5 +337,19 @@ function failure(
     durationMs: Date.now() - startedAt,
     retryable,
     processRuntime: runtime
+  };
+}
+
+function improvementFailure(
+  error: string,
+  startedAt: number,
+  retryable: boolean
+): ImprovementReviewExecutionResult {
+  return {
+    status: "failed",
+    output: "",
+    error: redactSensitiveText(error).slice(0, 2_000),
+    durationMs: Date.now() - startedAt,
+    retryable
   };
 }

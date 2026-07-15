@@ -101,8 +101,16 @@ A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 O painel inclui um laboratorio de propostas de melhoria inspirado no ciclo de
 aprendizado do Hermes Agent. Cada candidata registra categoria, justificativa,
 mudanca proposta, evidencias, risco e origem. O usuario pode aprovar ou rejeitar,
-mas **aprovar nao aplica a mudanca automaticamente**: apenas autoriza uma futura
-task isolada com testes e revisao.
+mas **aprovar nao aplica a mudanca automaticamente**: cria uma nova Task e um
+Feature Plan, que passam pelo fluxo normal de worktree isolada, validacao, Work PR
+Draft e Final Review somente no Feature PR consolidado.
+
+Quando uma Feature termina, um outbox SQLite idempotente registra um pacote de
+evidencias limitado, sanitizado e com proveniencia. Um reviewer em background usa
+Codex ou Claude em modo estritamente read-only e no maximo duas tentativas. Um
+evaluator deterministico rejeita evidencias inventadas, duplicatas, baixa confianca,
+risco subestimado e qualquer tentativa de alterar Constituicao, segredos, aprovacoes,
+auditoria, permissoes ou rollback. O reviewer nunca escreve skills, memoria ou codigo.
 
 A governanca esta separada da persona:
 
@@ -131,6 +139,9 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/queue @<key>` lists recent tasks for a project.
 - `/cancel <id>` cancels an active, waiting, or queued task without deleting its history.
 - `/doctor [@<key>]` verifies deterministic execution and provider readiness.
+- `/improvements` lists governed improvement candidates.
+- `/improve_approve <id>` approves a candidate as a new Task + Feature Plan.
+- `/improve_reject <id>` rejects a candidate while preserving its audit history.
 
 The governed backlog autopilot is enabled by default. It starts at most one running goal at a time,
 keeps `waiting_provider` goals from consuming that global slot, and never starts a second task for a

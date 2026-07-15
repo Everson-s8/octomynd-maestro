@@ -23,6 +23,9 @@ import {
 } from "./telegram/notifications.js";
 import { EnvironmentDoctor } from "./environment/doctor.js";
 import { DeterministicValidationRunner } from "./validation/runner.js";
+import { RestrictedImprovementReviewCoordinator } from "./improvements/coordinator.js";
+import { ImprovementReviewWorker } from "./improvements/worker.js";
+import { createTelegramImprovementCandidateNotifier } from "./telegram/notifications.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -101,6 +104,11 @@ const featureAssemblyNotifier = createTelegramFeatureAssemblyNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const improvementCandidateNotifier = createTelegramImprovementCandidateNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
@@ -123,6 +131,11 @@ const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(
   undefined,
   featureAssemblyNotifier
 );
+const improvementReviewWorker = new ImprovementReviewWorker(
+  database,
+  new RestrictedImprovementReviewCoordinator(agentRegistry),
+  improvementCandidateNotifier
+);
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath
@@ -130,6 +143,7 @@ backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
 reviewCoordinator.start();
 featureCoordinator.start();
 featureAssemblyCoordinator.start();
+improvementReviewWorker.start();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns();
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({
@@ -184,6 +198,7 @@ function shutdown() {
   reviewCoordinator.shutdown();
   featureCoordinator.shutdown();
   featureAssemblyCoordinator.shutdown();
+  improvementReviewWorker.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
     dashboardServer.close(() => database.close());

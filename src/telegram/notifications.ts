@@ -1,5 +1,5 @@
 import { MaestroConfig } from "../config.js";
-import { GoalRunRecord, MaestroDatabase, TaskRecord } from "../db.js";
+import { GoalRunRecord, ImprovementProposalRecord, MaestroDatabase, TaskRecord } from "../db.js";
 import type { ReviewDecisionNotifier, ReviewSyncNotifier } from "../reviews/coordinator.js";
 import type { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
@@ -15,6 +15,34 @@ import type { FeatureAssemblyEvent, FeatureAssemblyNotificationHandler } from ".
 export type GoalNotificationHandler = (run: GoalRunRecord) => Promise<void>;
 export type GoalProgressNotificationHandler = (run: GoalRunRecord, providerId: AgentProviderId) => Promise<void>;
 export type TelegramMessageSender = (chatId: string, text: string) => Promise<unknown>;
+
+export function createTelegramImprovementCandidateNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): ((proposal: ImprovementProposalRecord) => Promise<void>) | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+  return async (proposal) => {
+    await sendMessage(chatId, truncate([
+      `Nova melhoria candidata #${proposal.id}: ${proposal.title}`,
+      `Projeto: @${proposal.projectKey ?? "nao definido"}`,
+      `Risco: ${proposal.risk}`,
+      `Confianca: ${proposal.confidence === null ? "nao informada" : `${Math.round(proposal.confidence * 100)}%`}`,
+      `Motivo: ${redactSensitiveText(proposal.rationale)}`,
+      "",
+      `Aprovar: /improve_approve ${proposal.id}`,
+      `Rejeitar: /improve_reject ${proposal.id}`,
+      "A aprovacao cria uma nova Task e Feature Plan; nao altera o sistema diretamente."
+    ].join("\n"), 4_000));
+    database.addEvent({
+      source: "telegram",
+      type: "improvement.candidate_notification_sent",
+      text: `Improvement candidate #${proposal.id} notification sent.`,
+      metadata: { improvementId: proposal.id, projectKey: proposal.projectKey, risk: proposal.risk }
+    });
+  };
+}
 
 export function createTelegramGoalNotifier(
   config: MaestroConfig,

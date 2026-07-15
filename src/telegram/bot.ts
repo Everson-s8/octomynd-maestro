@@ -212,6 +212,44 @@ export function createTelegramBot(
     await ctx.reply(executeCancelCommand(ctx.message?.text ?? "", options.cancelTask));
   });
 
+  bot.command("improvements", async (ctx) => {
+    const candidates = database.listImprovementProposals(20).filter((item) => item.status === "candidate");
+    await ctx.reply(formatImprovementCandidates(candidates));
+  });
+
+  bot.command("improve_approve", async (ctx) => {
+    const improvementId = parseTaskId(ctx.message?.text ?? "", "improve_approve");
+    if (!improvementId) {
+      await ctx.reply("Use: /improve_approve id");
+      return;
+    }
+    try {
+      const result = commands.decideImprovementProposal(telegramOrigin(ctx), improvementId, "approved");
+      await ctx.reply([
+        `Melhoria #${result.improvement.id} aprovada sem mutacao direta.`,
+        `Task criada: #${result.task?.id}`,
+        `Feature Plan criado: #${result.featurePlan?.plan.id}`,
+        "O backlog normal assumira a implementacao e o PR consolidado continuara sendo o gate final."
+      ].join("\n"));
+    } catch (error) {
+      await ctx.reply(["Aprovacao nao aplicada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("improve_reject", async (ctx) => {
+    const improvementId = parseTaskId(ctx.message?.text ?? "", "improve_reject");
+    if (!improvementId) {
+      await ctx.reply("Use: /improve_reject id");
+      return;
+    }
+    try {
+      const result = commands.decideImprovementProposal(telegramOrigin(ctx), improvementId, "rejected");
+      await ctx.reply(`Melhoria #${result.improvement.id} rejeitada e preservada para auditoria.`);
+    } catch (error) {
+      await ctx.reply(["Rejeicao nao aplicada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.command("features", async (ctx) => {
     const projectKey = parseFeaturesProjectKey(ctx.message?.text ?? "");
     database.addEvent({
@@ -462,9 +500,26 @@ function formatHelp(): string {
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto",
     "/features - listar Feature Plans e Feature PRs",
-    "/features @projeto - listar Feature Plans e Feature PRs do projeto",
-    "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
+      "/features @projeto - listar Feature Plans e Feature PRs do projeto",
+      "/improvements - listar melhorias candidatas",
+      "/improve_approve id - aprovar como nova Task + Feature Plan",
+      "/improve_reject id - rejeitar sem apagar a auditoria",
+      "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
     "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria"
+  ].join("\n");
+}
+
+export function formatImprovementCandidates(
+  candidates: ReturnType<MaestroDatabase["listImprovementProposals"]>
+): string {
+  if (candidates.length === 0) return "Nenhuma melhoria candidata aguardando decisao.";
+  return [
+    "Melhorias candidatas:",
+    ...candidates.map((item) => (
+      `#${item.id} @${item.projectKey ?? "sem-projeto"} [${item.risk}] ${truncate(item.title, 120)}`
+    )),
+    "",
+    "Aprovar cria Task + Feature Plan; nunca aplica mudanca diretamente."
   ].join("\n");
 }
 

@@ -2,6 +2,15 @@ import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { buildFeatureCompletionEvidencePack } from "./improvements/evidence.js";
+import { redactSensitiveText, sanitizePublicMetadata } from "./security/redaction.js";
+import {
+  CompletionReviewClaimInput,
+  CompletionReviewFinishStatus,
+  CompletionReviewRecord,
+  CompletionReviewSubjectType,
+  CompletionReviewStatus
+} from "./improvements/types.js";
 
 export type TaskStatus =
   | "queued"
@@ -112,10 +121,17 @@ export type ImprovementProposalRecord = {
   evidence: string[];
   risk: ImprovementRisk;
   source: string;
+  projectKey: string | null;
+  targets: string[];
+  confidence: number | null;
+  fingerprint: string | null;
+  provenance: Record<string, unknown>;
   status: ImprovementStatus;
   decisionNote: string | null;
   createdAt: string;
   decidedAt: string | null;
+  taskId: number | null;
+  featurePlanId: number | null;
 };
 
 export type ImprovementProposalInput = {
@@ -126,6 +142,11 @@ export type ImprovementProposalInput = {
   evidence: string[];
   risk: ImprovementRisk;
   source?: string;
+  projectKey?: string | null;
+  targets?: string[];
+  confidence?: number | null;
+  fingerprint?: string | null;
+  provenance?: Record<string, unknown>;
 };
 
 export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
@@ -428,11 +449,13 @@ export function createDatabase(databasePath: string) {
   const addImprovementProposalStatement = db.prepare(`
     INSERT INTO improvement_proposals (
       category, title, rationale, proposed_change, evidence_json, risk, source,
-      status, decision_note, created_at, decided_at
+      project_key, targets_json, confidence, fingerprint, provenance_json,
+      status, decision_note, created_at, decided_at, task_id, feature_plan_id
     )
     VALUES (
       @category, @title, @rationale, @proposedChange, @evidenceJson, @risk, @source,
-      'candidate', NULL, @now, NULL
+      @projectKey, @targetsJson, @confidence, @fingerprint, @provenanceJson,
+      'candidate', NULL, @now, NULL, NULL, NULL
     )
   `);
   const decideImprovementProposalStatement = db.prepare(`
@@ -441,6 +464,11 @@ export function createDatabase(databasePath: string) {
         decision_note = @decisionNote,
         decided_at = @now
     WHERE id = @id AND status = 'candidate'
+  `);
+  const attachImprovementActivationStatement = db.prepare(`
+    UPDATE improvement_proposals
+    SET task_id = @taskId, feature_plan_id = @featurePlanId
+    WHERE id = @id AND status = 'approved'
   `);
   const updateTaskStatusStatement = db.prepare(`
     UPDATE tasks SET status = @status, updated_at = @now WHERE id = @id
@@ -621,6 +649,19 @@ export function createDatabase(databasePath: string) {
         last_error = @lastError,
         updated_at = @now
     WHERE id = @id
+  `);
+  const enqueueCompletionReviewStatement = db.prepare(`
+    INSERT INTO completion_review_outbox (
+      subject_type, subject_id, completion_version, status, evidence_json,
+      attempt_count, available_at, lease_owner, lease_expires_at, last_error,
+      created_at, updated_at, started_at, finished_at
+    )
+    VALUES (
+      @subjectType, @subjectId, @completionVersion, 'pending', @evidenceJson,
+      0, @now, NULL, NULL, NULL,
+      @now, @now, NULL, NULL
+    )
+    ON CONFLICT(subject_type, subject_id, completion_version) DO NOTHING
   `);
 
   return {
@@ -822,12 +863,30 @@ export function createDatabase(databasePath: string) {
 
     createImprovementProposal(input: ImprovementProposalInput): ImprovementProposalRecord {
       const proposal = normalizeImprovementProposal(input);
+      if (proposal.fingerprint) {
+        const existing = this.findImprovementProposalByFingerprint(proposal.fingerprint);
+        if (existing) return existing;
+      }
       const result = addImprovementProposalStatement.run({
         ...proposal,
         evidenceJson: JSON.stringify(proposal.evidence),
+        targetsJson: JSON.stringify(proposal.targets),
+        provenanceJson: JSON.stringify(proposal.provenance),
         now: new Date().toISOString()
       });
       return this.getImprovementProposal(Number(result.lastInsertRowid));
+    },
+
+    findImprovementProposalByFingerprint(fingerprint: string): ImprovementProposalRecord | null {
+      const row = db.prepare("SELECT * FROM improvement_proposals WHERE fingerprint = ?")
+        .get(fingerprint.trim()) as ImprovementProposalRow | undefined;
+      return row ? mapImprovementProposal(row) : null;
+    },
+
+    listImprovementFingerprints(): string[] {
+      const rows = db.prepare("SELECT fingerprint FROM improvement_proposals WHERE fingerprint IS NOT NULL")
+        .all() as Array<{ fingerprint: string }>;
+      return rows.map((row) => row.fingerprint);
     },
 
     getImprovementProposal(id: number): ImprovementProposalRecord {
@@ -863,12 +922,20 @@ export function createDatabase(databasePath: string) {
       const result = decideImprovementProposalStatement.run({
         id,
         status,
-        decisionNote: decisionNote?.trim() || null,
+        decisionNote: decisionNote ? redactSensitiveText(decisionNote.trim()).slice(0, 2_000) || null : null,
         now: new Date().toISOString()
       });
       if (result.changes === 0) {
         throw new Error(`Improvement proposal ${id} is no longer awaiting a decision.`);
       }
+      return this.getImprovementProposal(id);
+    },
+
+    attachImprovementActivation(id: number, taskId: number, featurePlanId: number): ImprovementProposalRecord {
+      this.getTask(taskId);
+      this.getFeaturePlan(featurePlanId);
+      const result = attachImprovementActivationStatement.run({ id, taskId, featurePlanId });
+      if (result.changes !== 1) throw new Error(`Improvement proposal ${id} is not approved.`);
       return this.getImprovementProposal(id);
     },
 
@@ -1105,6 +1172,124 @@ export function createDatabase(databasePath: string) {
         now: new Date().toISOString()
       });
       return this.getFeature(feature.id);
+    },
+
+    enqueueFeatureCompletionReview(featureId: number): CompletionReviewRecord {
+      const feature = this.getFeature(featureId);
+      const now = new Date().toISOString();
+      const evidence = buildFeatureCompletionEvidencePack(feature, now);
+      enqueueCompletionReviewStatement.run({
+        subjectType: evidence.subject.type,
+        subjectId: evidence.subject.id,
+        completionVersion: evidence.subject.completionVersion,
+        evidenceJson: JSON.stringify(evidence),
+        now
+      });
+      return this.findCompletionReview(
+        evidence.subject.type,
+        evidence.subject.id,
+        evidence.subject.completionVersion
+      )!;
+    },
+
+    findCompletionReview(
+      subjectType: CompletionReviewSubjectType,
+      subjectId: string,
+      completionVersion: string
+    ): CompletionReviewRecord | null {
+      const row = db.prepare(`
+        SELECT * FROM completion_review_outbox
+        WHERE subject_type = ? AND subject_id = ? AND completion_version = ?
+      `).get(subjectType, subjectId, completionVersion) as CompletionReviewRow | undefined;
+      return row ? mapCompletionReview(row) : null;
+    },
+
+    getCompletionReview(id: number): CompletionReviewRecord {
+      const row = db.prepare("SELECT * FROM completion_review_outbox WHERE id = ?")
+        .get(id) as CompletionReviewRow | undefined;
+      if (!row) throw new Error(`Completion review not found: ${id}`);
+      return mapCompletionReview(row);
+    },
+
+    listCompletionReviews(limit = 100): CompletionReviewRecord[] {
+      const rows = db.prepare("SELECT * FROM completion_review_outbox ORDER BY id ASC LIMIT ?")
+        .all(limit) as CompletionReviewRow[];
+      return rows.map(mapCompletionReview);
+    },
+
+    claimCompletionReview(input: CompletionReviewClaimInput): CompletionReviewRecord | null {
+      const workerId = input.workerId.trim();
+      if (!workerId) throw new Error("Completion review worker id is required.");
+      if (!Number.isInteger(input.leaseMs) || input.leaseMs < 1_000) {
+        throw new Error("Completion review lease must be at least 1000ms.");
+      }
+      const referenceTime = input.now ?? new Date();
+      const now = referenceTime.toISOString();
+      const leaseExpiresAt = new Date(referenceTime.getTime() + input.leaseMs).toISOString();
+      return db.transaction(() => {
+        const candidate = db.prepare(`
+          SELECT id FROM completion_review_outbox
+          WHERE (status = 'pending' AND available_at <= @now)
+             OR (status = 'running' AND lease_expires_at <= @now)
+          ORDER BY available_at ASC, id ASC
+          LIMIT 1
+        `).get({ now }) as { id: number } | undefined;
+        if (!candidate) return null;
+        const result = db.prepare(`
+          UPDATE completion_review_outbox
+          SET status = 'running',
+              attempt_count = attempt_count + 1,
+              lease_owner = @workerId,
+              lease_expires_at = @leaseExpiresAt,
+              updated_at = @now,
+              started_at = COALESCE(started_at, @now),
+              finished_at = NULL
+          WHERE id = @id
+            AND ((status = 'pending' AND available_at <= @now)
+              OR (status = 'running' AND lease_expires_at <= @now))
+        `).run({ id: candidate.id, workerId, leaseExpiresAt, now });
+        return result.changes === 1 ? this.getCompletionReview(candidate.id) : null;
+      })();
+    },
+
+    finishCompletionReview(
+      id: number,
+      workerId: string,
+      status: CompletionReviewFinishStatus,
+      error?: string | null
+    ): CompletionReviewRecord {
+      const now = new Date().toISOString();
+      const result = db.prepare(`
+        UPDATE completion_review_outbox
+        SET status = @status,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            last_error = @lastError,
+            updated_at = @now,
+            finished_at = CASE WHEN @status IN ('succeeded', 'failed') THEN @now ELSE NULL END
+        WHERE id = @id AND status = 'running' AND lease_owner = @workerId
+          AND lease_expires_at > @now
+      `).run({
+        id,
+        workerId: workerId.trim(),
+        status,
+        lastError: error ? redactSensitiveText(error.trim()).slice(0, 2_000) || null : null,
+        now
+      });
+      if (result.changes !== 1) throw new Error(`Completion review #${id} is not claimed by worker ${workerId}.`);
+      return this.getCompletionReview(id);
+    },
+
+    retryCompletionReview(id: number, availableAt = new Date().toISOString()): CompletionReviewRecord {
+      const result = db.prepare(`
+        UPDATE completion_review_outbox
+        SET status = 'pending', available_at = @availableAt,
+            lease_owner = NULL, lease_expires_at = NULL,
+            updated_at = @now, finished_at = NULL
+        WHERE id = @id AND status IN ('waiting_provider', 'failed')
+      `).run({ id, availableAt, now: new Date().toISOString() });
+      if (result.changes !== 1) throw new Error(`Completion review #${id} is not retryable.`);
+      return this.getCompletionReview(id);
     },
 
     cancelFeature(id: number, reason?: string | null): FeatureRecord {
@@ -1523,10 +1708,17 @@ function migrate(db: Database.Database) {
       evidence_json TEXT NOT NULL DEFAULT '[]',
       risk TEXT NOT NULL,
       source TEXT NOT NULL,
+      project_key TEXT,
+      targets_json TEXT NOT NULL DEFAULT '[]',
+      confidence REAL,
+      fingerprint TEXT,
+      provenance_json TEXT NOT NULL DEFAULT '{}',
       status TEXT NOT NULL DEFAULT 'candidate',
       decision_note TEXT,
       created_at TEXT NOT NULL,
-      decided_at TEXT
+      decided_at TEXT,
+      task_id INTEGER,
+      feature_plan_id INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS goal_runs (
@@ -1685,6 +1877,26 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
 
+    CREATE TABLE IF NOT EXISTS completion_review_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      completion_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'running', 'succeeded', 'waiting_provider', 'failed')),
+      evidence_json TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      UNIQUE(subject_type, subject_id, completion_version)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
       ON feature_plan_tasks(task_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
@@ -1695,6 +1907,8 @@ function migrate(db: Database.Database) {
       ON feature_plan_integration_items(integration_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_task_id
       ON feature_plan_integration_items(task_id);
+    CREATE INDEX IF NOT EXISTS idx_completion_review_outbox_claim
+      ON completion_review_outbox(status, available_at, lease_expires_at, id);
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -1707,9 +1921,18 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
   addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
   addColumnIfMissing(db, "features", "cancel_reason", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "project_key", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "targets_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "improvement_proposals", "confidence", "REAL");
+  addColumnIfMissing(db, "improvement_proposals", "fingerprint", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "provenance_json", "TEXT NOT NULL DEFAULT '{}'");
+  addColumnIfMissing(db, "improvement_proposals", "task_id", "INTEGER");
+  addColumnIfMissing(db, "improvement_proposals", "feature_plan_id", "INTEGER");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
       ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_proposals_fingerprint
+      ON improvement_proposals(fingerprint) WHERE fingerprint IS NOT NULL;
   `);
 }
 
@@ -1768,10 +1991,17 @@ type ImprovementProposalRow = {
   evidence_json: string;
   risk: ImprovementRisk;
   source: string;
+  project_key: string | null;
+  targets_json: string;
+  confidence: number | null;
+  fingerprint: string | null;
+  provenance_json: string;
   status: ImprovementStatus;
   decision_note: string | null;
   created_at: string;
   decided_at: string | null;
+  task_id: number | null;
+  feature_plan_id: number | null;
 };
 
 type GoalRunRow = {
@@ -1924,6 +2154,24 @@ type FeaturePlanIntegrationItemRow = FeaturePlanIntegrationItemBaseRow & {
   task_status: TaskStatus;
 };
 
+type CompletionReviewRow = {
+  id: number;
+  subject_type: CompletionReviewSubjectType;
+  subject_id: string;
+  completion_version: string;
+  status: CompletionReviewStatus;
+  evidence_json: string;
+  attempt_count: number;
+  available_at: string;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
@@ -1945,7 +2193,7 @@ function normalizeProjectInput(input: ProjectInput) {
   };
 }
 
-function normalizeImprovementProposal(input: ImprovementProposalInput): ImprovementProposalInput & { source: string } {
+function normalizeImprovementProposal(input: ImprovementProposalInput) {
   const category = input.category;
   const risk = input.risk;
   if (!["skill", "memory", "routing", "policy", "integration"].includes(category)) {
@@ -1955,12 +2203,25 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     throw new Error(`Unsupported improvement risk: ${risk}`);
   }
 
-  const title = input.title.trim();
-  const rationale = input.rationale.trim();
-  const proposedChange = input.proposedChange.trim();
-  const evidence = input.evidence.map((item) => item.trim()).filter(Boolean);
-  if (title.length < 4 || rationale.length < 8 || proposedChange.length < 8 || evidence.length === 0) {
+  const title = redactSensitiveText(input.title.trim());
+  const rationale = redactSensitiveText(input.rationale.trim());
+  const proposedChange = redactSensitiveText(input.proposedChange.trim());
+  const evidence = input.evidence.map((item) => redactSensitiveText(item.trim())).filter(Boolean);
+  const targets = (input.targets ?? []).map((item) => redactSensitiveText(item.trim())).filter(Boolean);
+  if (title.length < 4 || title.length > 160 || rationale.length < 8 || rationale.length > 4_000
+    || proposedChange.length < 8 || proposedChange.length > 4_000
+    || evidence.length === 0 || evidence.length > 20
+    || evidence.some((item) => item.length > 1_000)
+    || targets.length > 8 || targets.some((item) => item.length > 160)) {
     throw new Error("Improvement proposals require a title, rationale, proposed change and evidence.");
+  }
+  const confidence = input.confidence ?? null;
+  if (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    throw new Error("Improvement confidence must be between 0 and 1.");
+  }
+  const fingerprint = input.fingerprint?.trim() || null;
+  if (fingerprint && (fingerprint.length > 128 || !/^[a-zA-Z0-9:._-]+$/.test(fingerprint))) {
+    throw new Error("Improvement fingerprint is invalid.");
   }
 
   return {
@@ -1970,7 +2231,12 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     proposedChange,
     evidence,
     risk,
-    source: input.source?.trim() || "dashboard"
+    source: input.source?.trim() || "dashboard",
+    projectKey: input.projectKey?.trim().toLowerCase() || null,
+    targets,
+    confidence,
+    fingerprint,
+    provenance: sanitizePublicMetadata(input.provenance ?? {}) as Record<string, unknown>
   };
 }
 
@@ -2208,10 +2474,17 @@ function mapImprovementProposal(row: ImprovementProposalRow): ImprovementProposa
     evidence: JSON.parse(row.evidence_json || "[]") as string[],
     risk: row.risk,
     source: row.source,
+    projectKey: row.project_key,
+    targets: JSON.parse(row.targets_json || "[]") as string[],
+    confidence: row.confidence,
+    fingerprint: row.fingerprint,
+    provenance: JSON.parse(row.provenance_json || "{}") as Record<string, unknown>,
     status: row.status,
     decisionNote: row.decision_note,
     createdAt: row.created_at,
-    decidedAt: row.decided_at
+    decidedAt: row.decided_at,
+    taskId: row.task_id,
+    featurePlanId: row.feature_plan_id
   };
 }
 
@@ -2381,6 +2654,26 @@ function mapFeaturePlanIntegrationItem(
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function mapCompletionReview(row: CompletionReviewRow): CompletionReviewRecord {
+  return {
+    id: row.id,
+    subjectType: row.subject_type,
+    subjectId: row.subject_id,
+    completionVersion: row.completion_version,
+    status: row.status,
+    evidence: JSON.parse(row.evidence_json) as CompletionReviewRecord["evidence"],
+    attemptCount: row.attempt_count,
+    availableAt: row.available_at,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at
   };
 }
 
