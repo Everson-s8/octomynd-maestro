@@ -281,6 +281,9 @@ export class FeatureCoordinator {
   private async completeFeature(feature: FeatureRecord, state: FeaturePullRequestState): Promise<void> {
     if (feature.status === "completed") return;
     const project = this.database.getProjectByKey(feature.projectKey);
+    const issueLinks = feature.featurePlanId === null
+      ? { featureIssueNumber: null, taskIssueNumbers: {} as Record<number, number> }
+      : this.database.getFeaturePlanIssueLinks(feature.featurePlanId);
     const completedItems: FeatureCompletion["items"] = [];
     let workPullRequestPending = false;
     for (const item of this.database.listFeatureItems(feature.id)) {
@@ -299,6 +302,14 @@ export class FeatureCoordinator {
           await this.github.closeSuperseded(item.pullRequestUrl, feature.pullRequestUrl);
         }
         await this.github.deleteHeadBranch(item.pullRequestUrl);
+        const taskIssueNumber = issueLinks.taskIssueNumbers[task.id];
+        if (taskIssueNumber) {
+          await this.github.closeIssue(
+            feature.pullRequestUrl,
+            taskIssueNumber,
+            `Completed by Feature PR ${feature.pullRequestUrl} at ${state.headSha}.`
+          );
+        }
       } catch (error) {
         workPullRequestPending = true;
         this.addEvent(feature, "feature.work_pr_close_failed", safeSummary(error), task.id);
@@ -321,6 +332,13 @@ export class FeatureCoordinator {
 
     try {
       await this.github.deleteHeadBranch(feature.pullRequestUrl);
+      if (issueLinks.featureIssueNumber) {
+        await this.github.closeIssue(
+          feature.pullRequestUrl,
+          issueLinks.featureIssueNumber,
+          `Completed by merged Feature PR ${feature.pullRequestUrl} at ${state.headSha}.`
+        );
+      }
     } catch (error) {
       workPullRequestPending = true;
       this.addEvent(feature, "feature.branch_delete_failed", safeSummary(error));

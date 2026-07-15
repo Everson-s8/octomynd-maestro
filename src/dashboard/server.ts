@@ -257,6 +257,8 @@ async function routeRequest(
         objective: readString(body.objective),
         acceptanceCriteria: readStringArray(body.acceptanceCriteria),
         taskIds: readNumberArray(body.taskIds),
+        featureIssueNumber: readOptionalPositiveInteger(body.featureIssueNumber),
+        taskIssueNumbers: readTaskIssueNumbers(body.taskIssueNumbers),
         idempotencyKey: readString(body.idempotencyKey) || null
       });
       sendJson(response, result.applied ? 201 : 200, result);
@@ -560,6 +562,22 @@ function readNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((item): item is number => typeof item === "number")
     : [];
+}
+
+function readOptionalPositiveInteger(value: unknown): number | null {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function readTaskIssueNumbers(value: unknown): Record<number, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<number, number> = {};
+  for (const [taskId, issueNumber] of Object.entries(value)) {
+    const normalizedTaskId = Number(taskId);
+    if (!Number.isInteger(normalizedTaskId) || normalizedTaskId <= 0) continue;
+    if (!Number.isInteger(issueNumber) || Number(issueNumber) <= 0) continue;
+    result[normalizedTaskId] = Number(issueNumber);
+  }
+  return result;
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {

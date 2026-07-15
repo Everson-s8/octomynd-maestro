@@ -29,6 +29,7 @@ export interface FeatureGitHubGateway {
   close(url: string, comment: string): Promise<void>;
   closeSuperseded(url: string, featureUrl: string): Promise<void>;
   deleteHeadBranch(url: string): Promise<void>;
+  closeIssue(url: string, issueNumber: number, comment: string): Promise<void>;
 }
 
 export class GhFeatureGateway implements FeatureGitHubGateway {
@@ -120,6 +121,41 @@ export class GhFeatureGateway implements FeatureGitHubGateway {
       throw error;
     }
   }
+
+  async closeIssue(url: string, issueNumber: number, comment: string): Promise<void> {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error("Cannot close GitHub issue: invalid issue number.");
+    }
+    const repository = repositoryFromPullRequestUrl(url);
+    if (!repository) {
+      throw new Error("Cannot identify the GitHub repository for issue closure.");
+    }
+    const output = await runGh([
+      "issue",
+      "view",
+      String(issueNumber),
+      "--repo",
+      repository,
+      "--json",
+      "state"
+    ], "inspect linked GitHub issue");
+    const issue = JSON.parse(output) as { state: string };
+    if (issue.state.toUpperCase() === "CLOSED") return;
+    await runGh([
+      "issue",
+      "close",
+      String(issueNumber),
+      "--repo",
+      repository,
+      "--comment",
+      comment
+    ], "close linked GitHub issue");
+  }
+}
+
+function repositoryFromPullRequestUrl(url: string): string | null {
+  const match = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/\d+\/?$/i);
+  return match ? `${match[1]}/${match[2]}` : null;
 }
 
 export function featureChecksPassed(state: FeaturePullRequestState): boolean {

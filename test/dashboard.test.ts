@@ -556,4 +556,5 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   async close(url: string): Promise<void> { this.closed.push(url); this.state = { ...this.state, state: "CLOSED" }; }
   async closeSuperseded(): Promise<void> {}
   async deleteHeadBranch(): Promise<void> {}
+  async closeIssue(): Promise<void> {}
 }

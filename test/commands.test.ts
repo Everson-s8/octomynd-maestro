@@ -260,4 +260,5 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   }
   async closeSuperseded(): Promise<void> {}
   async deleteHeadBranch(): Promise<void> {}
+  async closeIssue(): Promise<void> {}
 }

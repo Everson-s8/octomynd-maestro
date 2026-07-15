@@ -102,6 +102,10 @@ describe("feature completion protocol", () => {
       url: "https://github.com/example/project/pull/4",
       featureUrl: feature.pullRequestUrl
     }]);
+    expect(fixture.github.closedIssues).toEqual([
+      { issueNumber: 36, comment: expect.stringContaining(feature.pullRequestUrl) },
+      { issueNumber: 35, comment: expect.stringContaining(feature.pullRequestUrl) }
+    ]);
     expect(fixture.github.deleted).toEqual([
       "https://github.com/example/project/pull/4",
       feature.pullRequestUrl
@@ -153,6 +157,33 @@ describe("feature completion protocol", () => {
 
     expect(fixture.database.getFeature(fixture.feature.id).status).toBe("completed");
     expect(fixture.database.getTask(fixture.task.id).status).toBe("done");
+    expect(notifications).toBe(1);
+    fixture.database.close();
+  });
+
+  it("retries GitHub issue closure before announcing Feature completion", async () => {
+    const fixture = createFixture("completed");
+    fixture.github.issueCloseFailuresRemaining = 1;
+    let notifications = 0;
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([fixture.provider]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github,
+      async () => { notifications += 1; }
+    );
+
+    await coordinator.reconcile();
+
+    expect(fixture.database.getFeature(fixture.feature.id).status).toBe("merging");
+    expect(fixture.database.getTask(fixture.task.id).status).toBe("queued");
+    expect(notifications).toBe(0);
+
+    await coordinator.reconcile();
+
+    expect(fixture.database.getFeature(fixture.feature.id).status).toBe("completed");
+    expect(fixture.database.getTask(fixture.task.id).status).toBe("done");
+    expect(fixture.github.closedIssues.map((entry) => entry.issueNumber)).toEqual([36, 35]);
     expect(notifications).toBe(1);
     fixture.database.close();
   });
@@ -276,7 +307,16 @@ function createFixture(outcome: "completed" | "changes_requested") {
   const database = createDatabase(path.join(tempDir, "maestro.db"));
   database.registerProject({ key: "maestro", name: "Octomynd Maestro", path: projectPath });
   const task = database.createTask("harden safety gate", "maestro", "maestro");
+  const featurePlan = database.createFeaturePlan({
+    projectKey: "maestro",
+    objective: "Integrate safety, lifecycle, provider fallback and CI.",
+    acceptanceCriteria: ["The consolidated Feature closes its tracked GitHub issues"],
+    taskIds: [task.id],
+    featureIssueNumber: 35,
+    taskIssueNumbers: { [task.id]: 36 }
+  });
   const feature = database.createFeature({
+    featurePlanId: featurePlan.plan.id,
     projectKey: "maestro",
     name: "Maestro Reliability Foundation",
     objective: "Integrate safety, lifecycle, provider fallback and CI.",
@@ -329,9 +369,11 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   state = pullRequestState();
   readonly merges: Array<{ url: string; expectedHeadSha: string }> = [];
   readonly closed: Array<{ url: string; featureUrl: string }> = [];
+  readonly closedIssues: Array<{ issueNumber: number; comment: string }> = [];
   readonly deleted: string[] = [];
   markedDraft = false;
   closeFailuresRemaining = 0;
+  issueCloseFailuresRemaining = 0;
   inspectCalls = 0;
 
   async inspect(url: string): Promise<FeaturePullRequestState> {
@@ -370,6 +412,16 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
 
   async deleteHeadBranch(url: string): Promise<void> {
     this.deleted.push(url);
+  }
+
+  async closeIssue(_url: string, issueNumber: number, comment: string): Promise<void> {
+    if (this.issueCloseFailuresRemaining > 0) {
+      this.issueCloseFailuresRemaining -= 1;
+      throw new Error("temporary GitHub issue close failure");
+    }
+    if (!this.closedIssues.some((entry) => entry.issueNumber === issueNumber)) {
+      this.closedIssues.push({ issueNumber, comment });
+    }
   }
 }
 
