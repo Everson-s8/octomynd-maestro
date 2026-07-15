@@ -9,6 +9,7 @@ import {
   ProjectRecord,
   TaskRecord
 } from "../db.js";
+import { CompletionReviewOutbox } from "../improvements/outbox.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import {
   FeatureGitHubGateway,
@@ -80,7 +81,7 @@ export class FeatureCoordinator {
   }
 
   private async reconcileFeatures(): Promise<number> {
-    let changes = 0;
+    let changes = new CompletionReviewOutbox(this.database).reconcileCompletedFeatures(100);
     const features = this.database.listFeatures(100).filter((feature) => (
       !["completed", "failed", "cancelled"].includes(feature.status)
     ));
@@ -332,13 +333,17 @@ export class FeatureCoordinator {
       return;
     }
 
-    const completed = this.database.updateFeature({
-      id: feature.id,
-      status: "completed",
-      lastError: null,
-      mergedAt: new Date().toISOString()
+    const completed = this.database.withTransaction(() => {
+      const updated = this.database.updateFeature({
+        id: feature.id,
+        status: "completed",
+        lastError: null,
+        mergedAt: new Date().toISOString()
+      });
+      this.database.enqueueFeatureCompletionReview(updated.id);
+      this.addEvent(updated, "feature.completed", `Feature PR #${state.number} merged and child work closed.`);
+      return updated;
     });
-    this.addEvent(completed, "feature.completed", `Feature PR #${state.number} merged and child work closed.`);
     if (this.notifyCompleted) {
       try {
         await this.notifyCompleted({ feature: completed, items: completedItems });

@@ -2,6 +2,15 @@ import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { buildFeatureCompletionEvidencePack } from "./improvements/evidence.js";
+import { redactSensitiveText } from "./security/redaction.js";
+import {
+  CompletionReviewClaimInput,
+  CompletionReviewFinishStatus,
+  CompletionReviewRecord,
+  CompletionReviewSubjectType,
+  CompletionReviewStatus
+} from "./improvements/types.js";
 
 export type TaskStatus =
   | "queued"
@@ -622,6 +631,19 @@ export function createDatabase(databasePath: string) {
         updated_at = @now
     WHERE id = @id
   `);
+  const enqueueCompletionReviewStatement = db.prepare(`
+    INSERT INTO completion_review_outbox (
+      subject_type, subject_id, completion_version, status, evidence_json,
+      attempt_count, available_at, lease_owner, lease_expires_at, last_error,
+      created_at, updated_at, started_at, finished_at
+    )
+    VALUES (
+      @subjectType, @subjectId, @completionVersion, 'pending', @evidenceJson,
+      0, @now, NULL, NULL, NULL,
+      @now, @now, NULL, NULL
+    )
+    ON CONFLICT(subject_type, subject_id, completion_version) DO NOTHING
+  `);
 
   return {
     close: () => db.close(),
@@ -1105,6 +1127,124 @@ export function createDatabase(databasePath: string) {
         now: new Date().toISOString()
       });
       return this.getFeature(feature.id);
+    },
+
+    enqueueFeatureCompletionReview(featureId: number): CompletionReviewRecord {
+      const feature = this.getFeature(featureId);
+      const now = new Date().toISOString();
+      const evidence = buildFeatureCompletionEvidencePack(feature, now);
+      enqueueCompletionReviewStatement.run({
+        subjectType: evidence.subject.type,
+        subjectId: evidence.subject.id,
+        completionVersion: evidence.subject.completionVersion,
+        evidenceJson: JSON.stringify(evidence),
+        now
+      });
+      return this.findCompletionReview(
+        evidence.subject.type,
+        evidence.subject.id,
+        evidence.subject.completionVersion
+      )!;
+    },
+
+    findCompletionReview(
+      subjectType: CompletionReviewSubjectType,
+      subjectId: string,
+      completionVersion: string
+    ): CompletionReviewRecord | null {
+      const row = db.prepare(`
+        SELECT * FROM completion_review_outbox
+        WHERE subject_type = ? AND subject_id = ? AND completion_version = ?
+      `).get(subjectType, subjectId, completionVersion) as CompletionReviewRow | undefined;
+      return row ? mapCompletionReview(row) : null;
+    },
+
+    getCompletionReview(id: number): CompletionReviewRecord {
+      const row = db.prepare("SELECT * FROM completion_review_outbox WHERE id = ?")
+        .get(id) as CompletionReviewRow | undefined;
+      if (!row) throw new Error(`Completion review not found: ${id}`);
+      return mapCompletionReview(row);
+    },
+
+    listCompletionReviews(limit = 100): CompletionReviewRecord[] {
+      const rows = db.prepare("SELECT * FROM completion_review_outbox ORDER BY id ASC LIMIT ?")
+        .all(limit) as CompletionReviewRow[];
+      return rows.map(mapCompletionReview);
+    },
+
+    claimCompletionReview(input: CompletionReviewClaimInput): CompletionReviewRecord | null {
+      const workerId = input.workerId.trim();
+      if (!workerId) throw new Error("Completion review worker id is required.");
+      if (!Number.isInteger(input.leaseMs) || input.leaseMs < 1_000) {
+        throw new Error("Completion review lease must be at least 1000ms.");
+      }
+      const referenceTime = input.now ?? new Date();
+      const now = referenceTime.toISOString();
+      const leaseExpiresAt = new Date(referenceTime.getTime() + input.leaseMs).toISOString();
+      return db.transaction(() => {
+        const candidate = db.prepare(`
+          SELECT id FROM completion_review_outbox
+          WHERE (status = 'pending' AND available_at <= @now)
+             OR (status = 'running' AND lease_expires_at <= @now)
+          ORDER BY available_at ASC, id ASC
+          LIMIT 1
+        `).get({ now }) as { id: number } | undefined;
+        if (!candidate) return null;
+        const result = db.prepare(`
+          UPDATE completion_review_outbox
+          SET status = 'running',
+              attempt_count = attempt_count + 1,
+              lease_owner = @workerId,
+              lease_expires_at = @leaseExpiresAt,
+              updated_at = @now,
+              started_at = COALESCE(started_at, @now),
+              finished_at = NULL
+          WHERE id = @id
+            AND ((status = 'pending' AND available_at <= @now)
+              OR (status = 'running' AND lease_expires_at <= @now))
+        `).run({ id: candidate.id, workerId, leaseExpiresAt, now });
+        return result.changes === 1 ? this.getCompletionReview(candidate.id) : null;
+      })();
+    },
+
+    finishCompletionReview(
+      id: number,
+      workerId: string,
+      status: CompletionReviewFinishStatus,
+      error?: string | null
+    ): CompletionReviewRecord {
+      const now = new Date().toISOString();
+      const result = db.prepare(`
+        UPDATE completion_review_outbox
+        SET status = @status,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            last_error = @lastError,
+            updated_at = @now,
+            finished_at = CASE WHEN @status IN ('succeeded', 'failed') THEN @now ELSE NULL END
+        WHERE id = @id AND status = 'running' AND lease_owner = @workerId
+          AND lease_expires_at > @now
+      `).run({
+        id,
+        workerId: workerId.trim(),
+        status,
+        lastError: error ? redactSensitiveText(error.trim()).slice(0, 2_000) || null : null,
+        now
+      });
+      if (result.changes !== 1) throw new Error(`Completion review #${id} is not claimed by worker ${workerId}.`);
+      return this.getCompletionReview(id);
+    },
+
+    retryCompletionReview(id: number, availableAt = new Date().toISOString()): CompletionReviewRecord {
+      const result = db.prepare(`
+        UPDATE completion_review_outbox
+        SET status = 'pending', available_at = @availableAt,
+            lease_owner = NULL, lease_expires_at = NULL,
+            updated_at = @now, finished_at = NULL
+        WHERE id = @id AND status IN ('waiting_provider', 'failed')
+      `).run({ id, availableAt, now: new Date().toISOString() });
+      if (result.changes !== 1) throw new Error(`Completion review #${id} is not retryable.`);
+      return this.getCompletionReview(id);
     },
 
     cancelFeature(id: number, reason?: string | null): FeatureRecord {
@@ -1685,6 +1825,26 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
 
+    CREATE TABLE IF NOT EXISTS completion_review_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      completion_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'running', 'succeeded', 'waiting_provider', 'failed')),
+      evidence_json TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      UNIQUE(subject_type, subject_id, completion_version)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
       ON feature_plan_tasks(task_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_operations_plan_id
@@ -1695,6 +1855,8 @@ function migrate(db: Database.Database) {
       ON feature_plan_integration_items(integration_id);
     CREATE INDEX IF NOT EXISTS idx_feature_plan_integration_items_task_id
       ON feature_plan_integration_items(task_id);
+    CREATE INDEX IF NOT EXISTS idx_completion_review_outbox_claim
+      ON completion_review_outbox(status, available_at, lease_expires_at, id);
   `);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
@@ -1922,6 +2084,24 @@ type FeaturePlanIntegrationItemBaseRow = {
 type FeaturePlanIntegrationItemRow = FeaturePlanIntegrationItemBaseRow & {
   task_text: string;
   task_status: TaskStatus;
+};
+
+type CompletionReviewRow = {
+  id: number;
+  subject_type: CompletionReviewSubjectType;
+  subject_id: string;
+  completion_version: string;
+  status: CompletionReviewStatus;
+  evidence_json: string;
+  attempt_count: number;
+  available_at: string;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 };
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
@@ -2381,6 +2561,26 @@ function mapFeaturePlanIntegrationItem(
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function mapCompletionReview(row: CompletionReviewRow): CompletionReviewRecord {
+  return {
+    id: row.id,
+    subjectType: row.subject_type,
+    subjectId: row.subject_id,
+    completionVersion: row.completion_version,
+    status: row.status,
+    evidence: JSON.parse(row.evidence_json) as CompletionReviewRecord["evidence"],
+    attemptCount: row.attempt_count,
+    availableAt: row.available_at,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at
   };
 }
 
