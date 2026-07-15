@@ -73,8 +73,8 @@ The first implemented vertical slice is an improvement proposal ledger:
 - candidate, approved, or rejected state;
 - audit event for proposal and decision.
 
-An approved proposal is not activated automatically. It becomes eligible for a future isolated task,
-tests, review, and explicit activation.
+An approved proposal is not activated automatically. It creates a normal isolated Task and Feature
+Plan, so implementation, tests, Work PR evidence and consolidated Final Review remain mandatory.
 
 ## What should be reused next
 
@@ -104,8 +104,13 @@ The deferred WhatsApp implementation plan is recorded in `docs/WHATSAPP_GATEWAY_
 4. Large gateway runtime before a stable platform adapter contract exists.
 5. Autonomous mutation based on one frustrating or anomalous session alone.
 
-## Recommended next milestone
+## Implemented milestone: governed self-improvement loop
 
-Create a read-only background reviewer over completed Maestro tasks and reviews. Its only output is a
-validated improvement candidate. A separate evaluator checks evidence and duplicates; the user then
-approves or rejects it in the Learning Lab. Activation remains a normal isolated Maestro task.
+Completed Features now enter a durable SQLite review outbox keyed by reviewed head SHA. A restricted
+read-only reviewer can produce bounded candidate drafts through Codex or Claude, and a deterministic
+evaluator checks evidence references, confidence/risk floors, duplicate fingerprints and protected
+surfaces. Accepted drafts appear in the Learning Lab and Telegram. Human approval creates a new Task
+and Feature Plan; it never mutates code, prompts, memory, skills, routing or policy directly.
+
+The next safe milestone is curator lifecycle and rollback for agent-owned artifacts, after enough
+candidate/activation telemetry exists to evaluate false positives and proposal quality.

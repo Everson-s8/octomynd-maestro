@@ -5,6 +5,8 @@ import {
   FeaturePlanDetails,
   FeaturePlanWriteResult,
   FeatureRecord,
+  ImprovementProposalRecord,
+  ImprovementStatus,
   MaestroDatabase,
   ProjectRecord,
   TaskRecord
@@ -52,6 +54,12 @@ export type PrepareTaskOutcome = {
   task: TaskRecord;
   branchName: string;
   worktreePath: string;
+};
+
+export type ImprovementDecisionOutcome = {
+  improvement: ImprovementProposalRecord;
+  task: TaskRecord | null;
+  featurePlan: FeaturePlanDetails | null;
 };
 
 export class ApplicationCommands {
@@ -162,6 +170,83 @@ export class ApplicationCommands {
       return result;
     } catch (error) {
       throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  decideImprovementProposal(
+    origin: CommandOrigin,
+    improvementId: number,
+    status: Exclude<ImprovementStatus, "candidate">,
+    decisionNote?: string | null
+  ): ImprovementDecisionOutcome {
+    try {
+      return this.database.withTransaction(() => {
+        const before = this.database.getImprovementProposal(improvementId);
+        if (before.status !== "candidate") {
+          if (before.status === status && before.taskId && before.featurePlanId) {
+            return {
+              improvement: before,
+              task: this.database.getTask(before.taskId),
+              featurePlan: this.database.getFeaturePlanDetails(before.featurePlanId)
+            };
+          }
+          throw new Error(`Improvement proposal ${improvementId} is no longer awaiting a decision.`);
+        }
+
+        const decided = this.database.decideImprovementProposal(improvementId, status, decisionNote);
+        if (status === "rejected") {
+          this.recordImprovementDecision(origin, decided);
+          return { improvement: decided, task: null, featurePlan: null };
+        }
+
+        const project = decided.projectKey
+          ? this.database.findProjectByKey(decided.projectKey)
+          : this.database.getDefaultProject();
+        if (!project) throw new Error(`Project not found for improvement proposal ${improvementId}.`);
+        const task = this.createTask(origin, {
+          projectKey: project.key,
+          text: [
+            `Implement approved improvement #${decided.id}: ${decided.title}`,
+            decided.proposedChange,
+            `Targets: ${decided.targets.length > 0 ? decided.targets.join(", ") : "determine during planning"}`,
+            "Preserve the Maestro Constitution, human gates, secret handling, audit trail and rollback boundaries."
+          ].join("\n\n")
+        });
+        const featurePlan = this.createFeaturePlan(origin, {
+          projectKey: project.key,
+          objective: `Implement approved improvement #${decided.id}: ${decided.title}`,
+          acceptanceCriteria: [
+            decided.proposedChange,
+            "Run deterministic typecheck, tests, build and secret scan.",
+            "Deliver a Draft Work PR and require Final Review only on the consolidated Feature PR.",
+            "Do not mutate protected policy, permission, audit or rollback layers automatically."
+          ],
+          taskIds: [task.id],
+          idempotencyKey: `improvement:${decided.id}:activation`
+        });
+        const improvement = this.database.attachImprovementActivation(
+          decided.id,
+          task.id,
+          featurePlan.plan.id
+        );
+        this.recordImprovementDecision(origin, improvement);
+        this.database.addEvent({
+          source: origin.channel,
+          type: "improvement.activated_as_feature_plan",
+          text: improvement.title,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          taskId: task.id,
+          metadata: {
+            improvementId: improvement.id,
+            featurePlanId: featurePlan.plan.id,
+            projectKey: project.key
+          }
+        });
+        return { improvement, task, featurePlan };
+      });
+    } catch (error) {
+      throw validationError(error instanceof Error ? error.message : "Improvement decision failed.");
     }
   }
 
@@ -384,5 +469,21 @@ export class ApplicationCommands {
       throw conflictError(message);
     }
     throw validationError(message);
+  }
+
+  private recordImprovementDecision(origin: CommandOrigin, improvement: ImprovementProposalRecord): void {
+    this.database.addEvent({
+      source: origin.channel,
+      type: `improvement.${improvement.status}`,
+      text: improvement.title,
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      metadata: {
+        improvementId: improvement.id,
+        decisionNote: improvement.decisionNote,
+        taskId: improvement.taskId,
+        featurePlanId: improvement.featurePlanId
+      }
+    });
   }
 }

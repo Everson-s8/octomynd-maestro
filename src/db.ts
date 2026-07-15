@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildFeatureCompletionEvidencePack } from "./improvements/evidence.js";
-import { redactSensitiveText } from "./security/redaction.js";
+import { redactSensitiveText, sanitizePublicMetadata } from "./security/redaction.js";
 import {
   CompletionReviewClaimInput,
   CompletionReviewFinishStatus,
@@ -121,10 +121,17 @@ export type ImprovementProposalRecord = {
   evidence: string[];
   risk: ImprovementRisk;
   source: string;
+  projectKey: string | null;
+  targets: string[];
+  confidence: number | null;
+  fingerprint: string | null;
+  provenance: Record<string, unknown>;
   status: ImprovementStatus;
   decisionNote: string | null;
   createdAt: string;
   decidedAt: string | null;
+  taskId: number | null;
+  featurePlanId: number | null;
 };
 
 export type ImprovementProposalInput = {
@@ -135,6 +142,11 @@ export type ImprovementProposalInput = {
   evidence: string[];
   risk: ImprovementRisk;
   source?: string;
+  projectKey?: string | null;
+  targets?: string[];
+  confidence?: number | null;
+  fingerprint?: string | null;
+  provenance?: Record<string, unknown>;
 };
 
 export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
@@ -437,11 +449,13 @@ export function createDatabase(databasePath: string) {
   const addImprovementProposalStatement = db.prepare(`
     INSERT INTO improvement_proposals (
       category, title, rationale, proposed_change, evidence_json, risk, source,
-      status, decision_note, created_at, decided_at
+      project_key, targets_json, confidence, fingerprint, provenance_json,
+      status, decision_note, created_at, decided_at, task_id, feature_plan_id
     )
     VALUES (
       @category, @title, @rationale, @proposedChange, @evidenceJson, @risk, @source,
-      'candidate', NULL, @now, NULL
+      @projectKey, @targetsJson, @confidence, @fingerprint, @provenanceJson,
+      'candidate', NULL, @now, NULL, NULL, NULL
     )
   `);
   const decideImprovementProposalStatement = db.prepare(`
@@ -450,6 +464,11 @@ export function createDatabase(databasePath: string) {
         decision_note = @decisionNote,
         decided_at = @now
     WHERE id = @id AND status = 'candidate'
+  `);
+  const attachImprovementActivationStatement = db.prepare(`
+    UPDATE improvement_proposals
+    SET task_id = @taskId, feature_plan_id = @featurePlanId
+    WHERE id = @id AND status = 'approved'
   `);
   const updateTaskStatusStatement = db.prepare(`
     UPDATE tasks SET status = @status, updated_at = @now WHERE id = @id
@@ -844,12 +863,30 @@ export function createDatabase(databasePath: string) {
 
     createImprovementProposal(input: ImprovementProposalInput): ImprovementProposalRecord {
       const proposal = normalizeImprovementProposal(input);
+      if (proposal.fingerprint) {
+        const existing = this.findImprovementProposalByFingerprint(proposal.fingerprint);
+        if (existing) return existing;
+      }
       const result = addImprovementProposalStatement.run({
         ...proposal,
         evidenceJson: JSON.stringify(proposal.evidence),
+        targetsJson: JSON.stringify(proposal.targets),
+        provenanceJson: JSON.stringify(proposal.provenance),
         now: new Date().toISOString()
       });
       return this.getImprovementProposal(Number(result.lastInsertRowid));
+    },
+
+    findImprovementProposalByFingerprint(fingerprint: string): ImprovementProposalRecord | null {
+      const row = db.prepare("SELECT * FROM improvement_proposals WHERE fingerprint = ?")
+        .get(fingerprint.trim()) as ImprovementProposalRow | undefined;
+      return row ? mapImprovementProposal(row) : null;
+    },
+
+    listImprovementFingerprints(): string[] {
+      const rows = db.prepare("SELECT fingerprint FROM improvement_proposals WHERE fingerprint IS NOT NULL")
+        .all() as Array<{ fingerprint: string }>;
+      return rows.map((row) => row.fingerprint);
     },
 
     getImprovementProposal(id: number): ImprovementProposalRecord {
@@ -885,12 +922,20 @@ export function createDatabase(databasePath: string) {
       const result = decideImprovementProposalStatement.run({
         id,
         status,
-        decisionNote: decisionNote?.trim() || null,
+        decisionNote: decisionNote ? redactSensitiveText(decisionNote.trim()).slice(0, 2_000) || null : null,
         now: new Date().toISOString()
       });
       if (result.changes === 0) {
         throw new Error(`Improvement proposal ${id} is no longer awaiting a decision.`);
       }
+      return this.getImprovementProposal(id);
+    },
+
+    attachImprovementActivation(id: number, taskId: number, featurePlanId: number): ImprovementProposalRecord {
+      this.getTask(taskId);
+      this.getFeaturePlan(featurePlanId);
+      const result = attachImprovementActivationStatement.run({ id, taskId, featurePlanId });
+      if (result.changes !== 1) throw new Error(`Improvement proposal ${id} is not approved.`);
       return this.getImprovementProposal(id);
     },
 
@@ -1663,10 +1708,17 @@ function migrate(db: Database.Database) {
       evidence_json TEXT NOT NULL DEFAULT '[]',
       risk TEXT NOT NULL,
       source TEXT NOT NULL,
+      project_key TEXT,
+      targets_json TEXT NOT NULL DEFAULT '[]',
+      confidence REAL,
+      fingerprint TEXT,
+      provenance_json TEXT NOT NULL DEFAULT '{}',
       status TEXT NOT NULL DEFAULT 'candidate',
       decision_note TEXT,
       created_at TEXT NOT NULL,
-      decided_at TEXT
+      decided_at TEXT,
+      task_id INTEGER,
+      feature_plan_id INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS goal_runs (
@@ -1869,9 +1921,18 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
   addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
   addColumnIfMissing(db, "features", "cancel_reason", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "project_key", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "targets_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "improvement_proposals", "confidence", "REAL");
+  addColumnIfMissing(db, "improvement_proposals", "fingerprint", "TEXT");
+  addColumnIfMissing(db, "improvement_proposals", "provenance_json", "TEXT NOT NULL DEFAULT '{}'");
+  addColumnIfMissing(db, "improvement_proposals", "task_id", "INTEGER");
+  addColumnIfMissing(db, "improvement_proposals", "feature_plan_id", "INTEGER");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
       ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_proposals_fingerprint
+      ON improvement_proposals(fingerprint) WHERE fingerprint IS NOT NULL;
   `);
 }
 
@@ -1930,10 +1991,17 @@ type ImprovementProposalRow = {
   evidence_json: string;
   risk: ImprovementRisk;
   source: string;
+  project_key: string | null;
+  targets_json: string;
+  confidence: number | null;
+  fingerprint: string | null;
+  provenance_json: string;
   status: ImprovementStatus;
   decision_note: string | null;
   created_at: string;
   decided_at: string | null;
+  task_id: number | null;
+  feature_plan_id: number | null;
 };
 
 type GoalRunRow = {
@@ -2125,7 +2193,7 @@ function normalizeProjectInput(input: ProjectInput) {
   };
 }
 
-function normalizeImprovementProposal(input: ImprovementProposalInput): ImprovementProposalInput & { source: string } {
+function normalizeImprovementProposal(input: ImprovementProposalInput) {
   const category = input.category;
   const risk = input.risk;
   if (!["skill", "memory", "routing", "policy", "integration"].includes(category)) {
@@ -2135,12 +2203,25 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     throw new Error(`Unsupported improvement risk: ${risk}`);
   }
 
-  const title = input.title.trim();
-  const rationale = input.rationale.trim();
-  const proposedChange = input.proposedChange.trim();
-  const evidence = input.evidence.map((item) => item.trim()).filter(Boolean);
-  if (title.length < 4 || rationale.length < 8 || proposedChange.length < 8 || evidence.length === 0) {
+  const title = redactSensitiveText(input.title.trim());
+  const rationale = redactSensitiveText(input.rationale.trim());
+  const proposedChange = redactSensitiveText(input.proposedChange.trim());
+  const evidence = input.evidence.map((item) => redactSensitiveText(item.trim())).filter(Boolean);
+  const targets = (input.targets ?? []).map((item) => redactSensitiveText(item.trim())).filter(Boolean);
+  if (title.length < 4 || title.length > 160 || rationale.length < 8 || rationale.length > 4_000
+    || proposedChange.length < 8 || proposedChange.length > 4_000
+    || evidence.length === 0 || evidence.length > 20
+    || evidence.some((item) => item.length > 1_000)
+    || targets.length > 8 || targets.some((item) => item.length > 160)) {
     throw new Error("Improvement proposals require a title, rationale, proposed change and evidence.");
+  }
+  const confidence = input.confidence ?? null;
+  if (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    throw new Error("Improvement confidence must be between 0 and 1.");
+  }
+  const fingerprint = input.fingerprint?.trim() || null;
+  if (fingerprint && (fingerprint.length > 128 || !/^[a-zA-Z0-9:._-]+$/.test(fingerprint))) {
+    throw new Error("Improvement fingerprint is invalid.");
   }
 
   return {
@@ -2150,7 +2231,12 @@ function normalizeImprovementProposal(input: ImprovementProposalInput): Improvem
     proposedChange,
     evidence,
     risk,
-    source: input.source?.trim() || "dashboard"
+    source: input.source?.trim() || "dashboard",
+    projectKey: input.projectKey?.trim().toLowerCase() || null,
+    targets,
+    confidence,
+    fingerprint,
+    provenance: sanitizePublicMetadata(input.provenance ?? {}) as Record<string, unknown>
   };
 }
 
@@ -2388,10 +2474,17 @@ function mapImprovementProposal(row: ImprovementProposalRow): ImprovementProposa
     evidence: JSON.parse(row.evidence_json || "[]") as string[],
     risk: row.risk,
     source: row.source,
+    projectKey: row.project_key,
+    targets: JSON.parse(row.targets_json || "[]") as string[],
+    confidence: row.confidence,
+    fingerprint: row.fingerprint,
+    provenance: JSON.parse(row.provenance_json || "{}") as Record<string, unknown>,
     status: row.status,
     decisionNote: row.decision_note,
     createdAt: row.created_at,
-    decidedAt: row.decided_at
+    decidedAt: row.decided_at,
+    taskId: row.task_id,
+    featurePlanId: row.feature_plan_id
   };
 }
 
