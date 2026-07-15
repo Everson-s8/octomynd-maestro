@@ -476,6 +476,13 @@ async function routeRequest(
           summary: redactSensitiveText(step.summary),
           output: redactSensitiveText(step.output),
           error: step.error ? redactSensitiveText(step.error) : null
+        })),
+        skills: options.database.listGoalSkillPins(run.id).map((pin) => ({
+          ...pin,
+          triggerReason: redactSensitiveText(pin.triggerReason),
+          usage: options.database.listSkillUsage(run.id).filter(
+            (item) => item.skillVersionRecordId === pin.skillVersionRecordId
+          )
         }))
       });
     } catch {

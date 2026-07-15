@@ -25,6 +25,12 @@ export type MaestroConfig = {
   runtime: {
     tokenEfficient: boolean;
   };
+  skills: {
+    enabled: boolean;
+    catalogPath: string;
+    versionsPath: string;
+    projectKey: string;
+  };
   telegram: {
     botToken: string;
     allowedUserId: string | null;
@@ -55,6 +61,15 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     },
     runtime: {
       tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true)
+    },
+    skills: {
+      enabled: normalizeBoolean(env.MAESTRO_SKILLS_ENABLED, false),
+      catalogPath: path.resolve(cwd, env.MAESTRO_SKILLS_PATH?.trim() || "skills"),
+      versionsPath: path.resolve(
+        cwd,
+        env.MAESTRO_SKILL_VERSIONS_PATH?.trim() || ".maestro/skill-versions"
+      ),
+      projectKey: env.MAESTRO_SKILLS_PROJECT_KEY?.trim().toLowerCase() || "maestro"
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",

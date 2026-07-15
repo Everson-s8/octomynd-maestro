@@ -15,6 +15,8 @@ import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
+import type { SkillRuntime } from "../skills/runtime.js";
+import type { SkillExecutionContext } from "../skills/types.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 const DEFAULT_GOAL_DEADLINE_MS = 30 * 60_000;
@@ -35,6 +37,7 @@ export type GoalRunnerOptions = {
   delivery?: GoalDeliveryHandler;
   tokenRuntime?: { enabled?: boolean } | false;
   validationRunner?: Pick<DeterministicValidationRunner, "run">;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -211,6 +214,7 @@ export async function runTaskGoal(
         ? captureWorkspaceProgress(task.worktreePath)
         : null;
       let result: AgentExecutionResult;
+      let skillContext: SkillExecutionContext | undefined;
       try {
         const previousSteps = database.listGoalSteps(run.id).filter((step) => step.id !== goalStep.id);
         const compressedHandoffs = tokenRuntimeEnabled
@@ -237,6 +241,35 @@ export async function runTaskGoal(
             }
           });
         }
+        skillContext = options.skillRuntime?.prepareContext({
+          runId: run.id,
+          phase,
+          capability: CAPABILITIES[phase],
+          taskText: task.text,
+          projectKey: project.key
+        });
+        if (skillContext && (skillContext.available.length > 0 || skillContext.loaded.length > 0)) {
+          database.addEvent({
+            source: "maestro",
+            type: "goal.skill_context_prepared",
+            text: `Prepared governed Skill context for ${phase}.`,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              available: skillContext.available.map((skill) => ({
+                qualifiedName: skill.qualifiedName,
+                versionId: skill.versionId,
+                risk: skill.risk
+              })),
+              loaded: skillContext.loaded.map((skill) => ({
+                qualifiedName: skill.qualifiedName,
+                versionId: skill.versionId
+              }))
+            }
+          });
+        }
         result = await routed.provider.execute({
           runId: run.id,
           stepNumber: stepCount + 1,
@@ -251,6 +284,7 @@ export async function runTaskGoal(
             rtk
           },
           humanFeedback: latestChangeRequest(database, run.id),
+          skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
           deadlineAt: goalDeadlineAt,
           signal: options.signal
@@ -266,6 +300,23 @@ export async function runTaskGoal(
         };
       } finally {
         routed.release(result!);
+      }
+      if (skillContext?.loaded.length) {
+        database.withTransaction(() => {
+          for (const skill of skillContext!.loaded) {
+            const version = database.getSkillVersionByCoordinates(skill.qualifiedName, skill.versionId);
+            database.recordSkillUsage({
+              runId: run.id,
+              stepId: goalStep.id,
+              skillVersionRecordId: version.id,
+              provider: routed!.provider.id,
+              phase,
+              outcome: result.outcome,
+              durationMs: result.durationMs,
+              estimatedTokens: Math.ceil(skill.instructions.length / 4)
+            });
+          }
+        });
       }
       const workspaceAfter = tracksWorkspaceProgress
         ? captureWorkspaceProgress(task.worktreePath)

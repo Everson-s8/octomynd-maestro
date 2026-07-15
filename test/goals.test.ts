@@ -32,6 +32,45 @@ afterEach(() => {
 });
 
 describe("goal runner", () => {
+  it("passes only prepared governed Skill context to the selected provider", async () => {
+    const projectDir = path.join(tempDir, "skill-project");
+    const worktreeDir = path.join(tempDir, "skill-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "skills", path: projectDir });
+    const task = database.createTask("plan with a governed skill", "dashboard", "skills");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let received: AgentExecutionRequest["skillContext"];
+    const provider = new FakeProvider("codex", ["planning"], (request) => {
+      received = request.skillContext;
+      return completed("planned");
+    });
+    const skillContext: NonNullable<AgentExecutionRequest["skillContext"]> = {
+      available: [{
+        qualifiedName: "repository:plan-task",
+        description: "Plan one task.",
+        versionId: `sha256:${"a".repeat(64)}`,
+        scope: "repository",
+        risk: "low"
+      }],
+      loaded: []
+    };
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1,
+      skillRuntime: { prepareContext: () => skillContext }
+    });
+
+    expect(received).toEqual(skillContext);
+    const event = database.listEvents().find((item) => item.type === "goal.skill_context_prepared");
+    expect(event?.metadata.available).toEqual([{
+      qualifiedName: "repository:plan-task",
+      versionId: `sha256:${"a".repeat(64)}`,
+      risk: "low"
+    }]);
+  });
+
   it("blocks before provider execution when the absolute goal deadline is exhausted", async () => {
     const projectDir = path.join(tempDir, "deadline-project");
     const worktreeDir = path.join(tempDir, "deadline-worktree");

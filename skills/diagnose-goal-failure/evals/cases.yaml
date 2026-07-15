@@ -1,0 +1,22 @@
+schemaVersion: 1
+cases:
+  - id: matches-goal-failure
+    type: trigger
+    prompt: diagnose the failed goal after a provider timeout
+    phase: planning
+    capability: planning
+    expectMatch: true
+  - id: ignores-feature-implementation
+    type: trigger
+    prompt: build a landing page component
+    phase: implementing
+    capability: coding
+    expectMatch: false
+  - id: preserves-diagnostic-guardrails
+    type: content
+    requiredPhrases:
+      - Do not edit files
+      - fail closed
+      - distinguish facts from hypotheses
+    forbiddenPhrases:
+      - reveal credentials

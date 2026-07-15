@@ -26,6 +26,7 @@ import { DeterministicValidationRunner } from "./validation/runner.js";
 import { RestrictedImprovementReviewCoordinator } from "./improvements/coordinator.js";
 import { ImprovementReviewWorker } from "./improvements/worker.js";
 import { createTelegramImprovementCandidateNotifier } from "./telegram/notifications.js";
+import { bootstrapSkills } from "./skills/bootstrap.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -49,6 +50,22 @@ database.addEvent({
 const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
+const skillBootstrap = config.skills.enabled
+  ? bootstrapSkills({
+      database,
+      catalogPath: config.skills.catalogPath,
+      versionsPath: config.skills.versionsPath,
+      projectKey: config.skills.projectKey
+    })
+  : null;
+if (skillBootstrap) {
+  database.addEvent({
+    source: "maestro",
+    type: "skills.bootstrap_completed",
+    text: `${skillBootstrap.active.length} governed built-in Skill(s) active.`,
+    metadata: { active: skillBootstrap.active }
+  });
+}
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
 const bot = createTelegramBot(config, database, {
@@ -78,7 +95,8 @@ goalCoordinator = new GoalCoordinator(
   undefined,
   { enabled: config.runtime.tokenEfficient },
   (taskId) => environmentDoctor.preflightTask(taskId),
-  validationRunner
+  validationRunner,
+  skillBootstrap?.runtime
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,

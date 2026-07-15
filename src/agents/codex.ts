@@ -19,6 +19,7 @@ import type {
   ImprovementReviewExecutionRequest,
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
+import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
 const CODEX_CAPABILITIES = new Set([
@@ -310,6 +311,7 @@ function buildPrompt(request: AgentExecutionRequest): string {
     "",
     "Historico resumido das etapas:",
     previous,
+    ...formatSkillPromptContext(request.skillContext),
     ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
     "",
     "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."

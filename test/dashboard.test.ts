@@ -13,6 +13,8 @@ import { createDashboardServer, DashboardServerOptions } from "../src/dashboard/
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
 import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { FeatureGitHubGateway, FeaturePullRequestState } from "../src/features/github.js";
+import { SkillCatalog } from "../src/skills/catalog.js";
+import { SkillVersionStore } from "../src/skills/store.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -41,6 +43,7 @@ beforeEach(() => {
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
+    skills: { enabled: false, catalogPath: path.join(tempDir, "skills"), versionsPath: path.join(tempDir, "versions"), projectKey: "boo" },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
   database = createDatabase(path.join(tempDir, "maestro.db"));
@@ -257,6 +260,56 @@ describe("dashboard", () => {
     });
     const run = database.createGoalRun(task.id);
     const step = database.createGoalStep(run.id, "planning", "codex");
+    const skillSource = path.join(tempDir, "evidence-skills", "review-feature");
+    fs.mkdirSync(skillSource, { recursive: true });
+    fs.writeFileSync(path.join(skillSource, "SKILL.md"), [
+      "---",
+      "name: review-feature",
+      "description: Review consolidated Feature evidence.",
+      "---",
+      "",
+      "PRIVATE SKILL INSTRUCTIONS",
+      ""
+    ].join("\n"));
+    const skillMetadata = new SkillCatalog([{
+      scope: "repository",
+      path: path.dirname(skillSource),
+      projectKey: "boo"
+    }]).discover().skills[0]!;
+    const skillStore = new SkillVersionStore(database, path.join(tempDir, "skill-versions"));
+    const registeredSkill = skillStore.register(skillMetadata);
+    database.recordSkillEvaluation({
+      skillVersionRecordId: registeredSkill.id,
+      status: "passed",
+      qualityScore: 1,
+      durationMs: 2,
+      estimatedTokens: 10,
+      attempts: 1,
+      failures: 0,
+      securityPassed: true,
+      regressionDetected: false,
+      baselineVersionId: null,
+      checks: [{ id: "fixture", type: "content", status: "passed", message: "passed" }]
+    });
+    database.updateSkillVersionStatus(registeredSkill.id, "evaluated");
+    database.updateSkillVersionStatus(registeredSkill.id, "approved");
+    const activeSkill = database.activateSkillVersion(registeredSkill.id);
+    database.pinGoalSkill({
+      runId: run.id,
+      skillVersionRecordId: activeSkill.id,
+      triggerReason: "Final evidence review.",
+      invocationMode: "explicit"
+    });
+    database.recordSkillUsage({
+      runId: run.id,
+      stepId: step.id,
+      skillVersionRecordId: activeSkill.id,
+      provider: "codex",
+      phase: "planning",
+      outcome: "failed",
+      durationMs: 5,
+      estimatedTokens: 20
+    });
     const fakeSecret = `sk-ant-${"z".repeat(24)}`;
     const fullDetail = `Path: C:\\Users\\evers\\Documents\\worktree\nKey: ${fakeSecret}\n${"n".repeat(3_000)}`;
     database.finishGoalStep({
@@ -280,13 +333,27 @@ describe("dashboard", () => {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/goals/${run.id}`);
       expect(response.status).toBe(200);
-      const payload = await response.json() as { steps: Array<{ output: string; error: string }> };
+      const payload = await response.json() as {
+        steps: Array<{ output: string; error: string }>;
+        skills: Array<{
+          qualifiedName: string;
+          versionId: string;
+          usage: Array<{ outcome: string; estimatedTokens: number }>;
+        }>;
+      };
       const [returnedStep] = payload.steps;
 
       expect(returnedStep.output).not.toContain(fakeSecret);
       expect(returnedStep.output).not.toContain("C:\\Users\\evers");
       expect(returnedStep.output).toContain("n".repeat(3_000));
       expect(returnedStep.error).not.toContain(fakeSecret);
+      expect(payload.skills).toEqual([expect.objectContaining({
+        qualifiedName: "repository:review-feature",
+        versionId: activeSkill.versionId,
+        usage: [expect.objectContaining({ outcome: "failed", estimatedTokens: 20 })]
+      })]);
+      expect(JSON.stringify(payload.skills)).not.toContain("PRIVATE SKILL INSTRUCTIONS");
+      expect(JSON.stringify(payload.skills)).not.toContain("snapshotPath");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

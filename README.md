@@ -121,6 +121,36 @@ A governanca esta separada da persona:
 - `docs/HERMES_APPLIED_STUDY.md`: conclusoes do estudo e elementos priorizados;
 - uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar seguranca.
 
+## Skills governadas
+
+O runtime de Skills usa pacotes portaveis com `SKILL.md`, policy opcional em
+`maestro.yaml` e casos deterministas em `evals/cases.yaml`. A descoberta carrega
+somente metadados; instrucoes entram no prompt apenas depois da selecao e ficam
+limitadas por budget. Cada Goal fixa o hash exato da versao usada, o motivo do
+trigger e o modo de invocacao.
+
+Ele permanece desligado por padrao. Para habilitar os tres Skills iniciais:
+
+```text
+MAESTRO_SKILLS_ENABLED=true
+MAESTRO_SKILLS_PATH=skills
+MAESTRO_SKILL_VERSIONS_PATH=.maestro/skill-versions
+MAESTRO_SKILLS_PROJECT_KEY=maestro
+```
+
+- `diagnose-goal-failure`: pode ser selecionado implicitamente, mas e read-only,
+  sem rede e sem escrita.
+- `final-feature-review`: pode ser selecionado implicitamente somente na revisao,
+  sem rede e sem escrita.
+- `implement-task-safely`: exige selecao explicita e limita escrita ao workspace
+  preparado.
+
+No startup, apenas o allowlist de Skills do sistema pode passar automaticamente
+por eval, aprovacao e ativacao. Pacotes adicionais ficam como `candidate`. Uma
+versao falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
+Dashboard e a evidencia do Goal mostram versoes, resultados, duracao e tokens
+estimados, mas nunca persistem ou exibem as instrucoes privadas do Skill.
+
 ## Goal autonoma
 
 Uma task preparada pode iniciar uma execucao persistente pelo painel. O Maestro avanca sozinho por

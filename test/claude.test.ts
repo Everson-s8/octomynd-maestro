@@ -101,6 +101,16 @@ describe("claude review", () => {
     expect(reviewingArgs.join(" ")).toContain("Bash(git show*)");
     expect(reviewingArgs.join(" ")).not.toContain("Edit");
     expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
+    coding.skillContext = {
+      available: [],
+      loaded: [{
+        qualifiedName: "repository:implement-task",
+        versionId: `sha256:${"a".repeat(64)}`,
+        triggerReason: "Explicit implementation.",
+        instructions: "PINNED SKILL PROCEDURE"
+      }]
+    };
+    expect(buildClaudeGoalPrompt(coding)).toContain("PINNED SKILL PROCEDURE");
   });
 
   it("recognizes Claude subscription quota failures", () => {
