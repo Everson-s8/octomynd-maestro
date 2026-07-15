@@ -2,9 +2,20 @@ import type { GoalPhase, GoalStepRecord, ProjectRecord, TaskRecord } from "../db
 import type { TokenEfficientHandoffStep } from "../runtime/compression.js";
 import type { RtkDetection } from "../runtime/rtk.js";
 import type { AgentProcessBreakerReason, AgentProcessResult } from "./process.js";
+import type {
+  ImprovementReviewExecutionRequest,
+  ImprovementReviewExecutionResult
+} from "../improvements/reviewer.js";
 
 export type AgentProviderId = "codex" | "claude";
-export type AgentCapability = "planning" | "coding" | "testing" | "reviewing" | "research" | "conversation";
+export type AgentCapability =
+  | "planning"
+  | "coding"
+  | "testing"
+  | "reviewing"
+  | "improvement_reviewing"
+  | "research"
+  | "conversation";
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
 
@@ -52,4 +63,5 @@ export interface AgentProvider {
   capabilities: ReadonlySet<AgentCapability>;
   health(): Promise<AgentHealth>;
   execute(request: AgentExecutionRequest): Promise<AgentExecutionResult>;
+  reviewImprovements?(request: ImprovementReviewExecutionRequest): Promise<ImprovementReviewExecutionResult>;
 }
