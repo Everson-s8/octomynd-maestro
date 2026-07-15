@@ -46,13 +46,14 @@ describe("goal runner", () => {
       return completed("planned");
     });
     const skillContext: NonNullable<AgentExecutionRequest["skillContext"]> = {
-      available: [],
-      loaded: [{
+      available: [{
         qualifiedName: "repository:plan-task",
+        description: "Plan one task.",
         versionId: `sha256:${"a".repeat(64)}`,
-        triggerReason: "Explicit planning.",
-        instructions: "PINNED INSTRUCTIONS"
-      }]
+        scope: "repository",
+        risk: "low"
+      }],
+      loaded: []
     };
 
     await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
@@ -63,11 +64,11 @@ describe("goal runner", () => {
 
     expect(received).toEqual(skillContext);
     const event = database.listEvents().find((item) => item.type === "goal.skill_context_prepared");
-    expect(event?.metadata.loaded).toEqual([{
+    expect(event?.metadata.available).toEqual([{
       qualifiedName: "repository:plan-task",
-      versionId: `sha256:${"a".repeat(64)}`
+      versionId: `sha256:${"a".repeat(64)}`,
+      risk: "low"
     }]);
-    expect(JSON.stringify(event)).not.toContain("PINNED INSTRUCTIONS");
   });
 
   it("blocks before provider execution when the absolute goal deadline is exhausted", async () => {

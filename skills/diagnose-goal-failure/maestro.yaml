@@ -1,0 +1,11 @@
+schemaVersion: 1
+owner: system
+risk: low
+allowImplicitInvocation: true
+capabilities: [planning, testing]
+operatingSystems: [win32, linux, darwin]
+network: none
+readScopes: ['.maestro/runs']
+writeScopes: []
+maxRuntimeMs: 30000
+maxOutputChars: 8000

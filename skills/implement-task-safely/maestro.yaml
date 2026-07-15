@@ -1,0 +1,11 @@
+schemaVersion: 1
+owner: system
+risk: medium
+allowImplicitInvocation: false
+capabilities: [coding]
+operatingSystems: [win32, linux, darwin]
+network: none
+readScopes: ['.']
+writeScopes: ['src', 'test', 'ui']
+maxRuntimeMs: 600000
+maxOutputChars: 12000

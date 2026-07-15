@@ -84,7 +84,10 @@ export class SkillRuntime {
       const implicit = active
         .filter(({ version }) => !selectedVersionIds.has(version.id))
         .filter(({ version }) => version.policy.allowImplicitInvocation && version.policy.risk === "low")
-        .map((candidate) => ({ ...candidate, score: relevanceScore(candidate.version, request) }))
+        .map((candidate) => ({
+          ...candidate,
+          score: scoreSkillRelevance(skillName(candidate.version), candidate.version.description, request)
+        }))
         .filter((candidate) => candidate.score > 0)
         .sort((left, right) => right.score - left.score || left.version.qualifiedName.localeCompare(right.version.qualifiedName))
         .slice(0, remaining);
@@ -153,9 +156,13 @@ function isApplicable(
   return true;
 }
 
-function relevanceScore(version: SkillVersionRecord, request: SkillRuntimeRequest): number {
+export function scoreSkillRelevance(
+  name: string,
+  description: string,
+  request: Pick<SkillRuntimeRequest, "taskText" | "phase" | "capability">
+): number {
   const requestTokens = tokens(`${request.taskText} ${request.phase} ${request.capability}`);
-  const skillTokens = tokens(`${skillName(version)} ${version.description}`);
+  const skillTokens = tokens(`${name} ${description}`);
   let score = 0;
   for (const token of skillTokens) if (requestTokens.has(token)) score += token.length >= 7 ? 3 : 1;
   return score;

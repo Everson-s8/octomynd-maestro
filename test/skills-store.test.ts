@@ -38,6 +38,7 @@ describe("SkillVersionStore", () => {
     expect(store.readSkillMarkdown(first)).toContain("First governed procedure");
     expect(store.readSkillMarkdown(first)).not.toContain("Second unapproved procedure");
 
+    recordPassingEvaluation(first.id);
     const evaluated = database.updateSkillVersionStatus(first.id, "evaluated");
     const approved = database.updateSkillVersionStatus(evaluated.id, "approved");
     const active = database.activateSkillVersion(approved.id);
@@ -58,6 +59,18 @@ describe("SkillVersionStore", () => {
       versionId: active.versionId,
       invocationMode: "explicit"
     });
+    const step = database.createGoalStep(run.id, "implementing", "codex");
+    const usage = database.recordSkillUsage({
+      runId: run.id,
+      stepId: step.id,
+      skillVersionRecordId: active.id,
+      provider: "codex",
+      phase: "implementing",
+      outcome: "completed",
+      durationMs: 40,
+      estimatedTokens: 25
+    });
+    expect(database.listSkillUsage(run.id)).toEqual([usage]);
 
     const second = store.register(discoverOne(sourceRoot));
     expect(second.versionId).not.toBe(first.versionId);
@@ -68,6 +81,16 @@ describe("SkillVersionStore", () => {
       triggerReason: "Unsafe candidate selection.",
       invocationMode: "explicit"
     })).toThrow("active approved version");
+    expect(() => database.recordSkillUsage({
+      runId: run.id,
+      stepId: step.id,
+      skillVersionRecordId: second.id,
+      provider: "codex",
+      phase: "implementing",
+      outcome: "completed",
+      durationMs: 1,
+      estimatedTokens: 1
+    })).toThrow("pinned");
     expect(database.listGoalSkillPins(run.id)).toEqual([pin]);
   });
 
@@ -76,6 +99,7 @@ describe("SkillVersionStore", () => {
     writeSkill(sourceRoot, "review-feature", "PRIVATE REVIEW INSTRUCTIONS");
     const store = new SkillVersionStore(database, path.join(tempDir, "managed-skill-versions"));
     const registered = store.register(discoverOne(sourceRoot));
+    recordPassingEvaluation(registered.id);
     database.updateSkillVersionStatus(registered.id, "evaluated");
     database.updateSkillVersionStatus(registered.id, "approved");
     const active = database.activateSkillVersion(registered.id);
@@ -159,4 +183,20 @@ function skillMarkdown(name: string, body: string): string {
     body,
     ""
   ].join("\n");
+}
+
+function recordPassingEvaluation(skillVersionRecordId: number): void {
+  database.recordSkillEvaluation({
+    skillVersionRecordId,
+    status: "passed",
+    qualityScore: 1,
+    durationMs: 1,
+    estimatedTokens: 10,
+    attempts: 1,
+    failures: 0,
+    securityPassed: true,
+    regressionDetected: false,
+    baselineVersionId: null,
+    checks: [{ id: "test", type: "content", status: "passed", message: "passed" }]
+  });
 }

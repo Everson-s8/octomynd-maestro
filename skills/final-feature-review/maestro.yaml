@@ -1,0 +1,11 @@
+schemaVersion: 1
+owner: system
+risk: low
+allowImplicitInvocation: true
+capabilities: [reviewing]
+operatingSystems: [win32, linux, darwin]
+network: none
+readScopes: ['.']
+writeScopes: []
+maxRuntimeMs: 120000
+maxOutputChars: 12000

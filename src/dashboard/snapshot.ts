@@ -67,6 +67,7 @@ export function buildDashboardSnapshot(
   const reviewQueue = listReviewQueue(database);
   const features = database.listFeatures(30);
   const featurePlans = database.listFeaturePlans(30);
+  const skills = database.listSkills();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -97,6 +98,35 @@ export function buildDashboardSnapshot(
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
+    skills: skills.map((skill) => {
+      const active = skill.activeVersionId
+        ? database.getSkillVersionByCoordinates(skill.qualifiedName, skill.activeVersionId)
+        : null;
+      const evaluation = active ? database.getLatestSkillEvaluation(active.id) : null;
+      const comparison = evaluation ? database.getSkillEvaluationComparison(evaluation.id) : null;
+      return {
+        qualifiedName: skill.qualifiedName,
+        description: redactSensitiveText(skill.description),
+        scope: skill.scope,
+        projectKey: skill.projectKey,
+        owner: skill.owner,
+        risk: skill.risk,
+        activeVersionId: skill.activeVersionId,
+        evaluation: evaluation ? {
+          status: evaluation.status,
+          qualityScore: evaluation.qualityScore,
+          durationMs: evaluation.durationMs,
+          estimatedTokens: evaluation.estimatedTokens,
+          attempts: evaluation.attempts,
+          failures: evaluation.failures,
+          securityPassed: evaluation.securityPassed,
+          regressionDetected: evaluation.regressionDetected,
+          comparison,
+          createdAt: evaluation.createdAt
+        } : null
+      };
+    }),
+    skillUsage: database.listSkillUsage(undefined, 40),
     projects: projects.map((project) => {
       const projectTasks = tasks.filter((task) => task.projectKey === project.key);
       const currentWork = goals.flatMap((goal) => {

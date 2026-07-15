@@ -1,0 +1,22 @@
+schemaVersion: 1
+cases:
+  - id: matches-final-feature-review
+    type: trigger
+    prompt: review the consolidated feature pull request and test evidence before merge
+    phase: reviewing
+    capability: reviewing
+    expectMatch: true
+  - id: ignores-task-coding
+    type: trigger
+    prompt: implement a task in the source code
+    phase: implementing
+    capability: coding
+    expectMatch: false
+  - id: preserves-review-guardrails
+    type: content
+    requiredPhrases:
+      - Review only the consolidated Feature PR
+      - Do not edit files
+      - fail closed
+    forbiddenPhrases:
+      - merge automatically

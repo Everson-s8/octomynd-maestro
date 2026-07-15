@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import { redactSensitiveText } from "../security/redaction.js";
+import type { AgentOutcome, AgentProviderId } from "../agents/types.js";
+import type { GoalPhase } from "../db.js";
 import type { SkillPolicy, SkillRisk, SkillScope } from "./types.js";
 
 export type SkillVersionLifecycleStatus =
@@ -69,6 +71,60 @@ export type GoalSkillPinRecord = {
   createdAt: string;
 };
 
+export type SkillEvaluationCheck = {
+  id: string;
+  type: string;
+  status: "passed" | "failed";
+  message: string;
+};
+
+export type SkillEvaluationRecord = {
+  id: number;
+  skillVersionRecordId: number;
+  qualifiedName: string;
+  versionId: string;
+  status: "passed" | "failed";
+  qualityScore: number;
+  durationMs: number;
+  estimatedTokens: number;
+  attempts: number;
+  failures: number;
+  securityPassed: boolean;
+  regressionDetected: boolean;
+  baselineVersionId: string | null;
+  checks: SkillEvaluationCheck[];
+  createdAt: string;
+};
+
+export type SkillEvaluationInput = Omit<
+  SkillEvaluationRecord,
+  "id" | "qualifiedName" | "versionId" | "createdAt"
+>;
+
+export type SkillEvaluationComparison = {
+  baselineVersionId: string;
+  qualityDelta: number;
+  durationDeltaMs: number;
+  estimatedTokensDelta: number;
+  attemptsDelta: number;
+  failuresDelta: number;
+};
+
+export type SkillUsageRecord = {
+  id: number;
+  runId: number;
+  stepId: number;
+  skillVersionRecordId: number;
+  qualifiedName: string;
+  versionId: string;
+  provider: AgentProviderId;
+  phase: GoalPhase;
+  outcome: AgentOutcome;
+  durationMs: number;
+  estimatedTokens: number;
+  createdAt: string;
+};
+
 export function createSkillPersistence(db: Database.Database) {
   const upsertSkill = db.prepare(`
     INSERT INTO skills (
@@ -111,6 +167,26 @@ export function createSkillPersistence(db: Database.Database) {
     ON CONFLICT(run_id, skill_version_id) DO UPDATE SET
       trigger_reason = excluded.trigger_reason,
       invocation_mode = excluded.invocation_mode
+  `);
+  const recordEvaluation = db.prepare(`
+    INSERT INTO skill_evaluations (
+      skill_version_id, status, quality_score, duration_ms, estimated_tokens,
+      attempts, failures, security_passed, regression_detected,
+      baseline_version_id, checks_json, created_at
+    ) VALUES (
+      @skillVersionRecordId, @status, @qualityScore, @durationMs, @estimatedTokens,
+      @attempts, @failures, @securityPassed, @regressionDetected,
+      @baselineVersionId, @checksJson, @now
+    )
+  `);
+  const recordUsage = db.prepare(`
+    INSERT INTO skill_usage (
+      run_id, step_id, skill_version_id, provider, phase, outcome,
+      duration_ms, estimated_tokens, created_at
+    ) VALUES (
+      @runId, @stepId, @skillVersionRecordId, @provider, @phase, @outcome,
+      @durationMs, @estimatedTokens, @now
+    )
   `);
 
   return {
@@ -179,6 +255,7 @@ export function createSkillPersistence(db: Database.Database) {
     ): SkillVersionRecord {
       const current = getVersionRow(db, id);
       assertStatusTransition(current.status, status);
+      if (status === "evaluated") assertPassingEvaluation(db, id);
       updateVersionStatus.run({ id, status, now: new Date().toISOString() });
       return mapVersion(getVersionRow(db, id));
     },
@@ -189,6 +266,7 @@ export function createSkillPersistence(db: Database.Database) {
         if (!(["approved", "active"] as const).includes(selected.status as "approved" | "active")) {
           throw new Error(`Skill version ${selected.qualified_name}@${selected.version_id} is not approved.`);
         }
+        assertPassingEvaluation(db, selected.id);
         const skill = getSkillRow(db, selected.qualified_name);
         const now = new Date().toISOString();
         if (skill.active_skill_version_id && skill.active_skill_version_id !== selected.id) {
@@ -226,6 +304,83 @@ export function createSkillPersistence(db: Database.Database) {
       const rows = db.prepare(`${PIN_SELECT} WHERE goal_skill_pins.run_id = ? ORDER BY goal_skill_pins.id ASC`)
         .all(runId) as GoalSkillPinRow[];
       return rows.map(mapPin);
+    },
+
+    recordSkillEvaluation(input: SkillEvaluationInput): SkillEvaluationRecord {
+      getVersionRow(db, input.skillVersionRecordId);
+      validateEvaluationInput(input);
+      const result = recordEvaluation.run({
+        ...input,
+        securityPassed: input.securityPassed ? 1 : 0,
+        regressionDetected: input.regressionDetected ? 1 : 0,
+        checksJson: JSON.stringify(input.checks.map((check) => ({
+          id: redactSensitiveText(check.id).slice(0, 120),
+          type: redactSensitiveText(check.type).slice(0, 80),
+          status: check.status,
+          message: redactSensitiveText(check.message).slice(0, 500)
+        }))),
+        now: new Date().toISOString()
+      });
+      return getEvaluation(db, Number(result.lastInsertRowid));
+    },
+
+    getLatestSkillEvaluation(skillVersionRecordId: number): SkillEvaluationRecord | null {
+      getVersionRow(db, skillVersionRecordId);
+      const row = db.prepare(`${EVALUATION_SELECT}
+        WHERE skill_evaluations.skill_version_id = ? ORDER BY skill_evaluations.id DESC LIMIT 1
+      `).get(skillVersionRecordId) as SkillEvaluationRow | undefined;
+      return row ? mapEvaluation(row) : null;
+    },
+
+    listSkillEvaluations(skillVersionRecordId?: number): SkillEvaluationRecord[] {
+      const rows = skillVersionRecordId === undefined
+        ? db.prepare(`${EVALUATION_SELECT} ORDER BY skill_evaluations.id DESC`).all()
+        : db.prepare(`${EVALUATION_SELECT}
+            WHERE skill_evaluations.skill_version_id = ? ORDER BY skill_evaluations.id DESC
+          `).all(skillVersionRecordId);
+      return (rows as SkillEvaluationRow[]).map(mapEvaluation);
+    },
+
+    getSkillEvaluationComparison(evaluationId: number): SkillEvaluationComparison | null {
+      const evaluation = getEvaluation(db, evaluationId);
+      if (!evaluation.baselineVersionId) return null;
+      const baselineVersion = findVersionByCoordinates(
+        db,
+        evaluation.qualifiedName,
+        evaluation.baselineVersionId
+      );
+      if (!baselineVersion) return null;
+      const baseline = db.prepare(`${EVALUATION_SELECT}
+        WHERE skill_evaluations.skill_version_id = ? ORDER BY skill_evaluations.id DESC LIMIT 1
+      `).get(baselineVersion.id) as SkillEvaluationRow | undefined;
+      if (!baseline) return null;
+      const baselineEvaluation = mapEvaluation(baseline);
+      return {
+        baselineVersionId: baselineEvaluation.versionId,
+        qualityDelta: evaluation.qualityScore - baselineEvaluation.qualityScore,
+        durationDeltaMs: evaluation.durationMs - baselineEvaluation.durationMs,
+        estimatedTokensDelta: evaluation.estimatedTokens - baselineEvaluation.estimatedTokens,
+        attemptsDelta: evaluation.attempts - baselineEvaluation.attempts,
+        failuresDelta: evaluation.failures - baselineEvaluation.failures
+      };
+    },
+
+    recordSkillUsage(input: Omit<SkillUsageRecord, "id" | "qualifiedName" | "versionId" | "createdAt">): SkillUsageRecord {
+      assertGoalExists(db, input.runId);
+      getVersionRow(db, input.skillVersionRecordId);
+      assertGoalStepBelongsToRun(db, input.stepId, input.runId);
+      assertSkillVersionPinnedToGoal(db, input.skillVersionRecordId, input.runId);
+      if (input.durationMs < 0 || input.estimatedTokens < 0) throw new Error("Skill usage metrics are invalid.");
+      const result = recordUsage.run({ ...input, now: new Date().toISOString() });
+      return getUsage(db, Number(result.lastInsertRowid));
+    },
+
+    listSkillUsage(runId?: number, limit = 100): SkillUsageRecord[] {
+      const rows = runId === undefined
+        ? db.prepare(`${USAGE_SELECT} ORDER BY skill_usage.id DESC LIMIT ?`).all(limit)
+        : db.prepare(`${USAGE_SELECT} WHERE skill_usage.run_id = ? ORDER BY skill_usage.id ASC LIMIT ?`)
+          .all(runId, limit);
+      return (rows as SkillUsageRow[]).map(mapUsage);
     }
   };
 }
@@ -272,8 +427,41 @@ export function migrateSkillPersistence(db: Database.Database): void {
       FOREIGN KEY (run_id) REFERENCES goal_runs(id),
       FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
     );
+    CREATE TABLE IF NOT EXISTS skill_evaluations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      skill_version_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      quality_score REAL NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      estimated_tokens INTEGER NOT NULL,
+      attempts INTEGER NOT NULL,
+      failures INTEGER NOT NULL,
+      security_passed INTEGER NOT NULL,
+      regression_detected INTEGER NOT NULL,
+      baseline_version_id TEXT,
+      checks_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
+    CREATE TABLE IF NOT EXISTS skill_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      step_id INTEGER NOT NULL,
+      skill_version_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      estimated_tokens INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id),
+      FOREIGN KEY (step_id) REFERENCES goal_steps(id),
+      FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
     CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, id);
     CREATE INDEX IF NOT EXISTS idx_goal_skill_pins_run_id ON goal_skill_pins(run_id, id);
+    CREATE INDEX IF NOT EXISTS idx_skill_evaluations_version_id ON skill_evaluations(skill_version_id, id);
+    CREATE INDEX IF NOT EXISTS idx_skill_usage_run_id ON skill_usage(run_id, id);
   `);
 }
 
@@ -287,6 +475,18 @@ const PIN_SELECT = `
          skills.qualified_name
   FROM goal_skill_pins
   JOIN skill_versions ON skill_versions.id = goal_skill_pins.skill_version_id
+  JOIN skills ON skills.id = skill_versions.skill_id
+`;
+const EVALUATION_SELECT = `
+  SELECT skill_evaluations.*, skill_versions.version_id, skills.qualified_name
+  FROM skill_evaluations
+  JOIN skill_versions ON skill_versions.id = skill_evaluations.skill_version_id
+  JOIN skills ON skills.id = skill_versions.skill_id
+`;
+const USAGE_SELECT = `
+  SELECT skill_usage.*, skill_versions.version_id, skills.qualified_name
+  FROM skill_usage
+  JOIN skill_versions ON skill_versions.id = skill_usage.skill_version_id
   JOIN skills ON skills.id = skill_versions.skill_id
 `;
 
@@ -328,6 +528,37 @@ type GoalSkillPinRow = {
   version_id: string;
   trigger_reason: string;
   invocation_mode: GoalSkillInvocationMode;
+  created_at: string;
+};
+type SkillEvaluationRow = {
+  id: number;
+  skill_version_id: number;
+  qualified_name: string;
+  version_id: string;
+  status: "passed" | "failed";
+  quality_score: number;
+  duration_ms: number;
+  estimated_tokens: number;
+  attempts: number;
+  failures: number;
+  security_passed: number;
+  regression_detected: number;
+  baseline_version_id: string | null;
+  checks_json: string;
+  created_at: string;
+};
+type SkillUsageRow = {
+  id: number;
+  run_id: number;
+  step_id: number;
+  skill_version_id: number;
+  qualified_name: string;
+  version_id: string;
+  provider: AgentProviderId;
+  phase: GoalPhase;
+  outcome: AgentOutcome;
+  duration_ms: number;
+  estimated_tokens: number;
   created_at: string;
 };
 
@@ -374,6 +605,17 @@ function findVersionRow(db: Database.Database, skillId: number, versionId: strin
   return row ?? null;
 }
 
+function findVersionByCoordinates(
+  db: Database.Database,
+  qualifiedName: string,
+  versionId: string
+): SkillVersionRow | null {
+  const row = db.prepare(`${VERSION_SELECT}
+    WHERE skills.qualified_name = ? AND skill_versions.version_id = ?
+  `).get(qualifiedName, versionId) as SkillVersionRow | undefined;
+  return row ?? null;
+}
+
 function assertImmutableVersion(existing: SkillVersionRow, input: SkillVersionRegistrationInput): void {
   if (
     existing.content_hash !== input.contentHash
@@ -402,11 +644,73 @@ function assertGoalExists(db: Database.Database, runId: number): void {
   if (!db.prepare("SELECT id FROM goal_runs WHERE id = ?").get(runId)) throw new Error(`Goal run not found: ${runId}`);
 }
 
+function assertGoalStepBelongsToRun(db: Database.Database, stepId: number, runId: number): void {
+  const row = db.prepare("SELECT run_id FROM goal_steps WHERE id = ?").get(stepId) as { run_id: number } | undefined;
+  if (!row || row.run_id !== runId) throw new Error(`Goal step ${stepId} does not belong to Goal run ${runId}.`);
+}
+
+function assertSkillVersionPinnedToGoal(
+  db: Database.Database,
+  skillVersionRecordId: number,
+  runId: number
+): void {
+  const row = db.prepare(`
+    SELECT id FROM goal_skill_pins WHERE run_id = ? AND skill_version_id = ?
+  `).get(runId, skillVersionRecordId);
+  if (!row) throw new Error("Skill usage requires the exact version to be pinned to the Goal.");
+}
+
+function assertPassingEvaluation(db: Database.Database, skillVersionRecordId: number): void {
+  const row = db.prepare(`
+    SELECT status, security_passed, regression_detected
+    FROM skill_evaluations
+    WHERE skill_version_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(skillVersionRecordId) as {
+    status: "passed" | "failed";
+    security_passed: number;
+    regression_detected: number;
+  } | undefined;
+  if (!row || row.status !== "passed" || row.security_passed !== 1 || row.regression_detected !== 0) {
+    throw new Error("Skill version requires a passing, secure, non-regressing evaluation.");
+  }
+}
+
+function validateEvaluationInput(input: SkillEvaluationInput): void {
+  if (
+    !["passed", "failed"].includes(input.status)
+    || !Number.isFinite(input.qualityScore)
+    || input.qualityScore < 0
+    || input.qualityScore > 1
+    || ![input.durationMs, input.estimatedTokens, input.attempts, input.failures]
+      .every((value) => Number.isInteger(value) && value >= 0)
+    || input.checks.length === 0
+    || input.checks.length > 128
+  ) throw new Error("Skill evaluation metrics are invalid.");
+  if (input.status === "passed" && (input.failures > 0 || !input.securityPassed || input.regressionDetected)) {
+    throw new Error("Passing Skill evaluations cannot contain failures, security errors or regressions.");
+  }
+}
+
 function getPin(db: Database.Database, runId: number, versionId: number): GoalSkillPinRecord {
   const row = db.prepare(`${PIN_SELECT} WHERE goal_skill_pins.run_id = ? AND goal_skill_pins.skill_version_id = ?`)
     .get(runId, versionId) as GoalSkillPinRow | undefined;
   if (!row) throw new Error("Goal Skill pin was not persisted.");
   return mapPin(row);
+}
+
+function getEvaluation(db: Database.Database, id: number): SkillEvaluationRecord {
+  const row = db.prepare(`${EVALUATION_SELECT} WHERE skill_evaluations.id = ?`)
+    .get(id) as SkillEvaluationRow | undefined;
+  if (!row) throw new Error(`Skill evaluation not found: ${id}`);
+  return mapEvaluation(row);
+}
+
+function getUsage(db: Database.Database, id: number): SkillUsageRecord {
+  const row = db.prepare(`${USAGE_SELECT} WHERE skill_usage.id = ?`).get(id) as SkillUsageRow | undefined;
+  if (!row) throw new Error(`Skill usage not found: ${id}`);
+  return mapUsage(row);
 }
 
 function mapSkill(row: SkillRow): SkillRecord {
@@ -453,6 +757,43 @@ function mapPin(row: GoalSkillPinRow): GoalSkillPinRecord {
     versionId: row.version_id,
     triggerReason: row.trigger_reason,
     invocationMode: row.invocation_mode,
+    createdAt: row.created_at
+  };
+}
+
+function mapEvaluation(row: SkillEvaluationRow): SkillEvaluationRecord {
+  return {
+    id: row.id,
+    skillVersionRecordId: row.skill_version_id,
+    qualifiedName: row.qualified_name,
+    versionId: row.version_id,
+    status: row.status,
+    qualityScore: row.quality_score,
+    durationMs: row.duration_ms,
+    estimatedTokens: row.estimated_tokens,
+    attempts: row.attempts,
+    failures: row.failures,
+    securityPassed: row.security_passed === 1,
+    regressionDetected: row.regression_detected === 1,
+    baselineVersionId: row.baseline_version_id,
+    checks: JSON.parse(row.checks_json) as SkillEvaluationCheck[],
+    createdAt: row.created_at
+  };
+}
+
+function mapUsage(row: SkillUsageRow): SkillUsageRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    skillVersionRecordId: row.skill_version_id,
+    qualifiedName: row.qualified_name,
+    versionId: row.version_id,
+    provider: row.provider,
+    phase: row.phase,
+    outcome: row.outcome,
+    durationMs: row.duration_ms,
+    estimatedTokens: row.estimated_tokens,
     createdAt: row.created_at
   };
 }

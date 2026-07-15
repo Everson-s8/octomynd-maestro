@@ -15,7 +15,12 @@ import { createSkillPersistence, migrateSkillPersistence } from "./skills/persis
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
+  SkillEvaluationCheck,
+  SkillEvaluationComparison,
+  SkillEvaluationInput,
+  SkillEvaluationRecord,
   SkillRecord,
+  SkillUsageRecord,
   SkillVersionLifecycleStatus,
   SkillVersionRecord,
   SkillVersionRegistrationInput

@@ -22,6 +22,12 @@ describe("config", () => {
     expect(config.runtime).toEqual({
       tokenEfficient: true
     });
+    expect(config.skills).toEqual({
+      enabled: false,
+      catalogPath: path.resolve("skills"),
+      versionsPath: path.resolve(".maestro/skill-versions"),
+      projectKey: "maestro"
+    });
     expect(config.execution.expectedNodeVersion).toBe("20.17.0");
     expect(config.worktreesPath).toBe(config.execution.worktreesPath);
     if (process.platform === "win32") {
@@ -75,6 +81,16 @@ describe("config", () => {
     });
 
     expect(config.runtime.tokenEfficient).toBe(false);
+  });
+
+  it("keeps governed Skills behind an explicit feature flag", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_SKILLS_ENABLED: "true",
+      MAESTRO_SKILLS_PROJECT_KEY: "OCTOMYND"
+    });
+
+    expect(config.skills.enabled).toBe(true);
+    expect(config.skills.projectKey).toBe("octomynd");
   });
 
   it("blocks unsafe Windows execution roots before long-running work", () => {

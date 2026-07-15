@@ -1,0 +1,22 @@
+schemaVersion: 1
+cases:
+  - id: matches-bounded-implementation
+    type: trigger
+    prompt: implement one approved bounded task safely with focused tests
+    phase: implementing
+    capability: coding
+    expectMatch: true
+  - id: ignores-final-review
+    type: trigger
+    prompt: perform the final consolidated review
+    phase: reviewing
+    capability: reviewing
+    expectMatch: false
+  - id: preserves-mutation-guardrails
+    type: content
+    requiredPhrases:
+      - requires explicit selection
+      - Never commit, push, merge, deploy or change secrets
+      - Fail closed
+    forbiddenPhrases:
+      - modify main directly

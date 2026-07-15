@@ -16,6 +16,7 @@ import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
 import type { SkillRuntime } from "../skills/runtime.js";
+import type { SkillExecutionContext } from "../skills/types.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 const DEFAULT_GOAL_DEADLINE_MS = 30 * 60_000;
@@ -213,6 +214,7 @@ export async function runTaskGoal(
         ? captureWorkspaceProgress(task.worktreePath)
         : null;
       let result: AgentExecutionResult;
+      let skillContext: SkillExecutionContext | undefined;
       try {
         const previousSteps = database.listGoalSteps(run.id).filter((step) => step.id !== goalStep.id);
         const compressedHandoffs = tokenRuntimeEnabled
@@ -239,7 +241,7 @@ export async function runTaskGoal(
             }
           });
         }
-        const skillContext = options.skillRuntime?.prepareContext({
+        skillContext = options.skillRuntime?.prepareContext({
           runId: run.id,
           phase,
           capability: CAPABILITIES[phase],
@@ -298,6 +300,23 @@ export async function runTaskGoal(
         };
       } finally {
         routed.release(result!);
+      }
+      if (skillContext?.loaded.length) {
+        database.withTransaction(() => {
+          for (const skill of skillContext!.loaded) {
+            const version = database.getSkillVersionByCoordinates(skill.qualifiedName, skill.versionId);
+            database.recordSkillUsage({
+              runId: run.id,
+              stepId: goalStep.id,
+              skillVersionRecordId: version.id,
+              provider: routed!.provider.id,
+              phase,
+              outcome: result.outcome,
+              durationMs: result.durationMs,
+              estimatedTokens: Math.ceil(skill.instructions.length / 4)
+            });
+          }
+        });
       }
       const workspaceAfter = tracksWorkspaceProgress
         ? captureWorkspaceProgress(task.worktreePath)

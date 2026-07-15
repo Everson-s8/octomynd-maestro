@@ -136,11 +136,28 @@ function registerAndActivateAll(root: string): SkillVersionStore {
   const store = new SkillVersionStore(database, path.join(tempDir, "managed-skill-versions"));
   for (const metadata of catalog.skills) {
     const registered = store.register(metadata);
+    recordPassingEvaluation(registered.id);
     database.updateSkillVersionStatus(registered.id, "evaluated");
     database.updateSkillVersionStatus(registered.id, "approved");
     database.activateSkillVersion(registered.id);
   }
   return store;
+}
+
+function recordPassingEvaluation(skillVersionRecordId: number): void {
+  database.recordSkillEvaluation({
+    skillVersionRecordId,
+    status: "passed",
+    qualityScore: 1,
+    durationMs: 1,
+    estimatedTokens: 10,
+    attempts: 1,
+    failures: 0,
+    securityPassed: true,
+    regressionDetected: false,
+    baselineVersionId: null,
+    checks: [{ id: "test", type: "content", status: "passed", message: "passed" }]
+  });
 }
 
 function writeSkill(

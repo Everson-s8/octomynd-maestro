@@ -371,12 +371,14 @@ After telemetry proves the runtime, consider:
 
 ### Feature A: Governed Skill Catalog and Eval Harness ([#40](https://github.com/Everson-s8/octomynd-maestro/issues/40))
 
-1. Define portable Skill metadata and Maestro policy schemas.
-2. Discover and validate repository Skills without executing them.
-3. Pin immutable Skill versions to Goal runs.
-4. Add trigger, forward and script eval fixtures.
-5. Add usage, token, latency and outcome telemetry.
-6. Ship the initial three Skills behind a feature flag.
+Implementation status: complete on the Feature branch; pending consolidated Final Review and merge.
+
+1. [x] Define portable Skill metadata and Maestro policy schemas.
+2. [x] Discover and validate repository Skills without executing them.
+3. [x] Pin immutable Skill versions to Goal runs.
+4. [x] Add trigger, forward and script eval fixtures.
+5. [x] Add usage, token, latency and outcome telemetry.
+6. [x] Ship the initial three Skills behind a feature flag.
 
 ### Feature B: Multi-Agent Work Graph
 
