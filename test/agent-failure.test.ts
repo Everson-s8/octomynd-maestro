@@ -10,6 +10,7 @@ describe("provider failure classification", () => {
     expect(classifyFailure("Error: usage limit reached for this account")).toBe("quota");
     expect(classifyFailure("429 Too Many Requests")).toBe("quota");
     expect(classifyFailure("Rate limit exceeded, please retry later")).toBe("quota");
+    expect(classifyFailure("You've hit your session limit · resets 5pm (America/Sao_Paulo)")).toBe("quota");
   });
 
   it("classifies authentication failures", () => {

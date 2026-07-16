@@ -198,9 +198,11 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/improve_reject <id>` rejects a candidate while preserving its audit history.
 
 The governed backlog autopilot is enabled by default. It starts at most one running goal at a time,
-keeps `waiting_provider` goals from consuming that global slot, and never starts a second task for a
-project that already has a running or waiting goal. Exact duplicates of delivered/completed work are
-marked `blocked` for human review rather than silently discarded. Configure it with
+keeps `waiting_provider` goals from consuming that global slot, and evaluates Feature Task
+dependencies before preparing a worktree. Same-project parallelism requires explicit disjoint
+mutation scopes; dependent Tasks inherit exact validated ancestor commits through a deterministic
+baseline branch. Exact duplicates of delivered/completed work are marked `blocked` for human review
+rather than silently discarded. Configure it with
 `MAESTRO_AUTOPILOT_ENABLED`, `MAESTRO_AUTOPILOT_POLL_MS`, and
 `MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
 - Any plain text message is saved as feedback.

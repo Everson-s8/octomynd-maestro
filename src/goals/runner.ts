@@ -3,6 +3,7 @@ import type {
   GoalPhase,
   GoalRunRecord,
   GoalStepStatus,
+  GoalWaitReason,
   MaestroDatabase,
   TaskStatus
 } from "../db.js";
@@ -15,12 +16,11 @@ import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
+import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
-const DEFAULT_GOAL_DEADLINE_MS = 30 * 60_000;
-
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
 const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
   planning: "planning",
@@ -60,7 +60,7 @@ export async function runTaskGoal(
   let excluded = initialExcludedProviders(database, run, phase);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
-  const goalDeadlineAt = Date.now() + (options.deadlineMs ?? DEFAULT_GOAL_DEADLINE_MS);
+  const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
   const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id));
 
   database.addEvent({
@@ -76,7 +76,7 @@ export async function runTaskGoal(
       if (options.signal?.aborted) {
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
-      if (Date.now() >= goalDeadlineAt) {
+      if (goalDeadlineAt !== undefined && Date.now() >= goalDeadlineAt) {
         return finishCircuitBreak(
           database,
           currentRun,
@@ -192,8 +192,21 @@ export async function runTaskGoal(
       }
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
-        return pauseRun(database, currentRun, phase, stepCount, error, task.id);
+        const availability = await registry.nextAvailability(CAPABILITIES[phase]);
+        return pauseRun(database, currentRun, phase, stepCount, error, task.id, {
+          reason: availability.reason,
+          retryAfterMs: availability.retryAfterMs,
+          provider: availability.provider ?? undefined
+        });
       }
+
+      currentRun = database.updateGoalRun({
+        id: run.id,
+        status: "running",
+        currentPhase: phase,
+        stepCount,
+        lastProvider: routed.provider.id
+      });
 
       const goalStep = database.withTransaction(() => {
         const step = database.createGoalStep(run.id, phase, routed.provider.id);
@@ -286,6 +299,9 @@ export async function runTaskGoal(
           humanFeedback: latestChangeRequest(database, run.id),
           skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
+          resumeContext: formatCheckpointForResume(database.getLatestGoalCheckpoint(run.id)),
+          featureTaskContract: database.findFeaturePlanDetailsByTask(task.id)?.tasks
+            .find((candidate) => candidate.taskId === task.id)?.contract,
           deadlineAt: goalDeadlineAt,
           signal: options.signal
         });
@@ -296,7 +312,8 @@ export async function runTaskGoal(
           output: "",
           error: error instanceof Error ? error.message : "Unknown provider execution error.",
           durationMs: Date.now() - startedAt,
-          retryable: false
+          retryable: false,
+          failureCategory: "unknown"
         };
       } finally {
         routed.release(result!);
@@ -384,6 +401,33 @@ export async function runTaskGoal(
           }
         });
       });
+      if (tracksWorkspaceProgress) {
+        const checkpoint = database.createGoalCheckpoint(captureGoalCheckpoint({
+          runId: run.id,
+          stepId: goalStep.id,
+          phase,
+          provider: routed.provider.id,
+          interrupted: result.outcome !== "completed" && result.outcome !== "changes_requested",
+          summary: safeSummary,
+          workspacePath: task.worktreePath,
+          workspaceFingerprint: workspaceAfter,
+          artifactKeys: Object.values(artifactKeys)
+        }));
+        database.addEvent({
+          source: "maestro",
+          type: "goal.checkpoint_saved",
+          text: `Checkpoint #${checkpoint.id} saved for goal #${run.id}.`,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            stepId: goalStep.id,
+            checkpointId: checkpoint.id,
+            status: checkpoint.status,
+            changedFiles: checkpoint.changedFiles,
+            artifactKeys: checkpoint.artifactKeys
+          }
+        });
+      }
 
       if (result.outcome === "cancelled" || options.signal?.aborted) {
         return cancelRun(database, currentRun, phase, stepCount, task.id);
@@ -432,13 +476,19 @@ export async function runTaskGoal(
           continue;
         }
         if (result.retryable) {
+          const availability = await registry.nextAvailability(CAPABILITIES[phase]);
           return pauseRun(
             database,
             currentRun,
             phase,
             stepCount,
             result.summary || result.error || "Provider failure.",
-            task.id
+            task.id,
+            {
+              reason: availability.reason,
+              retryAfterMs: availability.retryAfterMs,
+              provider: availability.provider ?? routed.provider.id
+            }
           );
         }
         return finishRun(database, currentRun, "failed", phase, stepCount, result.summary || result.error || "Provider failure.", task.id);
@@ -599,24 +649,41 @@ function pauseRun(
   phase: GoalPhase,
   stepCount: number,
   error: string,
-  taskId: number
+  taskId: number,
+  wait: {
+    reason: GoalWaitReason;
+    retryAfterMs?: number;
+    provider?: AgentProviderId;
+  }
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
+  const retryAfterMs = Math.max(1_000, wait.retryAfterMs ?? 60_000);
+  const nextRetryAt = new Date(Date.now() + retryAfterMs).toISOString();
   return database.withTransaction(() => {
-    database.updateTaskStatus(taskId, "waiting_quota");
+    database.updateTaskStatus(taskId, "waiting_provider");
     const paused = database.updateGoalRun({
       id: run.id,
       status: "waiting_provider",
       currentPhase: phase,
       stepCount,
-      lastError: safeError
+      lastError: safeError,
+      waitReason: wait.reason,
+      nextRetryAt,
+      lastProvider: wait.provider ?? run.lastProvider ?? null
     });
     database.addEvent({
       source: "maestro",
       type: "goal.waiting_provider",
       text: safeError,
       taskId,
-      metadata: { runId: run.id, phase, stepCount }
+      metadata: {
+        runId: run.id,
+        phase,
+        stepCount,
+        waitReason: wait.reason,
+        nextRetryAt,
+        provider: wait.provider ?? run.lastProvider ?? null
+      }
     });
     return paused;
   });

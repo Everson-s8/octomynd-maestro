@@ -20,7 +20,11 @@ describe("config", () => {
       maxConcurrentGoals: 1
     });
     expect(config.runtime).toEqual({
-      tokenEfficient: true
+      tokenEfficient: true,
+      codexInactivityTimeoutMs: 600_000,
+      claudeInactivityTimeoutMs: 1_800_000,
+      providerMaxRuntimeMs: undefined,
+      goalDeadlineMs: undefined
     });
     expect(config.skills).toEqual({
       enabled: false,

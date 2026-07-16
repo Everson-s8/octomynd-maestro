@@ -302,6 +302,7 @@ export class FeatureCoordinator {
           await this.github.closeSuperseded(item.pullRequestUrl, feature.pullRequestUrl);
         }
         await this.github.deleteHeadBranch(item.pullRequestUrl);
+        await cleanupTaskBaselineBranch(project, task);
         const taskIssueNumber = issueLinks.taskIssueNumbers[task.id];
         if (taskIssueNumber) {
           await this.github.closeIssue(
@@ -434,6 +435,20 @@ async function cleanupTaskWorktree(
   await runGit(["-C", project.path, "worktree", "remove", task.worktreePath]);
   await runGit(["-C", project.path, "branch", "-D", task.branchName]);
   return "completed";
+}
+
+async function cleanupTaskBaselineBranch(project: ProjectRecord, task: TaskRecord): Promise<void> {
+  if (!task.baseBranch || task.baseBranch === project.defaultBranch) return;
+  if (!/^maestro\/feature-plan-\d+-task-\d+-base-r\d+$/.test(task.baseBranch)) {
+    throw new Error(`Refusing to delete unexpected Task base branch: ${task.baseBranch}`);
+  }
+  try {
+    await runGit(["-C", project.path, "push", "origin", "--delete", task.baseBranch]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/remote ref does not exist|unable to delete|not found/i.test(message)) return;
+    throw error;
+  }
 }
 
 function runGit(args: string[]): Promise<string> {

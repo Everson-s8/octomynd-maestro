@@ -362,9 +362,135 @@ describe("goal runner", () => {
       ["planning", "coding", "testing", "reviewing"],
       (request) => {
         if (request.phase === "implementing" && codingAttempts++ === 0) {
-          return { outcome: "failed", summary: "quota", output: "", error: "quota", durationMs: 1, retryable: true };
+          return {
+            outcome: "failed",
+            summary: "quota",
+            output: "",
+            error: "quota",
+            durationMs: 1,
+            retryable: true,
+            retryAfterMs: 10 * 60_000,
+            failureCategory: "quota"
+          };
         }
         return completed("available");
+      }
+    );
+    const scheduler = new ManualScheduler();
+    let registryNow = Date.now();
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([codex], undefined, () => registryNow),
+      path.join(tempDir, "artifacts"),
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
+    );
+
+    const run = coordinator.start(task.id, 8);
+    await waitFor(() => database.getGoalRun(run.id).status === "waiting_provider");
+    const waitingRun = database.getGoalRun(run.id);
+    expect(waitingRun.nextRetryAt).not.toBeNull();
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.pendingDelaysMs[0]).toBeGreaterThan(50_000);
+    registryNow += 10 * 60_000 + 1;
+    scheduler.flush();
+    await waitFor(() => database.getGoalRun(run.id).status === "completed");
+
+    expect(database.getTask(task.id).status).toBe("done");
+    expect(database.getGoalRun(run.id).stepCount).toBe(4);
+    expect(database.listGoalSteps(run.id)).toHaveLength(5);
+    expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
+    coordinator.shutdown();
+  });
+
+  it("creates a durable waiting Goal when provider preflight reports quota", async () => {
+    const projectDir = path.join(tempDir, "preflight-quota-project");
+    const worktreeDir = path.join(tempDir, "preflight-quota-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "preflight-quota", path: projectDir });
+    const task = database.createTask("wait durably for provider quota", "dashboard", "preflight-quota");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-preflight-quota",
+      worktreePath: worktreeDir
+    });
+    const quotaProvider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["planning"]),
+      health: async () => ({ state: "quota", detail: "quota", checkedAt: new Date().toISOString() }),
+      execute: async () => completed("unexpected")
+    };
+    const scheduler = new ManualScheduler();
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([quotaProvider]),
+      path.join(tempDir, "artifacts"),
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler,
+      undefined,
+      () => ({
+        status: "quota",
+        summary: "No provider currently has quota.",
+        recommendedAction: "Wait for quota reset.",
+        checkedAt: new Date().toISOString(),
+        projectKey: "preflight-quota",
+        taskId: task.id,
+        fingerprintId: "quota-test",
+        requiredCapabilities: ["planning"],
+        checks: []
+      })
+    );
+
+    const run = coordinator.start(task.id, 6);
+    await waitFor(() => database.getGoalRun(run.id).status === "waiting_provider");
+
+    expect(database.getGoalRun(run.id).waitReason).toBe("quota");
+    expect(database.getTask(task.id).status).toBe("waiting_provider");
+    expect(database.listEvents().some((event) => event.type === "goal.provider_preflight_wait")).toBe(true);
+    expect(scheduler.pendingCount).toBe(1);
+    coordinator.shutdown();
+  });
+
+  it("recovers an interrupted runtime step from the preserved worktree and checkpoint", async () => {
+    const worktreeDir = path.join(tempDir, "restart-worktree");
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "restart", path: worktreeDir });
+    const task = database.createTask("resume partial implementation after restart", "dashboard", "restart");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "maestro/task-restart",
+      worktreePath: worktreeDir
+    });
+    const run = database.createGoalRun(task.id, 6);
+    database.updateGoalRun({
+      id: run.id,
+      status: "running",
+      currentPhase: "implementing",
+      stepCount: 0,
+      lastProvider: "codex"
+    });
+    const interruptedStep = database.createGoalStep(run.id, "implementing", "codex");
+    fs.writeFileSync(path.join(worktreeDir, "partial.ts"), "export const preserved = true;\n", "utf8");
+
+    let implementationResumeContext: string | undefined;
+    const codex = new FakeProvider(
+      "codex",
+      ["coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "implementing") implementationResumeContext = request.resumeContext;
+        return completed("continued from preserved work");
       }
     );
     const scheduler = new ManualScheduler();
@@ -379,17 +505,68 @@ describe("goal runner", () => {
       scheduler
     );
 
-    const run = coordinator.start(task.id, 8);
-    await waitFor(() => database.getGoalRun(run.id).status === "waiting_provider");
+    expect(coordinator.recoverWaitingRuns()).toBe(1);
+    const waitingRun = database.getGoalRun(run.id);
+    expect(waitingRun.status).toBe("waiting_provider");
+    expect(waitingRun.waitReason).toBe("runtime_restart");
+    expect(database.getTask(task.id).status).toBe("waiting_provider");
+    expect(database.getGoalStep(interruptedStep.id).status).toBe("cancelled");
+    expect(database.getLatestGoalCheckpoint(run.id)).toMatchObject({
+      status: "interrupted",
+      changedFiles: ["partial.ts"]
+    });
     expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.pendingDelaysMs[0]).toBeGreaterThan(0);
+    expect(scheduler.pendingDelaysMs[0]).toBeLessThanOrEqual(5_000);
+
     scheduler.flush();
     await waitFor(() => database.getGoalRun(run.id).status === "completed");
 
+    expect(implementationResumeContext).toContain("partial.ts");
+    expect(implementationResumeContext).toContain("Nao reverta nem refaca trabalho valido");
     expect(database.getTask(task.id).status).toBe("done");
-    expect(database.getGoalRun(run.id).stepCount).toBe(4);
-    expect(database.listGoalSteps(run.id)).toHaveLength(5);
-    expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
-    expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.recovered_after_restart")).toBe(true);
+    coordinator.shutdown();
+  });
+
+  it("fails closed during restart recovery when the recorded worktree is missing", () => {
+    const projectDir = path.join(tempDir, "missing-worktree-project");
+    fs.mkdirSync(projectDir);
+    database.registerProject({ key: "missing-worktree", path: projectDir });
+    const task = database.createTask("recover only from preserved state", "dashboard", "missing-worktree");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "maestro/task-missing-worktree",
+      worktreePath: path.join(tempDir, "does-not-exist")
+    });
+    const run = database.createGoalRun(task.id, 6);
+    database.updateGoalRun({
+      id: run.id,
+      status: "running",
+      currentPhase: "implementing",
+      stepCount: 0,
+      lastProvider: "codex"
+    });
+    const step = database.createGoalStep(run.id, "implementing", "codex");
+    const scheduler = new ManualScheduler();
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([]),
+      path.join(tempDir, "artifacts"),
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
+    );
+
+    expect(coordinator.recoverWaitingRuns()).toBe(0);
+    expect(database.getGoalRun(run.id).status).toBe("blocked");
+    expect(database.getGoalStep(step.id).status).toBe("blocked");
+    expect(database.getTask(task.id).status).toBe("blocked");
+    expect(scheduler.pendingCount).toBe(0);
+    expect(database.listEvents().some((event) => event.type === "goal.recovery_blocked")).toBe(true);
     coordinator.shutdown();
   });
 

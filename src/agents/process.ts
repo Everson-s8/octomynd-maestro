@@ -12,7 +12,7 @@ export type AgentProcessRequest = {
   args: string[];
   cwd: string;
   stdin?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   signal?: AbortSignal;
   maxOutputChars?: number;
   maxReceivedChars?: number;
@@ -43,7 +43,8 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
   const maxOutputChars = request.maxOutputChars ?? 500_000;
   const maxReceivedChars = request.maxReceivedChars ?? Math.max(maxOutputChars * 4, maxOutputChars);
   const maxDuplicateChunks = request.maxDuplicateChunks ?? 80;
-  const inactivityTimeoutMs = request.inactivityTimeoutMs ?? Math.min(request.timeoutMs, 2 * 60_000);
+  const inactivityTimeoutMs = request.inactivityTimeoutMs
+    ?? (request.timeoutMs === undefined ? 10 * 60_000 : Math.min(request.timeoutMs, 2 * 60_000));
 
   return new Promise((resolve) => {
     const child = spawn(request.command, request.args, {
@@ -125,7 +126,9 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
       aborted = true;
       stop();
     };
-    phaseTimer = setTimeout(() => tripBreaker("phase_timeout"), request.timeoutMs);
+    if (request.timeoutMs !== undefined && request.timeoutMs > 0) {
+      phaseTimer = setTimeout(() => tripBreaker("phase_timeout"), request.timeoutMs);
+    }
     if (request.deadlineAt !== undefined) {
       deadlineTimer = setTimeout(
         () => tripBreaker("deadline"),

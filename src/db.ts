@@ -13,6 +13,12 @@ import {
 } from "./improvements/types.js";
 import { createSkillPersistence, migrateSkillPersistence } from "./skills/persistence.js";
 import { createWorkGraphPersistence, migrateWorkGraphPersistence } from "./work-graphs/persistence.js";
+import {
+  FeatureTaskContract,
+  FeatureTaskContractInput,
+  legacyFeatureTaskContract,
+  normalizeFeatureTaskContracts
+} from "./features/task-graph.js";
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
@@ -38,6 +44,8 @@ export type TaskStatus =
   | "ready_to_merge"
   | "rejected"
   | "waiting_quota"
+  | "waiting_provider"
+  | "waiting_dependency"
   | "blocked"
   | "failed"
   | "cancelled"
@@ -70,6 +78,7 @@ export type TaskRecord = {
   source: string;
   branchName: string | null;
   worktreePath: string | null;
+  baseBranch?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -79,6 +88,7 @@ export type TaskWorktreeUpdate = {
   status: TaskStatus;
   branchName: string;
   worktreePath: string;
+  baseBranch?: string | null;
 };
 
 export type EventRecord = {
@@ -167,6 +177,14 @@ export type ImprovementProposalInput = {
 export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
 export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
 export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
+export type GoalWaitReason =
+  | "quota"
+  | "auth_required"
+  | "timeout"
+  | "offline"
+  | "capacity"
+  | "runtime_restart"
+  | "unknown";
 
 export type GoalRunRecord = {
   id: number;
@@ -176,12 +194,33 @@ export type GoalRunRecord = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
+  waitReason?: GoalWaitReason | null;
+  nextRetryAt?: string | null;
+  lastProvider?: string | null;
   commitSha: string | null;
   pullRequestUrl: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
 };
+
+export type GoalCheckpointStatus = "completed" | "interrupted";
+
+export type GoalCheckpointRecord = {
+  id: number;
+  runId: number;
+  stepId: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalCheckpointStatus;
+  summary: string;
+  workspaceFingerprint: string | null;
+  changedFiles: string[];
+  artifactKeys: string[];
+  createdAt: string;
+};
+
+export type GoalCheckpointInput = Omit<GoalCheckpointRecord, "id" | "createdAt">;
 
 export type GoalStepRecord = {
   id: number;
@@ -293,6 +332,7 @@ export type FeaturePlanTaskRecord = {
   taskText: string;
   taskStatus: TaskStatus;
   position: number;
+  contract: FeatureTaskContract;
   createdAt: string;
 };
 
@@ -325,6 +365,7 @@ export type FeaturePlanInput = {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  taskContracts?: FeatureTaskContractInput[];
   featureIssueNumber?: number | null;
   taskIssueNumbers?: Record<number, number>;
   source?: string;
@@ -338,6 +379,7 @@ export type FeaturePlanReplanInput = {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  taskContracts?: FeatureTaskContractInput[];
   idempotencyKey?: string | null;
 };
 
@@ -473,6 +515,7 @@ export function createDatabase(databasePath: string) {
     SET status = @status,
         branch_name = @branchName,
         worktree_path = @worktreePath,
+        base_branch = @baseBranch,
         updated_at = @now
     WHERE id = @id
   `);
@@ -511,9 +554,9 @@ export function createDatabase(databasePath: string) {
   const createGoalRunStatement = db.prepare(`
     INSERT INTO goal_runs (
       task_id, status, current_phase, step_count, max_steps, last_error,
-      created_at, updated_at, finished_at
+      wait_reason, next_retry_at, last_provider, created_at, updated_at, finished_at
     )
-    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, @now, @now, NULL)
+    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, @now, @now, NULL)
   `);
   const updateGoalRunStatement = db.prepare(`
     UPDATE goal_runs
@@ -521,6 +564,9 @@ export function createDatabase(databasePath: string) {
         current_phase = @currentPhase,
         step_count = @stepCount,
         last_error = @lastError,
+        wait_reason = @waitReason,
+        next_retry_at = @nextRetryAt,
+        last_provider = @lastProvider,
         updated_at = @now,
         finished_at = @finishedAt
     WHERE id = @id
@@ -548,6 +594,16 @@ export function createDatabase(databasePath: string) {
         duration_ms = @durationMs,
         finished_at = @now
     WHERE id = @id
+  `);
+  const createGoalCheckpointStatement = db.prepare(`
+    INSERT INTO goal_checkpoints (
+      run_id, step_id, phase, provider, status, summary, workspace_fingerprint,
+      changed_files_json, artifact_keys_json, created_at
+    )
+    VALUES (
+      @runId, @stepId, @phase, @provider, @status, @summary, @workspaceFingerprint,
+      @changedFilesJson, @artifactKeysJson, @now
+    )
   `);
   const addHumanReviewStatement = db.prepare(`
     INSERT INTO human_reviews (run_id, task_id, decision, note, source, created_at)
@@ -615,8 +671,8 @@ export function createDatabase(databasePath: string) {
     )
   `);
   const addFeaturePlanTaskStatement = db.prepare(`
-    INSERT INTO feature_plan_tasks (feature_plan_id, task_id, position, created_at)
-    VALUES (@featurePlanId, @taskId, @position, @now)
+    INSERT INTO feature_plan_tasks (feature_plan_id, task_id, position, contract_json, created_at)
+    VALUES (@featurePlanId, @taskId, @position, @contractJson, @now)
   `);
   const addGitHubIssueLinkStatement = db.prepare(`
     INSERT INTO github_issue_links (subject_type, subject_id, issue_number, created_at)
@@ -765,7 +821,7 @@ export function createDatabase(databasePath: string) {
 
     updateTaskWorktree(input: TaskWorktreeUpdate): TaskRecord {
       const now = new Date().toISOString();
-      updateTaskWorktreeStatement.run({ ...input, now });
+      updateTaskWorktreeStatement.run({ ...input, baseBranch: input.baseBranch ?? null, now });
       return this.getTask(input.id);
     },
 
@@ -1008,22 +1064,69 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapGoalRun);
     },
 
+    listActiveGoalRuns(): GoalRunRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM goal_runs WHERE status IN ('running', 'waiting_provider') ORDER BY id ASC")
+        .all() as GoalRunRow[];
+      return rows.map(mapGoalRun);
+    },
+
     updateGoalRun(input: {
       id: number;
       status: GoalRunStatus;
       currentPhase: GoalPhase;
       stepCount: number;
       lastError?: string | null;
+      waitReason?: GoalWaitReason | null;
+      nextRetryAt?: string | null;
+      lastProvider?: string | null;
     }): GoalRunRecord {
-      this.getGoalRun(input.id);
+      const existing = this.getGoalRun(input.id);
       const now = new Date().toISOString();
+      const waiting = input.status === "waiting_provider";
       updateGoalRunStatement.run({
         ...input,
         lastError: input.lastError ?? null,
+        waitReason: waiting ? input.waitReason ?? existing.waitReason : null,
+        nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
+        lastProvider: input.lastProvider ?? existing.lastProvider,
         now,
         finishedAt: ["running", "waiting_provider"].includes(input.status) ? null : now
       });
       return this.getGoalRun(input.id);
+    },
+
+    createGoalCheckpoint(input: GoalCheckpointInput): GoalCheckpointRecord {
+      this.getGoalRun(input.runId);
+      this.getGoalStep(input.stepId);
+      const result = createGoalCheckpointStatement.run({
+        ...input,
+        summary: redactSensitiveText(input.summary).slice(0, 2_000),
+        changedFilesJson: JSON.stringify(input.changedFiles),
+        artifactKeysJson: JSON.stringify(input.artifactKeys),
+        now: new Date().toISOString()
+      });
+      return this.getGoalCheckpoint(Number(result.lastInsertRowid));
+    },
+
+    getGoalCheckpoint(id: number): GoalCheckpointRecord {
+      const row = db.prepare("SELECT * FROM goal_checkpoints WHERE id = ?").get(id) as GoalCheckpointRow | undefined;
+      if (!row) throw new Error(`Goal checkpoint not found: ${id}`);
+      return mapGoalCheckpoint(row);
+    },
+
+    listGoalCheckpoints(runId: number): GoalCheckpointRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM goal_checkpoints WHERE run_id = ? ORDER BY id ASC")
+        .all(runId) as GoalCheckpointRow[];
+      return rows.map(mapGoalCheckpoint);
+    },
+
+    getLatestGoalCheckpoint(runId: number): GoalCheckpointRecord | null {
+      const row = db
+        .prepare("SELECT * FROM goal_checkpoints WHERE run_id = ? ORDER BY id DESC LIMIT 1")
+        .get(runId) as GoalCheckpointRow | undefined;
+      return row ? mapGoalCheckpoint(row) : null;
     },
 
     updateGoalDelivery(input: {
@@ -1392,11 +1495,17 @@ export function createDatabase(databasePath: string) {
       const normalized = normalizeFeaturePlanInput(input);
       const project = this.getProjectByKey(normalized.projectKey);
       validateFeaturePlanTasks(project.id, normalized.taskIds, (id) => this.getTask(id));
+      const taskContracts = normalizeFeatureTaskContracts(
+        normalized.taskIds,
+        normalized.taskContracts,
+        (taskId) => this.getTask(taskId).text
+      );
       const requestHash = hashFeaturePlanOperation("create", {
         projectId: project.id,
         objective: normalized.objective,
         acceptanceCriteria: normalized.acceptanceCriteria,
         taskIds: normalized.taskIds,
+        taskContracts: [...taskContracts.entries()],
         featureIssueNumber: normalized.featureIssueNumber,
         taskIssueNumbers: normalized.taskIssueNumbers
       });
@@ -1421,7 +1530,13 @@ export function createDatabase(databasePath: string) {
           now
         });
         const featurePlanId = Number(result.lastInsertRowid);
-        insertFeaturePlanTasks(addFeaturePlanTaskStatement, featurePlanId, normalized.taskIds, now);
+        insertFeaturePlanTasks(
+          addFeaturePlanTaskStatement,
+          featurePlanId,
+          normalized.taskIds,
+          taskContracts,
+          now
+        );
         if (normalized.featureIssueNumber !== null) {
           addGitHubIssueLinkStatement.run({
             subjectType: "feature_plan",
@@ -1482,7 +1597,23 @@ export function createDatabase(databasePath: string) {
       const rows = db
         .prepare(featurePlanTasksSelectSql("WHERE feature_plan_tasks.feature_plan_id = ? ORDER BY feature_plan_tasks.position ASC"))
         .all(featurePlanId) as FeaturePlanTaskRow[];
-      return rows.map(mapFeaturePlanTask);
+      return rows.map((row, index) => mapFeaturePlanTask(row, parseFeatureTaskContract(
+        row.contract_json,
+        row,
+        rows[index - 1]?.task_id
+      )));
+    },
+
+    findFeaturePlanDetailsByTask(taskId: number): FeaturePlanDetails | null {
+      const row = db.prepare(`
+        SELECT feature_plan_tasks.feature_plan_id
+        FROM feature_plan_tasks
+        JOIN feature_plans ON feature_plans.id = feature_plan_tasks.feature_plan_id
+        WHERE feature_plan_tasks.task_id = ? AND feature_plans.status = 'planned'
+        ORDER BY feature_plan_tasks.id DESC
+        LIMIT 1
+      `).get(taskId) as { feature_plan_id: number } | undefined;
+      return row ? this.getFeaturePlanDetails(row.feature_plan_id) : null;
     },
 
     getFeaturePlanIssueLinks(featurePlanId: number): FeaturePlanIssueLinks {
@@ -1538,13 +1669,20 @@ export function createDatabase(databasePath: string) {
         objective: input.objective,
         acceptanceCriteria: input.acceptanceCriteria,
         taskIds: input.taskIds,
+        taskContracts: input.taskContracts,
         idempotencyKey: input.idempotencyKey
       });
+      const taskContracts = normalizeFeatureTaskContracts(
+        normalized.taskIds,
+        normalized.taskContracts,
+        (taskId) => this.getTask(taskId).text
+      );
       const requestHash = hashFeaturePlanOperation("replan", {
         featurePlanId: plan.id,
         objective: normalized.objective,
         acceptanceCriteria: normalized.acceptanceCriteria,
-        taskIds: normalized.taskIds
+        taskIds: normalized.taskIds,
+        taskContracts: [...taskContracts.entries()]
       });
       const existingOperation = normalized.idempotencyKey
         ? findFeaturePlanOperation(db, normalized.idempotencyKey)
@@ -1572,7 +1710,13 @@ export function createDatabase(databasePath: string) {
           throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
         }
         deleteFeaturePlanTasksStatement.run(plan.id);
-        insertFeaturePlanTasks(addFeaturePlanTaskStatement, plan.id, normalized.taskIds, now);
+        insertFeaturePlanTasks(
+          addFeaturePlanTaskStatement,
+          plan.id,
+          normalized.taskIds,
+          taskContracts,
+          now
+        );
         if (normalized.idempotencyKey) {
           addFeaturePlanOperationStatement.run({
             featurePlanId: plan.id,
@@ -1753,6 +1897,7 @@ function migrate(db: Database.Database) {
       source TEXT NOT NULL,
       branch_name TEXT,
       worktree_path TEXT,
+      base_branch TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -1835,6 +1980,22 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (run_id) REFERENCES goal_runs(id)
     );
 
+    CREATE TABLE IF NOT EXISTS goal_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      step_id INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      workspace_fingerprint TEXT,
+      changed_files_json TEXT NOT NULL DEFAULT '[]',
+      artifact_keys_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id),
+      FOREIGN KEY (step_id) REFERENCES goal_steps(id)
+    );
+
     CREATE TABLE IF NOT EXISTS human_reviews (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id INTEGER NOT NULL,
@@ -1904,6 +2065,7 @@ function migrate(db: Database.Database) {
       feature_plan_id INTEGER NOT NULL,
       task_id INTEGER NOT NULL,
       position INTEGER NOT NULL,
+      contract_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       UNIQUE(feature_plan_id, task_id),
       FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
@@ -2003,6 +2165,8 @@ function migrate(db: Database.Database) {
       ON feature_plan_integration_items(task_id);
     CREATE INDEX IF NOT EXISTS idx_completion_review_outbox_claim
       ON completion_review_outbox(status, available_at, lease_expires_at, id);
+    CREATE INDEX IF NOT EXISTS idx_goal_checkpoints_run_id
+      ON goal_checkpoints(run_id, id);
   `);
 
   migrateSkillPersistence(db);
@@ -2011,10 +2175,15 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
+  addColumnIfMissing(db, "tasks", "base_branch", "TEXT");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "wait_reason", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "next_retry_at", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "last_provider", "TEXT");
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
+  addColumnIfMissing(db, "feature_plan_tasks", "contract_json", "TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
   addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
   addColumnIfMissing(db, "features", "cancel_reason", "TEXT");
@@ -2053,6 +2222,7 @@ type TaskRow = {
   source: string;
   branch_name: string | null;
   worktree_path: string | null;
+  base_branch: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2109,11 +2279,28 @@ type GoalRunRow = {
   step_count: number;
   max_steps: number;
   last_error: string | null;
+  wait_reason: GoalWaitReason | null;
+  next_retry_at: string | null;
+  last_provider: string | null;
   commit_sha: string | null;
   pull_request_url: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+};
+
+type GoalCheckpointRow = {
+  id: number;
+  run_id: number;
+  step_id: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalCheckpointStatus;
+  summary: string;
+  workspace_fingerprint: string | null;
+  changed_files_json: string;
+  artifact_keys_json: string;
+  created_at: string;
 };
 
 type GoalStepRow = {
@@ -2199,6 +2386,7 @@ type FeaturePlanTaskRow = {
   task_text: string;
   task_status: TaskStatus;
   position: number;
+  contract_json: string;
   created_at: string;
 };
 
@@ -2339,10 +2527,11 @@ function normalizeImprovementProposal(input: ImprovementProposalInput) {
 
 type NormalizedFeaturePlanInput = Required<Omit<
   FeaturePlanInput,
-  "featureIssueNumber" | "taskIssueNumbers"
+  "featureIssueNumber" | "taskIssueNumbers" | "taskContracts"
 >> & {
   featureIssueNumber: number | null;
   taskIssueNumbers: Record<number, number>;
+  taskContracts?: FeatureTaskContractInput[];
 };
 
 function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePlanInput {
@@ -2384,6 +2573,7 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePl
     objective,
     acceptanceCriteria,
     taskIds,
+    taskContracts: input.taskContracts,
     source,
     createdByUserId: input.createdByUserId?.trim() || null,
     createdByUsername: input.createdByUsername?.trim() || null,
@@ -2465,10 +2655,17 @@ function insertFeaturePlanTasks(
   statement: Database.Statement,
   featurePlanId: number,
   taskIds: number[],
+  contracts: Map<number, FeatureTaskContract>,
   now: string
 ): void {
   taskIds.forEach((taskId, index) => {
-    statement.run({ featurePlanId, taskId, position: index + 1, now });
+    statement.run({
+      featurePlanId,
+      taskId,
+      position: index + 1,
+      contractJson: JSON.stringify(contracts.get(taskId)),
+      now
+    });
   });
 }
 
@@ -2557,6 +2754,7 @@ function mapTask(row: TaskRow): TaskRecord {
     source: row.source,
     branchName: row.branch_name,
     worktreePath: row.worktree_path,
+    baseBranch: row.base_branch,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2621,11 +2819,30 @@ function mapGoalRun(row: GoalRunRow): GoalRunRecord {
     stepCount: row.step_count,
     maxSteps: row.max_steps,
     lastError: row.last_error,
+    waitReason: row.wait_reason,
+    nextRetryAt: row.next_retry_at,
+    lastProvider: row.last_provider,
     commitSha: row.commit_sha,
     pullRequestUrl: row.pull_request_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     finishedAt: row.finished_at
+  };
+}
+
+function mapGoalCheckpoint(row: GoalCheckpointRow): GoalCheckpointRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    phase: row.phase,
+    provider: row.provider,
+    status: row.status,
+    summary: row.summary,
+    workspaceFingerprint: row.workspace_fingerprint,
+    changedFiles: JSON.parse(row.changed_files_json || "[]") as string[],
+    artifactKeys: JSON.parse(row.artifact_keys_json || "[]") as string[],
+    createdAt: row.created_at
   };
 }
 
@@ -2726,7 +2943,10 @@ function parseStringArrayJson(value: string | null): string[] {
   }
 }
 
-function mapFeaturePlanTask(row: FeaturePlanTaskRow): FeaturePlanTaskRecord {
+function mapFeaturePlanTask(
+  row: FeaturePlanTaskRow,
+  contract: FeatureTaskContract
+): FeaturePlanTaskRecord {
   return {
     id: row.id,
     featurePlanId: row.feature_plan_id,
@@ -2734,8 +2954,32 @@ function mapFeaturePlanTask(row: FeaturePlanTaskRow): FeaturePlanTaskRecord {
     taskText: row.task_text,
     taskStatus: row.task_status,
     position: row.position,
+    contract,
     createdAt: row.created_at
   };
+}
+
+function parseFeatureTaskContract(
+  value: string,
+  row: FeaturePlanTaskRow,
+  previousTaskId?: number
+): FeatureTaskContract {
+  try {
+    const parsed = JSON.parse(value || "{}") as Partial<FeatureTaskContract>;
+    if (
+      typeof parsed.objective === "string"
+      && Array.isArray(parsed.acceptanceCriteria)
+      && Array.isArray(parsed.excludedScope)
+      && Array.isArray(parsed.mutationScope)
+      && Array.isArray(parsed.dependsOnTaskIds)
+      && (parsed.parallelMode === "serial" || parsed.parallelMode === "parallel")
+    ) {
+      return parsed as FeatureTaskContract;
+    }
+  } catch {
+    // Legacy rows are migrated to the safe serial contract below.
+  }
+  return legacyFeatureTaskContract(row.task_id, row.task_text, previousTaskId);
 }
 
 function mapFeaturePlanIntegration(row: FeaturePlanIntegrationRow): FeaturePlanIntegrationRecord {

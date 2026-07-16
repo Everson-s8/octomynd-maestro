@@ -70,6 +70,28 @@ describe("human review queue", () => {
     expect(item.securityAlerts[0].code).toBe("secret_scan_passed");
   });
 
+  it("compares a dependent Task only against its recorded Feature baseline", () => {
+    git(["checkout", "main"]);
+    git(["checkout", "-b", "maestro/feature-baseline"]);
+    fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, "src", "ancestor.ts"), "export const ancestor = true;\n");
+    git(["add", "src/ancestor.ts"]);
+    git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Ancestor"]);
+    git(["checkout", "-b", "maestro/dependent-review"]);
+    fs.writeFileSync(path.join(projectDir, "src", "dependent.ts"), "export const dependent = true;\n");
+    git(["add", "src/dependent.ts"]);
+    git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Dependent"]);
+    const run = reviewableGoal({
+      branchName: "maestro/dependent-review",
+      baseBranch: "maestro/feature-baseline",
+      commitSha: git(["rev-parse", "HEAD"]).trim()
+    });
+
+    const item = buildReviewQueueItem(database, run);
+
+    expect(item.changedFiles).toEqual(["src/dependent.ts"]);
+  });
+
   it("fails closed when Git cannot inspect the worktree", async () => {
     const nonRepo = path.join(tempDir, "not-a-repo");
     fs.mkdirSync(nonRepo);
@@ -284,6 +306,7 @@ class FakeGitHubGateway implements ReviewGitHubGateway {
 
 function reviewableGoal(options: {
   branchName?: string;
+  baseBranch?: string;
   worktreePath?: string;
   commitSha?: string;
 } = {}): GoalRunRecord {
@@ -292,7 +315,8 @@ function reviewableGoal(options: {
     id: task.id,
     status: "planning",
     branchName: options.branchName ?? "maestro/review-test",
-    worktreePath: options.worktreePath ?? projectDir
+    worktreePath: options.worktreePath ?? projectDir,
+    baseBranch: options.baseBranch ?? "main"
   });
   const run = database.createGoalRun(task.id, 8);
   finishStep(run.id, "planning", "codex", "Plano criado");

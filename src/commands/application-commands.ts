@@ -18,6 +18,8 @@ import { redactSensitiveText } from "../security/redaction.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
+import type { FeatureTaskContractInput } from "../features/task-graph.js";
+import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -41,6 +43,7 @@ export type CreateFeaturePlanInput = {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  taskContracts?: FeatureTaskContractInput[];
   featureIssueNumber?: number | null;
   taskIssueNumbers?: Record<number, number>;
   idempotencyKey?: string | null;
@@ -50,6 +53,7 @@ export type ReplanFeaturePlanInput = {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  taskContracts?: FeatureTaskContractInput[];
   idempotencyKey?: string | null;
 };
 
@@ -187,6 +191,7 @@ export class ApplicationCommands {
         objective: input.objective,
         acceptanceCriteria: input.acceptanceCriteria,
         taskIds: input.taskIds,
+        taskContracts: input.taskContracts,
         featureIssueNumber: input.featureIssueNumber,
         taskIssueNumbers: input.taskIssueNumbers,
         idempotencyKey: input.idempotencyKey,
@@ -415,6 +420,7 @@ export class ApplicationCommands {
         objective: input.objective,
         acceptanceCriteria: input.acceptanceCriteria,
         taskIds: input.taskIds,
+        taskContracts: input.taskContracts,
         idempotencyKey: input.idempotencyKey
       });
       if (result.applied) {
@@ -469,7 +475,17 @@ export class ApplicationCommands {
       throw failure;
     }
 
-    const plan = createWorktreePlan(project, task, worktreesRoot);
+    let baseline;
+    try {
+      baseline = prepareFeatureTaskBaseline(this.database, task, project, worktreesRoot);
+    } catch (error) {
+      const failure = conflictError(
+        error instanceof Error ? error.message : "Feature Task baseline preparation failed."
+      );
+      this.recordPrepareFailure(origin, task.id, failure.details);
+      throw failure;
+    }
+    const plan = createWorktreePlan(project, task, worktreesRoot, baseline);
     const result = createGitWorktree(project, plan);
     if (!result.ok) {
       const failure = conflictError(result.stderr || result.stdout || "git worktree failed.");
@@ -481,7 +497,8 @@ export class ApplicationCommands {
       id: task.id,
       status: "planning",
       branchName: plan.branchName,
-      worktreePath: plan.worktreePath
+      worktreePath: plan.worktreePath,
+      baseBranch: plan.baseBranch ?? project.defaultBranch
     });
 
     this.database.addEvent({
@@ -491,7 +508,12 @@ export class ApplicationCommands {
       userId: origin.userId ?? null,
       username: origin.username ?? null,
       taskId: updatedTask.id,
-      metadata: { branchName: plan.branchName, worktreePath: plan.worktreePath }
+      metadata: {
+        branchName: plan.branchName,
+        worktreePath: plan.worktreePath,
+        baseBranch: plan.baseBranch ?? project.defaultBranch,
+        dependencyTaskIds: baseline.dependencyTaskIds
+      }
     });
 
     return { task: updatedTask, branchName: plan.branchName, worktreePath: plan.worktreePath };

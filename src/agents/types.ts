@@ -8,6 +8,8 @@ import type {
   ImprovementReviewExecutionRequest,
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
+import type { FailureCategory } from "./failure.js";
+import type { FeatureTaskContract } from "../features/task-graph.js";
 
 export type AgentProviderId = "codex" | "claude";
 export type AgentCapability =
@@ -43,6 +45,8 @@ export type AgentExecutionRequest = {
   humanFeedback?: string | null;
   skillContext?: SkillExecutionContext;
   workerContext?: WorkerExecutionContext;
+  resumeContext?: string;
+  featureTaskContract?: FeatureTaskContract;
   artifactsRoot: string;
   deadlineAt?: number;
   signal?: AbortSignal;
@@ -56,6 +60,7 @@ export type AgentExecutionResult = {
   durationMs: number;
   retryable: boolean;
   retryAfterMs?: number;
+  failureCategory?: FailureCategory;
   processRuntime?: {
     breakerReason: AgentProcessBreakerReason | null;
     outputStats: AgentProcessResult["outputStats"];

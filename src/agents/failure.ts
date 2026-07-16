@@ -1,12 +1,15 @@
-export type FailureCategory = "quota" | "auth_required" | "timeout" | "unknown";
+export type FailureCategory = "quota" | "auth_required" | "timeout" | "offline" | "capacity" | "unknown";
 
-const QUOTA_PATTERN = /usage limit|rate limit|quota|credits exhausted|no credits|429\b|too many requests/i;
+const QUOTA_PATTERN = /usage limit|session limit|rate limit|quota|credits exhausted|no credits|429\b|too many requests|resets?\s+\d/i;
 const AUTH_PATTERN = /\b401\b|unauthorized|authentication|not logged in|please run \/login|sign in|invalid credentials|login required/i;
+const OFFLINE_PATTERN = /not found|cannot find module|connection refused|network is unreachable|offline|enoent/i;
 
 const CATEGORY_LABELS: Record<FailureCategory, string> = {
   quota: "cota do provedor esgotada",
   auth_required: "autenticacao necessaria",
   timeout: "tempo limite excedido",
+  offline: "provedor indisponivel",
+  capacity: "nenhum provedor com capacidade disponivel",
   unknown: "erro desconhecido"
 };
 
@@ -16,6 +19,7 @@ export function classifyFailure(text: string, timedOut = false): FailureCategory
   if (timedOut) return "timeout";
   if (QUOTA_PATTERN.test(text)) return "quota";
   if (AUTH_PATTERN.test(text)) return "auth_required";
+  if (OFFLINE_PATTERN.test(text)) return "offline";
   return "unknown";
 }
 
@@ -24,12 +28,14 @@ export function failureCategoryLabel(category: FailureCategory): string {
 }
 
 export function isRetryableFailureCategory(category: FailureCategory): boolean {
-  return category === "quota" || category === "auth_required" || category === "timeout";
+  return category !== "unknown";
 }
 
 export function retryAfterMsForFailure(category: FailureCategory): number | undefined {
   if (category === "timeout") return 15_000;
   if (category === "quota" || category === "auth_required") return 10 * 60_000;
+  if (category === "offline") return 60_000;
+  if (category === "capacity") return 30_000;
   return undefined;
 }
 

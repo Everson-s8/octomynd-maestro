@@ -6,6 +6,10 @@ import {
   isSupportedNodeVersion,
   resolveExecutionContract
 } from "./execution/contract.js";
+import {
+  DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS,
+  DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS
+} from "./agents/execution-limits.js";
 
 export type MaestroConfig = {
   projectName: string;
@@ -24,6 +28,10 @@ export type MaestroConfig = {
   };
   runtime: {
     tokenEfficient: boolean;
+    codexInactivityTimeoutMs?: number;
+    claudeInactivityTimeoutMs?: number;
+    providerMaxRuntimeMs?: number;
+    goalDeadlineMs?: number;
   };
   skills: {
     enabled: boolean;
@@ -60,7 +68,25 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
       maxConcurrentGoals: normalizePositiveInteger(env.MAESTRO_AUTOPILOT_MAX_CONCURRENT, 1, 1)
     },
     runtime: {
-      tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true)
+      tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true),
+      codexInactivityTimeoutMs: normalizePositiveInteger(
+        env.MAESTRO_CODEX_INACTIVITY_TIMEOUT_MS,
+        DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS,
+        1_000
+      ),
+      claudeInactivityTimeoutMs: normalizePositiveInteger(
+        env.MAESTRO_CLAUDE_INACTIVITY_TIMEOUT_MS,
+        DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS,
+        1_000
+      ),
+      providerMaxRuntimeMs: normalizeOptionalPositiveInteger(
+        env.MAESTRO_PROVIDER_MAX_RUNTIME_MS,
+        60_000
+      ),
+      goalDeadlineMs: normalizeOptionalPositiveInteger(
+        env.MAESTRO_GOAL_DEADLINE_MS,
+        60_000
+      )
     },
     skills: {
       enabled: normalizeBoolean(env.MAESTRO_SKILLS_ENABLED, false),
@@ -129,4 +155,10 @@ function normalizePort(value: string | undefined, fallback: number): number {
 function normalizePositiveInteger(value: string | undefined, fallback: number, minimum: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
+}
+
+function normalizeOptionalPositiveInteger(value: string | undefined, minimum: number): number | undefined {
+  if (!value?.trim() || value.trim() === "0") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= minimum ? parsed : undefined;
 }

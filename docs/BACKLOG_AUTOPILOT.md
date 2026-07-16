@@ -9,9 +9,14 @@ runtime capacity is available. It automates task pickup, not approval or deliver
   limits provider concurrency conservatively.
 - A `waiting_provider` goal does not consume the global running slot, so an independent project can
   continue while another provider waits for quota or authentication.
-- A project with a running or waiting goal remains occupied; the autopilot does not create competing
-  worktrees for the same project.
-- Only tasks still in `queued` are candidates.
+- A project with unrelated running or waiting work remains occupied. Tasks in the same Feature may
+  share capacity only when both contracts explicitly allow parallel execution and mutation scopes
+  are disjoint.
+- `queued` and `waiting_dependency` tasks are candidates for dependency evaluation.
+- A dependent Task starts only after every ancestor is delivered and validated. A failed, rejected,
+  blocked or cancelled ancestor blocks the descendant instead of letting it run against stale code.
+- A dependent worktree starts from a deterministic baseline containing the exact delivered commits
+  of its transitive dependencies.
 - A task without a project is marked `blocked` for human review.
 - An exact normalized duplicate of `awaiting_human`, `ready_to_merge`, or `done` work in the same
   project is marked `blocked`; it is never silently deleted.

@@ -43,6 +43,8 @@ const taskStatusLabels: Record<TaskStatus, string> = {
   ready_to_merge: "pronta para merge",
   rejected: "rejeitada",
   waiting_quota: "aguardando cota",
+  waiting_provider: "aguardando provider",
+  waiting_dependency: "aguardando dependencia",
   blocked: "bloqueada",
   failed: "falhou",
   cancelled: "cancelada",
@@ -58,6 +60,8 @@ const statusOrder: TaskStatus[] = [
   "awaiting_human",
   "ready_to_merge",
   "waiting_quota",
+  "waiting_provider",
+  "waiting_dependency",
   "changes_requested",
   "blocked",
   "failed",
@@ -669,7 +673,18 @@ function FeaturePlanBoard({
               <small>{plan.taskCount} task(s) no bloco - revisao {plan.revision}</small>
               <div className="feature-plan-tasks">
                 {plan.tasks.map((task) => (
-                  <span className={`status-pill status-${task.status}`} key={task.id} title={task.text}>
+                  <span
+                    className={`status-pill status-${task.status}`}
+                    key={task.id}
+                    title={[
+                      task.objective,
+                      `Depende de: ${task.dependsOnTaskIds.length ? task.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
+                      `Escopo: ${task.mutationScope.length ? task.mutationScope.join(", ") : "somente leitura"}`,
+                      `Modo: ${task.parallelMode}`,
+                      `Aceite: ${task.acceptanceCriteria.join(" | ")}`,
+                      `Fora de escopo: ${task.excludedScope.join(", ") || "nao especificado"}`
+                    ].join("\n")}
+                  >
                     #{task.id} {task.status}
                   </span>
                 ))}
@@ -1178,6 +1193,13 @@ function TaskDetail({
             <div className={`goal-state goal-${goal.status}`}>
               <span>goal #{goal.id} · {goal.status}</span>
               <strong>{goal.currentPhase} · passo {goal.stepCount}/{goal.maxSteps}</strong>
+              {goal.status === "waiting_provider" && goal.waitReason ? (
+                <small>
+                  Motivo: {goal.waitReason}
+                  {goal.lastProvider ? ` · provider: ${goal.lastProvider}` : ""}
+                  {goal.nextRetryAt ? ` · nova tentativa: ${new Date(goal.nextRetryAt).toLocaleTimeString("pt-BR")}` : ""}
+                </small>
+              ) : null}
               {goal.lastError ? <small>{goal.lastError}</small> : null}
               {goal.pullRequestUrl ? (
                 <a href={goal.pullRequestUrl} target="_blank" rel="noreferrer">Abrir draft PR</a>
@@ -1296,7 +1318,7 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
 }
 
 function statusProgress(status: TaskStatus): number {
-  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, blocked: 42, failed: 100, rejected: 100, cancelled: 100, done: 100 }[status];
+  return { queued: 10, planning: 24, implementing: 48, testing: 68, reviewing: 82, changes_requested: 58, awaiting_human: 90, ready_to_merge: 96, waiting_quota: 36, waiting_provider: 36, waiting_dependency: 16, blocked: 42, failed: 100, rejected: 100, cancelled: 100, done: 100 }[status];
 }
 
 function featureProgress(status: FeatureStatus): number {
