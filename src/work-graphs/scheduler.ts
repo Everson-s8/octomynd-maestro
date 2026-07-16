@@ -11,7 +11,7 @@ export function scheduleWorkerBatch(graph: WorkGraphDetails): WorkerSchedule {
   const completed = new Set(
     graph.nodes.filter((node) => node.status === "completed").map((node) => node.key)
   );
-  const active = graph.nodes.filter((node) => ["running", "waiting_provider"].includes(node.status));
+  const active = graph.nodes.filter((node) => node.status === "running");
   const terminal = graph.nodes.filter((node) => ["completed", "cancelled"].includes(node.status));
   const failed = graph.nodes.filter((node) => ["blocked", "failed"].includes(node.status));
   if (terminal.length === graph.nodes.length) {
@@ -54,6 +54,5 @@ export function scheduleWorkerBatch(graph: WorkGraphDetails): WorkerSchedule {
 }
 
 function isPending(node: WorkerNodeRecord): boolean {
-  return ["pending", "ready", "failed"].includes(node.status);
+  return ["pending", "ready", "waiting_provider", "failed"].includes(node.status);
 }
-

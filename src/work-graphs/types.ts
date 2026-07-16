@@ -4,6 +4,7 @@ export type WorkGraphStatus =
   | "draft"
   | "validated"
   | "running"
+  | "waiting_provider"
   | "completed"
   | "blocked"
   | "cancelled";
@@ -116,3 +117,14 @@ export type WorkGraphDetails = WorkGraphRecord & {
   nodes: WorkerNodeRecord[];
 };
 
+export type WorkerExecutionContext = {
+  graphId: number;
+  nodeId: number;
+  key: string;
+  role: WorkerRole;
+  objective: string;
+  outputContract: string;
+  mode: WorkerMode;
+  writeScope: string[];
+  inputArtifacts: Array<{ key: string; summary: string }>;
+};

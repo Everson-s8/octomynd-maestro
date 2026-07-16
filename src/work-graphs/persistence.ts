@@ -367,7 +367,8 @@ function assertGraphTransition(from: WorkGraphStatus, to: WorkGraphStatus): void
   const allowed: Record<WorkGraphStatus, WorkGraphStatus[]> = {
     draft: ["validated", "blocked", "cancelled"],
     validated: ["running", "blocked", "cancelled"],
-    running: ["completed", "blocked", "cancelled"],
+    running: ["waiting_provider", "completed", "blocked", "cancelled"],
+    waiting_provider: ["running", "blocked", "cancelled"],
     completed: [],
     blocked: [],
     cancelled: []
@@ -595,4 +596,3 @@ type WorkerArtifactRow = {
   bytes: number;
   created_at: string;
 };
-

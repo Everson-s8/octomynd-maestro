@@ -308,6 +308,7 @@ function buildPrompt(request: AgentExecutionRequest): string {
     `Task #${request.task.id}: ${request.task.text}`,
     `Fase: ${request.phase}`,
     phaseInstruction,
+    ...formatWorkerContext(request.workerContext),
     "",
     "Historico resumido das etapas:",
     previous,
@@ -316,6 +317,22 @@ function buildPrompt(request: AgentExecutionRequest): string {
     "",
     "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."
   ].join("\n");
+}
+
+function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): string[] {
+  if (!context) return [];
+  return [
+    "",
+    `Worker ${context.key} (${context.role}, ${context.mode})`,
+    `Objetivo do Worker: ${context.objective}`,
+    `Contrato de saida: ${context.outputContract}`,
+    `Escopo de escrita: ${context.writeScope.length > 0 ? context.writeScope.join(", ") : "nenhum"}`,
+    "Artifacts de entrada:",
+    ...(context.inputArtifacts.length > 0
+      ? context.inputArtifacts.map((artifact) => `- artifact:${artifact.key} - ${artifact.summary}`)
+      : ["- nenhum"]),
+    "Cumpra somente este contrato; nao absorva responsabilidades de outros Workers."
+  ];
 }
 
 function resolveCodexCliEntry(): string | null {

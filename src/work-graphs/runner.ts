@@ -1,0 +1,221 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import type { AgentExecutionResult } from "../agents/types.js";
+import { AgentRegistry } from "../agents/registry.js";
+import type { GoalPhase, MaestroDatabase } from "../db.js";
+import { redactSensitiveText } from "../security/redaction.js";
+import { writeWorkerResultArtifacts } from "./artifacts.js";
+import { scheduleWorkerBatch } from "./scheduler.js";
+import type { WorkGraphDetails, WorkerNodeRecord } from "./types.js";
+import { validateWorkGraph } from "./validator.js";
+
+export type WorkGraphRunnerOptions = {
+  artifactsRoot: string;
+  signal?: AbortSignal;
+  onProgress?: (graph: WorkGraphDetails, node: WorkerNodeRecord, provider: "codex" | "claude") => void;
+};
+
+export async function runWorkGraph(
+  database: MaestroDatabase,
+  registry: AgentRegistry,
+  graphId: number,
+  options: WorkGraphRunnerOptions
+): Promise<WorkGraphDetails> {
+  let graph = database.getWorkGraphDetails(graphId);
+  const validation = validateWorkGraph(graph);
+  if (!validation.valid) {
+    const error = validation.issues.map((issue) => issue.message).join(" ");
+    database.updateWorkGraphStatus(graph.id, "blocked");
+    database.addEvent({ source: "maestro", type: "work_graph.validation_failed", text: error, metadata: { graphId } });
+    return database.getWorkGraphDetails(graph.id);
+  }
+  if (graph.status === "draft") graph = { ...database.updateWorkGraphStatus(graph.id, "validated"), nodes: graph.nodes };
+  if (graph.status === "validated" || graph.status === "waiting_provider") {
+    database.updateWorkGraphStatus(graph.id, "running");
+  }
+  const run = database.getGoalRun(graph.runId);
+  const task = database.getTask(run.taskId);
+  if (!task.projectKey || !task.worktreePath) throw new Error("Work Graph Task requires a prepared project worktree.");
+  const worktreePath = task.worktreePath;
+  const project = database.getProjectByKey(task.projectKey);
+
+  while (true) {
+    graph = database.getWorkGraphDetails(graph.id);
+    if (options.signal?.aborted) return cancelGraph(database, graph);
+    const schedule = scheduleWorkerBatch(graph);
+    if (schedule.complete) {
+      database.updateWorkGraphStatus(graph.id, "completed");
+      return database.getWorkGraphDetails(graph.id);
+    }
+    if (schedule.blocked || schedule.ready.length === 0 && schedule.waiting.length === 0) {
+      database.updateWorkGraphStatus(graph.id, "blocked");
+      return database.getWorkGraphDetails(graph.id);
+    }
+    if (schedule.ready.length === 0) {
+      database.updateWorkGraphStatus(graph.id, "waiting_provider");
+      return database.getWorkGraphDetails(graph.id);
+    }
+
+    const results = await Promise.all(schedule.ready.map(async (scheduledNode) => {
+      const node = database.updateWorkerNodeStatus(scheduledNode.id, "ready");
+      const lease = await registry.acquire(node.capability);
+      if (!lease) {
+        database.updateWorkerNodeStatus(node.id, "waiting_provider", `No ready Provider for ${node.capability}.`);
+        return { progressed: false, waiting: true };
+      }
+      const attempt = database.createWorkerAttempt(node.id, lease.provider.id);
+      options.onProgress?.(database.getWorkGraphDetails(graph.id), node, lease.provider.id);
+      const beforePaths = node.mode === "writer" ? changedPaths(worktreePath) : [];
+      let result: AgentExecutionResult | undefined;
+      try {
+        const artifacts = database.listWorkerArtifacts(graph.id);
+        const dependencyIds = new Set(
+          graph.nodes.filter((candidate) => node.dependsOn.includes(candidate.key)).map((candidate) => candidate.id)
+        );
+        result = await lease.provider.execute({
+          runId: run.id,
+          stepNumber: attempt.id,
+          phase: phaseForNode(node),
+          capability: node.capability,
+          task,
+          project,
+          previousSteps: database.listGoalSteps(run.id),
+          workerContext: {
+            graphId: graph.id,
+            nodeId: node.id,
+            key: node.key,
+            role: node.role,
+            objective: node.objective,
+            outputContract: node.outputContract,
+            mode: node.mode,
+            writeScope: node.writeScope,
+            inputArtifacts: artifacts
+              .filter((artifact) => dependencyIds.has(artifact.nodeId) || node.inputArtifacts.includes(artifact.key))
+              .map((artifact) => ({ key: artifact.key, summary: artifact.summary }))
+          },
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          deadlineAt: Date.now() + node.deadlineMs,
+          signal: options.signal
+        });
+      } catch (error) {
+        result = {
+          outcome: "failed",
+          summary: "Worker provider execution failed.",
+          output: "",
+          error: redactSensitiveText(error instanceof Error ? error.message : String(error)),
+          durationMs: 0,
+          retryable: false
+        };
+      } finally {
+        lease.release(result);
+      }
+      if (!result) throw new Error("Worker provider returned no execution result.");
+      const scopeError = node.mode === "writer"
+        ? validateWriteScope(beforePaths, changedPaths(worktreePath), node.writeScope)
+        : null;
+      const effectiveResult = scopeError
+        ? { ...result, outcome: "blocked" as const, summary: scopeError, error: scopeError, retryable: false }
+        : result;
+      const finished = database.finishWorkerAttempt({
+        id: attempt.id,
+        status: effectiveResult.outcome,
+        summary: effectiveResult.summary,
+        error: effectiveResult.error,
+        durationMs: effectiveResult.durationMs
+      });
+      writeWorkerResultArtifacts({
+        database,
+        artifactsRoot: options.artifactsRoot,
+        graphId: graph.id,
+        runId: run.id,
+        node,
+        attempt: finished,
+        summary: effectiveResult.summary,
+        output: effectiveResult.output
+      });
+      const nodeStatus = statusForResult(effectiveResult, finished.attemptNumber >= node.maxAttempts);
+      database.updateWorkerNodeStatus(node.id, nodeStatus, effectiveResult.error);
+      database.addEvent({
+        source: lease.provider.id,
+        type: "work_graph.worker_finished",
+        text: `${node.key}: ${effectiveResult.summary}`,
+        taskId: task.id,
+        metadata: {
+          graphId: graph.id,
+          nodeId: node.id,
+          attemptId: attempt.id,
+          outcome: effectiveResult.outcome,
+          durationMs: effectiveResult.durationMs
+        }
+      });
+      return { progressed: effectiveResult.outcome === "completed", waiting: nodeStatus === "waiting_provider" };
+    }));
+    if (results.some((result) => result.waiting) && !results.some((result) => result.progressed)) {
+      database.updateWorkGraphStatus(graph.id, "waiting_provider");
+      return database.getWorkGraphDetails(graph.id);
+    }
+  }
+}
+
+function phaseForNode(node: WorkerNodeRecord): GoalPhase {
+  if (node.role === "implementer") return "implementing";
+  if (node.role === "tester") return "testing";
+  if (node.role === "reviewer") return "reviewing";
+  return "planning";
+}
+
+function statusForResult(
+  result: AgentExecutionResult,
+  exhausted: boolean
+): "completed" | "failed" | "blocked" | "cancelled" | "waiting_provider" {
+  if (result.outcome === "completed") return "completed";
+  if (result.outcome === "cancelled") return "cancelled";
+  if (result.outcome === "blocked" || exhausted) return "blocked";
+  if (result.retryable) return "waiting_provider";
+  return "failed";
+}
+
+function cancelGraph(database: MaestroDatabase, graph: WorkGraphDetails): WorkGraphDetails {
+  for (const node of graph.nodes) {
+    if (!["completed", "blocked", "cancelled"].includes(node.status)) {
+      database.updateWorkerNodeStatus(node.id, "cancelled", "Work Graph cancelled.");
+    }
+  }
+  database.updateWorkGraphStatus(graph.id, "cancelled");
+  return database.getWorkGraphDetails(graph.id);
+}
+
+function changedPaths(worktreePath: string): string[] {
+  const output = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  return output.split("\0").filter(Boolean).map((entry) => {
+    const value = entry.slice(3).trim();
+    const renamed = value.includes(" -> ") ? value.split(" -> ").at(-1)! : value;
+    return renamed.replaceAll("\\", "/");
+  });
+}
+
+function validateWriteScope(before: string[], after: string[], scopes: string[]): string | null {
+  const changed = after.filter((entry) => !before.includes(entry));
+  const outside = changed.filter((entry) => !scopes.some((scope) => pathMatchesScope(entry, scope)));
+  return outside.length > 0
+    ? `Writer changed paths outside its lease: ${outside.map((entry) => redactSensitiveText(entry)).join(", ")}`
+    : null;
+}
+
+function pathMatchesScope(filePath: string, scope: string): boolean {
+  const normalized = scope.trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (!normalized || normalized.startsWith("/") || normalized.includes("..")) return false;
+  if (normalized.endsWith("/**")) {
+    const prefix = normalized.slice(0, -3);
+    return filePath === prefix || filePath.startsWith(`${prefix}/`);
+  }
+  if (normalized.endsWith("/*")) {
+    const prefix = normalized.slice(0, -2);
+    return filePath.startsWith(`${prefix}/`) && !filePath.slice(prefix.length + 1).includes("/");
+  }
+  return filePath === normalized || filePath.startsWith(`${normalized}/`);
+}
