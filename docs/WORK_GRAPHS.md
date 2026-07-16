@@ -8,6 +8,7 @@ Worker Nodes; they do not own the workflow or communicate independently with the
 - one Work Graph per Goal run;
 - at most four nodes and two concurrent read-only nodes;
 - at most one writer, always serialized;
+- only an `implementer` may be a writer; every other role is read-only in this release;
 - every node declares role, capability, dependencies, output contract and budgets;
 - a writer declares repository-relative write scopes;
 - provider absence moves the graph to `waiting_provider` without spending an attempt;

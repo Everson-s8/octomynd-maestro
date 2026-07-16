@@ -1,5 +1,5 @@
 import type { AgentCapability } from "../agents/types.js";
-import type { WorkGraphDetails, WorkerNodeRecord, WorkerRole } from "./types.js";
+import type { WorkGraphDetails, WorkerMode, WorkerNodeRecord, WorkerRole } from "./types.js";
 
 const MAX_NODES = 4;
 const MAX_ATTEMPTS = 3;
@@ -14,6 +14,14 @@ const ROLE_CAPABILITIES: Record<WorkerRole, ReadonlySet<AgentCapability>> = {
   reviewer: new Set(["reviewing"])
 };
 
+const ROLE_MODES: Record<WorkerRole, WorkerMode> = {
+  researcher: "read_only",
+  planner: "read_only",
+  implementer: "writer",
+  tester: "read_only",
+  reviewer: "read_only"
+};
+
 export type WorkGraphValidationIssueCode =
   | "too_many_nodes"
   | "invalid_parallelism"
@@ -22,6 +30,7 @@ export type WorkGraphValidationIssueCode =
   | "cycle"
   | "missing_output_contract"
   | "role_capability_mismatch"
+  | "role_mode_mismatch"
   | "provider_unavailable"
   | "writer_limit"
   | "writer_scope_missing"
@@ -81,6 +90,13 @@ function validateNode(
     issues.push({
       code: "role_capability_mismatch",
       message: `${node.role} cannot request ${node.capability}.`,
+      nodeKey: node.key
+    });
+  }
+  if (node.mode !== ROLE_MODES[node.role]) {
+    issues.push({
+      code: "role_mode_mismatch",
+      message: `${node.role} must run as ${ROLE_MODES[node.role]} in the first Work Graph release.`,
       nodeKey: node.key
     });
   }
@@ -182,4 +198,3 @@ export function classifyWorkGraphComplexity(input: {
   }
   return { mode: score >= 2 ? "work_graph_candidate" : "single_agent", score, reasons };
 }
-

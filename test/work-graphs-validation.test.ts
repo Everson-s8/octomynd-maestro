@@ -43,6 +43,22 @@ describe("Work Graph validation", () => {
     ]));
   });
 
+  it("rejects role and mode combinations that could bypass the single writer policy", () => {
+    const graph = createGraph();
+    graph.nodes[0]!.mode = "writer";
+    graph.nodes[0]!.writeScope = ["src/research"];
+    graph.nodes[2]!.mode = "read_only";
+    graph.nodes[2]!.writeScope = [];
+
+    const result = validateWorkGraph(graph);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.filter((issue) => issue.code === "role_mode_mismatch")).toEqual([
+      expect.objectContaining({ nodeKey: "research" }),
+      expect.objectContaining({ nodeKey: "implement" })
+    ]);
+  });
+
   it("classifies only sufficiently complex Tasks as Work Graph candidates", () => {
     expect(classifyWorkGraphComplexity({ taskText: "Fix a label typo." }).mode).toBe("single_agent");
     expect(classifyWorkGraphComplexity({
@@ -123,4 +139,3 @@ function graphInput(runId: number): WorkGraphInput {
     ]
   };
 }
-
