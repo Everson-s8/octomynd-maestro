@@ -3,6 +3,7 @@ import {
   cancelFeature,
   cancelFeaturePlan,
   cancelTask,
+  cancelWorkGraph,
   createImprovement,
   createTask,
   deleteTask,
@@ -14,6 +15,7 @@ import {
   DashboardFeaturePlan,
   DashboardProject,
   DashboardTask,
+  DashboardWorkGraph,
   FeatureStatus,
   fetchTaskReviews,
   fetchDashboard,
@@ -150,6 +152,7 @@ export default function App() {
             <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
             <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={() => refresh(true)} />
             <FeatureBoard features={data.features} onChanged={() => refresh(true)} />
+            <WorkGraphBoard workGraphs={data.workGraphs} onChanged={() => refresh(true)} />
             <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
             <AgentDock agents={data.agents} environments={data.environments} />
             <ProjectDeck projects={data.projects} />
@@ -454,6 +457,72 @@ function TaskBoard({ tasks, onOpenTask }: { tasks: DashboardTask[]; onOpenTask: 
         {tasks.length === 0 ? (
           <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
         ) : tasks.slice(0, 8).map((task) => <TaskRow task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)}
+      </div>
+    </section>
+  );
+}
+
+function WorkGraphBoard({
+  workGraphs,
+  onChanged
+}: {
+  workGraphs: DashboardWorkGraph[];
+  onChanged: () => Promise<unknown>;
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const active = workGraphs.filter((graph) => !["completed", "cancelled"].includes(graph.status));
+
+  async function handleCancel(graph: DashboardWorkGraph) {
+    if (!window.confirm(`Cancelar o Work Graph #${graph.id}? Artefatos e historico serao preservados.`)) return;
+    setBusyId(graph.id);
+    setError(null);
+    try {
+      await cancelWorkGraph(graph.id, "Cancelado pelo dashboard.");
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar o Work Graph.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="panel work-graph-board" id="work-graphs" aria-labelledby="work-graphs-title">
+      <SectionHeader eyebrow="Multi-agent" title="Work Graphs" meta={`${active.length} ativo(s)`} />
+      {error ? <p className="detail-error">{error}</p> : null}
+      <div className="work-graph-list">
+        {workGraphs.length === 0 ? (
+          <EmptyState icon="spark" title="Nenhum Work Graph" text="Tasks complexas poderao aparecer aqui como DAGs governados." />
+        ) : workGraphs.slice(0, 6).map((graph) => (
+          <article className={`work-graph-card status-${graph.status}`} key={graph.id}>
+            <header>
+              <div>
+                <span>@{graph.projectKey ?? "inbox"} · task #{graph.taskId}</span>
+                <strong>Graph #{graph.id} · {graph.status}</strong>
+              </div>
+              <small>{graph.artifactCount} artefatos · {Math.ceil(graph.artifactBytes / 1024)} KB</small>
+            </header>
+            <p>{graph.objective}</p>
+            <div className="worker-node-strip">
+              {graph.nodes.map((node) => (
+                <div className={`worker-node status-${node.status}`} key={node.id} title={node.lastError ?? node.key}>
+                  <span>{node.role}</span>
+                  <strong>{node.key}</strong>
+                  <small>{node.mode === "writer" ? "WRITE" : "READ"} · {node.attemptCount}/{node.maxAttempts}</small>
+                </div>
+              ))}
+            </div>
+            <footer>
+              <span>Paralelo: {graph.maxParallelReaders} readers</span>
+              {graph.cancellable ? (
+                <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
+                  {busyId === graph.id ? "Cancelando..." : "Cancelar graph"}
+                </button>
+              ) : <small>{graph.status === "running" ? "Cancelamento exige coordenador de runtime" : "Historico preservado"}</small>}
+            </footer>
+          </article>
+        ))}
       </div>
     </section>
   );

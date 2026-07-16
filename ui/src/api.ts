@@ -103,6 +103,46 @@ export type DashboardFeaturePlan = {
   updatedAt: string;
 };
 
+export type WorkGraphStatus =
+  | "draft"
+  | "validated"
+  | "running"
+  | "waiting_provider"
+  | "completed"
+  | "blocked"
+  | "cancelled";
+
+export type DashboardWorkGraph = {
+  id: number;
+  runId: number;
+  taskId: number;
+  projectKey: string | null;
+  objective: string;
+  status: WorkGraphStatus;
+  maxParallelReaders: number;
+  artifactCount: number;
+  artifactBytes: number;
+  cancellable: boolean;
+  nodes: Array<{
+    id: number;
+    key: string;
+    role: string;
+    mode: "read_only" | "writer";
+    capability: string;
+    status: string;
+    attemptCount: number;
+    maxAttempts: number;
+    deadlineMs: number;
+    outputChars: number;
+    dependsOn: string[];
+    writeScope: string[];
+    lastError: string | null;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
 export type FeaturePlanTask = {
   id: number;
   featurePlanId: number;
@@ -194,6 +234,7 @@ export type DashboardData = {
   goals: GoalRun[];
   features: DashboardFeature[];
   featurePlans: DashboardFeaturePlan[];
+  workGraphs: DashboardWorkGraph[];
   environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{
@@ -341,6 +382,24 @@ export async function cancelTask(taskId: number) {
     throw new Error(payload.details || payload.error || "Nao foi possivel cancelar a task.");
   }
   return payload.task;
+}
+
+export async function cancelWorkGraph(workGraphId: number, reason = ""): Promise<DashboardWorkGraph> {
+  const response = await fetch(`/api/work-graphs/${workGraphId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as {
+    workGraph?: DashboardWorkGraph;
+    error?: string;
+    details?: string | string[];
+  };
+  if (!response.ok || !payload.workGraph) {
+    const details = Array.isArray(payload.details) ? payload.details.join(" ") : payload.details;
+    throw new Error(details || payload.error || "Nao foi possivel cancelar o Work Graph.");
+  }
+  return payload.workGraph;
 }
 
 export async function deleteTask(taskId: number) {

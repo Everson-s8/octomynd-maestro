@@ -17,6 +17,7 @@ import { createGitWorktree, createWorktreePlan, validateGitProject } from "../gi
 import { redactSensitiveText } from "../security/redaction.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
+import type { WorkGraphDetails } from "../work-graphs/types.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -137,6 +138,46 @@ export class ApplicationCommands {
     });
 
     return task;
+  }
+
+  listWorkGraphs(limit = 30): WorkGraphDetails[] {
+    return this.database.listWorkGraphs(limit);
+  }
+
+  getWorkGraph(workGraphId: number): WorkGraphDetails {
+    try {
+      return this.database.getWorkGraphDetails(workGraphId);
+    } catch (error) {
+      throw notFoundError(error instanceof Error ? error.message : `Work Graph #${workGraphId} not found.`);
+    }
+  }
+
+  cancelWorkGraph(origin: CommandOrigin, workGraphId: number, reason?: string | null): WorkGraphDetails {
+    const graph = this.getWorkGraph(workGraphId);
+    if (["completed", "blocked", "cancelled"].includes(graph.status)) {
+      throw conflictError(`Work Graph #${workGraphId} is already ${graph.status}.`);
+    }
+    if (graph.status === "running") {
+      throw conflictError(
+        `Work Graph #${workGraphId} is running and requires its runtime coordinator to abort safely.`
+      );
+    }
+    const cancellationReason = reason?.trim() || "Cancelled by operator.";
+    for (const node of graph.nodes) {
+      if (!["completed", "blocked", "cancelled"].includes(node.status)) {
+        this.database.updateWorkerNodeStatus(node.id, "cancelled", cancellationReason);
+      }
+    }
+    this.database.updateWorkGraphStatus(graph.id, "cancelled");
+    this.database.addEvent({
+      source: origin.channel,
+      type: "work_graph.cancelled",
+      text: graph.objective,
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      metadata: { graphId: graph.id, runId: graph.runId, reason: redactSensitiveText(cancellationReason) }
+    });
+    return this.database.getWorkGraphDetails(graph.id);
   }
 
   createFeaturePlan(origin: CommandOrigin, input: CreateFeaturePlanInput): FeaturePlanWriteResult {

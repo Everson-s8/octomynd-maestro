@@ -117,6 +117,13 @@ export function createWorkGraphPersistence(db: Database.Database) {
       return getWorkGraphDetails(db, id);
     },
 
+    listWorkGraphs(limit = 30): WorkGraphDetails[] {
+      const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+      const rows = db.prepare("SELECT * FROM work_graphs ORDER BY id DESC LIMIT ?")
+        .all(boundedLimit) as WorkGraphRow[];
+      return rows.map((row) => ({ ...mapGraph(row), nodes: listNodeRows(db, row.id).map(mapNode) }));
+    },
+
     listWorkerNodes(graphId: number): WorkerNodeRecord[] {
       getGraphRow(db, graphId);
       return listNodeRows(db, graphId).map(mapNode);
