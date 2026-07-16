@@ -22,6 +22,7 @@ import type {
 } from "../improvements/reviewer.js";
 import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { isWritableExecution } from "./execution-policy.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -331,7 +332,9 @@ export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
   const phaseInstruction = {
     planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
     implementing: "Implemente integralmente a task no workspace. Preserve o escopo.",
-    testing: "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
+    testing: request.workerContext?.mode === "read_only"
+      ? "Rode os testes relevantes e reporte falhas. Nao edite arquivos."
+      : "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
     reviewing: [
       "Revise o diff, requisitos e testes. Nao edite.",
       "Solicite ajustes somente para problemas concretos.",
@@ -382,11 +385,15 @@ export function buildClaudeGoalArgs(
   request: AgentExecutionRequest,
   cwd: string
 ): string[] {
-  const writable = request.capability === "coding" || request.capability === "testing";
+  const writable = isWritableExecution(request);
   const testing = request.capability === "testing";
   const reviewing = request.capability === "reviewing";
-  const tools = testing ? TESTING_TOOLS : writable ? CODING_TOOLS : reviewing ? REVIEW_TOOLS : READ_ONLY_TOOLS;
-  const allowedTools = testing ? TESTING_ALLOWED_TOOLS : reviewing ? REVIEW_ALLOWED_TOOLS : CODING_TOOLS;
+  const tools = testing
+    ? writable ? TESTING_TOOLS : REVIEW_TOOLS
+    : writable ? CODING_TOOLS : reviewing ? REVIEW_TOOLS : READ_ONLY_TOOLS;
+  const allowedTools = testing
+    ? writable ? TESTING_ALLOWED_TOOLS : TESTING_ALLOWED_TOOLS.filter((tool) => !["Edit", "Write"].includes(tool))
+    : reviewing ? REVIEW_ALLOWED_TOOLS : CODING_TOOLS;
   return [
     ...cli.argsPrefix,
     "--print",
@@ -396,7 +403,7 @@ export function buildClaudeGoalArgs(
     writable ? "acceptEdits" : "plan",
     "--tools",
     tools.join(","),
-    ...(writable || reviewing
+    ...(testing || writable || reviewing
       ? ["--allowedTools", allowedTools.join(","), "--disallowedTools", ...DISALLOWED_MUTATIONS]
       : []),
     "--add-dir",

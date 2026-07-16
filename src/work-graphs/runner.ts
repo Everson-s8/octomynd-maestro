@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import type { AgentExecutionResult } from "../agents/types.js";
 import { AgentRegistry } from "../agents/registry.js";
@@ -65,7 +67,7 @@ export async function runWorkGraph(
       }
       const attempt = database.createWorkerAttempt(node.id, lease.provider.id);
       options.onProgress?.(database.getWorkGraphDetails(graph.id), node, lease.provider.id);
-      const beforePaths = node.mode === "writer" ? changedPaths(worktreePath) : [];
+      const beforeState = captureWorktreeState(worktreePath);
       let result: AgentExecutionResult | undefined;
       try {
         const artifacts = database.listWorkerArtifacts(graph.id);
@@ -110,9 +112,10 @@ export async function runWorkGraph(
         lease.release(result);
       }
       if (!result) throw new Error("Worker provider returned no execution result.");
+      const afterState = captureWorktreeState(worktreePath);
       const scopeError = node.mode === "writer"
-        ? validateWriteScope(beforePaths, changedPaths(worktreePath), node.writeScope)
-        : null;
+        ? validateWriteScope(beforeState, afterState, node.writeScope)
+        : validateReadOnlyState(beforeState, afterState);
       const effectiveResult = scopeError
         ? { ...result, outcome: "blocked" as const, summary: scopeError, error: scopeError, retryable: false }
         : result;
@@ -198,8 +201,39 @@ function changedPaths(worktreePath: string): string[] {
   });
 }
 
-function validateWriteScope(before: string[], after: string[], scopes: string[]): string | null {
-  const changed = after.filter((entry) => !before.includes(entry));
+function captureWorktreeState(worktreePath: string): Map<string, string> {
+  return new Map(changedPaths(worktreePath).map((filePath) => [
+    filePath,
+    fingerprintPath(path.join(worktreePath, filePath))
+  ]));
+}
+
+function fingerprintPath(filePath: string): string {
+  if (!fs.existsSync(filePath)) return "missing";
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink()) return `symlink:${fs.readlinkSync(filePath)}`;
+  if (!stat.isFile()) return `other:${stat.mode}:${stat.size}`;
+  return `file:${crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")}`;
+}
+
+function changedStatePaths(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter((filePath) => before.get(filePath) !== after.get(filePath));
+}
+
+function validateReadOnlyState(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string | null {
+  const changed = changedStatePaths(before, after);
+  return changed.length > 0
+    ? `Read-only Worker changed repository paths: ${changed.map((entry) => redactSensitiveText(entry)).join(", ")}`
+    : null;
+}
+
+function validateWriteScope(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+  scopes: string[]
+): string | null {
+  const changed = changedStatePaths(before, after);
   const outside = changed.filter((entry) => !scopes.some((scope) => pathMatchesScope(entry, scope)));
   return outside.length > 0
     ? `Writer changed paths outside its lease: ${outside.map((entry) => redactSensitiveText(entry)).join(", ")}`

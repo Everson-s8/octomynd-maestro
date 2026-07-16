@@ -105,6 +105,31 @@ describe("Work Graph runner", () => {
     expect(fs.readFileSync(path.join(projectPath, "outside.txt"), "utf8")).toBe("preserve me\n");
   });
 
+  it("blocks a read-only tester that mutates the worktree", async () => {
+    const provider = new FakeProvider("claude", ["testing"], async (request) => {
+      fs.writeFileSync(path.join(request.task.worktreePath!, "README.md"), "mutated by tester\n", "utf8");
+      return completed("tests passed");
+    });
+    const graph = createPreparedGraph({
+      objective: "Validate without editing.",
+      nodes: [{
+        key: "test",
+        role: "tester",
+        objective: "Run validation without changing files.",
+        capability: "testing",
+        outputContract: "Test report.",
+        mode: "read_only",
+        budget: { maxAttempts: 1, deadlineMs: 30_000, outputChars: 2_000 }
+      }]
+    });
+
+    const finished = await runWorkGraph(database, new AgentRegistry([provider]), graph.id, { artifactsRoot });
+
+    expect(finished.status).toBe("blocked");
+    expect(finished.nodes[0]).toMatchObject({ status: "blocked" });
+    expect(finished.nodes[0]!.lastError).toContain("Read-only Worker changed repository paths: README.md");
+  });
+
   it("waits without spending an attempt when no provider is available", async () => {
     const graph = createPreparedGraph({
       objective: "Research one question.",
