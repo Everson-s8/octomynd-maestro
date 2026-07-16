@@ -68,6 +68,7 @@ export function buildDashboardSnapshot(
   const features = database.listFeatures(30);
   const featurePlans = database.listFeaturePlans(30);
   const skills = database.listSkills();
+  const workGraphs = database.listWorkGraphs(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -254,6 +255,43 @@ export function buildDashboardSnapshot(
           : null,
         createdAt: plan.createdAt,
         updatedAt: plan.updatedAt
+      };
+    }),
+    workGraphs: workGraphs.map((graph) => {
+      const run = database.getGoalRun(graph.runId);
+      const task = database.getTask(run.taskId);
+      const artifacts = database.listWorkerArtifacts(graph.id);
+      return {
+        id: graph.id,
+        runId: graph.runId,
+        taskId: task.id,
+        projectKey: task.projectKey,
+        objective: truncateForDisplay(redactSensitiveText(graph.objective), EVENT_TEXT_MAX_LENGTH),
+        status: graph.status,
+        maxParallelReaders: graph.maxParallelReaders,
+        artifactCount: artifacts.length,
+        artifactBytes: artifacts.reduce((total, artifact) => total + artifact.bytes, 0),
+        cancellable: ["draft", "validated", "waiting_provider"].includes(graph.status),
+        nodes: graph.nodes.map((node) => ({
+          id: node.id,
+          key: node.key,
+          role: node.role,
+          mode: node.mode,
+          capability: node.capability,
+          status: node.status,
+          attemptCount: node.attemptCount,
+          maxAttempts: node.maxAttempts,
+          deadlineMs: node.deadlineMs,
+          outputChars: node.outputChars,
+          dependsOn: node.dependsOn,
+          writeScope: node.writeScope.map(redactSensitiveText),
+          lastError: node.lastError
+            ? truncateForDisplay(redactSensitiveText(node.lastError), EVENT_TEXT_MAX_LENGTH)
+            : null
+        })),
+        createdAt: graph.createdAt,
+        updatedAt: graph.updatedAt,
+        finishedAt: graph.finishedAt
       };
     }),
     environments: latestEnvironmentReports(allEvents),

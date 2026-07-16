@@ -113,6 +113,29 @@ describe("claude review", () => {
     expect(buildClaudeGoalPrompt(coding)).toContain("PINNED SKILL PROCEDURE");
   });
 
+  it("runs a read-only Work Graph tester without edit tools", () => {
+    const testing = executionRequest("testing", "testing");
+    testing.workerContext = {
+      graphId: 1,
+      nodeId: 2,
+      key: "test",
+      role: "tester",
+      objective: "Validate the implementation.",
+      outputContract: "Test report.",
+      mode: "read_only",
+      writeScope: [],
+      inputArtifacts: []
+    };
+
+    const args = buildClaudeGoalArgs(buildClaudeCliCommand("C:/tools/claude.exe"), testing, "C:/worktree");
+
+    expect(args).toContain("plan");
+    expect(args.join(" ")).toContain("Bash(npm test*)");
+    expect(args.join(" ")).not.toContain("Edit");
+    expect(args.join(" ")).not.toContain("Write");
+    expect(buildClaudeGoalPrompt(testing)).toContain("Nao edite arquivos");
+  });
+
   it("recognizes Claude subscription quota failures", () => {
     expect(isClaudeQuotaError("You've hit your session limit · resets 12:40am")).toBe(true);
     expect(isClaudeQuotaError("Unexpected filesystem failure")).toBe(false);

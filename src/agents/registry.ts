@@ -97,6 +97,7 @@ export class AgentRegistry {
       if ((this.activeLeases.get(providerId) ?? 0) >= limit) continue;
       const health = await provider.health();
       if (health.state !== "ready") continue;
+      if ((this.activeLeases.get(providerId) ?? 0) >= limit) continue;
       this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
       let released = false;
       return {

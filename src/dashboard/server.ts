@@ -94,6 +94,37 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/work-graphs") {
+    sendJson(response, 200, { workGraphs: commands.listWorkGraphs() });
+    return;
+  }
+
+  const workGraphMatch = url.pathname.match(/^\/api\/work-graphs\/(\d+)$/);
+  if (request.method === "GET" && workGraphMatch) {
+    try {
+      sendJson(response, 200, { workGraph: commands.getWorkGraph(Number(workGraphMatch[1])) });
+    } catch (error) {
+      sendCommandError(response, error, "work_graph_get_failed");
+    }
+    return;
+  }
+
+  const cancelWorkGraphMatch = url.pathname.match(/^\/api\/work-graphs\/(\d+)\/cancel$/);
+  if (request.method === "POST" && cancelWorkGraphMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const workGraph = commands.cancelWorkGraph(
+        { channel: "dashboard" },
+        Number(cancelWorkGraphMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, { workGraph });
+    } catch (error) {
+      sendCommandError(response, error, "work_graph_cancel_failed");
+    }
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/environment/doctor") {
     if (!options.environmentDoctor) {
       sendJson(response, 503, { error: "environment_doctor_unavailable" });

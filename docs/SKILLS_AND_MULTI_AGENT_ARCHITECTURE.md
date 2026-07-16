@@ -380,14 +380,21 @@ Implementation status: complete on the Feature branch; pending consolidated Fina
 5. [x] Add usage, token, latency and outcome telemetry.
 6. [x] Ship the initial three Skills behind a feature flag.
 
-### Feature B: Multi-Agent Work Graph
+### Feature B: Multi-Agent Work Graph ([#47](https://github.com/Everson-s8/octomynd-maestro/issues/47))
 
-1. Define Work Graph and Worker Node schemas.
-2. Add deterministic validation and complexity classification.
-3. Execute up to two read-only nodes in parallel.
-4. Persist artifacts and lightweight handoffs.
-5. Add one writer lease with worktree scope enforcement.
-6. Surface graph, budgets, cancellation and node evidence in Dashboard and Telegram.
+Implementation status: complete on the Feature branch; pending consolidated Final Review and merge.
+
+1. [x] Define Work Graph and Worker Node schemas.
+2. [x] Add deterministic validation and complexity classification.
+3. [x] Execute up to two read-only nodes in parallel.
+4. [x] Persist artifacts and lightweight handoffs.
+5. [x] Add one writer lease with worktree scope enforcement.
+6. [x] Surface graph, budgets, cancellation and node evidence in Dashboard and Telegram.
+
+The first release keeps automatic activation disabled. Work Graphs are an explicit Maestro runtime
+primitive until production telemetry proves that complex-task classification saves time or improves
+quality without multiplying token use. Safe cancellation of a running graph remains reserved for a
+resident coordinator that owns and propagates its `AbortController`.
 
 ### Feature C: Governed Skill Lifecycle and Curator
 

@@ -6,6 +6,7 @@ import {
   CodexProvider,
   buildCodexGoalPrompt,
   codexSandboxForCapability,
+  codexSandboxForRequest,
   isCodexAuthenticationError,
   isCodexQuotaError
 } from "../src/agents/codex.js";
@@ -17,6 +18,14 @@ describe("codex provider", () => {
     expect(codexSandboxForCapability("reviewing")).toBe("read-only");
     expect(codexSandboxForCapability("coding")).toBe("workspace-write");
     expect(codexSandboxForCapability("testing")).toBe("workspace-write");
+  });
+
+  it("forces read-only sandbox for a read-only Work Graph tester", () => {
+    const request = executionRequest("C:/worktree", "testing");
+    request.workerContext = workerContext("tester", "read_only");
+
+    expect(codexSandboxForRequest(request)).toBe("read-only");
+    expect(buildCodexGoalPrompt(request)).toContain("Nao edite arquivos");
   });
 
   it("classifies quota and authentication failures", () => {
@@ -212,5 +221,22 @@ function skillContext(): NonNullable<AgentExecutionRequest["skillContext"]> {
       triggerReason: "Explicit implementation.",
       instructions: "PINNED SKILL PROCEDURE"
     }]
+  };
+}
+
+function workerContext(
+  role: NonNullable<AgentExecutionRequest["workerContext"]>["role"],
+  mode: NonNullable<AgentExecutionRequest["workerContext"]>["mode"]
+): NonNullable<AgentExecutionRequest["workerContext"]> {
+  return {
+    graphId: 1,
+    nodeId: 2,
+    key: role,
+    role,
+    objective: "Validate the implementation.",
+    outputContract: "Test report.",
+    mode,
+    writeScope: [],
+    inputArtifacts: []
   };
 }

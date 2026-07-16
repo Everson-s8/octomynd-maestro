@@ -192,6 +192,37 @@ export function createTelegramBot(
     await ctx.reply(formatQueue(tasks));
   });
 
+  bot.command("graphs", async (ctx) => {
+    const projectKey = parseNamedProjectKey(ctx.message?.text ?? "", "graphs");
+    if (projectKey && !database.findProjectByKey(projectKey)) {
+      await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.graphs",
+      text: "/graphs",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey }
+    });
+    await ctx.reply(formatWorkGraphs(database, commands.listWorkGraphs(10), projectKey));
+  });
+
+  bot.command("graph_cancel", async (ctx) => {
+    const graphId = parseTaskId(ctx.message?.text ?? "", "graph_cancel");
+    if (!graphId) {
+      await ctx.reply("Use: /graph_cancel id");
+      return;
+    }
+    try {
+      const graph = commands.cancelWorkGraph(telegramOrigin(ctx), graphId, "Cancelado pelo Telegram.");
+      await ctx.reply(`Work Graph #${graph.id} cancelado. Artefatos e historico foram preservados.`);
+    } catch (error) {
+      await ctx.reply(["Cancelamento do Work Graph nao aplicado.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.command("prepare", async (ctx) => {
     const taskId = parseTaskId(ctx.message?.text ?? "", "prepare");
     if (!taskId) {
@@ -382,6 +413,13 @@ export function parseStatusProjectKey(messageText: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
+function parseNamedProjectKey(messageText: string, command: string): string | null {
+  const text = messageText.replace(new RegExp(`^/${command}(?:@\\w+)?\\s*`, "i"), "").trim();
+  if (!text) return null;
+  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 export function parseTaskId(messageText: string, command: string): number | null {
   const regex = new RegExp(`^/${command}(?:@\\w+)?\\s+(\\d+)\\s*$`, "i");
   const match = messageText.match(regex);
@@ -452,6 +490,12 @@ export function formatStatus(
     const provider = database.listGoalSteps(goal.id).at(-1)?.provider ?? "roteando agente";
     return `- #${task.id} @${task.projectKey ?? "inbox"}: ${provider} em ${goal.currentPhase} (${goal.stepCount}/${goal.maxSteps})`;
   });
+  const activeGraphs = database.listWorkGraphs(30).filter((graph) => {
+    if (!["draft", "validated", "running", "waiting_provider"].includes(graph.status)) return false;
+    if (!projectKey) return true;
+    const task = database.getTask(database.getGoalRun(graph.runId).taskId);
+    return task.projectKey === projectKey;
+  });
 
   return [
     `Maestro: online`,
@@ -470,6 +514,13 @@ export function formatStatus(
     "",
     "Trabalhando agora:",
     ...(working.length > 0 ? working : ["- nenhum agente executando"]),
+    ...(activeGraphs.length > 0 ? [
+      "",
+      "Work Graphs:",
+      ...activeGraphs.map((graph) => (
+        `- graph #${graph.id} [${graph.status}] ${graph.nodes.filter((node) => node.status === "completed").length}/${graph.nodes.length} nodes`
+      ))
+    ] : []),
     ...(providers.length > 0 ? [
       "",
       "Providers:",
@@ -516,6 +567,8 @@ function formatHelp(): string {
     "/cancel id - cancelar task ativa ou queued",
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto",
+    "/graphs [@projeto] - listar Work Graphs e budgets",
+    "/graph_cancel id - cancelar graph parado, preservando evidencias",
     "/features - listar Feature Plans e Feature PRs",
       "/features @projeto - listar Feature Plans e Feature PRs do projeto",
       "/improvements - listar melhorias candidatas",
@@ -524,6 +577,35 @@ function formatHelp(): string {
       "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
     "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria"
   ].join("\n");
+}
+
+export function formatWorkGraphs(
+  database: MaestroDatabase,
+  graphs: ReturnType<MaestroDatabase["listWorkGraphs"]>,
+  projectKey: string | null = null
+): string {
+  const filtered = graphs.filter((graph) => {
+    if (!projectKey) return true;
+    const task = database.getTask(database.getGoalRun(graph.runId).taskId);
+    return task.projectKey === projectKey;
+  });
+  if (filtered.length === 0) return "Nenhum Work Graph registrado.";
+  return filtered.map((graph) => {
+    const task = database.getTask(database.getGoalRun(graph.runId).taskId);
+    const artifacts = database.listWorkerArtifacts(graph.id);
+    const nodes = graph.nodes.map((node) => (
+      `  - ${node.key} [${node.status}] ${node.mode === "writer" ? "WRITE" : "READ"} tentativas ${node.attemptCount}/${node.maxAttempts}`
+    ));
+    return [
+      `Graph #${graph.id} @${task.projectKey ?? "inbox"} task #${task.id} [${graph.status}]`,
+      `${graph.objective}`,
+      `Readers paralelos: ${graph.maxParallelReaders}; artefatos: ${artifacts.length}`,
+      ...nodes,
+      ...(["draft", "validated", "waiting_provider"].includes(graph.status)
+        ? [`  cancelar: /graph_cancel ${graph.id}`]
+        : [])
+    ].join("\n");
+  }).join("\n\n");
 }
 
 export function formatImprovementCandidates(

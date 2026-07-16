@@ -12,6 +12,7 @@ import {
   CompletionReviewStatus
 } from "./improvements/types.js";
 import { createSkillPersistence, migrateSkillPersistence } from "./skills/persistence.js";
+import { createWorkGraphPersistence, migrateWorkGraphPersistence } from "./work-graphs/persistence.js";
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
@@ -448,6 +449,7 @@ export function createDatabase(databasePath: string) {
   db.pragma("foreign_keys = ON");
   migrate(db);
   const skillPersistence = createSkillPersistence(db);
+  const workGraphPersistence = createWorkGraphPersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -706,6 +708,7 @@ export function createDatabase(databasePath: string) {
     close: () => db.close(),
 
     ...skillPersistence,
+    ...workGraphPersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
@@ -2003,6 +2006,7 @@ function migrate(db: Database.Database) {
   `);
 
   migrateSkillPersistence(db);
+  migrateWorkGraphPersistence(db);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");

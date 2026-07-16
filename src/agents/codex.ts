@@ -21,6 +21,7 @@ import type {
 } from "../improvements/reviewer.js";
 import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { filesystemAccessForExecution } from "./execution-policy.js";
 
 const CODEX_CAPABILITIES = new Set([
   "planning",
@@ -84,7 +85,7 @@ export class CodexProvider implements AgentProvider {
     const outputPath = path.join(artifactDir, "result.json");
     fs.writeFileSync(schemaPath, JSON.stringify(RESULT_SCHEMA, null, 2), "utf8");
 
-    const sandbox = codexSandboxForCapability(request.capability);
+    const sandbox = codexSandboxForRequest(request);
     const args = [
       cliEntry,
       "exec",
@@ -255,6 +256,10 @@ export function codexSandboxForCapability(capability: AgentExecutionRequest["cap
   return capability === "coding" || capability === "testing" ? "workspace-write" : "read-only";
 }
 
+export function codexSandboxForRequest(request: AgentExecutionRequest): "read-only" | "workspace-write" {
+  return filesystemAccessForExecution(request) === "workspace_write" ? "workspace-write" : "read-only";
+}
+
 export function buildCodexImprovementReviewArgs(
   cliEntry: string,
   request: ImprovementReviewExecutionRequest,
@@ -294,7 +299,9 @@ function buildPrompt(request: AgentExecutionRequest): string {
   const phaseInstruction = {
     planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
     implementing: "Implemente integralmente a task no workspace. Preserve o escopo e nao faca commit nem push.",
-    testing: "Rode os testes mais relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
+    testing: request.workerContext?.mode === "read_only"
+      ? "Rode os testes mais relevantes e reporte falhas. Nao edite arquivos."
+      : "Rode os testes mais relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
     reviewing: "Revise o diff, requisitos e testes. Nao edite. Use changes_requested somente para problemas concretos."
   }[request.phase];
 
@@ -308,6 +315,7 @@ function buildPrompt(request: AgentExecutionRequest): string {
     `Task #${request.task.id}: ${request.task.text}`,
     `Fase: ${request.phase}`,
     phaseInstruction,
+    ...formatWorkerContext(request.workerContext),
     "",
     "Historico resumido das etapas:",
     previous,
@@ -316,6 +324,22 @@ function buildPrompt(request: AgentExecutionRequest): string {
     "",
     "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."
   ].join("\n");
+}
+
+function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): string[] {
+  if (!context) return [];
+  return [
+    "",
+    `Worker ${context.key} (${context.role}, ${context.mode})`,
+    `Objetivo do Worker: ${context.objective}`,
+    `Contrato de saida: ${context.outputContract}`,
+    `Escopo de escrita: ${context.writeScope.length > 0 ? context.writeScope.join(", ") : "nenhum"}`,
+    "Artifacts de entrada:",
+    ...(context.inputArtifacts.length > 0
+      ? context.inputArtifacts.map((artifact) => `- artifact:${artifact.key} - ${artifact.summary}`)
+      : ["- nenhum"]),
+    "Cumpra somente este contrato; nao absorva responsabilidades de outros Workers."
+  ];
 }
 
 function resolveCodexCliEntry(): string | null {

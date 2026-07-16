@@ -82,6 +82,25 @@ sem inferir autenticacao ou disponibilidade por regras visuais separadas.
 Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
 draft PR. O merge continua sendo a decisao humana importante.
 
+## Work Graph multiagente
+
+Tasks complexas podem ser representadas como um DAG governado de ate quatro Worker
+Nodes. O Maestro continua como gerente: valida dependencias e budgets, permite no
+maximo dois readers simultaneos e serializa um unico writer com escopo de escrita
+declarado. Resultados grandes ficam em artefatos redigidos; os workers seguintes
+recebem apenas referencias e resumos limitados.
+
+O Dashboard mostra graph, nodes, tentativas, budgets e evidencias. No Telegram:
+
+- `/graphs [@projeto]` lista Work Graphs e seus nodes;
+- `/graph_cancel <id>` cancela graphs parados e preserva toda a auditoria;
+- `/status` inclui Work Graphs ativos.
+
+Cancelamento de um graph em execucao falha fechado ate que um coordenador residente
+possa propagar `AbortSignal` ao provider. A classificacao de complexidade e o runtime
+estao prontos, mas a ativacao automatica para toda Task permanece desligada nesta
+primeira entrega para nao multiplicar tokens em demandas simples.
+
 ## Fila de revisao humana
 
 Draft PRs entregues aparecem em **Aguardando revisao** com projeto, demanda, agentes,
@@ -170,6 +189,8 @@ O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
 - `/task @<key> <text>` creates a local task for a project.
 - `/queue` lists recent tasks.
 - `/queue @<key>` lists recent tasks for a project.
+- `/graphs [@<key>]` lists governed Work Graphs and node budgets.
+- `/graph_cancel <id>` cancels an idle Work Graph while preserving evidence.
 - `/cancel <id>` cancels an active, waiting, or queued task without deleting its history.
 - `/doctor [@<key>]` verifies deterministic execution and provider readiness.
 - `/improvements` lists governed improvement candidates.

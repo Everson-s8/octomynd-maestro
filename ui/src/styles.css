@@ -179,6 +179,7 @@ a { color: inherit; text-decoration: none; }
 
 .task-board { min-width: 0; padding: 28px; }
 .feature-board { grid-column: 1 / -1; min-width: 0; padding: 28px; scroll-margin-top: 118px; }
+.work-graph-board { grid-column: 1 / -1; min-width: 0; padding: 28px; scroll-margin-top: 118px; }
 .human-review-queue { grid-column: 1 / -1; padding: 28px; scroll-margin-top: 118px; }
 .agent-dock { padding: 28px; }
 .project-deck { grid-column: 1 / -1; padding: 28px; }
@@ -239,6 +240,16 @@ a { color: inherit; text-decoration: none; }
 .feature-plan-linked { flex: 0 0 auto; padding: 6px 10px; color: var(--ink); background: rgba(12,11,16,.06); border-radius: 999px; font-family: var(--mono); font-size: .6rem; font-weight: 750; }
 .feature-plan-tasks { display: flex; flex-wrap: wrap; gap: 6px; }
 .feature-plan-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: end; }
+
+.work-graph-list { display: grid; gap: 12px; }
+.work-graph-card { display: grid; gap: 15px; padding: 18px; background: rgba(255,255,255,.65); border: 1px solid color-mix(in srgb, var(--status-color, var(--line)) 36%, var(--line)); border-left: 4px solid var(--status-color, var(--muted)); border-radius: 18px; }
+.work-graph-card > header, .work-graph-card > footer { display: flex; gap: 14px; align-items: center; justify-content: space-between; }
+.work-graph-card > header div { display: grid; gap: 4px; }.work-graph-card > header span, .work-graph-card > header small, .work-graph-card > footer { color: var(--muted); font-family: var(--mono); font-size: .58rem; }
+.work-graph-card > header strong { font-size: .86rem; }.work-graph-card > p { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.5; }
+.worker-node-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.worker-node { display: grid; gap: 4px; min-width: 0; padding: 11px; background: color-mix(in srgb, var(--status-color, var(--muted)) 10%, white); border: 1px solid color-mix(in srgb, var(--status-color, var(--muted)) 25%, transparent); border-radius: 12px; }
+.worker-node span, .worker-node small { overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: .5rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }.worker-node strong { overflow: hidden; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.work-graph-card footer button { padding: 8px 11px; color: var(--danger); background: rgba(255,92,103,.1); border: 1px solid rgba(255,92,103,.2); border-radius: 9px; font-size: .58rem; font-weight: 800; }.work-graph-card footer button:hover:not(:disabled) { color: white; background: var(--danger); }.work-graph-card footer button:disabled { opacity: .45; }
 
 .review-workbench { display: grid; grid-template-columns: minmax(230px,.55fr) minmax(0,1.45fr); gap: 16px; }
 .review-inbox { display: grid; gap: 8px; align-content: start; }
@@ -469,7 +480,7 @@ a { color: inherit; text-decoration: none; }
   .hero-now { grid-template-columns: 110px minmax(0,1fr); }
   .hero-now small { display: none; }
   .dashboard-grid { grid-template-columns: 1fr; }
-  .human-review-queue, .feature-board, .feature-plan-board, .task-board, .agent-dock, .project-deck, .improvement-lab, .event-stream { grid-column: 1; }
+  .human-review-queue, .feature-board, .feature-plan-board, .work-graph-board, .task-board, .agent-dock, .project-deck, .improvement-lab, .event-stream { grid-column: 1; }
   .project-grid { grid-template-columns: 1fr; }
   .feature-list, .improvement-layout, .review-workbench { grid-template-columns: 1fr; }
   .feature-status-strip { grid-template-columns: repeat(4, minmax(0,1fr)); }
@@ -492,7 +503,7 @@ a { color: inherit; text-decoration: none; }
   .summary-strip { grid-template-columns: 1fr 1fr; gap: 9px; }
   .metric-card { grid-template-columns: auto 1fr; min-height: 94px; padding: 14px; }
   .metric-card > strong { grid-column: 2; grid-row: 1 / 3; justify-self: end; }
-  .human-review-queue, .feature-board, .feature-plan-board, .task-board, .agent-dock, .project-deck, .improvement-lab, .event-stream { padding: 20px 16px; border-radius: 24px; }
+  .human-review-queue, .feature-board, .feature-plan-board, .work-graph-board, .task-board, .agent-dock, .project-deck, .improvement-lab, .event-stream { padding: 20px 16px; border-radius: 24px; }
   .review-facts, .review-evidence-grid { grid-template-columns: 1fr 1fr; }
   .review-decision-actions { grid-template-columns: 1fr; }
   .feature-status-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }

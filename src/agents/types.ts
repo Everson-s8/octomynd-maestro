@@ -3,6 +3,7 @@ import type { TokenEfficientHandoffStep } from "../runtime/compression.js";
 import type { RtkDetection } from "../runtime/rtk.js";
 import type { AgentProcessBreakerReason, AgentProcessResult } from "./process.js";
 import type { SkillExecutionContext } from "../skills/types.js";
+import type { WorkerExecutionContext } from "../work-graphs/types.js";
 import type {
   ImprovementReviewExecutionRequest,
   ImprovementReviewExecutionResult
@@ -41,6 +42,7 @@ export type AgentExecutionRequest = {
   };
   humanFeedback?: string | null;
   skillContext?: SkillExecutionContext;
+  workerContext?: WorkerExecutionContext;
   artifactsRoot: string;
   deadlineAt?: number;
   signal?: AbortSignal;
