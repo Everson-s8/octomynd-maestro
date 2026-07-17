@@ -43,7 +43,8 @@ export class GoalCoordinator {
     private readonly preflight?: GoalPreflight,
     private readonly validationRunner?: Pick<DeterministicValidationRunner, "run">,
     private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">,
-    private readonly goalDeadlineMs?: number
+    private readonly goalDeadlineMs?: number,
+    private readonly workGraphAdoption?: GoalRunnerOptions["workGraphAdoption"]
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -195,6 +196,7 @@ export class GoalCoordinator {
       validationRunner: this.validationRunner,
       skillRuntime: this.skillRuntime,
       deadlineMs: this.goalDeadlineMs,
+      workGraphAdoption: this.workGraphAdoption,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;

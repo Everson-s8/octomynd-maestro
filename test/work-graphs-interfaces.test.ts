@@ -32,6 +32,7 @@ beforeEach(() => {
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: false, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
+    workGraph: { adoptionMode: "off" },
     skills: { enabled: false, catalogPath: path.join(root, "skills"), versionsPath: path.join(root, "versions"), projectKey: "fixture" },
     telegram: { botToken: "", allowedUserId: null }
   };
