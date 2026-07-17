@@ -22,6 +22,11 @@ import type {
 import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { filesystemAccessForExecution } from "./execution-policy.js";
+import {
+  DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS,
+  normalizeProviderExecutionLimits,
+  ProviderExecutionLimits
+} from "./execution-limits.js";
 
 const CODEX_CAPABILITIES = new Set([
   "planning",
@@ -50,7 +55,14 @@ export class CodexProvider implements AgentProvider {
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
-  constructor(private readonly executionTimeoutMs = 6 * 60_000) {}
+  private readonly executionLimits: ProviderExecutionLimits;
+
+  constructor(executionLimits?: number | Partial<ProviderExecutionLimits>) {
+    this.executionLimits = normalizeProviderExecutionLimits(
+      executionLimits,
+      DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS
+    );
+  }
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
@@ -108,7 +120,8 @@ export class CodexProvider implements AgentProvider {
       args,
       cwd,
       stdin: buildPrompt(request),
-      timeoutMs: this.executionTimeoutMs,
+      timeoutMs: this.executionLimits.maxRuntimeMs,
+      inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
       signal: request.signal,
       env: buildRestrictedAgentEnvironment()
@@ -143,6 +156,7 @@ export class CodexProvider implements AgentProvider {
         durationMs: processResult.durationMs,
         retryable,
         retryAfterMs: retryAfterMsForFailure(category),
+        failureCategory: category,
         processRuntime: processRuntime(processResult)
       };
     }
@@ -315,15 +329,32 @@ function buildPrompt(request: AgentExecutionRequest): string {
     `Task #${request.task.id}: ${request.task.text}`,
     `Fase: ${request.phase}`,
     phaseInstruction,
+    ...formatFeatureTaskContract(request.featureTaskContract),
     ...formatWorkerContext(request.workerContext),
     "",
     "Historico resumido das etapas:",
     previous,
+    ...(request.resumeContext ? ["", "Checkpoint de retomada:", request.resumeContext] : []),
     ...formatSkillPromptContext(request.skillContext),
     ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
     "",
     "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."
   ].join("\n");
+}
+
+function formatFeatureTaskContract(contract: AgentExecutionRequest["featureTaskContract"]): string[] {
+  if (!contract) return [];
+  return [
+    "",
+    "Contrato desta Task na Feature:",
+    `Objetivo: ${contract.objective}`,
+    `Dependencias: ${contract.dependsOnTaskIds.length ? contract.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
+    `Escopo de mutacao: ${contract.mutationScope.length ? contract.mutationScope.join(", ") : "somente leitura"}`,
+    `Fora de escopo: ${contract.excludedScope.length ? contract.excludedScope.join(", ") : "nao especificado"}`,
+    "Criterios de aceite:",
+    ...contract.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    "Nao amplie o escopo sem bloquear com evidencia concreta."
+  ];
 }
 
 function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): string[] {

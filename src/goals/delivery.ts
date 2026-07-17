@@ -107,7 +107,7 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
     "This pull request is intentionally a draft; merge remains a human decision."
   ].join("\n");
   const created = runGh([
-    "pr", "create", "--draft", "--base", project.defaultBranch, "--head", task.branchName!,
+    "pr", "create", "--draft", "--base", task.baseBranch || project.defaultBranch, "--head", task.branchName!,
     "--title", title, "--body", body
   ], task.worktreePath!);
   if (!created.ok) throw new Error(`Cannot create draft pull request: ${created.stderr || created.stdout}`);

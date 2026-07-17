@@ -293,6 +293,7 @@ async function routeRequest(
         objective: readString(body.objective),
         acceptanceCriteria: readStringArray(body.acceptanceCriteria),
         taskIds: readNumberArray(body.taskIds),
+        taskContracts: readFeatureTaskContracts(body.taskContracts),
         featureIssueNumber: readOptionalPositiveInteger(body.featureIssueNumber),
         taskIssueNumbers: readTaskIssueNumbers(body.taskIssueNumbers),
         idempotencyKey: readString(body.idempotencyKey) || null
@@ -341,6 +342,7 @@ async function routeRequest(
           objective: readString(body.objective),
           acceptanceCriteria: readStringArray(body.acceptanceCriteria),
           taskIds: readNumberArray(body.taskIds),
+          taskContracts: readFeatureTaskContracts(body.taskContracts),
           idempotencyKey: readString(body.idempotencyKey) || null
         }
       );
@@ -621,6 +623,22 @@ function readTaskIssueNumbers(value: unknown): Record<number, number> {
     result[normalizedTaskId] = Number(issueNumber);
   }
   return result;
+}
+
+function readFeatureTaskContracts(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({
+      taskId: Number(item.taskId),
+      objective: readString(item.objective) || undefined,
+      acceptanceCriteria: readStringArray(item.acceptanceCriteria),
+      excludedScope: readStringArray(item.excludedScope),
+      mutationScope: readStringArray(item.mutationScope),
+      dependsOnTaskIds: readNumberArray(item.dependsOnTaskIds),
+      parallelMode: (readEnum(item.parallelMode, ["serial", "parallel"]) as "serial" | "parallel" | null)
+        ?? undefined
+    }));
 }
 
 function serveStatic(response: ServerResponse, staticRoot: string, pathname: string) {

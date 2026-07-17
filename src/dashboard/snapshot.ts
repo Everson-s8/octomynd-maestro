@@ -232,7 +232,15 @@ export function buildDashboardSnapshot(
           id: task.taskId,
           position: task.position,
           text: truncateForDisplay(redactSensitiveText(task.taskText), EVENT_TEXT_MAX_LENGTH),
-          status: task.taskStatus
+          status: task.taskStatus,
+          objective: truncateForDisplay(redactSensitiveText(task.contract.objective), EVENT_TEXT_MAX_LENGTH),
+          acceptanceCriteria: task.contract.acceptanceCriteria.map((criterion) => (
+            truncateForDisplay(redactSensitiveText(criterion), EVENT_TEXT_MAX_LENGTH)
+          )),
+          excludedScope: task.contract.excludedScope.map(redactSensitiveText),
+          dependsOnTaskIds: task.contract.dependsOnTaskIds,
+          mutationScope: task.contract.mutationScope,
+          parallelMode: task.contract.parallelMode
         })),
         eligible: plan.status === "planned" && tasks.length > 0 && blockers.length === 0,
         blockers,

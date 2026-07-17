@@ -31,6 +31,22 @@ describe("agent process runtime", () => {
     expect(result.breakerReason).toBe("phase_timeout");
   });
 
+  it("allows active work to finish when no hard runtime is configured", async () => {
+    const result = await runAgentProcess({
+      command: process.execPath,
+      args: [
+        "-e",
+        "let n=0; const timer=setInterval(() => { console.log(++n); if (n === 5) clearInterval(timer); }, 30);"
+      ],
+      cwd: process.cwd(),
+      inactivityTimeoutMs: 1_000
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.breakerReason).toBeNull();
+    expect(result.stdout).toContain("5");
+  });
+
   it("stops a silent process on inactivity before the phase timeout", async () => {
     const result = await runAgentProcess({
       command: process.execPath,

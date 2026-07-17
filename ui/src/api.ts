@@ -9,6 +9,8 @@ export type TaskStatus =
   | "ready_to_merge"
   | "rejected"
   | "waiting_quota"
+  | "waiting_provider"
+  | "waiting_dependency"
   | "blocked"
   | "failed"
   | "cancelled"
@@ -72,6 +74,22 @@ export type FeaturePlanTaskSummary = {
   position: number;
   text: string;
   status: TaskStatus;
+  objective: string;
+  acceptanceCriteria: string[];
+  excludedScope: string[];
+  dependsOnTaskIds: number[];
+  mutationScope: string[];
+  parallelMode: "serial" | "parallel";
+};
+
+export type FeatureTaskContractInput = {
+  taskId: number;
+  objective?: string;
+  acceptanceCriteria?: string[];
+  excludedScope?: string[];
+  dependsOnTaskIds?: number[];
+  mutationScope?: string[];
+  parallelMode?: "serial" | "parallel";
 };
 
 export type FeaturePlanFeatureSummary = {
@@ -150,6 +168,14 @@ export type FeaturePlanTask = {
   taskText: string;
   taskStatus: TaskStatus;
   position: number;
+  contract: {
+    objective: string;
+    acceptanceCriteria: string[];
+    excludedScope: string[];
+    mutationScope: string[];
+    dependsOnTaskIds: number[];
+    parallelMode: "serial" | "parallel";
+  };
   createdAt: string;
 };
 
@@ -256,6 +282,9 @@ export type GoalRun = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
+  waitReason: "quota" | "auth_required" | "timeout" | "offline" | "capacity" | "runtime_restart" | "unknown" | null;
+  nextRetryAt: string | null;
+  lastProvider: string | null;
   commitSha: string | null;
   pullRequestUrl: string | null;
   createdAt: string;
@@ -496,6 +525,7 @@ export async function createFeaturePlan(input: {
   objective: string;
   acceptanceCriteria: string[];
   taskIds: number[];
+  taskContracts?: FeatureTaskContractInput[];
   idempotencyKey?: string | null;
 }): Promise<FeaturePlanDetails> {
   const response = await fetch("/api/feature-plans", {
@@ -529,6 +559,7 @@ export async function replanFeaturePlan(
     objective: string;
     acceptanceCriteria: string[];
     taskIds: number[];
+    taskContracts?: FeatureTaskContractInput[];
     idempotencyKey?: string | null;
   }
 ): Promise<FeaturePlanDetails> {

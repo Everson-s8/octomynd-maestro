@@ -250,6 +250,63 @@ describe("dashboard", () => {
     expect(featurePlan.cancellable).toBe(false);
   });
 
+  it("preserves explicit Feature Task contracts through the dashboard API", async () => {
+    const [first] = database.listTasks();
+    const second = database.createTask("segundo bloco paralelo", "dashboard", "boo");
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/feature-plans`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectKey: "boo",
+          objective: "Executar blocos independentes com contratos auditaveis.",
+          acceptanceCriteria: ["Cada Task respeita seu escopo"],
+          taskIds: [first.id, second.id],
+          taskContracts: [
+            {
+              taskId: first.id,
+              objective: "Implementar o primeiro bloco isolado.",
+              acceptanceCriteria: ["Primeiro bloco validado"],
+              mutationScope: ["src/first/**"],
+              dependsOnTaskIds: [],
+              parallelMode: "parallel"
+            },
+            {
+              taskId: second.id,
+              objective: "Implementar o segundo bloco isolado.",
+              acceptanceCriteria: ["Segundo bloco validado"],
+              excludedScope: ["src/first/**"],
+              mutationScope: ["src/second/**"],
+              dependsOnTaskIds: [],
+              parallelMode: "parallel"
+            }
+          ]
+        })
+      });
+      const payload = await response.json() as {
+        tasks: Array<{ taskId: number; contract: { mutationScope: string[]; parallelMode: string } }>;
+      };
+
+      expect(response.status).toBe(201);
+      expect(payload.tasks).toEqual([
+        expect.objectContaining({
+          taskId: first.id,
+          contract: expect.objectContaining({ mutationScope: ["src/first/**"], parallelMode: "parallel" })
+        }),
+        expect.objectContaining({
+          taskId: second.id,
+          contract: expect.objectContaining({ mutationScope: ["src/second/**"], parallelMode: "parallel" })
+        })
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("sanitizes but does not truncate the goal evidence endpoint", async () => {
     const task = database.listTasks()[0];
     database.updateTaskWorktree({

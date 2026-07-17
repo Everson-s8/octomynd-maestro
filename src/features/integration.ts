@@ -121,9 +121,9 @@ export class FeatureIntegrationBuilder {
       const state = await this.github.inspect(run.pullRequestUrl!);
       validateWorkPullRequest({
         taskId: task.id,
-        project,
         branchName: task.branchName,
         commitSha: run.commitSha!,
+        expectedBaseBranch: task.baseBranch || project.defaultBranch,
         state
       });
       items.push({
@@ -151,9 +151,9 @@ export class FeatureIntegrationBuilder {
       const state = await this.github.inspect(item.pullRequestUrl);
       validateWorkPullRequest({
         taskId: item.taskId,
-        project,
         branchName: item.branchName,
         commitSha: item.commitSha,
+        expectedBaseBranch: task.baseBranch || project.defaultBranch,
         state
       });
     }
@@ -407,12 +407,12 @@ export function createFeatureIntegrationPlan(
 
 function validateWorkPullRequest(input: {
   taskId: number;
-  project: ProjectRecord;
   branchName: string;
   commitSha: string;
+  expectedBaseBranch: string;
   state: FeaturePullRequestState;
 }): void {
-  const { taskId, project, branchName, commitSha, state } = input;
+  const { taskId, branchName, commitSha, expectedBaseBranch, state } = input;
   if (state.state !== "OPEN") {
     throw new Error(`Task #${taskId} Work PR must be open before Feature Plan integration.`);
   }
@@ -422,8 +422,8 @@ function validateWorkPullRequest(input: {
   if (state.mergeable === "CONFLICTING") {
     throw new Error(`Task #${taskId} Work PR reports merge conflicts.`);
   }
-  if (state.baseRefName !== project.defaultBranch) {
-    throw new Error(`Task #${taskId} Work PR targets ${state.baseRefName}, expected ${project.defaultBranch}.`);
+  if (state.baseRefName !== expectedBaseBranch) {
+    throw new Error(`Task #${taskId} Work PR targets ${state.baseRefName}, expected ${expectedBaseBranch}.`);
   }
   if (state.headRefName !== branchName) {
     throw new Error(`Task #${taskId} Work PR head ${state.headRefName} does not match recorded branch ${branchName}.`);

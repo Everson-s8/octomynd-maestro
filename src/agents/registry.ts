@@ -5,6 +5,7 @@ import {
   AgentProvider,
   AgentProviderId
 } from "./types.js";
+import type { FailureCategory } from "./failure.js";
 
 const ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
   planning: ["claude", "codex"],
@@ -22,9 +23,15 @@ export type RoutedAgent = {
 };
 
 export type AgentLease = RoutedAgent & {
-  release(feedback?: Pick<AgentExecutionResult, "retryable" | "summary"> & {
+  release(feedback?: Pick<AgentExecutionResult, "retryable" | "summary" | "failureCategory"> & {
     retryAfterMs?: number;
   }): void;
+};
+
+export type ProviderAvailabilityWait = {
+  reason: FailureCategory;
+  retryAfterMs: number;
+  provider: AgentProviderId | null;
 };
 
 export type AgentOperationalState = AgentHealth["state"] | "working" | "cooldown";
@@ -43,6 +50,7 @@ export type AgentProviderSnapshot = {
 type ProviderCooldown = {
   until: number;
   detail: string;
+  reason: FailureCategory;
 };
 
 export class AgentRegistry {
@@ -113,7 +121,8 @@ export class AgentRegistry {
             const retryAfterMs = Math.max(1_000, feedback.retryAfterMs);
             this.cooldowns.set(providerId, {
               until: this.now() + retryAfterMs,
-              detail: feedback.summary || "Provider em cooldown apos falha transitoria."
+              detail: feedback.summary || "Provider em cooldown apos falha transitoria.",
+              reason: feedback.failureCategory ?? "unknown"
             });
           }
         }
@@ -124,6 +133,40 @@ export class AgentRegistry {
 
   activeCount(providerId: AgentProviderId): number {
     return this.activeLeases.get(providerId) ?? 0;
+  }
+
+  async nextAvailability(capability: AgentCapability): Promise<ProviderAvailabilityWait> {
+    const candidates: ProviderAvailabilityWait[] = [];
+    for (const providerId of ROUTING_ORDER[capability]) {
+      const provider = this.providers.get(providerId);
+      if (!provider || !provider.capabilities.has(capability)) continue;
+      const cooldown = this.activeCooldown(providerId);
+      if (cooldown) {
+        candidates.push({
+          reason: cooldown.reason,
+          retryAfterMs: Math.max(1_000, cooldown.until - this.now()),
+          provider: providerId
+        });
+        continue;
+      }
+      const limit = Math.max(1, this.providerLimits[providerId] ?? 1);
+      if ((this.activeLeases.get(providerId) ?? 0) >= limit) {
+        candidates.push({ reason: "capacity", retryAfterMs: 5_000, provider: providerId });
+        continue;
+      }
+      const health = await provider.health();
+      if (health.state === "ready") {
+        candidates.push({ reason: "capacity", retryAfterMs: 1_000, provider: providerId });
+      } else if (health.state === "quota") {
+        candidates.push({ reason: "quota", retryAfterMs: 10 * 60_000, provider: providerId });
+      } else if (health.state === "auth_required") {
+        candidates.push({ reason: "auth_required", retryAfterMs: 10 * 60_000, provider: providerId });
+      } else {
+        candidates.push({ reason: "offline", retryAfterMs: 60_000, provider: providerId });
+      }
+    }
+    return candidates.sort((left, right) => left.retryAfterMs - right.retryAfterMs)[0]
+      ?? { reason: "offline", retryAfterMs: 60_000, provider: null };
   }
 
   async snapshot(): Promise<AgentProviderSnapshot[]> {

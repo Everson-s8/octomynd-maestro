@@ -47,7 +47,17 @@ database.addEvent({
   text: environmentFingerprint.id,
   metadata: { fingerprint: environmentFingerprint }
 });
-const agentRegistry = new AgentRegistry([new CodexProvider(), new ClaudeProvider()]);
+const providerLimits = { maxRuntimeMs: config.runtime.providerMaxRuntimeMs };
+const agentRegistry = new AgentRegistry([
+  new CodexProvider({
+    ...providerLimits,
+    inactivityTimeoutMs: config.runtime.codexInactivityTimeoutMs
+  }),
+  new ClaudeProvider({
+    ...providerLimits,
+    inactivityTimeoutMs: config.runtime.claudeInactivityTimeoutMs
+  })
+]);
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
 const skillBootstrap = config.skills.enabled
@@ -96,7 +106,8 @@ goalCoordinator = new GoalCoordinator(
   { enabled: config.runtime.tokenEfficient },
   (taskId) => environmentDoctor.preflightTask(taskId),
   validationRunner,
-  skillBootstrap?.runtime
+  skillBootstrap?.runtime,
+  config.runtime.goalDeadlineMs
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,

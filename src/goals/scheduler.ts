@@ -19,11 +19,11 @@ export class SystemScheduler implements Scheduler {
  */
 export class ManualScheduler implements Scheduler {
   private nextId = 1;
-  private readonly pending = new Map<number, () => void>();
+  private readonly pending = new Map<number, { callback: () => void; delayMs: number }>();
 
-  schedule(callback: () => void, _delayMs: number): unknown {
+  schedule(callback: () => void, delayMs: number): unknown {
     const id = this.nextId++;
-    this.pending.set(id, callback);
+    this.pending.set(id, { callback, delayMs });
     return id;
   }
 
@@ -35,8 +35,12 @@ export class ManualScheduler implements Scheduler {
     return this.pending.size;
   }
 
+  get pendingDelaysMs(): number[] {
+    return [...this.pending.values()].map((item) => item.delayMs);
+  }
+
   flush(): void {
-    const callbacks = Array.from(this.pending.values());
+    const callbacks = Array.from(this.pending.values()).map((item) => item.callback);
     this.pending.clear();
     for (const callback of callbacks) callback();
   }

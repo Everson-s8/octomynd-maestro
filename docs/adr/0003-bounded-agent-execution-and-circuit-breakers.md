@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by ADR 0005
 
 ## Context
 
@@ -24,10 +24,10 @@ Keep the provider process runtime and Goal Runner as separate deep modules with 
 - worktree progress is a content fingerprint of tracked changes and untracked files;
 - a circuit breaker preserves the worktree and records a durable reason. It never resets or cleans.
 
-Defaults are intentionally conservative: two-minute inactivity, six-minute provider phase, and a
-thirty-minute active execution window. A persisted run waiting for provider availability receives a
-new bounded window when resumed. Two equivalent failures or two completed writable phases without
-worktree progress are enough to block for diagnosis.
+The original fixed six-minute provider phase and thirty-minute Goal window were superseded after
+production evidence showed that a healthy Codex process could keep producing output and changing the
+worktree until the wall-clock timeout discarded its final response. ADR 0005 retains bounded output,
+inactivity and no-progress breakers while making total runtime limits explicit opt-in policy.
 
 ## Consequences
 

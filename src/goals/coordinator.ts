@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import { AgentRegistry } from "../agents/registry.js";
-import { GoalRunRecord, MaestroDatabase } from "../db.js";
+import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
 import { GoalDeliveryHandler } from "./delivery.js";
@@ -9,6 +10,19 @@ import { EnvironmentBlockedError } from "../environment/doctor.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import type { SkillRuntime } from "../skills/runtime.js";
+import { captureGoalCheckpoint } from "./checkpoint.js";
+import { captureWorkspaceProgress } from "./circuit-breaker.js";
+
+const RESTART_RETRY_DELAY_MS = 5_000;
+const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
+  "awaiting_human",
+  "ready_to_merge",
+  "rejected",
+  "blocked",
+  "failed",
+  "cancelled",
+  "done"
+]);
 
 export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
 
@@ -28,7 +42,8 @@ export class GoalCoordinator {
     private readonly tokenRuntime?: GoalRunnerOptions["tokenRuntime"],
     private readonly preflight?: GoalPreflight,
     private readonly validationRunner?: Pick<DeterministicValidationRunner, "run">,
-    private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">
+    private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">,
+    private readonly goalDeadlineMs?: number
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -40,9 +55,9 @@ export class GoalCoordinator {
     if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
     const readiness = this.preflight?.(taskId);
-    if (readiness && readiness.status !== "ready") {
+    if (readiness?.status === "environment_blocked") {
       this.database.withTransaction(() => {
-        this.database.updateTaskStatus(taskId, readiness.status === "quota" ? "waiting_quota" : "blocked");
+        this.database.updateTaskStatus(taskId, "blocked");
         this.database.addEvent({
           source: "maestro",
           type: "goal.environment_blocked",
@@ -52,6 +67,15 @@ export class GoalCoordinator {
         });
       });
       throw new EnvironmentBlockedError(readiness);
+    }
+    if (readiness && readiness.status !== "ready") {
+      this.database.addEvent({
+        source: "maestro",
+        type: "goal.provider_preflight_wait",
+        text: readiness.summary,
+        taskId,
+        metadata: { report: readiness }
+      });
     }
     const run = this.database.createGoalRun(taskId, maxSteps);
     this.execute(run);
@@ -90,7 +114,9 @@ export class GoalCoordinator {
   }
 
   recoverWaitingRuns(): number {
-    const waiting = this.database.listGoalRuns(500).filter((run) => run.status === "waiting_provider");
+    const interrupted = this.database.listActiveGoalRuns().filter((run) => run.status === "running");
+    for (const run of interrupted) this.recoverInterruptedRun(run);
+    const waiting = this.database.listActiveGoalRuns().filter((run) => run.status === "waiting_provider");
     for (const run of waiting) this.scheduleRetry(run);
     return waiting.length;
   }
@@ -125,7 +151,7 @@ export class GoalCoordinator {
       return this.database.getTask(taskId);
     }
 
-    const waitingRun = this.database.listGoalRuns(500).find(
+    const waitingRun = this.database.listActiveGoalRuns().find(
       (run) => run.taskId === taskId && run.status === "waiting_provider"
     );
     if (waitingRun) {
@@ -168,6 +194,7 @@ export class GoalCoordinator {
       tokenRuntime: this.tokenRuntime,
       validationRunner: this.validationRunner,
       skillRuntime: this.skillRuntime,
+      deadlineMs: this.goalDeadlineMs,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;
@@ -206,8 +233,136 @@ export class GoalCoordinator {
     );
   }
 
+  private recoverInterruptedRun(run: GoalRunRecord): void {
+    const task = this.database.getTask(run.taskId);
+    const runningStep = [...this.database.listGoalSteps(run.id)]
+      .reverse()
+      .find((step) => step.status === "running");
+    const interruptionSummary = "Maestro runtime restarted while this provider step was active; partial worktree preserved.";
+
+    if (NON_RESUMABLE_TASK_STATUSES.has(task.status)) {
+      this.database.withTransaction(() => {
+        if (runningStep) {
+          this.database.finishGoalStep({
+            id: runningStep.id,
+            status: "cancelled",
+            summary: interruptionSummary,
+            error: "Task reached a non-resumable state before runtime recovery.",
+            durationMs: elapsedDurationMs(runningStep.createdAt)
+          });
+        }
+        this.database.updateGoalRun({
+          id: run.id,
+          status: "cancelled",
+          currentPhase: run.currentPhase,
+          stepCount: run.stepCount,
+          lastError: `Task #${task.id} is ${task.status}; stale Goal was not resumed.`
+        });
+        this.database.addEvent({
+          source: "maestro",
+          type: "goal.recovery_skipped",
+          text: `Stale Goal #${run.id} was not resumed because task #${task.id} is ${task.status}.`,
+          taskId: task.id,
+          metadata: { runId: run.id, taskStatus: task.status, worktreePreserved: true }
+        });
+      });
+      return;
+    }
+
+    if (!task.worktreePath || !fs.existsSync(task.worktreePath)) {
+      this.database.withTransaction(() => {
+        if (runningStep) {
+          this.database.finishGoalStep({
+            id: runningStep.id,
+            status: "blocked",
+            summary: "Runtime recovery failed closed because the task worktree is unavailable.",
+            error: task.worktreePath
+              ? `Worktree does not exist: ${task.worktreePath}`
+              : "Task has no recorded worktree.",
+            durationMs: elapsedDurationMs(runningStep.createdAt)
+          });
+        }
+        this.database.updateTaskStatus(task.id, "blocked");
+        this.database.updateGoalRun({
+          id: run.id,
+          status: "blocked",
+          currentPhase: run.currentPhase,
+          stepCount: run.stepCount,
+          lastError: "Runtime recovery could not find the preserved task worktree."
+        });
+        this.database.addEvent({
+          source: "maestro",
+          type: "goal.recovery_blocked",
+          text: `Goal #${run.id} requires operator attention because its worktree is unavailable.`,
+          taskId: task.id,
+          metadata: { runId: run.id, worktreePath: task.worktreePath ?? null }
+        });
+      });
+      return;
+    }
+
+    let checkpointId: number | null = null;
+    if (runningStep && (runningStep.phase === "implementing" || runningStep.phase === "testing")) {
+      const checkpoint = this.database.createGoalCheckpoint(captureGoalCheckpoint({
+        runId: run.id,
+        stepId: runningStep.id,
+        phase: runningStep.phase,
+        provider: runningStep.provider,
+        interrupted: true,
+        summary: interruptionSummary,
+        workspacePath: task.worktreePath,
+        workspaceFingerprint: captureWorkspaceProgress(task.worktreePath),
+        artifactKeys: []
+      }));
+      checkpointId = checkpoint.id;
+    }
+
+    const nextRetryAt = new Date(Date.now() + RESTART_RETRY_DELAY_MS).toISOString();
+    this.database.withTransaction(() => {
+      if (runningStep) {
+        this.database.finishGoalStep({
+          id: runningStep.id,
+          status: "cancelled",
+          summary: interruptionSummary,
+          error: "Interrupted by Maestro runtime restart.",
+          durationMs: elapsedDurationMs(runningStep.createdAt)
+        });
+      }
+      this.database.updateTaskStatus(task.id, "waiting_provider");
+      this.database.updateGoalRun({
+        id: run.id,
+        status: "waiting_provider",
+        currentPhase: run.currentPhase,
+        stepCount: run.stepCount,
+        lastError: interruptionSummary,
+        waitReason: "runtime_restart",
+        nextRetryAt,
+        lastProvider: runningStep?.provider ?? run.lastProvider ?? null
+      });
+      this.database.addEvent({
+        source: "maestro",
+        type: "goal.recovered_after_restart",
+        text: `Recovered Goal #${run.id} after runtime restart; preserved work will be resumed.`,
+        taskId: task.id,
+        metadata: {
+          runId: run.id,
+          stepId: runningStep?.id ?? null,
+          checkpointId,
+          provider: runningStep?.provider ?? run.lastProvider ?? null,
+          phase: run.currentPhase,
+          nextRetryAt,
+          worktreePreserved: true
+        }
+      });
+    });
+  }
+
   private scheduleRetry(run: GoalRunRecord) {
     if (this.retryTimers.has(run.id)) return;
+    const nextRetryAt = run.nextRetryAt ? Date.parse(run.nextRetryAt) : Number.NaN;
+    const delayMs = Number.isFinite(nextRetryAt)
+      ? Math.max(0, nextRetryAt - Date.now())
+      : this.retryDelayMs;
     const timer = this.scheduler.schedule(() => {
       this.retryTimers.delete(run.id);
       try {
@@ -221,7 +376,12 @@ export class GoalCoordinator {
           metadata: { runId: run.id }
         });
       }
-    }, this.retryDelayMs);
+    }, delayMs);
     this.retryTimers.set(run.id, timer);
   }
+}
+
+function elapsedDurationMs(createdAt: string): number {
+  const startedAt = Date.parse(createdAt);
+  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
 }

@@ -1,6 +1,7 @@
 import { GoalRunRecord, MaestroDatabase, TaskRecord } from "../db.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
+import { evaluateFeatureTaskReadiness } from "../features/task-scheduler.js";
 
 export type BacklogAutopilotState = "disabled" | "idle" | "working" | "waiting_provider" | "at_capacity";
 
@@ -73,7 +74,7 @@ export class BacklogAutopilot {
     this.lastTickAt = new Date().toISOString();
 
     try {
-      const goals = this.database.listGoalRuns(500);
+      const goals = this.database.listActiveGoalRuns();
       const runningGoals = goals.filter((goal) => goal.status === "running");
       if (runningGoals.length >= this.maxConcurrentGoals) {
         this.lastAction = "running_capacity_reached";
@@ -81,8 +82,12 @@ export class BacklogAutopilot {
       }
 
       const tasks = this.database.listTasks(500);
-      const occupiedProjects = occupiedProjectKeys(this.database, goals);
-      const queued = tasks.filter((task) => task.status === "queued").sort((left, right) => left.id - right.id);
+      const activeTasks = goals
+        .filter((goal) => goal.status === "running" || goal.status === "waiting_provider")
+        .map((goal) => this.database.getTask(goal.taskId));
+      const queued = tasks
+        .filter((task) => task.status === "queued" || task.status === "waiting_dependency")
+        .sort((left, right) => left.id - right.id);
 
       for (const task of queued) {
         const revalidation = revalidateQueuedTask(task, tasks);
@@ -90,7 +95,25 @@ export class BacklogAutopilot {
           this.blockTask(task, revalidation.reason);
           continue;
         }
-        if (occupiedProjects.has(task.projectKey!)) continue;
+        const readiness = evaluateFeatureTaskReadiness(this.database, task, activeTasks);
+        if (readiness.state === "blocked") {
+          this.blockTask(task, readiness.reason);
+          continue;
+        }
+        if (readiness.state === "waiting") {
+          this.waitForDependency(task, readiness.reason);
+          continue;
+        }
+        if (task.status === "waiting_dependency") {
+          this.database.updateTaskStatus(task.id, "queued");
+          this.database.addEvent({
+            source: "maestro",
+            type: "backlog.task_dependency_ready",
+            text: `Dependencies are ready for task #${task.id}.`,
+            taskId: task.id,
+            metadata: { featurePlanId: readiness.featurePlan?.plan.id ?? null }
+          });
+        }
         if (this.database.getTask(task.id).status !== "queued") continue;
 
         let prepared: TaskPreparationResult;
@@ -130,7 +153,7 @@ export class BacklogAutopilot {
   }
 
   snapshot(): BacklogAutopilotSnapshot {
-    const goals = this.database.listGoalRuns(500);
+    const goals = this.database.listActiveGoalRuns();
     const tasks = this.database.listTasks(500);
     const runningGoals = goals.filter((goal) => goal.status === "running").length;
     const waitingProviderGoals = goals.filter((goal) => goal.status === "waiting_provider").length;
@@ -149,7 +172,7 @@ export class BacklogAutopilot {
       pollIntervalMs: this.pollIntervalMs,
       runningGoals,
       waitingProviderGoals,
-      queuedTasks: tasks.filter((task) => task.status === "queued").length,
+      queuedTasks: tasks.filter((task) => task.status === "queued" || task.status === "waiting_dependency").length,
       lastAction: this.lastAction,
       lastTickAt: this.lastTickAt
     };
@@ -165,6 +188,20 @@ export class BacklogAutopilot {
       metadata: { reason, projectKey: task.projectKey }
     });
     this.lastAction = `blocked_task_${task.id}_${reason}`;
+  }
+
+  private waitForDependency(task: TaskRecord, reason: string): void {
+    if (task.status !== "waiting_dependency" && reason.startsWith("dependency_task_")) {
+      this.database.updateTaskStatus(task.id, "waiting_dependency");
+      this.database.addEvent({
+        source: "maestro",
+        type: "backlog.task_waiting_dependency",
+        text: `Task #${task.id} is waiting for a Feature dependency.`,
+        taskId: task.id,
+        metadata: { reason, projectKey: task.projectKey }
+      });
+    }
+    this.lastAction = `waiting_task_${task.id}_${reason}`;
   }
 
   private async runScheduledTick(): Promise<void> {
@@ -205,16 +242,6 @@ export function revalidateQueuedTask(
   return duplicate
     ? { applicable: false, reason: `already_resolved_by_task_${duplicate.id}` }
     : { applicable: true };
-}
-
-function occupiedProjectKeys(database: MaestroDatabase, goals: GoalRunRecord[]): Set<string> {
-  const occupied = new Set<string>();
-  for (const goal of goals) {
-    if (goal.status !== "running" && goal.status !== "waiting_provider") continue;
-    const projectKey = database.getTask(goal.taskId).projectKey;
-    if (projectKey) occupied.add(projectKey);
-  }
-  return occupied;
 }
 
 function normalizeDemand(value: string): string {

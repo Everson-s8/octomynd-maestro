@@ -65,7 +65,7 @@ export function buildReviewQueueItem(
   const steps = database.listGoalSteps(run.id);
   const decisions = database.listHumanReviews(run.id);
   const latestDecision = decisions[0]?.decision ?? "pending";
-  const changedFilesResult = inspectChangedFiles(task.worktreePath, project.defaultBranch);
+  const changedFilesResult = inspectChangedFiles(task.worktreePath, task.baseBranch || project.defaultBranch);
   const changedFiles = changedFilesResult.status === "available" ? changedFilesResult.files : [];
   const changeSafety = inspectChangeSafety(task.worktreePath, changedFilesResult);
   const reviewSummary = [...steps].reverse().find((step) => step.phase === "reviewing")?.summary;
@@ -106,7 +106,7 @@ type ChangedFilesInspection =
   | { status: "available"; files: string[] }
   | { status: "unavailable"; code: string; message: string };
 
-function inspectChangedFiles(worktreePath: string | null, defaultBranch: string): ChangedFilesInspection {
+function inspectChangedFiles(worktreePath: string | null, baseBranch: string): ChangedFilesInspection {
   if (!worktreePath) {
     return {
       status: "unavailable",
@@ -115,7 +115,7 @@ function inspectChangedFiles(worktreePath: string | null, defaultBranch: string)
     };
   }
   const safeDirectory = `safe.directory=${path.resolve(worktreePath)}`;
-  const candidates = [`origin/${defaultBranch}`, defaultBranch];
+  const candidates = [`origin/${baseBranch}`, baseBranch];
   for (const base of candidates) {
     const result = runGit(["-c", safeDirectory, "diff", "--name-only", "-z", `${base}...HEAD`], worktreePath);
     if (result.ok) {

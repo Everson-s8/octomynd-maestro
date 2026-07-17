@@ -70,11 +70,17 @@ Providers advertise capabilities. The registry selects a ready provider using th
 If a provider fails, the runner excludes it for that phase and tries the next ready provider. A
 review that returns `changes_requested` sends the goal back to implementation automatically. If
 the available providers report a retryable quota or authentication condition, the task becomes
-`waiting_quota`, the goal becomes `waiting_provider`, and the same run is resumed later.
+`waiting_provider`, the goal persists its typed wait reason and `nextRetryAt`, and the same run is
+resumed later.
 Retryable provider failures are recorded as attempts but do not consume the goal's semantic step
 budget. When a waiting run resumes, the last failed provider is temporarily excluded so an
 available fallback is tried first. If no alternative exists, the original provider remains eligible
 for a later retry.
+
+The provider control plane computes the earliest recovery across every capable provider. A Claude
+quota failure therefore cannot force a ten-minute wait when Codex's timeout cooldown ends in fifteen
+seconds. Provider preflight failures create a durable waiting Goal; only deterministic environment
+failures block before Goal creation.
 
 The `AgentRegistry` is also the provider control plane. It owns concurrency leases and transient
 cooldowns, and exposes one operational snapshot with `ready`, `working`, `quota`, `auth_required`,
@@ -99,21 +105,25 @@ and Windows-hidden subprocess execution. Provider adapters only define CLI argum
 prompting, and result classification. Credential-shaped environment variables are removed before
 either worker process starts; subscription authentication continues through the installed CLIs.
 
-## Circuit breakers and bounded execution
+## Resumable execution and circuit breakers
 
-Provider execution has independent limits instead of one large timeout:
+Provider execution uses progress-sensitive limits instead of a short wall-clock timeout:
 
-- inactivity stops silent provider processes after two minutes by default; Claude `--print`
-  execution uses the bounded phase timeout because it can remain silent while still working;
-- a provider phase is bounded to six minutes by default;
-- each active goal execution attempt has a thirty-minute absolute deadline by default; a persisted
-  `waiting_provider` run receives a new bounded window when resumed;
+- Codex stops after ten minutes without stdout/stderr activity by default;
+- Claude `--print` stops after thirty minutes without activity by default because it can buffer
+  useful work longer;
+- provider total runtime and Goal total deadline are optional environment policies and are disabled
+  by default;
 - repeated identical output and excessive received output stop the process early;
 - the same normalized provider failure stops after two occurrences;
 - implementation or testing that completes twice without worktree progress blocks the goal.
 
 All stops preserve the isolated worktree. The runner does not reset, clean, or discard partial work.
-Every step records bounded process output statistics and whether a worktree change was observed.
+Every writable step stores a durable checkpoint with changed files, worktree fingerprint and artifact
+references. Provider fallback receives that checkpoint. On Maestro restart, an orphaned running step
+is closed as interrupted, the checkpoint is captured, and the same Goal is scheduled from its
+persisted state. If the worktree is missing, recovery fails closed instead of rebuilding silently.
+Every step also records bounded process output statistics and whether a worktree change was observed.
 Fallbacks emit `goal.provider_fallback`; circuit breakers emit `goal.circuit_breaker` with the reason
 and `worktreePreserved=true`. This makes quota, timeout, output flood, repeated failure, and no-progress
 conditions distinguishable without another LLM call.
@@ -148,7 +158,7 @@ service can still enforce the limits of the user's plan.
   Dashboard shows the latest persisted report by project.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
-- Every goal and provider phase has a bounded deadline, inactivity limit, and output budget.
+- Every provider has an inactivity limit and output budget; total runtime limits are optional.
 - Repeated failures and repeated no-progress phases stop before another provider cycle is spent.
 - Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
 - Goal artifacts, database, logs, environment files, and credentials remain ignored by Git.
@@ -190,5 +200,22 @@ GET  /api/goals/:runId
 
 The task detail panel starts a goal once. The coordinator continues it in the background and the
 dashboard refresh shows phase, step count, provider wait, completion, blocker, or failure. Waiting
-runs are recovered after a Maestro restart and scheduled for retry. Delivered goals expose their
-commit SHA and draft pull request URL.
+runs and stale running steps are recovered after a Maestro restart and scheduled for retry from the
+latest checkpoint. Delivered goals expose their commit SHA and draft pull request URL.
+
+## Feature Task contracts and dependency execution
+
+Feature Tasks persist an explicit execution contract: objective, acceptance criteria, excluded scope,
+mutation scope, dependency IDs and serial/parallel policy. A plan without explicit contracts is
+normalized to a fail-closed serial chain for backward compatibility.
+
+Dependencies must point backward inside the same Feature Plan and the graph must be acyclic. A Task
+starts only after every dependency is delivered and validated. Failure, cancellation or rejection of
+an ancestor blocks its descendants. Independent Tasks may run in parallel in the same project only
+when both contracts opt into parallel execution and their mutation scopes are disjoint.
+
+Dependent Tasks receive a deterministic Git baseline assembled from the exact delivered commits of
+all transitive ancestors. Their Work PR targets that synthetic baseline. Final Feature assembly still
+uses the exact Task delivery commits, preventing accidental inclusion of unrelated branch state.
+Review evidence and secret scanning compare the Task against its recorded baseline, so ancestor
+changes are not duplicated into the dependent Task's diff or reviewer context.

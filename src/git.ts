@@ -6,6 +6,8 @@ import { ProjectRecord, TaskRecord } from "./db.js";
 export type WorktreePlan = {
   branchName: string;
   worktreePath: string;
+  baseRef?: string;
+  baseBranch?: string;
 };
 
 export type GitCommandResult = {
@@ -15,10 +17,16 @@ export type GitCommandResult = {
   exitCode: number | null;
 };
 
-export function createWorktreePlan(project: ProjectRecord, task: TaskRecord, worktreesRoot: string): WorktreePlan {
+export function createWorktreePlan(
+  project: ProjectRecord,
+  task: TaskRecord,
+  worktreesRoot: string,
+  base?: { baseRef: string; baseBranch: string }
+): WorktreePlan {
   return {
     branchName: `maestro/task-${task.id}-${slugify(task.text)}`,
-    worktreePath: path.join(worktreesRoot, project.key, `task-${task.id}`)
+    worktreePath: path.join(worktreesRoot, project.key, `task-${task.id}`),
+    ...(base ?? {})
   };
 }
 
@@ -56,7 +64,14 @@ export function createGitWorktree(project: ProjectRecord, plan: WorktreePlan): G
     };
   }
 
-  return runGit(["worktree", "add", "-b", plan.branchName, plan.worktreePath, project.defaultBranch], project.path);
+  return runGit([
+    "worktree",
+    "add",
+    "-b",
+    plan.branchName,
+    plan.worktreePath,
+    plan.baseRef ?? project.defaultBranch
+  ], project.path);
 }
 
 export function runGit(args: string[], cwd: string): GitCommandResult {

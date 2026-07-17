@@ -45,7 +45,12 @@ describe("agent registry leases", () => {
     const registry = new AgentRegistry([claude, codex], undefined, () => now);
     const lease = await registry.acquire("planning");
 
-    lease?.release({ retryable: true, retryAfterMs: 30_000, summary: "Claude timed out." });
+    lease?.release({
+      retryable: true,
+      retryAfterMs: 30_000,
+      summary: "Claude timed out.",
+      failureCategory: "timeout"
+    });
 
     expect((await registry.snapshot()).find((item) => item.id === "claude")).toMatchObject({
       state: "cooldown",
@@ -56,6 +61,38 @@ describe("agent registry leases", () => {
 
     now += 30_001;
     expect((await registry.acquire("planning"))?.provider.id).toBe("claude");
+  });
+
+  it("chooses the earliest provider recovery instead of the last failure delay", async () => {
+    let now = 1_000;
+    const registry = new AgentRegistry(
+      [provider("claude", ["coding"]), provider("codex", ["coding"])],
+      undefined,
+      () => now
+    );
+    const codex = await registry.acquire("coding");
+    codex?.release({
+      retryable: true,
+      retryAfterMs: 15_000,
+      summary: "Codex inactivity timeout.",
+      failureCategory: "timeout"
+    });
+    const claude = await registry.acquire("coding");
+    claude?.release({
+      retryable: true,
+      retryAfterMs: 10 * 60_000,
+      summary: "Claude session limit.",
+      failureCategory: "quota"
+    });
+
+    expect(await registry.nextAvailability("coding")).toEqual({
+      reason: "timeout",
+      retryAfterMs: 15_000,
+      provider: "codex"
+    });
+
+    now += 15_001;
+    expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
 });
 
