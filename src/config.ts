@@ -10,6 +10,11 @@ import {
   DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS,
   DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS
 } from "./agents/execution-limits.js";
+import {
+  isWorkGraphAdoptionMode,
+  WORK_GRAPH_ADOPTION_MODES,
+  type WorkGraphAdoptionMode
+} from "./work-graphs/adoption.js";
 
 export type MaestroConfig = {
   projectName: string;
@@ -32,6 +37,9 @@ export type MaestroConfig = {
     claudeInactivityTimeoutMs?: number;
     providerMaxRuntimeMs?: number;
     goalDeadlineMs?: number;
+  };
+  workGraph: {
+    adoptionMode: WorkGraphAdoptionMode;
   };
   skills: {
     enabled: boolean;
@@ -88,6 +96,9 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
         60_000
       )
     },
+    workGraph: {
+      adoptionMode: normalizeWorkGraphAdoptionMode(env.MAESTRO_WORK_GRAPH_MODE)
+    },
     skills: {
       enabled: normalizeBoolean(env.MAESTRO_SKILLS_ENABLED, false),
       catalogPath: path.resolve(cwd, env.MAESTRO_SKILLS_PATH?.trim() || "skills"),
@@ -128,6 +139,13 @@ export function validateRuntimeConfig(
     );
   }
 
+  if (env.MAESTRO_WORK_GRAPH_MODE?.trim()) {
+    const mode = env.MAESTRO_WORK_GRAPH_MODE.trim().toLowerCase();
+    if (!isWorkGraphAdoptionMode(mode)) {
+      errors.push(`MAESTRO_WORK_GRAPH_MODE must be one of: ${WORK_GRAPH_ADOPTION_MODES.join(", ")}.`);
+    }
+  }
+
   if (process.platform === "win32") {
     errors.push(...assessExecutionPaths(config.execution, env).reasons);
   }
@@ -155,6 +173,11 @@ function normalizePort(value: string | undefined, fallback: number): number {
 function normalizePositiveInteger(value: string | undefined, fallback: number, minimum: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
+}
+
+function normalizeWorkGraphAdoptionMode(value: string | undefined): WorkGraphAdoptionMode {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && isWorkGraphAdoptionMode(normalized) ? normalized : "off";
 }
 
 function normalizeOptionalPositiveInteger(value: string | undefined, minimum: number): number | undefined {
