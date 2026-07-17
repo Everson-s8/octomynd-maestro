@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentExecutionResult } from "../agents/types.js";
 import { AgentRegistry } from "../agents/registry.js";
-import type { GoalPhase, MaestroDatabase } from "../db.js";
+import type { GoalPhase, GoalWaitReason, MaestroDatabase } from "../db.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { writeWorkerResultArtifacts } from "./artifacts.js";
 import { scheduleWorkerBatch } from "./scheduler.js";
@@ -17,6 +17,8 @@ export type WorkGraphRunnerOptions = {
   onProgress?: (graph: WorkGraphDetails, node: WorkerNodeRecord, provider: "codex" | "claude") => void;
 };
 
+export const WORK_GRAPH_RUNTIME_SHUTDOWN = "maestro_runtime_shutdown";
+
 export async function runWorkGraph(
   database: MaestroDatabase,
   registry: AgentRegistry,
@@ -24,34 +26,34 @@ export async function runWorkGraph(
   options: WorkGraphRunnerOptions
 ): Promise<WorkGraphDetails> {
   let graph = database.getWorkGraphDetails(graphId);
+  const run = database.getGoalRun(graph.runId);
+  const task = database.getTask(run.taskId);
   const validation = validateWorkGraph(graph);
   if (!validation.valid) {
     const error = validation.issues.map((issue) => issue.message).join(" ");
-    database.updateWorkGraphStatus(graph.id, "blocked");
-    database.addEvent({ source: "maestro", type: "work_graph.validation_failed", text: error, metadata: { graphId } });
-    return database.getWorkGraphDetails(graph.id);
+    return finishGraph(database, graph, "blocked", error, "work_graph.validation_failed");
   }
   if (graph.status === "draft") graph = { ...database.updateWorkGraphStatus(graph.id, "validated"), nodes: graph.nodes };
   if (graph.status === "validated" || graph.status === "waiting_provider") {
     database.updateWorkGraphStatus(graph.id, "running");
   }
-  const run = database.getGoalRun(graph.runId);
-  const task = database.getTask(run.taskId);
   if (!task.projectKey || !task.worktreePath) throw new Error("Work Graph Task requires a prepared project worktree.");
   const worktreePath = task.worktreePath;
   const project = database.getProjectByKey(task.projectKey);
 
   while (true) {
     graph = database.getWorkGraphDetails(graph.id);
-    if (options.signal?.aborted) return cancelGraph(database, graph);
+    if (options.signal?.aborted) {
+      return options.signal.reason === WORK_GRAPH_RUNTIME_SHUTDOWN
+        ? interruptGraph(database, graph)
+        : cancelGraph(database, graph);
+    }
     const schedule = scheduleWorkerBatch(graph);
     if (schedule.complete) {
-      database.updateWorkGraphStatus(graph.id, "completed");
-      return database.getWorkGraphDetails(graph.id);
+      return finishGraph(database, graph, "completed");
     }
     if (schedule.blocked || schedule.ready.length === 0 && schedule.waiting.length === 0) {
-      database.updateWorkGraphStatus(graph.id, "blocked");
-      return database.getWorkGraphDetails(graph.id);
+      return finishGraph(database, graph, "blocked", "Work Graph has no schedulable Worker Nodes.");
     }
     if (schedule.ready.length === 0) {
       database.updateWorkGraphStatus(graph.id, "waiting_provider");
@@ -62,8 +64,15 @@ export async function runWorkGraph(
       const node = database.updateWorkerNodeStatus(scheduledNode.id, "ready");
       const lease = await registry.acquire(node.capability);
       if (!lease) {
-        database.updateWorkerNodeStatus(node.id, "waiting_provider", `No ready Provider for ${node.capability}.`);
-        return { progressed: false, waiting: true };
+        const availability = await registry.nextAvailability(node.capability);
+        const wait = persistProviderWait(database, graph, node, {
+          reason: availability.reason,
+          retryAfterMs: availability.retryAfterMs,
+          provider: availability.provider ?? undefined,
+          summary: `No ready Provider for ${node.capability}.`
+        });
+        database.updateWorkerNodeStatus(node.id, "waiting_provider", wait.summary);
+        return { progressed: false, waiting: true, cancelled: false };
       }
       const attempt = database.createWorkerAttempt(node.id, lease.provider.id);
       options.onProgress?.(database.getWorkGraphDetails(graph.id), node, lease.provider.id);
@@ -116,9 +125,19 @@ export async function runWorkGraph(
       const scopeError = node.mode === "writer"
         ? validateWriteScope(beforeState, afterState, node.writeScope)
         : validateReadOnlyState(beforeState, afterState);
-      const effectiveResult = scopeError
+      const scopedResult = scopeError
         ? { ...result, outcome: "blocked" as const, summary: scopeError, error: scopeError, retryable: false }
         : result;
+      const runtimeInterrupted = options.signal?.aborted && options.signal.reason === WORK_GRAPH_RUNTIME_SHUTDOWN;
+      const effectiveResult = options.signal?.aborted
+        ? {
+            ...scopedResult,
+            outcome: "cancelled" as const,
+            summary: scopedResult.summary || "Work Graph cancelled.",
+            error: scopedResult.error ?? null,
+            retryable: false
+          }
+        : scopedResult;
       const finished = database.finishWorkerAttempt({
         id: attempt.id,
         status: effectiveResult.outcome,
@@ -136,7 +155,9 @@ export async function runWorkGraph(
         summary: effectiveResult.summary,
         output: effectiveResult.output
       });
-      const nodeStatus = statusForResult(effectiveResult, finished.attemptNumber >= node.maxAttempts);
+      const nodeStatus = runtimeInterrupted
+        ? finished.attemptNumber >= node.maxAttempts ? "blocked" : "waiting_provider"
+        : statusForResult(effectiveResult, finished.attemptNumber >= node.maxAttempts);
       database.updateWorkerNodeStatus(node.id, nodeStatus, effectiveResult.error);
       database.addEvent({
         source: lease.provider.id,
@@ -151,8 +172,24 @@ export async function runWorkGraph(
           durationMs: effectiveResult.durationMs
         }
       });
-      return { progressed: effectiveResult.outcome === "completed", waiting: nodeStatus === "waiting_provider" };
+      if (nodeStatus === "waiting_provider") {
+        persistProviderWait(database, graph, node, {
+          reason: effectiveResult.failureCategory ?? "unknown",
+          retryAfterMs: effectiveResult.retryAfterMs,
+          provider: lease.provider.id,
+          summary: effectiveResult.summary || effectiveResult.error || `Provider unavailable for ${node.capability}.`
+        });
+      }
+      return {
+        progressed: effectiveResult.outcome === "completed",
+        waiting: nodeStatus === "waiting_provider",
+        cancelled: nodeStatus === "cancelled",
+        interrupted: runtimeInterrupted
+      };
     }));
+    if (results.some((result) => result.cancelled)) {
+      return cancelGraph(database, database.getWorkGraphDetails(graph.id));
+    }
     if (results.some((result) => result.waiting) && !results.some((result) => result.progressed)) {
       database.updateWorkGraphStatus(graph.id, "waiting_provider");
       return database.getWorkGraphDetails(graph.id);
@@ -178,6 +215,27 @@ function statusForResult(
   return "failed";
 }
 
+function interruptGraph(database: MaestroDatabase, graph: WorkGraphDetails): WorkGraphDetails {
+  for (const node of graph.nodes) {
+    if (["ready", "running"].includes(node.status)) {
+      const status = node.attemptCount >= node.maxAttempts ? "blocked" : "waiting_provider";
+      database.updateWorkerNodeStatus(node.id, status, "Maestro runtime stopped; partial worktree preserved.");
+    }
+  }
+  const latest = database.getWorkGraphDetails(graph.id);
+  const blocked = latest.nodes.some((node) => node.status === "blocked");
+  database.updateWorkGraphStatus(graph.id, blocked ? "blocked" : "waiting_provider");
+  const run = database.getGoalRun(graph.runId);
+  database.addEvent({
+    source: "maestro",
+    type: blocked ? "work_graph.shutdown_blocked" : "work_graph.interrupted",
+    text: "Maestro runtime stopped; partial worktree preserved.",
+    taskId: run.taskId,
+    metadata: { graphId: graph.id, runId: run.id, worktreePreserved: true }
+  });
+  return database.getWorkGraphDetails(graph.id);
+}
+
 function cancelGraph(database: MaestroDatabase, graph: WorkGraphDetails): WorkGraphDetails {
   for (const node of graph.nodes) {
     if (!["completed", "blocked", "cancelled"].includes(node.status)) {
@@ -185,7 +243,67 @@ function cancelGraph(database: MaestroDatabase, graph: WorkGraphDetails): WorkGr
     }
   }
   database.updateWorkGraphStatus(graph.id, "cancelled");
+  const run = database.getGoalRun(graph.runId);
+  database.addEvent({
+    source: "maestro",
+    type: "work_graph.cancelled",
+    text: graph.objective,
+    taskId: run.taskId,
+    metadata: { graphId: graph.id, runId: run.id }
+  });
   return database.getWorkGraphDetails(graph.id);
+}
+
+function finishGraph(
+  database: MaestroDatabase,
+  graph: WorkGraphDetails,
+  status: "completed" | "blocked",
+  error?: string | null,
+  eventType = `work_graph.${status}`
+): WorkGraphDetails {
+  const run = database.getGoalRun(graph.runId);
+  database.withTransaction(() => {
+    database.updateWorkGraphStatus(graph.id, status);
+    database.addEvent({
+      source: "maestro",
+      type: eventType,
+      text: status === "completed" ? graph.objective : error ?? "Work Graph blocked.",
+      taskId: run.taskId,
+      metadata: { graphId: graph.id, runId: run.id }
+    });
+  });
+  return database.getWorkGraphDetails(graph.id);
+}
+
+function persistProviderWait(
+  database: MaestroDatabase,
+  graph: WorkGraphDetails,
+  node: WorkerNodeRecord,
+  wait: {
+    reason: GoalWaitReason;
+    retryAfterMs?: number;
+    provider?: "codex" | "claude";
+    summary: string;
+  }
+): { summary: string } {
+  const run = database.getGoalRun(graph.runId);
+  const summary = redactSensitiveText(wait.summary);
+  database.addEvent({
+    source: "maestro",
+    type: "work_graph.waiting_provider",
+    text: summary,
+    taskId: run.taskId,
+    metadata: {
+      graphId: graph.id,
+      runId: run.id,
+      nodeId: node.id,
+      nodeKey: node.key,
+      waitReason: wait.reason,
+      retryAfterMs: wait.retryAfterMs ?? null,
+      provider: wait.provider ?? null
+    }
+  });
+  return { summary };
 }
 
 function changedPaths(worktreePath: string): string[] {

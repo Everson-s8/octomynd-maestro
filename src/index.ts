@@ -27,6 +27,7 @@ import { RestrictedImprovementReviewCoordinator } from "./improvements/coordinat
 import { ImprovementReviewWorker } from "./improvements/worker.js";
 import { createTelegramImprovementCandidateNotifier } from "./telegram/notifications.js";
 import { bootstrapSkills } from "./skills/bootstrap.js";
+import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -78,11 +79,17 @@ if (skillBootstrap) {
 }
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
+const workGraphCoordinator = new WorkGraphCoordinator(
+  database,
+  agentRegistry,
+  path.join(path.dirname(config.databasePath), "runs")
+);
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),
   autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
   environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey),
-  providerStatus: () => agentRegistry.snapshot()
+  providerStatus: () => agentRegistry.snapshot(),
+  workGraphRuntime: workGraphCoordinator
 });
 const goalNotifier = createTelegramGoalNotifier(
   config,
@@ -175,7 +182,8 @@ reviewCoordinator.start();
 featureCoordinator.start();
 featureAssemblyCoordinator.start();
 improvementReviewWorker.start();
-const recoveredGoals = goalCoordinator.recoverWaitingRuns();
+const recoveredWorkGraphs = workGraphCoordinator.recoverActiveGraphs();
+const recoveredGoals = goalCoordinator.recoverWaitingRuns((run) => workGraphCoordinator.isRunActive(run.id));
 const dashboardServer = config.dashboard.enabled
   ? await startDashboardServer({
     config,
@@ -186,7 +194,8 @@ const dashboardServer = config.dashboard.enabled
     featureCoordinator,
     backlogAutopilot,
     environmentDoctor,
-    agentRegistry
+    agentRegistry,
+    workGraphRuntime: workGraphCoordinator
   })
   : null;
 backlogAutopilot.start();
@@ -202,8 +211,8 @@ bot.catch((error) => {
   console.error("Telegram bot error:", error.error instanceof Error ? error.error.message : "unknown error");
 });
 
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+process.once("SIGINT", () => void shutdown());
+process.once("SIGTERM", () => void shutdown());
 
 console.log(`Starting Maestro for ${config.projectName}.`);
 console.log("Telegram token loaded: yes.");
@@ -213,6 +222,9 @@ if (dashboardServer) {
 }
 if (recoveredGoals > 0) {
   console.log(`Goals waiting for providers: ${recoveredGoals}. Automatic retry scheduled.`);
+}
+if (recoveredWorkGraphs > 0) {
+  console.log(`Work Graphs recovered: ${recoveredWorkGraphs}.`);
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
 console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
@@ -225,7 +237,11 @@ void bot.start({
   }
 });
 
-function shutdown() {
+let shutdownStarted = false;
+
+async function shutdown() {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   console.log("Stopping Maestro.");
   bot.stop();
   backlogAutopilot.shutdown();
@@ -233,9 +249,13 @@ function shutdown() {
   featureCoordinator.shutdown();
   featureAssemblyCoordinator.shutdown();
   improvementReviewWorker.shutdown();
+  await workGraphCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
-    dashboardServer.close(() => database.close());
+    await new Promise<void>((resolve, reject) => {
+      dashboardServer.close((error) => error ? reject(error) : resolve());
+    });
+    database.close();
   } else {
     database.close();
   }

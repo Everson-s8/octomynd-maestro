@@ -22,6 +22,7 @@ import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
 import { AgentRegistry } from "../agents/registry.js";
+import type { WorkGraphRuntimeCommands } from "../commands/application-commands.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -36,12 +37,13 @@ export type DashboardServerOptions = {
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot">;
+  workGraphRuntime?: WorkGraphRuntimeCommands;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
-  const commands = new ApplicationCommands(options.database, options.featureGithub);
+  const commands = new ApplicationCommands(options.database, options.featureGithub, options.workGraphRuntime);
 
   return http.createServer(async (request, response) => {
     try {
@@ -113,7 +115,7 @@ async function routeRequest(
   if (request.method === "POST" && cancelWorkGraphMatch) {
     const body = await readJsonBody(request);
     try {
-      const workGraph = commands.cancelWorkGraph(
+      const workGraph = await commands.cancelWorkGraph(
         { channel: "dashboard" },
         Number(cancelWorkGraphMatch[1]),
         readString(body.reason) || null
