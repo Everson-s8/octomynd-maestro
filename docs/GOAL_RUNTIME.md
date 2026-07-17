@@ -41,6 +41,19 @@ fact. It never installs, downloads or updates RTK. When RTK is absent, the inter
 transparently. The adapter can be disabled with `MAESTRO_TOKEN_RUNTIME_ENABLED=false`, without
 changing delivery gates, review gates or final Feature PR completion rules.
 
+## Work Graph adoption policy
+
+The Multi-Agent Work Graph is governed separately from the current linear Goal runner. The
+`MAESTRO_WORK_GRAPH_MODE` setting accepts `off`, `shadow` or `explicit` and defaults to `off`.
+Invalid values fail closed: the loaded mode is `off` and runtime validation blocks startup.
+
+Every Goal start or resume records `goal.work_graph_adoption_decision` before Provider routing. The
+event stores the selected mode, reason, linear execution mode, `automaticFanOut=false`, and bounded
+telemetry such as complexity signals and estimated Worker Node count. It never stores the raw task
+text. `shadow` records what the policy would consider without changing execution. `explicit` records
+only an explicit caller request; otherwise the linear path remains selected. This milestone does not
+execute Worker Nodes or automatic fan-out.
+
 ## Deterministic validation
 
 The testing phase first calls one deep Maestro module with an allowlisted command

@@ -71,6 +71,61 @@ describe("goal runner", () => {
     }]);
   });
 
+  it("records a governed Work Graph adoption decision before routing without fanning out automatically", async () => {
+    const projectDir = path.join(tempDir, "work-graph-project");
+    const worktreeDir = path.join(tempDir, "work-graph-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "workgraph", path: projectDir });
+    const task = database.createTask("plan a small change", "dashboard", "workgraph");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => completed("planned"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1,
+      workGraphAdoption: { mode: "shadow" }
+    });
+
+    const events = database.listEvents();
+    const decisionIndex = events.findIndex((event) => event.type === "goal.work_graph_adoption_decision");
+    const stepStartedIndex = events.findIndex((event) => event.type === "goal.step_started");
+    expect(decisionIndex).toBeGreaterThanOrEqual(0);
+    expect(stepStartedIndex).toBeLessThan(decisionIndex);
+    expect(events[decisionIndex].id).toBeLessThan(events[stepStartedIndex].id);
+    expect(events[decisionIndex].metadata).toMatchObject({
+      mode: "shadow",
+      decision: "shadow",
+      reason: "shadow_mode_records_only",
+      executionMode: "linear",
+      automaticFanOut: false
+    });
+    expect(database.listGoalSteps(run.id)).toHaveLength(1);
+  });
+
+  it("defaults Work Graph adoption to off when the runner option is not provided", async () => {
+    const projectDir = path.join(tempDir, "work-graph-default-project");
+    const worktreeDir = path.join(tempDir, "work-graph-default-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "workgraphdefault", path: projectDir });
+    const task = database.createTask("plan a small change", "dashboard", "workgraphdefault");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => completed("planned"));
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1
+    });
+
+    const decision = database.listEvents().find((event) => event.type === "goal.work_graph_adoption_decision");
+    expect(decision?.metadata).toMatchObject({
+      mode: "off",
+      decision: "off",
+      reason: "disabled_by_config"
+    });
+  });
+
   it("blocks before provider execution when the absolute goal deadline is exhausted", async () => {
     const projectDir = path.join(tempDir, "deadline-project");
     const worktreeDir = path.join(tempDir, "deadline-worktree");

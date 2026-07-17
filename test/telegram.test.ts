@@ -315,6 +315,7 @@ function telegramConfig(): MaestroConfig {
     dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
+    workGraph: { adoptionMode: "off" },
     skills: { enabled: false, catalogPath: "skills", versionsPath: "versions", projectKey: "maestro" },
     telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
   };

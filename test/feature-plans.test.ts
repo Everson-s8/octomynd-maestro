@@ -374,6 +374,7 @@ function testConfig(): MaestroConfig {
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
+    workGraph: { adoptionMode: "off" },
     skills: { enabled: false, catalogPath: path.join(tempDir, "skills"), versionsPath: path.join(tempDir, "versions"), projectKey: "boo" },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
