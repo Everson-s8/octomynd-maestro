@@ -52,10 +52,40 @@ describe("Work Graph persistence", () => {
       contentHash: "sha256:abc",
       bytes: 320
     });
+    const repeatedArtifact = database.addWorkerArtifact({
+      graphId: graph.id,
+      nodeId: researcher.id,
+      attemptId: attempt.id,
+      key: "work-graphs/research/handoff.md",
+      kind: "handoff",
+      summary: "Bounded research handoff.",
+      contentHash: "sha256:abc",
+      bytes: 320
+    });
 
     expect(finished.status).toBe("completed");
     expect(database.listWorkerAttempts(researcher.id)).toEqual([finished]);
     expect(database.listWorkerArtifacts(graph.id)).toEqual([artifact]);
+    expect(repeatedArtifact.id).toBe(artifact.id);
+    expect(() => database.addWorkerArtifact({
+      graphId: graph.id,
+      nodeId: researcher.id,
+      attemptId: attempt.id,
+      key: "work-graphs/research/handoff.md",
+      kind: "report",
+      summary: "Conflicting lineage.",
+      bytes: 320
+    })).toThrow("different content or lineage");
+    expect(() => database.addWorkerArtifact({
+      graphId: graph.id,
+      nodeId: researcher.id,
+      attemptId: attempt.id,
+      key: "work-graphs/research/handoff.md",
+      kind: "handoff",
+      summary: "Bounded research handoff.",
+      contentHash: "sha256:changed",
+      bytes: 321
+    })).toThrow("different content or lineage");
 
     database.close();
     database = createDatabase(databasePath);

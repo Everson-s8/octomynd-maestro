@@ -97,15 +97,15 @@ describe("Work Graph interfaces", () => {
     }
   });
 
-  it("fails closed when asked to cancel a running graph without its runtime coordinator", () => {
+  it("fails closed when asked to cancel a running graph without its runtime coordinator", async () => {
     const graph = createGraph("Do not fake cancellation");
     database.updateWorkGraphStatus(graph.id, "validated");
     database.updateWorkGraphStatus(graph.id, "running");
 
-    expect(() => new ApplicationCommands(database).cancelWorkGraph(
+    await expect(new ApplicationCommands(database).cancelWorkGraph(
       { channel: "dashboard" },
       graph.id
-    )).toThrow("requires its runtime coordinator");
+    )).rejects.toThrow("requires its runtime coordinator");
     expect(database.getWorkGraph(graph.id).status).toBe("running");
   });
 });

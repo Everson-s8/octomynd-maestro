@@ -3,6 +3,7 @@ import { MaestroConfig } from "../config.js";
 import { FeaturePlanDetails, FeatureRecord, MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
 import { parseProjectTaskInput } from "../orchestrator.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
+import type { WorkGraphRuntimeCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
@@ -16,6 +17,7 @@ export type TelegramBotOptions = {
   featureGithub?: FeatureGitHubGateway;
   environmentDoctor?: (projectKey: string) => Promise<EnvironmentDoctorReport>;
   providerStatus?: () => Promise<AgentProviderSnapshot[]>;
+  workGraphRuntime?: WorkGraphRuntimeCommands;
 };
 
 export function createTelegramBot(
@@ -24,7 +26,7 @@ export function createTelegramBot(
   options: TelegramBotOptions = {}
 ) {
   const bot = new Bot(config.telegram.botToken);
-  const commands = new ApplicationCommands(database, options.featureGithub);
+  const commands = new ApplicationCommands(database, options.featureGithub, options.workGraphRuntime);
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -216,7 +218,7 @@ export function createTelegramBot(
       return;
     }
     try {
-      const graph = commands.cancelWorkGraph(telegramOrigin(ctx), graphId, "Cancelado pelo Telegram.");
+      const graph = await commands.cancelWorkGraph(telegramOrigin(ctx), graphId, "Cancelado pelo Telegram.");
       await ctx.reply(`Work Graph #${graph.id} cancelado. Artefatos e historico foram preservados.`);
     } catch (error) {
       await ctx.reply(["Cancelamento do Work Graph nao aplicado.", ...commandErrorDetails(error)].join("\n"));
@@ -568,7 +570,7 @@ function formatHelp(): string {
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto",
     "/graphs [@projeto] - listar Work Graphs e budgets",
-    "/graph_cancel id - cancelar graph parado, preservando evidencias",
+    "/graph_cancel id - cancelar graph ativo ou parado, preservando evidencias",
     "/features - listar Feature Plans e Feature PRs",
       "/features @projeto - listar Feature Plans e Feature PRs do projeto",
       "/improvements - listar melhorias candidatas",

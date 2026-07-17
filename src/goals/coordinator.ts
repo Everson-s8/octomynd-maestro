@@ -114,10 +114,12 @@ export class GoalCoordinator {
     return reopened;
   }
 
-  recoverWaitingRuns(): number {
-    const interrupted = this.database.listActiveGoalRuns().filter((run) => run.status === "running");
+  recoverWaitingRuns(skipRun: (run: GoalRunRecord) => boolean = () => false): number {
+    const interrupted = this.database.listActiveGoalRuns()
+      .filter((run) => run.status === "running" && !skipRun(run));
     for (const run of interrupted) this.recoverInterruptedRun(run);
-    const waiting = this.database.listActiveGoalRuns().filter((run) => run.status === "waiting_provider");
+    const waiting = this.database.listActiveGoalRuns()
+      .filter((run) => run.status === "waiting_provider" && !skipRun(run));
     for (const run of waiting) this.scheduleRetry(run);
     return waiting.length;
   }

@@ -584,6 +584,40 @@ describe("goal runner", () => {
     coordinator.shutdown();
   });
 
+  it("does not recover a Goal owned by another resident coordinator", () => {
+    const projectDir = path.join(tempDir, "owned-run-project");
+    fs.mkdirSync(projectDir);
+    initializeRepository(projectDir);
+    database.registerProject({ key: "owned-run", path: projectDir });
+    const task = database.createTask("leave owned run untouched", "dashboard", "owned-run");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "maestro/task-owned-run",
+      worktreePath: projectDir
+    });
+    const run = database.createGoalRun(task.id, 6);
+    const step = database.createGoalStep(run.id, "implementing", "codex");
+    const scheduler = new ManualScheduler();
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([]),
+      path.join(tempDir, "artifacts"),
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
+    );
+
+    expect(coordinator.recoverWaitingRuns((candidate) => candidate.id === run.id)).toBe(0);
+    expect(database.getGoalRun(run.id).status).toBe("running");
+    expect(database.getGoalStep(step.id).status).toBe("running");
+    expect(database.getTask(task.id).status).toBe("implementing");
+    expect(scheduler.pendingCount).toBe(0);
+    coordinator.shutdown();
+  });
+
   it("fails closed during restart recovery when the recorded worktree is missing", () => {
     const projectDir = path.join(tempDir, "missing-worktree-project");
     fs.mkdirSync(projectDir);
