@@ -14,7 +14,10 @@ Worker Nodes; they do not own the workflow or communicate independently with the
 - every node declares role, capability, dependencies, output contract and budgets;
 - a writer declares repository-relative write scopes;
 - provider absence moves the graph to `waiting_provider` without spending an attempt;
+- provider waits emit typed, redacted evidence while the resident coordinator owns their retry timer;
 - handoffs and reports are sanitized, hashed and stored outside coordinator context;
+- the resident `WorkGraphCoordinator` owns one `AbortController` per active graph and deduplicates
+  active execution by both Work Graph id and Goal run id;
 - scope violations preserve changes for inspection and block the graph fail-closed.
 
 ## Lifecycle
@@ -24,12 +27,21 @@ draft -> validated -> running -> completed
                          |  \
                          |   -> waiting_provider -> running
                          -> blocked
-draft/validated/waiting_provider -> cancelled
+draft/validated/running/waiting_provider -> cancelled
 ```
 
-Running cancellation is intentionally unavailable from Dashboard and Telegram until a resident
-Work Graph coordinator can abort the active provider process. Reporting a graph as cancelled while
-its process still runs would violate the execution contract.
+Dashboard and Telegram cancel through the shared application command. If the graph is active, the
+resident coordinator aborts the provider with the graph `AbortSignal`, waits for the execution to
+settle, marks the graph and unfinished nodes as cancelled, and leaves Goal lifecycle, worktree changes
+and artifacts intact for the owning workflow.
+
+On Maestro restart, the coordinator recovers `draft`, `validated`, `running` and `waiting_provider`
+graphs from the existing `src/work-graphs` persistence. An interrupted running Worker attempt is
+finalized as cancelled evidence; if budget remains, recovery creates one new attempt with correct
+provider lineage. Completed nodes and artifact keys are never duplicated.
+
+Work Graph completion is not Goal completion. The runner only owns Work Graph and Worker state;
+validation, review, delivery and terminal Goal/Task transitions remain in the Goal lifecycle.
 
 ## Scheduling
 

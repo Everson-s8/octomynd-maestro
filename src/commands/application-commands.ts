@@ -69,10 +69,15 @@ export type ImprovementDecisionOutcome = {
   featurePlan: FeaturePlanDetails | null;
 };
 
+export type WorkGraphRuntimeCommands = {
+  cancel(origin: CommandOrigin, workGraphId: number, reason?: string | null): Promise<WorkGraphDetails>;
+};
+
 export class ApplicationCommands {
   constructor(
     private readonly database: MaestroDatabase,
-    private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway()
+    private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway(),
+    private readonly workGraphRuntime?: WorkGraphRuntimeCommands
   ) {}
 
   registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {
@@ -156,10 +161,17 @@ export class ApplicationCommands {
     }
   }
 
-  cancelWorkGraph(origin: CommandOrigin, workGraphId: number, reason?: string | null): WorkGraphDetails {
+  async cancelWorkGraph(origin: CommandOrigin, workGraphId: number, reason?: string | null): Promise<WorkGraphDetails> {
     const graph = this.getWorkGraph(workGraphId);
     if (["completed", "blocked", "cancelled"].includes(graph.status)) {
       throw conflictError(`Work Graph #${workGraphId} is already ${graph.status}.`);
+    }
+    if (this.workGraphRuntime) {
+      try {
+        return await this.workGraphRuntime.cancel(origin, workGraphId, reason);
+      } catch (error) {
+        throw conflictError(error instanceof Error ? error.message : "Work Graph cancellation failed.");
+      }
     }
     if (graph.status === "running") {
       throw conflictError(
