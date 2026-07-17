@@ -107,7 +107,8 @@ goalCoordinator = new GoalCoordinator(
   (taskId) => environmentDoctor.preflightTask(taskId),
   validationRunner,
   skillBootstrap?.runtime,
-  config.runtime.goalDeadlineMs
+  config.runtime.goalDeadlineMs,
+  { mode: config.workGraph.adoptionMode }
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,
@@ -215,6 +216,7 @@ if (recoveredGoals > 0) {
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
 console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
+console.log(`Work Graph adoption: ${config.workGraph.adoptionMode}.`);
 console.log(`Execution environment: ${environmentFingerprint.id}.`);
 
 void bot.start({

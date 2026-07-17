@@ -26,6 +26,9 @@ describe("config", () => {
       providerMaxRuntimeMs: undefined,
       goalDeadlineMs: undefined
     });
+    expect(config.workGraph).toEqual({
+      adoptionMode: "off"
+    });
     expect(config.skills).toEqual({
       enabled: false,
       catalogPath: path.resolve("skills"),
@@ -85,6 +88,27 @@ describe("config", () => {
     });
 
     expect(config.runtime.tokenEfficient).toBe(false);
+  });
+
+  it("configures Work Graph adoption behind a governed mode", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_WORK_GRAPH_MODE: "shadow"
+    });
+
+    expect(config.workGraph.adoptionMode).toBe("shadow");
+  });
+
+  it("fails closed for invalid Work Graph adoption modes", () => {
+    const env = {
+      TELEGRAM_BOT_TOKEN: "configured",
+      MAESTRO_WORK_GRAPH_MODE: "auto"
+    };
+    const config = loadConfig(process.cwd(), env);
+
+    expect(config.workGraph.adoptionMode).toBe("off");
+    expect(validateRuntimeConfig(config, env)).toContain(
+      "MAESTRO_WORK_GRAPH_MODE must be one of: off, shadow, explicit."
+    );
   });
 
   it("keeps governed Skills behind an explicit feature flag", () => {
