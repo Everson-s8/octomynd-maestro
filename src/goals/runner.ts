@@ -19,6 +19,11 @@ import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
+import {
+  decideWorkGraphAdoption,
+  type WorkGraphAdoptionDecision,
+  type WorkGraphAdoptionInput
+} from "../work-graphs/adoption.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
@@ -38,6 +43,7 @@ export type GoalRunnerOptions = {
   tokenRuntime?: { enabled?: boolean } | false;
   validationRunner?: Pick<DeterministicValidationRunner, "run">;
   skillRuntime?: Pick<SkillRuntime, "prepareContext">;
+  workGraphAdoption?: Pick<WorkGraphAdoptionInput, "mode" | "explicitRequest" | "trigger">;
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -69,6 +75,31 @@ export async function runTaskGoal(
     text: `Goal #${run.id} ${isResume ? "resumed" : "started"} for task #${task.id}`,
     taskId: task.id,
     metadata: { runId: run.id, maxSteps: run.maxSteps }
+  });
+  const workGraphDecision = decideWorkGraphAdoption({
+    mode: options.workGraphAdoption?.mode ?? "off",
+    explicitRequest: options.workGraphAdoption?.explicitRequest,
+    trigger: options.workGraphAdoption?.trigger,
+    taskText: task.text,
+    projectKey: project.key,
+    isResume,
+    currentPhase: phase,
+    stepCount
+  });
+  database.addEvent({
+    source: "maestro",
+    type: "goal.work_graph_adoption_decision",
+    text: formatWorkGraphAdoptionText(workGraphDecision),
+    taskId: task.id,
+    metadata: {
+      runId: run.id,
+      mode: workGraphDecision.mode,
+      decision: workGraphDecision.decision,
+      reason: workGraphDecision.reason,
+      executionMode: workGraphDecision.executionMode,
+      automaticFanOut: workGraphDecision.automaticFanOut,
+      telemetry: workGraphDecision.telemetry
+    }
   });
 
   try {
@@ -602,6 +633,19 @@ export async function runTaskGoal(
       task.id
     );
   }
+}
+
+function formatWorkGraphAdoptionText(decision: WorkGraphAdoptionDecision): string {
+  if (decision.reason === "disabled_by_config") {
+    return "Work Graph adoption is disabled; running the linear Goal path.";
+  }
+  if (decision.reason === "shadow_mode_records_only") {
+    return "Work Graph shadow decision recorded; running the linear Goal path.";
+  }
+  if (decision.reason === "explicit_request_recorded") {
+    return "Explicit Work Graph request recorded; automatic fan-out remains disabled.";
+  }
+  return "Work Graph requires an explicit request; running the linear Goal path.";
 }
 
 function finishCircuitBreak(
