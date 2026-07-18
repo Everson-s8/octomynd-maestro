@@ -1,4 +1,65 @@
+import type { AgentCapability } from "../agents/types.js";
+import type { WorkerBudget, WorkerMode, WorkerRole } from "../work-graphs/types.js";
+
 export type FeatureTaskParallelMode = "serial" | "parallel";
+
+// Role/capability/mode compatibility mirrors src/work-graphs/validator.ts. This contract-level
+// check fails fast at Feature Plan creation time; validateWorkGraph remains the authoritative
+// gate immediately before execution (defense in depth, not a replacement).
+const WORK_GRAPH_NODE_ROLE_CAPABILITY: Record<WorkerRole, AgentCapability> = {
+  researcher: "research",
+  planner: "planning",
+  implementer: "coding",
+  tester: "testing",
+  reviewer: "reviewing"
+};
+
+const WORK_GRAPH_NODE_ROLE_MODE: Record<WorkerRole, WorkerMode> = {
+  researcher: "read_only",
+  planner: "read_only",
+  implementer: "writer",
+  tester: "read_only",
+  reviewer: "read_only"
+};
+
+const WORK_GRAPH_DEFAULT_BUDGET: WorkerBudget = { maxAttempts: 2, deadlineMs: 5 * 60_000, outputChars: 8_000 };
+const WORK_GRAPH_MAX_NODES = 4;
+
+export type FeatureWorkGraphNodeRequestInput = {
+  key: string;
+  role: WorkerRole;
+  capability: AgentCapability;
+  objective: string;
+  dependsOn?: string[];
+  outputContract: string;
+  mode?: WorkerMode;
+  writeScope?: string[];
+  budget?: Partial<WorkerBudget>;
+};
+
+export type FeatureWorkGraphRequestInput = {
+  objective?: string;
+  maxParallelReaders?: number;
+  nodes: FeatureWorkGraphNodeRequestInput[];
+};
+
+export type FeatureWorkGraphNodeRequest = {
+  key: string;
+  role: WorkerRole;
+  capability: AgentCapability;
+  objective: string;
+  dependsOn: string[];
+  outputContract: string;
+  mode: WorkerMode;
+  writeScope: string[];
+  budget: WorkerBudget;
+};
+
+export type FeatureWorkGraphRequest = {
+  objective: string;
+  maxParallelReaders: number;
+  nodes: FeatureWorkGraphNodeRequest[];
+};
 
 export type FeatureTaskContractInput = {
   taskId: number;
@@ -8,6 +69,7 @@ export type FeatureTaskContractInput = {
   mutationScope?: string[];
   dependsOnTaskIds?: number[];
   parallelMode?: FeatureTaskParallelMode;
+  workGraphRequest?: FeatureWorkGraphRequestInput;
 };
 
 export type FeatureTaskContract = {
@@ -17,6 +79,7 @@ export type FeatureTaskContract = {
   mutationScope: string[];
   dependsOnTaskIds: number[];
   parallelMode: FeatureTaskParallelMode;
+  workGraphRequest: FeatureWorkGraphRequest | null;
 };
 
 export type FeatureTaskGraphNode = {
@@ -62,13 +125,15 @@ export function normalizeFeatureTaskContracts(
     if (parallelMode === "parallel" && mutationScope.includes("**")) {
       throw new Error(`Task #${taskId} cannot use parallel mode with an unrestricted mutation scope.`);
     }
+    const workGraphRequest = normalizeWorkGraphRequest(input.workGraphRequest, mutationScope, taskId);
     contracts.set(taskId, {
       objective,
       acceptanceCriteria,
       excludedScope,
       mutationScope,
       dependsOnTaskIds,
-      parallelMode
+      parallelMode,
+      workGraphRequest
     });
   }
   validateFeatureTaskGraph(taskIds.map((taskId, index) => ({
@@ -90,7 +155,8 @@ export function legacyFeatureTaskContract(
     excludedScope: [],
     mutationScope: ["**"],
     dependsOnTaskIds: previousTaskId ? [previousTaskId] : [],
-    parallelMode: "serial"
+    parallelMode: "serial",
+    workGraphRequest: null
   };
 }
 
@@ -175,6 +241,138 @@ function normalizeMutationScope(values: string[] | undefined): string[] {
     const withoutTrailingSlash = scope.replace(/\/+$/, "");
     return withoutTrailingSlash === "" || withoutTrailingSlash === "." ? "**" : withoutTrailingSlash;
   });
+}
+
+function normalizeWorkGraphRequest(
+  request: FeatureWorkGraphRequestInput | undefined,
+  mutationScope: string[],
+  taskId: number
+): FeatureWorkGraphRequest | null {
+  if (!request) return null;
+  if (!request.nodes || request.nodes.length === 0) {
+    throw new Error(`Task #${taskId} work graph request requires at least one node.`);
+  }
+  if (request.nodes.length > WORK_GRAPH_MAX_NODES) {
+    throw new Error(`Task #${taskId} work graph request exceeds the ${WORK_GRAPH_MAX_NODES}-node limit.`);
+  }
+  const objective = request.objective?.trim() || `Work Graph for Task #${taskId}`;
+  const keys = new Set<string>();
+  let writerCount = 0;
+  const nodes: FeatureWorkGraphNodeRequest[] = request.nodes.map((node) => {
+    const key = node.key?.trim().toLowerCase();
+    if (!key || !/^[a-z0-9][a-z0-9-]{1,63}$/.test(key)) {
+      throw new Error(`Task #${taskId} work graph node has an invalid key: ${node.key}`);
+    }
+    if (keys.has(key)) throw new Error(`Task #${taskId} work graph has a duplicate node key: ${key}`);
+    keys.add(key);
+
+    const expectedCapability = WORK_GRAPH_NODE_ROLE_CAPABILITY[node.role];
+    if (!expectedCapability) throw new Error(`Task #${taskId} work graph node "${key}" has an unsupported role.`);
+    if (node.capability !== expectedCapability) {
+      throw new Error(`Task #${taskId} work graph node "${key}" role ${node.role} cannot request ${node.capability}.`);
+    }
+
+    const expectedMode = WORK_GRAPH_NODE_ROLE_MODE[node.role];
+    const mode = node.mode ?? expectedMode;
+    if (mode !== expectedMode) {
+      throw new Error(`Task #${taskId} work graph node "${key}" role ${node.role} must run as ${expectedMode}.`);
+    }
+    if (mode === "writer") writerCount += 1;
+
+    const objectiveText = requiredNonEmpty(node.objective, `Task #${taskId} work graph node "${key}" objective`);
+    const outputContract = requiredNonEmpty(
+      node.outputContract,
+      `Task #${taskId} work graph node "${key}" output contract`
+    );
+    const dependsOn = [...new Set((node.dependsOn ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean))];
+    const writeScope = normalizeMutationScope(node.writeScope ?? []);
+
+    if (mode === "writer") {
+      if (writeScope.length === 0) {
+        throw new Error(`Task #${taskId} work graph writer node "${key}" requires an explicit write scope.`);
+      }
+      for (const scope of writeScope) {
+        if (!scopeWithinMutationScope(scope, mutationScope)) {
+          throw new Error(
+            `Task #${taskId} work graph writer node "${key}" write scope must stay inside the Task mutation scope: ${scope}`
+          );
+        }
+      }
+    } else if (writeScope.length > 0) {
+      throw new Error(`Task #${taskId} work graph read-only node "${key}" cannot declare a write scope.`);
+    }
+
+    const budget = { ...WORK_GRAPH_DEFAULT_BUDGET, ...node.budget };
+    return {
+      key,
+      role: node.role,
+      capability: node.capability,
+      objective: objectiveText,
+      dependsOn,
+      outputContract,
+      mode,
+      writeScope,
+      budget
+    };
+  });
+
+  if (writerCount > 1) {
+    throw new Error(`Task #${taskId} work graph permits at most one writer node.`);
+  }
+  for (const node of nodes) {
+    for (const dependency of node.dependsOn) {
+      if (dependency === node.key) {
+        throw new Error(`Task #${taskId} work graph node "${node.key}" cannot depend on itself.`);
+      }
+      if (!keys.has(dependency)) {
+        throw new Error(`Task #${taskId} work graph node "${node.key}" depends on unknown node "${dependency}".`);
+      }
+    }
+  }
+  assertAcyclicWorkGraphNodes(nodes, taskId);
+
+  const maxParallelReaders = request.maxParallelReaders ?? 2;
+  if (!Number.isInteger(maxParallelReaders) || maxParallelReaders < 1 || maxParallelReaders > 2) {
+    throw new Error(`Task #${taskId} work graph maxParallelReaders must be 1 or 2.`);
+  }
+
+  return { objective, maxParallelReaders, nodes };
+}
+
+function assertAcyclicWorkGraphNodes(
+  nodes: Array<{ key: string; dependsOn: string[] }>,
+  taskId: number
+): void {
+  const byKey = new Map(nodes.map((node) => [node.key, node]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (key: string) => {
+    if (visiting.has(key)) {
+      throw new Error(`Task #${taskId} work graph has a dependency cycle including node "${key}".`);
+    }
+    if (visited.has(key)) return;
+    visiting.add(key);
+    for (const dependency of byKey.get(key)!.dependsOn) visit(dependency);
+    visiting.delete(key);
+    visited.add(key);
+  };
+  for (const node of nodes) visit(node.key);
+}
+
+function scopeWithinMutationScope(writeScope: string, mutationScope: string[]): boolean {
+  if (mutationScope.includes("**")) return true;
+  const writePrefix = staticPrefix(writeScope);
+  return mutationScope.some((scope) => {
+    if (scope === "**") return true;
+    const scopePrefix = staticPrefix(scope);
+    return writePrefix === scopePrefix || writePrefix.startsWith(`${scopePrefix}/`);
+  });
+}
+
+function requiredNonEmpty(value: string | undefined, label: string): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) throw new Error(`${label} is required.`);
+  return trimmed;
 }
 
 function uniquePositiveIds(values: number[], label: string): number[] {

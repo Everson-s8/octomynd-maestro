@@ -82,7 +82,18 @@ let backlogAutopilot!: BacklogAutopilot;
 const workGraphCoordinator = new WorkGraphCoordinator(
   database,
   agentRegistry,
-  path.join(path.dirname(config.databasePath), "runs")
+  path.join(path.dirname(config.databasePath), "runs"),
+  15 * 60_000,
+  undefined,
+  undefined,
+  (graph) => {
+    try {
+      goalCoordinator.resume(graph.runId);
+    } catch {
+      // The owning Goal is not waiting for this graph (e.g. it drove the graph inline and
+      // will observe the terminal result directly), already active, or already terminal.
+    }
+  }
 );
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),
@@ -115,7 +126,8 @@ goalCoordinator = new GoalCoordinator(
   validationRunner,
   skillBootstrap?.runtime,
   config.runtime.goalDeadlineMs,
-  { mode: config.workGraph.adoptionMode }
+  { mode: config.workGraph.adoptionMode },
+  workGraphCoordinator
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,

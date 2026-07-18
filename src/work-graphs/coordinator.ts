@@ -36,7 +36,8 @@ export class WorkGraphCoordinator {
     private readonly artifactsRoot: string,
     private readonly retryDelayMs = 15 * 60_000,
     private readonly scheduler: Scheduler = new SystemScheduler(),
-    private readonly restartRetryDelayMs = RESTART_RETRY_DELAY_MS
+    private readonly restartRetryDelayMs = RESTART_RETRY_DELAY_MS,
+    private readonly onGraphSettled?: (graph: WorkGraphDetails) => void
   ) {}
 
   start(graphId: number): WorkGraphDetails {
@@ -54,12 +55,43 @@ export class WorkGraphCoordinator {
     if (activeRunGraphId !== undefined && activeRunGraphId !== graph.id) {
       throw new Error(`Goal run #${graph.runId} already has Work Graph #${activeRunGraphId} active.`);
     }
-    this.execute(graph);
+    void this.execute(graph);
     return this.database.getWorkGraphDetails(graph.id);
   }
 
   resume(graphId: number): WorkGraphDetails {
     return this.start(graphId);
+  }
+
+  /**
+   * Runs a graph to a terminal or waiting_provider state and returns that outcome directly,
+   * for callers (such as the Goal runner) that drive the graph inline instead of through the
+   * coordinator's own background retry. `selfRetry:false` disables the coordinator's own
+   * 15-minute retry timer so the caller's own resume cadence is the single retry authority.
+   * An optional external `signal` (e.g. the owning Goal's AbortSignal) is linked to the graph's
+   * internal AbortController so Goal-level cancellation cancels the graph too.
+   */
+  runToCompletion(
+    graphId: number,
+    options: { selfRetry?: boolean; signal?: AbortSignal } = {}
+  ): Promise<WorkGraphDetails> {
+    if (this.stopping) throw new Error("Work Graph coordinator is shutting down.");
+    const existing = this.activeByGraphId.get(graphId);
+    if (existing) {
+      this.linkExternalAbort(existing.controller, options.signal);
+      return existing.promise;
+    }
+    const graph = this.database.getWorkGraphDetails(graphId);
+    if (TERMINAL_GRAPH_STATUSES.has(graph.status)) return Promise.resolve(graph);
+    const run = this.database.getGoalRun(graph.runId);
+    if (!ACTIVE_RUN_STATUSES.has(run.status)) {
+      throw new Error(`Work Graph #${graphId} belongs to inactive Goal run #${run.id} (${run.status}).`);
+    }
+    const activeRunGraphId = this.activeByRunId.get(graph.runId);
+    if (activeRunGraphId !== undefined && activeRunGraphId !== graph.id) {
+      throw new Error(`Goal run #${graph.runId} already has Work Graph #${activeRunGraphId} active.`);
+    }
+    return this.execute(graph, { selfRetry: options.selfRetry ?? true, externalSignal: options.signal });
   }
 
   recoverActiveGraphs(): number {
@@ -124,7 +156,9 @@ export class WorkGraphCoordinator {
         metadata: { graphId: graph.id, runId: graph.runId, reason: cancellationReason }
       });
     });
-    return this.database.getWorkGraphDetails(graph.id);
+    const cancelled = this.database.getWorkGraphDetails(graph.id);
+    this.onGraphSettled?.(cancelled);
+    return cancelled;
   }
 
   async shutdown(): Promise<void> {
@@ -144,9 +178,13 @@ export class WorkGraphCoordinator {
     return [...this.retryTimers.keys()].some((graphId) => this.database.getWorkGraph(graphId).runId === runId);
   }
 
-  private execute(graph: WorkGraphDetails): void {
+  private execute(
+    graph: WorkGraphDetails,
+    options: { selfRetry?: boolean; externalSignal?: AbortSignal } = {}
+  ): Promise<WorkGraphDetails> {
     this.clearRetry(graph.id);
     const controller = new AbortController();
+    this.linkExternalAbort(controller, options.externalSignal);
     const promise = runWorkGraph(this.database, this.registry, graph.id, {
       artifactsRoot: this.artifactsRoot,
       signal: controller.signal
@@ -154,13 +192,17 @@ export class WorkGraphCoordinator {
     const active = { runId: graph.runId, controller, promise };
     this.activeByGraphId.set(graph.id, active);
     this.activeByRunId.set(graph.runId, graph.id);
+    const selfRetry = options.selfRetry ?? true;
 
     void promise.then(
       (result) => {
         this.releaseActive(graph.id, active);
-        if (!this.stopping && result.status === "waiting_provider") {
-          this.scheduleRetry(result, this.retryDelayMs);
+        if (this.stopping) return;
+        if (result.status === "waiting_provider") {
+          if (selfRetry) this.scheduleRetry(result, this.retryDelayMs);
+          return;
         }
+        if (TERMINAL_GRAPH_STATUSES.has(result.status)) this.onGraphSettled?.(result);
       },
       (error) => {
         this.releaseActive(graph.id, active);
@@ -169,6 +211,16 @@ export class WorkGraphCoordinator {
         }
       }
     );
+    return promise;
+  }
+
+  private linkExternalAbort(controller: AbortController, signal?: AbortSignal): void {
+    if (!signal) return;
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      return;
+    }
+    signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
   }
 
   private recoverInterruptedGraph(graph: WorkGraphDetails): WorkGraphDetails {
@@ -271,7 +323,9 @@ export class WorkGraphCoordinator {
         metadata: { graphId: graph.id, runId: graph.runId }
       });
     });
-    return this.database.getWorkGraphDetails(graph.id);
+    const blocked = this.database.getWorkGraphDetails(graph.id);
+    this.onGraphSettled?.(blocked);
+    return blocked;
   }
 
   private clearRetry(graphId: number): void {
