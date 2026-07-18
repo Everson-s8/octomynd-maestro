@@ -12,7 +12,7 @@ export type WorkGraphAdoptionDecision = {
   mode: WorkGraphAdoptionMode;
   decision: "off" | "shadow" | "explicit";
   reason: WorkGraphAdoptionReason;
-  executionMode: "linear";
+  executionMode: "linear" | "work_graph";
   automaticFanOut: false;
   telemetry: WorkGraphAdoptionTelemetry;
 };
@@ -73,7 +73,7 @@ export function decideWorkGraphAdoption(input: WorkGraphAdoptionInput): WorkGrap
     mode: "explicit",
     decision: input.explicitRequest ? "explicit" : "off",
     reason: input.explicitRequest ? "explicit_request_recorded" : "explicit_request_required",
-    executionMode: "linear",
+    executionMode: input.explicitRequest ? "work_graph" : "linear",
     automaticFanOut: false,
     telemetry: {
       ...telemetry,

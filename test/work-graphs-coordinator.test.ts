@@ -180,6 +180,81 @@ describe("WorkGraphCoordinator", () => {
     expect(database.listWorkerAttempts(graph.nodes[0]!.id)[0]).toMatchObject({ status: "cancelled" });
     expect(database.getGoalRun(graph.runId).status).toBe("running");
   });
+
+  describe("runToCompletion", () => {
+    it("dedupes concurrent calls for the same graph into a single execution", async () => {
+      let calls = 0;
+      const provider = new FakeProvider("codex", ["research"], async () => {
+        calls += 1;
+        return completed("done");
+      });
+      const graph = createPreparedGraph(singleNodeGraph("Inline execution."));
+      const coordinator = new WorkGraphCoordinator(database, new AgentRegistry([provider]), artifactsRoot);
+
+      const [first, second] = await Promise.all([
+        coordinator.runToCompletion(graph.id, { selfRetry: false }),
+        coordinator.runToCompletion(graph.id, { selfRetry: false })
+      ]);
+
+      expect(calls).toBe(1);
+      expect(first.status).toBe("completed");
+      expect(second.status).toBe("completed");
+      await coordinator.shutdown();
+    });
+
+    it("cancels the graph when an external signal aborts", async () => {
+      let observedSignal: AbortSignal | undefined;
+      const provider = new FakeProvider("codex", ["research"], async (request) => {
+        observedSignal = request.signal;
+        return new Promise((resolve) => {
+          request.signal?.addEventListener("abort", () => resolve(cancelled()), { once: true });
+        });
+      });
+      const graph = createPreparedGraph(singleNodeGraph("External abort."));
+      const coordinator = new WorkGraphCoordinator(database, new AgentRegistry([provider]), artifactsRoot);
+      const externalController = new AbortController();
+
+      const runPromise = coordinator.runToCompletion(graph.id, { selfRetry: false, signal: externalController.signal });
+      await waitFor(() => observedSignal !== undefined);
+      externalController.abort("Goal cancelled.");
+      const result = await runPromise;
+
+      expect(result.status).toBe("cancelled");
+      await coordinator.shutdown();
+    });
+
+    it("does not schedule the coordinator's own retry timer when selfRetry is false", async () => {
+      const scheduler = new ManualScheduler();
+      const graph = createPreparedGraph(singleNodeGraph("Wait without self retry."));
+      const coordinator = new WorkGraphCoordinator(database, new AgentRegistry([]), artifactsRoot, 20, scheduler);
+
+      const result = await coordinator.runToCompletion(graph.id, { selfRetry: false });
+
+      expect(result.status).toBe("waiting_provider");
+      expect(scheduler.pendingCount).toBe(0);
+      await coordinator.shutdown();
+    });
+
+    it("notifies onGraphSettled when a graph reaches a terminal state", async () => {
+      const provider = new FakeProvider("codex", ["research"], async () => completed("done"));
+      const graph = createPreparedGraph(singleNodeGraph("Notify on settle."));
+      const settled: string[] = [];
+      const coordinator = new WorkGraphCoordinator(
+        database,
+        new AgentRegistry([provider]),
+        artifactsRoot,
+        15 * 60_000,
+        undefined,
+        undefined,
+        (settledGraph) => settled.push(settledGraph.status)
+      );
+
+      await coordinator.runToCompletion(graph.id, { selfRetry: false });
+
+      expect(settled).toEqual(["completed"]);
+      await coordinator.shutdown();
+    });
+  });
 });
 
 function reopenDatabase() {

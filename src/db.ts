@@ -2974,7 +2974,7 @@ function parseFeatureTaskContract(
       && Array.isArray(parsed.dependsOnTaskIds)
       && (parsed.parallelMode === "serial" || parsed.parallelMode === "parallel")
     ) {
-      return parsed as FeatureTaskContract;
+      return { ...parsed, workGraphRequest: parsed.workGraphRequest ?? null } as FeatureTaskContract;
     }
   } catch {
     // Legacy rows are migrated to the safe serial contract below.
