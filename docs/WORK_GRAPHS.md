@@ -67,3 +67,12 @@ The deterministic complexity classifier and runtime are available, but automatic
 in the first release. Simple Tasks continue through the existing single-agent Goal path. A later
 feature may enable automatic selection after before/after telemetry demonstrates quality or latency
 benefit without uncontrolled token multiplication.
+
+## Goal lifecycle integration
+
+A Work Graph only executes when `MAESTRO_WORK_GRAPH_MODE=explicit` **and** the Task's persisted
+`FeatureTaskContract.workGraphRequest` declares one. `off` and `shadow` never create or run a Work
+Graph, even when a request is persisted; the heuristic classifier only ever produces telemetry. See
+[Explicit Work Graph execution inside the Goal lifecycle](GOAL_RUNTIME.md#explicit-work-graph-execution-inside-the-goal-lifecycle)
+for how the `implementing` phase creates, validates, runs and hands off the graph without repeating
+implementation or bypassing validation, review or delivery.

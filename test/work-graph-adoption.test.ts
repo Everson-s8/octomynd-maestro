@@ -59,7 +59,7 @@ describe("work graph adoption policy", () => {
     });
   });
 
-  it("records an explicit adoption request without executing automatic fan-out", () => {
+  it("selects Work Graph execution for an explicit request without enabling automatic fan-out", () => {
     const decision = decideWorkGraphAdoption({
       mode: "explicit",
       taskText: "add a small doc fix",
@@ -72,7 +72,7 @@ describe("work graph adoption policy", () => {
       mode: "explicit",
       decision: "explicit",
       reason: "explicit_request_recorded",
-      executionMode: "linear",
+      executionMode: "work_graph",
       automaticFanOut: false
     });
     expect(decision.telemetry.trigger).toBe("operator");
