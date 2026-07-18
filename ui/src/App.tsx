@@ -31,6 +31,7 @@ import {
   TaskReview,
   TaskStatus
 } from "./api";
+import { formatWorkGraphDuration, isWorkGraphCancellable } from "./workGraphs";
 
 const taskStatusLabels: Record<TaskStatus, string> = {
   queued: "na fila",
@@ -508,22 +509,47 @@ function WorkGraphBoard({
               <small>{graph.artifactCount} artefatos · {Math.ceil(graph.artifactBytes / 1024)} KB</small>
             </header>
             <p>{graph.objective}</p>
+            <div className="work-graph-evidence">
+              <span>
+                Adocao <strong>{graph.adoption?.decision ?? "sem evento"}</strong>
+                {graph.adoption ? ` - ${graph.adoption.reason}` : ""}
+              </span>
+              <span>
+                Canario <strong>{graph.canary.quality}</strong> - {formatWorkGraphDuration(graph.canary.durationMs)} -
+                {` ${graph.canary.attempts} attempts - ${graph.canary.fallbacks} fallbacks - ${graph.canary.conflicts} conflitos - ~${graph.canary.estimatedTokens} tokens`}
+              </span>
+            </div>
             <div className="worker-node-strip">
               {graph.nodes.map((node) => (
                 <div className={`worker-node status-${node.status}`} key={node.id} title={node.lastError ?? node.key}>
                   <span>{node.role}</span>
                   <strong>{node.key}</strong>
                   <small>{node.mode === "writer" ? "WRITE" : "READ"} · {node.attemptCount}/{node.maxAttempts}</small>
+                  {node.fallbackCount ? <small>{node.fallbackCount} fallback(s)</small> : null}
+                  {node.attempts.map((attempt) => (
+                    <small className="worker-attempt" key={attempt.attemptNumber} title={attempt.error ?? attempt.summary}>
+                      #{attempt.attemptNumber} {attempt.provider} - {attempt.status} - {formatWorkGraphDuration(attempt.durationMs)}
+                    </small>
+                  ))}
                 </div>
               ))}
             </div>
+            {graph.artifacts.length ? (
+              <div className="work-graph-artifacts">
+                {graph.artifacts.slice(0, 5).map((artifact) => (
+                  <span key={`${artifact.nodeId}-${artifact.key}`} title={artifact.summary}>
+                    {artifact.kind} - {artifact.key} - {artifact.bytes} bytes
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <footer>
               <span>Paralelo: {graph.maxParallelReaders} readers</span>
-              {graph.cancellable ? (
+              {isWorkGraphCancellable(graph) ? (
                 <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
                   {busyId === graph.id ? "Cancelando..." : "Cancelar graph"}
                 </button>
-              ) : <small>{graph.status === "running" ? "Cancelamento exige coordenador de runtime" : "Historico preservado"}</small>}
+              ) : <small>Historico preservado</small>}
             </footer>
           </article>
         ))}

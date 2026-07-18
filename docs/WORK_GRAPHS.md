@@ -76,3 +76,22 @@ Graph, even when a request is persisted; the heuristic classifier only ever prod
 [Explicit Work Graph execution inside the Goal lifecycle](GOAL_RUNTIME.md#explicit-work-graph-execution-inside-the-goal-lifecycle)
 for how the `implementing` phase creates, validates, runs and hands off the graph without repeating
 implementation or bypassing validation, review or delivery.
+
+## Operational surface
+
+`ApplicationCommands` is the single public projection used by the Work Graph API, Dashboard and
+Telegram. It exposes the persisted adoption decision and reason, graph/node status and budgets,
+provider attempts and duration, fallback count, relative artifact references and a comparable
+canary evidence summary. The projection redacts secrets, absolute local paths, raw provider prompts
+and unsafe artifact keys before any interface receives the data.
+
+The canary evidence is observational and never activates a Work Graph automatically. It records:
+
+- total provider duration and attempt count;
+- estimated token volume from bounded artifact bytes;
+- provider fallback and write-scope conflict counts;
+- a quality state derived from terminal graph and attempt outcomes.
+
+Running graphs are cancellable only through a runtime-aware `ApplicationCommands` instance. The
+resident coordinator aborts the active provider through its `AbortSignal`; interfaces do not fake a
+database-only cancellation. Terminal graphs remain visible as immutable operational evidence.
