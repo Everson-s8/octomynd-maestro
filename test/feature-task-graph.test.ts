@@ -111,6 +111,30 @@ describe("Feature Task work graph requests", () => {
     });
   });
 
+  it("rejects role budgets that would fail only after Goal execution starts", () => {
+    expect(() => normalizeFeatureTaskContracts(
+      [1],
+      [{
+        taskId: 1,
+        objective: "Implement one bounded change.",
+        acceptanceCriteria: ["The change is complete."],
+        mutationScope: ["src/**"],
+        workGraphRequest: {
+          nodes: [{
+            key: "writer",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the bounded change.",
+            outputContract: "Code and evidence.",
+            writeScope: ["src/**"],
+            budget: { deadlineMs: 20 * 60_000 + 1 }
+          }]
+        }
+      }],
+      () => "Implement one bounded change."
+    )).toThrow(/deadline max 1200000 ms/);
+  });
+
   it("defaults legacy contracts to a null work graph request", () => {
     const contracts = normalizeFeatureTaskContracts([1], undefined, (id) => `Implement Task ${id}`);
     expect(contracts.get(1)?.workGraphRequest).toBeNull();

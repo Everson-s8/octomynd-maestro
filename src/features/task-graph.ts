@@ -1,5 +1,6 @@
 import type { AgentCapability } from "../agents/types.js";
 import type { WorkerBudget, WorkerMode, WorkerRole } from "../work-graphs/types.js";
+import { workerBudgetExceedsLimits, workerDeadlineLimitMs } from "../work-graphs/validator.js";
 
 export type FeatureTaskParallelMode = "serial" | "parallel";
 
@@ -303,6 +304,12 @@ function normalizeWorkGraphRequest(
     }
 
     const budget = { ...WORK_GRAPH_DEFAULT_BUDGET, ...node.budget };
+    if (workerBudgetExceedsLimits(node.role, budget)) {
+      throw new Error(
+        `Task #${taskId} work graph node "${key}" exceeds its bounded execution limits `
+        + `(deadline max ${workerDeadlineLimitMs(node.role)} ms).`
+      );
+    }
     return {
       key,
       role: node.role,

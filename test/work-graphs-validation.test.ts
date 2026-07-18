@@ -59,6 +59,21 @@ describe("Work Graph validation", () => {
     ]);
   });
 
+  it("uses role-aware deadlines so bounded writers can finish substantive work", () => {
+    const graph = createGraph();
+    graph.nodes[0]!.deadlineMs = 6 * 60_000;
+    graph.nodes[2]!.deadlineMs = 20 * 60_000;
+
+    expect(validateWorkGraph(graph).issues.filter((issue) => issue.code === "budget_exceeded")).toEqual([]);
+
+    graph.nodes[0]!.deadlineMs += 1;
+    graph.nodes[2]!.deadlineMs += 1;
+    expect(validateWorkGraph(graph).issues.filter((issue) => issue.code === "budget_exceeded")).toEqual([
+      expect.objectContaining({ nodeKey: "research" }),
+      expect.objectContaining({ nodeKey: "implement" })
+    ]);
+  });
+
   it("classifies only sufficiently complex Tasks as Work Graph candidates", () => {
     expect(classifyWorkGraphComplexity({ taskText: "Fix a label typo." }).mode).toBe("single_agent");
     expect(classifyWorkGraphComplexity({

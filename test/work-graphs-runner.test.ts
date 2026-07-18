@@ -149,6 +149,48 @@ describe("Work Graph runner", () => {
     expect(finished.status).toBe("waiting_provider");
     expect(finished.nodes[0]).toMatchObject({ status: "waiting_provider", attemptCount: 0 });
   });
+
+  it("prefers an alternate provider after a failed attempt before reusing the same provider", async () => {
+    const providersUsed: AgentProviderId[] = [];
+    const codex = new FakeProvider("codex", ["coding"], async () => {
+      providersUsed.push("codex");
+      return failed("Codex timed out.");
+    });
+    const claude = new FakeProvider("claude", ["coding"], async (request) => {
+      providersUsed.push("claude");
+      const target = path.join(request.task.worktreePath!, "src", "work-graphs", "fallback.ts");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "export const fallback = true;\n", "utf8");
+      return completed("Claude completed the preserved work.");
+    });
+    const graph = createPreparedGraph({
+      objective: "Complete one writer task with fallback.",
+      nodes: [{
+        key: "implement",
+        role: "implementer",
+        objective: "Implement with a fallback provider.",
+        capability: "coding",
+        outputContract: "Code and report.",
+        mode: "writer",
+        writeScope: ["src/work-graphs"],
+        budget: { maxAttempts: 2, deadlineMs: 30_000, outputChars: 2_000 }
+      }]
+    });
+
+    const finished = await runWorkGraph(
+      database,
+      new AgentRegistry([codex, claude]),
+      graph.id,
+      { artifactsRoot }
+    );
+
+    expect(finished.status).toBe("completed");
+    expect(providersUsed).toEqual(["codex", "claude"]);
+    expect(database.listWorkerAttempts(finished.nodes[0]!.id).map((attempt) => attempt.provider)).toEqual([
+      "codex",
+      "claude"
+    ]);
+  });
 });
 
 function createPreparedGraph(input: Omit<WorkGraphInput, "runId">) {
@@ -228,6 +270,17 @@ function completed(summary: string): AgentExecutionResult {
     summary,
     output: summary,
     error: null,
+    durationMs: 1,
+    retryable: false
+  };
+}
+
+function failed(summary: string): AgentExecutionResult {
+  return {
+    outcome: "failed",
+    summary,
+    output: summary,
+    error: summary,
     durationMs: 1,
     retryable: false
   };

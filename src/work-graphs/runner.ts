@@ -62,7 +62,13 @@ export async function runWorkGraph(
 
     const results = await Promise.all(schedule.ready.map(async (scheduledNode) => {
       const node = database.updateWorkerNodeStatus(scheduledNode.id, "ready");
-      const lease = await registry.acquire(node.capability);
+      const failedProviders = new Set(
+        database.listWorkerAttempts(node.id)
+          .filter((attempt) => !["completed", "running"].includes(attempt.status))
+          .map((attempt) => attempt.provider)
+      );
+      const lease = await registry.acquire(node.capability, failedProviders)
+        ?? (failedProviders.size > 0 ? await registry.acquire(node.capability) : null);
       if (!lease) {
         const availability = await registry.nextAvailability(node.capability);
         const wait = persistProviderWait(database, graph, node, {

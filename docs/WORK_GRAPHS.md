@@ -12,6 +12,8 @@ Worker Nodes; they do not own the workflow or communicate independently with the
 - read-only mode is enforced by provider adapters: Codex uses a read-only sandbox and Claude uses plan mode without edit/write tools, including tester nodes;
 - the runner fingerprints dirty repository paths before and after every Worker, blocking any mutation by a read-only Worker as a fail-closed fallback;
 - every node declares role, capability, dependencies, output contract and budgets;
+- role-aware absolute deadlines keep read-only analysis bounded while allowing up to 20 minutes for
+  the single writer and 10 minutes for a tester; inactivity and output breakers still apply;
 - a writer declares repository-relative write scopes;
 - provider absence moves the graph to `waiting_provider` without spending an attempt;
 - provider waits emit typed, redacted evidence while the resident coordinator owns their retry timer;
