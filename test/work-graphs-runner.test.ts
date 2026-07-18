@@ -191,6 +191,40 @@ describe("Work Graph runner", () => {
       "claude"
     ]);
   });
+
+  it("falls back after a provider sandbox block but keeps scope violations terminal", async () => {
+    const providersUsed: AgentProviderId[] = [];
+    const codex = new FakeProvider("codex", ["testing"], async () => {
+      providersUsed.push("codex");
+      return blocked("Provider sandbox cannot execute this validation command.");
+    });
+    const claude = new FakeProvider("claude", ["testing"], async () => {
+      providersUsed.push("claude");
+      return completed("Static and dynamic verification completed.");
+    });
+    const graph = createPreparedGraph({
+      objective: "Verify through a provider fallback.",
+      nodes: [{
+        key: "verify",
+        role: "tester",
+        objective: "Verify without mutating the worktree.",
+        capability: "testing",
+        outputContract: "Verification report.",
+        mode: "read_only",
+        budget: { maxAttempts: 2, deadlineMs: 30_000, outputChars: 2_000 }
+      }]
+    });
+
+    const finished = await runWorkGraph(
+      database,
+      new AgentRegistry([codex, claude]),
+      graph.id,
+      { artifactsRoot }
+    );
+
+    expect(finished.status).toBe("completed");
+    expect(providersUsed).toEqual(["codex", "claude"]);
+  });
 });
 
 function createPreparedGraph(input: Omit<WorkGraphInput, "runId">) {
@@ -281,6 +315,17 @@ function failed(summary: string): AgentExecutionResult {
     summary,
     output: summary,
     error: summary,
+    durationMs: 1,
+    retryable: false
+  };
+}
+
+function blocked(summary: string): AgentExecutionResult {
+  return {
+    outcome: "blocked",
+    summary,
+    output: summary,
+    error: null,
     durationMs: 1,
     retryable: false
   };

@@ -161,9 +161,15 @@ export async function runWorkGraph(
         summary: effectiveResult.summary,
         output: effectiveResult.output
       });
+      const retryProviderBlock = effectiveResult.outcome === "blocked"
+        && !scopeError
+        && !options.signal?.aborted
+        && finished.attemptNumber < node.maxAttempts;
       const nodeStatus = runtimeInterrupted
         ? finished.attemptNumber >= node.maxAttempts ? "blocked" : "waiting_provider"
-        : statusForResult(effectiveResult, finished.attemptNumber >= node.maxAttempts);
+        : retryProviderBlock
+          ? "failed"
+          : statusForResult(effectiveResult, finished.attemptNumber >= node.maxAttempts);
       database.updateWorkerNodeStatus(node.id, nodeStatus, effectiveResult.error);
       database.addEvent({
         source: lease.provider.id,
