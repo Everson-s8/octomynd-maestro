@@ -5,6 +5,7 @@ import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from 
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
+import { ApplicationCommands } from "../commands/application-commands.js";
 
 export type AgentPresence = {
   id: "codex" | "claude" | "telegram";
@@ -68,7 +69,7 @@ export function buildDashboardSnapshot(
   const features = database.listFeatures(30);
   const featurePlans = database.listFeaturePlans(30);
   const skills = database.listSkills();
-  const workGraphs = database.listWorkGraphs(30);
+  const workGraphs = new ApplicationCommands(database).listWorkGraphs(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -265,43 +266,7 @@ export function buildDashboardSnapshot(
         updatedAt: plan.updatedAt
       };
     }),
-    workGraphs: workGraphs.map((graph) => {
-      const run = database.getGoalRun(graph.runId);
-      const task = database.getTask(run.taskId);
-      const artifacts = database.listWorkerArtifacts(graph.id);
-      return {
-        id: graph.id,
-        runId: graph.runId,
-        taskId: task.id,
-        projectKey: task.projectKey,
-        objective: truncateForDisplay(redactSensitiveText(graph.objective), EVENT_TEXT_MAX_LENGTH),
-        status: graph.status,
-        maxParallelReaders: graph.maxParallelReaders,
-        artifactCount: artifacts.length,
-        artifactBytes: artifacts.reduce((total, artifact) => total + artifact.bytes, 0),
-        cancellable: ["draft", "validated", "waiting_provider"].includes(graph.status),
-        nodes: graph.nodes.map((node) => ({
-          id: node.id,
-          key: node.key,
-          role: node.role,
-          mode: node.mode,
-          capability: node.capability,
-          status: node.status,
-          attemptCount: node.attemptCount,
-          maxAttempts: node.maxAttempts,
-          deadlineMs: node.deadlineMs,
-          outputChars: node.outputChars,
-          dependsOn: node.dependsOn,
-          writeScope: node.writeScope.map(redactSensitiveText),
-          lastError: node.lastError
-            ? truncateForDisplay(redactSensitiveText(node.lastError), EVENT_TEXT_MAX_LENGTH)
-            : null
-        })),
-        createdAt: graph.createdAt,
-        updatedAt: graph.updatedAt,
-        finishedAt: graph.finishedAt
-      };
-    }),
+    workGraphs,
     environments: latestEnvironmentReports(allEvents),
     reviewQueue,
     agents: agents ?? defaultAgentPresence(config, database, tasks, goals)

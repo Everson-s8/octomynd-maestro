@@ -10,6 +10,7 @@ import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
 import { createDatabase, type MaestroDatabase } from "../src/db.js";
 import { formatStatus, formatWorkGraphs } from "../src/telegram/bot.js";
 import type { WorkGraphInput } from "../src/work-graphs/types.js";
+import { formatWorkGraphDuration, isWorkGraphCancellable } from "../ui/src/workGraphs.js";
 
 let root: string;
 let database: MaestroDatabase;
@@ -65,10 +66,77 @@ describe("Work Graph interfaces", () => {
     });
     expect(JSON.stringify(snapshot.workGraphs)).not.toContain(root);
 
-    const telegram = formatWorkGraphs(database, [graph]);
+    const telegram = formatWorkGraphs(new ApplicationCommands(database).listWorkGraphs());
     expect(telegram).toContain(`Graph #${graph.id} @fixture`);
     expect(telegram).toContain("tentativas 0/2");
     expect(formatStatus("Maestro", database)).toContain(`graph #${graph.id} [draft]`);
+  });
+
+  it("exposes redacted adoption, attempts, fallbacks, artifacts and comparable canary evidence", () => {
+    const graph = createGraph(`Inspect private workspace ${root} and /tmp/private-workspace`);
+    database.addEvent({
+      source: "maestro",
+      type: "goal.work_graph_adoption_decision",
+      text: "explicit",
+      taskId: database.getGoalRun(graph.runId).taskId,
+      metadata: {
+        runId: graph.runId,
+        mode: "explicit",
+        decision: "explicit",
+        reason: "explicit_request_recorded",
+        executionMode: "work_graph",
+        automaticFanOut: false,
+        telemetry: { trigger: "task_metadata", path: root }
+      }
+    });
+    database.updateWorkGraphStatus(graph.id, "validated");
+    database.updateWorkGraphStatus(graph.id, "running");
+    const node = database.updateWorkerNodeStatus(graph.nodes[0]!.id, "ready");
+    const first = database.createWorkerAttempt(node.id, "codex");
+    database.finishWorkerAttempt({
+      id: first.id,
+      status: "failed",
+      summary: `Failed in ${root}`,
+      error: `write outside scope at ${root}`,
+      durationMs: 1_200
+    });
+    database.updateWorkerNodeStatus(node.id, "failed", "write outside scope");
+    const second = database.createWorkerAttempt(node.id, "claude");
+    database.finishWorkerAttempt({ id: second.id, status: "completed", summary: "Recovered.", durationMs: 1_800 });
+    database.updateWorkerNodeStatus(node.id, "completed");
+    database.addWorkerArtifact({
+      graphId: graph.id,
+      nodeId: node.id,
+      attemptId: second.id,
+      key: path.join(root, "provider.log"),
+      kind: "log",
+      summary: `Evidence from ${root}`,
+      bytes: 400
+    });
+    database.updateWorkGraphStatus(graph.id, "completed");
+
+    const view = new ApplicationCommands(database).getWorkGraph(graph.id);
+    expect(view.adoption).toMatchObject({
+      decision: "explicit",
+      reason: "explicit_request_recorded",
+      executionMode: "work_graph",
+      automaticFanOut: false
+    });
+    expect(view.nodes[0]).toMatchObject({ fallbackCount: 1, attempts: [{ provider: "codex" }, { provider: "claude" }] });
+    expect(view.canary).toEqual({
+      durationMs: 3_000,
+      estimatedTokens: 100,
+      attempts: 2,
+      fallbacks: 1,
+      conflicts: 1,
+      quality: "degraded"
+    });
+    expect(view.artifacts[0]?.key).toBe("[REDACTED_ARTIFACT_KEY]");
+    expect(JSON.stringify(view)).not.toContain(root);
+    expect(JSON.stringify(view)).not.toContain("/tmp/private-workspace");
+    expect(formatWorkGraphs([view])).toContain("fallbacks 1");
+    expect(formatWorkGraphDuration(view.canary.durationMs)).toBe("3.0 s");
+    expect(isWorkGraphCancellable(view)).toBe(false);
   });
 
   it("cancels an idle graph through the shared Dashboard command and preserves evidence", async () => {
@@ -108,6 +176,44 @@ describe("Work Graph interfaces", () => {
     )).rejects.toThrow("requires its runtime coordinator");
     expect(database.getWorkGraph(graph.id).status).toBe("running");
   });
+
+  it("cancels a running graph through the runtime-aware Dashboard command", async () => {
+    const graph = createGraph("Abort active provider");
+    database.updateWorkGraphStatus(graph.id, "validated");
+    database.updateWorkGraphStatus(graph.id, "running");
+    database.updateWorkerNodeStatus(graph.nodes[0]!.id, "ready");
+    let cancelledId: number | null = null;
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: root,
+      workGraphRuntime: {
+        cancel: async (_origin, workGraphId) => {
+          cancelledId = workGraphId;
+          database.updateWorkerNodeStatus(graph.nodes[0]!.id, "cancelled", "operator");
+          database.updateWorkGraphStatus(workGraphId, "cancelled");
+          return database.getWorkGraphDetails(workGraphId);
+        }
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const before = new ApplicationCommands(database).getWorkGraph(graph.id);
+      expect(before.status).toBe("running");
+      expect(isWorkGraphCancellable(before)).toBe(true);
+      const response = await fetch(`http://127.0.0.1:${port}/api/work-graphs/${graph.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Operator stop." })
+      });
+      expect(response.status).toBe(200);
+      expect(cancelledId).toBe(graph.id);
+      expect((await response.json() as { workGraph: { status: string } }).workGraph.status).toBe("cancelled");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
 });
 
 function createGraph(objective: string) {
@@ -119,9 +225,9 @@ function createGraph(objective: string) {
     nodes: [{
       key: "research",
       role: "researcher",
-      objective: "Inspect the repository.",
+      objective: `Inspect the repository at ${root}.`,
       capability: "research",
-      outputContract: "A bounded repository map.",
+      outputContract: `A bounded repository map for ${root}.`,
       mode: "read_only",
       budget: { maxAttempts: 2, deadlineMs: 30_000, outputChars: 2_000 }
     }]

@@ -15,6 +15,7 @@ import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { FeatureGitHubGateway, FeaturePullRequestState } from "../src/features/github.js";
 import { SkillCatalog } from "../src/skills/catalog.js";
 import { SkillVersionStore } from "../src/skills/store.js";
+import type { WorkGraphInput } from "../src/work-graphs/types.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -155,6 +156,52 @@ describe("dashboard", () => {
     expect(protectedSnapshot).not.toContain(fakeSecret);
     expect(protectedSnapshot).not.toContain(tempDir);
     expect(protectedSnapshot).not.toContain("worktreePath");
+  });
+
+  it("includes the shared redacted Work Graph operational evidence", () => {
+    const task = database.listTasks()[0]!;
+    const run = database.createGoalRun(task.id);
+    const input: WorkGraphInput = {
+      runId: run.id,
+      objective: `Inspect ${tempDir} and /tmp/private-dashboard`,
+      nodes: [{
+        key: "research",
+        role: "researcher",
+        objective: "Inspect bounded evidence.",
+        capability: "research",
+        outputContract: "Report.",
+        mode: "read_only",
+        budget: { maxAttempts: 2, deadlineMs: 30_000, outputChars: 2_000 }
+      }]
+    };
+    const graph = database.createWorkGraph(input);
+    database.addEvent({
+      source: "maestro",
+      type: "goal.work_graph_adoption_decision",
+      text: "explicit",
+      taskId: task.id,
+      metadata: {
+        runId: run.id,
+        mode: "explicit",
+        decision: "explicit",
+        reason: "explicit_request_recorded",
+        executionMode: "work_graph",
+        automaticFanOut: false,
+        telemetry: { trigger: "task_metadata" }
+      }
+    });
+    database.updateWorkGraphStatus(graph.id, "validated");
+    database.updateWorkGraphStatus(graph.id, "running");
+
+    const view = buildDashboardSnapshot(config, database).workGraphs[0]!;
+    expect(view).toMatchObject({
+      id: graph.id,
+      cancellable: true,
+      adoption: { decision: "explicit", reason: "explicit_request_recorded" },
+      canary: { quality: "pending", attempts: 0, fallbacks: 0 }
+    });
+    expect(JSON.stringify(view)).not.toContain(tempDir);
+    expect(JSON.stringify(view)).not.toContain("/tmp/private-dashboard");
   });
 
   it("shows the provider currently working on a project", () => {
