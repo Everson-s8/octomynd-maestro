@@ -57,9 +57,9 @@ describe("Feature Task contracts", () => {
 
   it("allows parallel contracts only when mutation scopes do not overlap", () => {
     const [left, right, conflict] = [
-      { objective: "left task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/a/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const },
-      { objective: "right task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/b/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const },
-      { objective: "conflict task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/a/service/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const }
+      { objective: "left task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/a/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const, workGraphRequest: null },
+      { objective: "right task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/b/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const, workGraphRequest: null },
+      { objective: "conflict task", acceptanceCriteria: ["done"], excludedScope: [], mutationScope: ["src/a/service/**"], dependsOnTaskIds: [], parallelMode: "parallel" as const, workGraphRequest: null }
     ];
 
     expect(featureTaskContractsConflict(left, right)).toBe(false);
@@ -68,6 +68,142 @@ describe("Feature Task contracts", () => {
       ...right,
       mutationScope: ["*.ts"]
     })).toBe(true);
+  });
+});
+
+describe("Feature Task work graph requests", () => {
+  it("normalizes an explicit work graph request with default budgets", () => {
+    const contracts = normalizeFeatureTaskContracts([1], [{
+      taskId: 1,
+      objective: "Implement a bounded Task",
+      acceptanceCriteria: ["done"],
+      mutationScope: ["src/feature/**"],
+      workGraphRequest: {
+        objective: "Research then implement.",
+        nodes: [
+          {
+            key: "research",
+            role: "researcher",
+            capability: "research",
+            objective: "Inspect the repository.",
+            outputContract: "Research report."
+          },
+          {
+            key: "implement",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the change.",
+            outputContract: "Implementation report.",
+            dependsOn: ["research"],
+            writeScope: ["src/feature/service.ts"]
+          }
+        ]
+      }
+    }], () => "task");
+
+    const request = contracts.get(1)?.workGraphRequest;
+    expect(request?.nodes).toHaveLength(2);
+    expect(request?.nodes[1]).toMatchObject({
+      key: "implement",
+      mode: "writer",
+      writeScope: ["src/feature/service.ts"],
+      budget: { maxAttempts: 2, deadlineMs: 300_000, outputChars: 8_000 }
+    });
+  });
+
+  it("rejects role budgets that would fail only after Goal execution starts", () => {
+    expect(() => normalizeFeatureTaskContracts(
+      [1],
+      [{
+        taskId: 1,
+        objective: "Implement one bounded change.",
+        acceptanceCriteria: ["The change is complete."],
+        mutationScope: ["src/**"],
+        workGraphRequest: {
+          nodes: [{
+            key: "writer",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the bounded change.",
+            outputContract: "Code and evidence.",
+            writeScope: ["src/**"],
+            budget: { deadlineMs: 20 * 60_000 + 1 }
+          }]
+        }
+      }],
+      () => "Implement one bounded change."
+    )).toThrow(/deadline max 1200000 ms/);
+  });
+
+  it("defaults legacy contracts to a null work graph request", () => {
+    const contracts = normalizeFeatureTaskContracts([1], undefined, (id) => `Implement Task ${id}`);
+    expect(contracts.get(1)?.workGraphRequest).toBeNull();
+  });
+
+  it("rejects a writer node whose write scope escapes the Task mutation scope", () => {
+    expect(() => normalizeFeatureTaskContracts([1], [{
+      taskId: 1,
+      objective: "Implement a bounded Task",
+      acceptanceCriteria: ["done"],
+      mutationScope: ["src/feature/**"],
+      workGraphRequest: {
+        nodes: [{
+          key: "implement",
+          role: "implementer",
+          capability: "coding",
+          objective: "Implement the change.",
+          outputContract: "Implementation report.",
+          writeScope: ["src/other/service.ts"]
+        }]
+      }
+    }], () => "task")).toThrow("must stay inside the Task mutation scope");
+  });
+
+  it("rejects a work graph request with more than one writer node", () => {
+    expect(() => normalizeFeatureTaskContracts([1], [{
+      taskId: 1,
+      objective: "Implement a bounded Task",
+      acceptanceCriteria: ["done"],
+      mutationScope: ["src/feature/**"],
+      workGraphRequest: {
+        nodes: [
+          {
+            key: "implement-a",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement part A.",
+            outputContract: "Implementation report A.",
+            writeScope: ["src/feature/a.ts"]
+          },
+          {
+            key: "implement-b",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement part B.",
+            outputContract: "Implementation report B.",
+            writeScope: ["src/feature/b.ts"]
+          }
+        ]
+      }
+    }], () => "task")).toThrow("at most one writer node");
+  });
+
+  it("rejects a work graph node whose role cannot request the declared capability", () => {
+    expect(() => normalizeFeatureTaskContracts([1], [{
+      taskId: 1,
+      objective: "Implement a bounded Task",
+      acceptanceCriteria: ["done"],
+      mutationScope: ["src/feature/**"],
+      workGraphRequest: {
+        nodes: [{
+          key: "research",
+          role: "researcher",
+          capability: "coding",
+          objective: "Inspect the repository.",
+          outputContract: "Research report."
+        }]
+      }
+    }], () => "task")).toThrow("cannot request coding");
   });
 });
 

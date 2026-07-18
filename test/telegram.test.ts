@@ -3,6 +3,7 @@ import {
   formatQueue,
   formatEnvironmentReport,
   formatImprovementCandidates,
+  formatWorkGraphs,
   formatStatus,
   executeCancelCommand,
   isUserAllowed,
@@ -26,8 +27,97 @@ import { createTelegramReviewNotifier } from "../src/telegram/notifications.js";
 import { createDatabase, GoalRunRecord, TaskRecord } from "../src/db.js";
 import { MaestroConfig } from "../src/config.js";
 import { ReviewQueueItem } from "../src/reviews/evidence.js";
+import type { WorkGraphView } from "../src/commands/application-commands.js";
 
 describe("telegram helpers", () => {
+  it("formats shared Work Graph evidence without private paths", () => {
+    const graph = {
+      id: 9,
+      runId: 8,
+      taskId: 7,
+      projectKey: "boo",
+      objective: "Inspect voice pipeline.",
+      status: "running",
+      maxParallelReaders: 2,
+      createdAt: "2026-07-18T10:00:00.000Z",
+      updatedAt: "2026-07-18T10:00:03.000Z",
+      finishedAt: null,
+      adoption: {
+        mode: "explicit",
+        decision: "explicit",
+        reason: "explicit_request_recorded",
+        executionMode: "work_graph",
+        automaticFanOut: false,
+        telemetry: {}
+      },
+      nodes: [{
+        id: 1,
+        graphId: 9,
+        key: "research",
+        position: 0,
+        role: "researcher",
+        objective: "Inspect.",
+        capability: "research",
+        dependsOn: [],
+        inputArtifacts: [],
+        outputContract: "Report.",
+        skillVersions: [],
+        mode: "read_only",
+        writeScope: [],
+        maxAttempts: 2,
+        deadlineMs: 30_000,
+        outputChars: 2_000,
+        status: "running",
+        attemptCount: 2,
+        lastError: null,
+        createdAt: "2026-07-18T10:00:00.000Z",
+        updatedAt: "2026-07-18T10:00:03.000Z",
+        startedAt: "2026-07-18T10:00:00.000Z",
+        finishedAt: null,
+        fallbackCount: 1,
+        attempts: [{
+          attemptNumber: 1,
+          provider: "codex",
+          status: "failed",
+          durationMs: 1_000,
+          summary: "quota",
+          error: "quota",
+          createdAt: "2026-07-18T10:00:00.000Z",
+          finishedAt: "2026-07-18T10:00:01.000Z"
+        }, {
+          attemptNumber: 2,
+          provider: "claude",
+          status: "running",
+          durationMs: null,
+          summary: "",
+          error: null,
+          createdAt: "2026-07-18T10:00:02.000Z",
+          finishedAt: null
+        }]
+      }],
+      artifacts: [{
+        nodeId: 1,
+        key: "goal-8/work-graph-9/report.md",
+        kind: "report",
+        summary: "Safe report.",
+        contentHash: null,
+        bytes: 400
+      }],
+      artifactCount: 1,
+      artifactBytes: 400,
+      canary: { durationMs: 1_000, estimatedTokens: 100, attempts: 2, fallbacks: 1, conflicts: 0, quality: "pending" },
+      cancellable: true
+    } satisfies WorkGraphView;
+
+    const message = formatWorkGraphs([graph]);
+    expect(message).toContain("Adocao: explicit/work_graph");
+    expect(message).toContain("codex [failed]");
+    expect(message).toContain("claude [running]");
+    expect(message).toContain("fallbacks 1");
+    expect(message).toContain("/graph_cancel 9");
+    expect(message).not.toContain("C:\\Users");
+  });
+
   it("parses task text", () => {
     expect(parseTaskText("/task testar integracao")).toBe("testar integracao");
     expect(parseTaskText("/task@OctomyndMaestroBot testar bot")).toBe("testar bot");
@@ -315,6 +405,7 @@ function telegramConfig(): MaestroConfig {
     dashboard: { enabled: false, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
+    workGraph: { adoptionMode: "off" },
     skills: { enabled: false, catalogPath: "skills", versionsPath: "versions", projectKey: "maestro" },
     telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
   };

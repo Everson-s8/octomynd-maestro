@@ -41,6 +41,60 @@ fact. It never installs, downloads or updates RTK. When RTK is absent, the inter
 transparently. The adapter can be disabled with `MAESTRO_TOKEN_RUNTIME_ENABLED=false`, without
 changing delivery gates, review gates or final Feature PR completion rules.
 
+## Work Graph adoption policy
+
+The Multi-Agent Work Graph is governed separately from the current linear Goal runner. The
+`MAESTRO_WORK_GRAPH_MODE` setting accepts `off`, `shadow` or `explicit` and defaults to `off`.
+Invalid values fail closed: the loaded mode is `off` and runtime validation blocks startup.
+
+Every Goal start or resume records `goal.work_graph_adoption_decision` before Provider routing. The
+event stores the selected mode, reason, the selected `linear` or `work_graph` execution mode,
+`automaticFanOut=false`, and bounded
+telemetry such as complexity signals and estimated Worker Node count. It never stores the raw task
+text. `shadow` records what the policy would consider without changing execution. `explicit` records
+only an explicit caller request; otherwise the linear path remains selected. Heuristic complexity
+signals only ever produce telemetry; they never trigger fan-out on their own, in `off`, `shadow` or
+`explicit` mode.
+
+### Explicit Work Graph execution inside the Goal lifecycle
+
+Single-agent execution remains the default for every Task and for `off`/`shadow` modes. A Work Graph
+only runs when all of the following hold for a Goal in `explicit` mode:
+
+- the Task belongs to a Feature Plan;
+- its persisted `FeatureTaskContract.workGraphRequest` declares a bounded set of Worker Nodes
+  (role, capability, mode, write scope, dependencies, budgets);
+- the caller passed an explicit `workGraphRequest` when the Task contract was created — heuristic
+  complexity signals alone never populate this field.
+
+When those conditions hold, the `implementing` phase creates one Work Graph tied 1:1 to the Goal run
+(`work_graphs.run_id` is unique) instead of routing a single provider call. The graph reuses the same
+worktree, artifact root and provider registry as the rest of the Goal, and is validated by
+`validateWorkGraph` before it runs (`draft -> validated -> running`). The Goal runner drives the graph
+inline through `WorkGraphCoordinator.runToCompletion(graphId, { selfRetry: false, signal })`: the
+resident coordinator's own 15-minute retry timer is disabled so the Goal's own pause/resume cadence is
+the single retry authority, and the Goal's own `AbortSignal` cancels the graph on Task cancellation.
+
+The graph's completion produces exactly one synthetic `implementing` Goal step (`provider: "work-graph"`),
+regardless of how many Worker Nodes or attempts ran inside it. Its summary and output reference the
+graph's own worker artifacts (`artifact:<key>`) as the handoff into the next phase — implementation is
+never repeated. A `completed` graph advances the Goal straight into the existing deterministic
+validation, review and delivery path. A `blocked` graph fails the Goal closed (`finishRun("blocked", ...)`)
+while preserving the worktree and every Work Graph/Worker artifact for inspection. A `cancelled` graph
+cancels the Goal the same way a cancelled single-agent step does. A `waiting_provider` graph pauses the
+Goal itself (`goal.waiting_provider`) using the wait reason and retry hint recorded by the graph's own
+`work_graph.waiting_provider` event; no synthetic step is created until the graph reaches a terminal
+state.
+
+Resume reuses the same Work Graph (`findWorkGraphByRunId`, unique per run) instead of creating a new
+one. If the resident coordinator's own restart recovery independently drives a Goal-owned graph to a
+terminal state in the background, its `onGraphSettled` callback resumes the owning Goal so it can build
+the synthetic step and continue; if the Goal is already driving the graph directly, the resulting
+`resume()` call is a safe no-op. If a later review loop sends the Goal back to `implementing` after the
+Work Graph already completed, that graph is not re-run — follow-up fixes go through the normal
+single-agent path, consistent with Single-agent remaining the default outside of the initial explicit
+run.
+
 ## Deterministic validation
 
 The testing phase first calls one deep Maestro module with an allowlisted command

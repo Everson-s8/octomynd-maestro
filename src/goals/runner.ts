@@ -19,6 +19,13 @@ import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
+import {
+  decideWorkGraphAdoption,
+  type WorkGraphAdoptionDecision,
+  type WorkGraphAdoptionInput
+} from "../work-graphs/adoption.js";
+import type { WorkGraphDetails } from "../work-graphs/types.js";
+import type { FeatureWorkGraphRequest } from "../features/task-graph.js";
 
 const LAST_ERROR_MAX_LENGTH = 300;
 const PHASES: GoalPhase[] = ["planning", "implementing", "testing", "reviewing"];
@@ -38,6 +45,13 @@ export type GoalRunnerOptions = {
   tokenRuntime?: { enabled?: boolean } | false;
   validationRunner?: Pick<DeterministicValidationRunner, "run">;
   skillRuntime?: Pick<SkillRuntime, "prepareContext">;
+  workGraphAdoption?: Pick<WorkGraphAdoptionInput, "mode" | "explicitRequest" | "trigger">;
+  workGraphRunner?: {
+    runToCompletion(
+      graphId: number,
+      options?: { selfRetry?: boolean; signal?: AbortSignal }
+    ): Promise<WorkGraphDetails>;
+  };
   onProgress?: (run: GoalRunRecord, providerId: AgentProviderId) => void;
   signal?: AbortSignal;
 };
@@ -62,6 +76,10 @@ export async function runTaskGoal(
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
   const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id));
+  const persistedWorkGraphRequest = database.findFeaturePlanDetailsByTask(task.id)?.tasks
+    .find((candidate) => candidate.taskId === task.id)?.contract.workGraphRequest ?? null;
+  const explicitWorkGraphRequested = persistedWorkGraphRequest !== null
+    && options.workGraphAdoption?.explicitRequest !== false;
 
   database.addEvent({
     source: "maestro",
@@ -69,6 +87,31 @@ export async function runTaskGoal(
     text: `Goal #${run.id} ${isResume ? "resumed" : "started"} for task #${task.id}`,
     taskId: task.id,
     metadata: { runId: run.id, maxSteps: run.maxSteps }
+  });
+  const workGraphDecision = decideWorkGraphAdoption({
+    mode: options.workGraphAdoption?.mode ?? "off",
+    explicitRequest: explicitWorkGraphRequested,
+    trigger: explicitWorkGraphRequested ? options.workGraphAdoption?.trigger ?? "task_metadata" : options.workGraphAdoption?.trigger,
+    taskText: task.text,
+    projectKey: project.key,
+    isResume,
+    currentPhase: phase,
+    stepCount
+  });
+  database.addEvent({
+    source: "maestro",
+    type: "goal.work_graph_adoption_decision",
+    text: formatWorkGraphAdoptionText(workGraphDecision),
+    taskId: task.id,
+    metadata: {
+      runId: run.id,
+      mode: workGraphDecision.mode,
+      decision: workGraphDecision.decision,
+      reason: workGraphDecision.reason,
+      executionMode: workGraphDecision.executionMode,
+      automaticFanOut: workGraphDecision.automaticFanOut,
+      telemetry: workGraphDecision.telemetry
+    }
   });
 
   try {
@@ -185,6 +228,129 @@ export async function runTaskGoal(
           continue;
         }
       }
+      const completedWorkGraphStep = database.listGoalSteps(run.id).some((step) => (
+        step.phase === "implementing" && step.provider === "work-graph" && step.status === "completed"
+      ));
+      if (
+        phase === "implementing"
+        && workGraphDecision.decision === "explicit"
+        && options.workGraphRunner
+        && persistedWorkGraphRequest
+        && !completedWorkGraphStep
+      ) {
+        const outcome = await runExplicitWorkGraphImplementation(
+          database,
+          options.workGraphRunner,
+          task,
+          run.id,
+          persistedWorkGraphRequest,
+          options.signal
+        );
+        currentRun = database.updateGoalRun({
+          id: run.id,
+          status: "running",
+          currentPhase: phase,
+          stepCount,
+          lastProvider: "work-graph"
+        });
+        if (outcome.status === "waiting_provider") {
+          const wait = latestWorkGraphWaitReason(database, outcome.graph.id);
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            "Explicit Work Graph is waiting for a ready provider.",
+            task.id,
+            wait
+          );
+        }
+        if (outcome.status === "cancelled" || options.signal?.aborted) {
+          return cancelRun(database, currentRun, phase, stepCount, task.id);
+        }
+
+        stepCount += 1;
+        const evidence = summarizeWorkGraphExecution(outcome.graph, database);
+        const stepOutcome: Exclude<GoalStepStatus, "running"> = outcome.status === "completed" ? "completed" : "blocked";
+        const safeSummary = redactSensitiveText(evidence.summary);
+        const safeOutput = redactSensitiveText(evidence.output);
+        const safeError = stepOutcome === "blocked" ? safeSummary : null;
+        const goalStep = database.createGoalStep(run.id, phase, "work-graph");
+        const completedStep = { ...goalStep, status: stepOutcome, summary: safeSummary, output: safeOutput, error: safeError };
+        const compressed = compressStepOutput({
+          step: completedStep,
+          rtk,
+          rawOutputArtifact: rawOutputArtifactKey(completedStep),
+          enabled: tokenRuntimeEnabled
+        });
+        const artifactKeys = writeGoalStepRuntimeArtifacts({
+          artifactsRoot: path.resolve(options.artifactsRoot),
+          step: completedStep,
+          rawOutput: [
+            `summary: ${safeSummary}`,
+            `output:\n${safeOutput}`,
+            `work-graph: #${outcome.graph.id}`
+          ].join("\n\n"),
+          compactHandoff: compressed.compactOutput,
+          telemetry: compressed.telemetry
+        });
+        database.withTransaction(() => {
+          database.finishGoalStep({
+            id: goalStep.id,
+            status: stepOutcome,
+            summary: safeSummary,
+            output: safeOutput,
+            error: safeError,
+            durationMs: 0
+          });
+          database.addEvent({
+            source: "maestro",
+            type: `goal.step_${stepOutcome}`,
+            text: safeSummary,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              workGraphId: outcome.graph.id,
+              tokenRuntime: { ...compressed.telemetry, artifacts: artifactKeys }
+            }
+          });
+        });
+        const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
+        const checkpoint = database.createGoalCheckpoint(captureGoalCheckpoint({
+          runId: run.id,
+          stepId: goalStep.id,
+          phase,
+          provider: "work-graph",
+          interrupted: false,
+          summary: safeSummary,
+          workspacePath: task.worktreePath,
+          workspaceFingerprint,
+          artifactKeys: Object.values(artifactKeys)
+        }));
+        database.addEvent({
+          source: "maestro",
+          type: "goal.checkpoint_saved",
+          text: `Checkpoint #${checkpoint.id} saved for goal #${run.id}.`,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            stepId: goalStep.id,
+            checkpointId: checkpoint.id,
+            status: checkpoint.status,
+            artifactKeys: checkpoint.artifactKeys
+          }
+        });
+
+        if (stepOutcome === "blocked") {
+          return finishRun(database, currentRun, "blocked", phase, stepCount, safeSummary, task.id);
+        }
+        phase = "testing";
+        excluded = new Set();
+        continue;
+      }
+
       let routed = await registry.acquire(CAPABILITIES[phase], excluded);
       if (!routed && excluded.size > 0) {
         excluded = new Set();
@@ -602,6 +768,99 @@ export async function runTaskGoal(
       task.id
     );
   }
+}
+
+type ExplicitWorkGraphOutcome = {
+  status: "completed" | "blocked" | "cancelled" | "waiting_provider";
+  graph: WorkGraphDetails;
+};
+
+async function runExplicitWorkGraphImplementation(
+  database: MaestroDatabase,
+  workGraphRunner: NonNullable<GoalRunnerOptions["workGraphRunner"]>,
+  task: { id: number; text: string },
+  runId: number,
+  request: FeatureWorkGraphRequest,
+  signal?: AbortSignal
+): Promise<ExplicitWorkGraphOutcome> {
+  const existingGraph = database.findWorkGraphByRunId(runId);
+  const graph = existingGraph ?? database.createWorkGraph({
+    runId,
+    objective: request.objective,
+    maxParallelReaders: request.maxParallelReaders,
+    nodes: request.nodes.map((node) => ({
+      key: node.key,
+      role: node.role,
+      objective: node.objective,
+      capability: node.capability,
+      dependsOn: node.dependsOn,
+      outputContract: node.outputContract,
+      mode: node.mode,
+      writeScope: node.writeScope,
+      budget: node.budget
+    }))
+  });
+  if (!existingGraph) {
+    database.addEvent({
+      source: "maestro",
+      type: "goal.work_graph_created",
+      text: `Explicit Work Graph #${graph.id} created for goal #${runId}.`,
+      taskId: task.id,
+      metadata: { runId, graphId: graph.id, nodeCount: request.nodes.length }
+    });
+  }
+  const result = await workGraphRunner.runToCompletion(graph.id, { selfRetry: false, signal });
+  const status = result.status as ExplicitWorkGraphOutcome["status"];
+  return { status, graph: result };
+}
+
+function summarizeWorkGraphExecution(
+  graph: WorkGraphDetails,
+  database: MaestroDatabase
+): { summary: string; output: string } {
+  const total = graph.nodes.length;
+  const completedCount = graph.nodes.filter((node) => node.status === "completed").length;
+  const summary = `Explicit Work Graph #${graph.id} ${graph.status}: ${completedCount}/${total} Worker Node(s) completed.`;
+  const lines = graph.nodes.map((node) => {
+    const attempts = database.listWorkerAttempts(node.id);
+    const latest = attempts.at(-1);
+    const artifacts = database.listWorkerArtifacts(graph.id, node.id);
+    const artifactRefs = artifacts.length > 0
+      ? artifacts.map((artifact) => `artifact:${artifact.key}`).join(", ")
+      : "none";
+    return `- ${node.key} (${node.role}/${node.status}): ${latest?.summary || node.lastError || "no attempt"} [artifacts: ${artifactRefs}]`;
+  });
+  return { summary, output: [summary, ...lines].join("\n") };
+}
+
+function latestWorkGraphWaitReason(
+  database: MaestroDatabase,
+  graphId: number
+): { reason: GoalWaitReason; retryAfterMs?: number; provider?: AgentProviderId } {
+  const event = database.listEvents(200).find((candidate) => (
+    candidate.type === "work_graph.waiting_provider" && candidate.metadata?.graphId === graphId
+  ));
+  const reason = typeof event?.metadata?.waitReason === "string"
+    ? event.metadata.waitReason as GoalWaitReason
+    : "unknown";
+  const retryAfterMs = typeof event?.metadata?.retryAfterMs === "number" ? event.metadata.retryAfterMs : undefined;
+  const provider = event?.metadata?.provider === "codex" || event?.metadata?.provider === "claude"
+    ? event.metadata.provider as AgentProviderId
+    : undefined;
+  return { reason, retryAfterMs, provider };
+}
+
+function formatWorkGraphAdoptionText(decision: WorkGraphAdoptionDecision): string {
+  if (decision.reason === "disabled_by_config") {
+    return "Work Graph adoption is disabled; running the linear Goal path.";
+  }
+  if (decision.reason === "shadow_mode_records_only") {
+    return "Work Graph shadow decision recorded; running the linear Goal path.";
+  }
+  if (decision.reason === "explicit_request_recorded") {
+    return "Explicit Work Graph request recorded; automatic fan-out remains disabled.";
+  }
+  return "Work Graph requires an explicit request; running the linear Goal path.";
 }
 
 function finishCircuitBreak(

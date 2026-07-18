@@ -14,7 +14,7 @@ import {
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
-import { redactSensitiveText } from "../security/redaction.js";
+import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
 import { conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
@@ -69,10 +69,111 @@ export type ImprovementDecisionOutcome = {
   featurePlan: FeaturePlanDetails | null;
 };
 
+export type WorkGraphRuntimeCommands = {
+  cancel(origin: CommandOrigin, workGraphId: number, reason?: string | null): Promise<WorkGraphDetails>;
+};
+
+export type WorkGraphAttemptView = {
+  attemptNumber: number;
+  provider: string;
+  status: string;
+  durationMs: number | null;
+  summary: string;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+};
+
+export type WorkGraphNodeView = WorkGraphDetails["nodes"][number] & {
+  objective: string;
+  writeScope: string[];
+  lastError: string | null;
+  attempts: WorkGraphAttemptView[];
+  fallbackCount: number;
+};
+
+export type WorkGraphAdoptionView = {
+  mode: string;
+  decision: string;
+  reason: string;
+  executionMode: string;
+  automaticFanOut: boolean;
+  telemetry: unknown;
+};
+
+export type WorkGraphArtifactView = {
+  nodeId: number;
+  key: string;
+  kind: string;
+  summary: string;
+  contentHash: string | null;
+  bytes: number;
+};
+
+export type WorkGraphCanaryEvidence = {
+  durationMs: number;
+  estimatedTokens: number;
+  attempts: number;
+  fallbacks: number;
+  conflicts: number;
+  quality: "passed" | "degraded" | "blocked" | "cancelled" | "pending";
+};
+
+export type WorkGraphView = Omit<WorkGraphDetails, "nodes" | "objective"> & {
+  taskId: number;
+  projectKey: string | null;
+  objective: string;
+  adoption: WorkGraphAdoptionView | null;
+  nodes: WorkGraphNodeView[];
+  artifacts: WorkGraphArtifactView[];
+  artifactCount: number;
+  artifactBytes: number;
+  canary: WorkGraphCanaryEvidence;
+  cancellable: boolean;
+};
+
+const WORK_GRAPH_DISPLAY_LIMIT = 500;
+
+function publicText(value: string): string {
+  const redacted = redactSensitiveText(value)
+    .replace(/[A-Za-z]:[\\/][^\s"'<>]+/g, "[REDACTED_LOCAL_PATH]")
+    .replace(
+      /(^|[\s"'(])\/(?:tmp|var|opt|srv|mnt|home|Users)\/[^\s"',)]+/g,
+      "$1[REDACTED_LOCAL_PATH]"
+    );
+  return truncateForDisplay(redacted, WORK_GRAPH_DISPLAY_LIMIT);
+}
+
+function publicScope(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return path.isAbsolute(value) || normalized.split("/").includes("..")
+    ? "[REDACTED_LOCAL_PATH]"
+    : publicText(normalized);
+}
+
+function publicArtifactKey(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return path.isAbsolute(value) || normalized.split("/").includes("..")
+    ? "[REDACTED_ARTIFACT_KEY]"
+    : publicText(normalized);
+}
+
+function adoptionView(metadata: Record<string, unknown>): WorkGraphAdoptionView {
+  return {
+    mode: String(metadata.mode ?? "unknown"),
+    decision: String(metadata.decision ?? "unknown"),
+    reason: publicText(String(metadata.reason ?? "unknown")),
+    executionMode: String(metadata.executionMode ?? "unknown"),
+    automaticFanOut: metadata.automaticFanOut === true,
+    telemetry: sanitizePublicMetadata(metadata.telemetry ?? {})
+  };
+}
+
 export class ApplicationCommands {
   constructor(
     private readonly database: MaestroDatabase,
-    private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway()
+    private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway(),
+    private readonly workGraphRuntime?: WorkGraphRuntimeCommands
   ) {}
 
   registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {
@@ -144,22 +245,30 @@ export class ApplicationCommands {
     return task;
   }
 
-  listWorkGraphs(limit = 30): WorkGraphDetails[] {
-    return this.database.listWorkGraphs(limit);
+  listWorkGraphs(limit = 30): WorkGraphView[] {
+    const events = this.database.listEvents(200);
+    return this.database.listWorkGraphs(limit).map((graph) => this.toWorkGraphView(graph, events));
   }
 
-  getWorkGraph(workGraphId: number): WorkGraphDetails {
+  getWorkGraph(workGraphId: number): WorkGraphView {
     try {
-      return this.database.getWorkGraphDetails(workGraphId);
+      return this.toWorkGraphView(this.database.getWorkGraphDetails(workGraphId));
     } catch (error) {
       throw notFoundError(error instanceof Error ? error.message : `Work Graph #${workGraphId} not found.`);
     }
   }
 
-  cancelWorkGraph(origin: CommandOrigin, workGraphId: number, reason?: string | null): WorkGraphDetails {
-    const graph = this.getWorkGraph(workGraphId);
+  async cancelWorkGraph(origin: CommandOrigin, workGraphId: number, reason?: string | null): Promise<WorkGraphView> {
+    const graph = this.getRawWorkGraph(workGraphId);
     if (["completed", "blocked", "cancelled"].includes(graph.status)) {
       throw conflictError(`Work Graph #${workGraphId} is already ${graph.status}.`);
+    }
+    if (this.workGraphRuntime) {
+      try {
+        return this.toWorkGraphView(await this.workGraphRuntime.cancel(origin, workGraphId, reason));
+      } catch (error) {
+        throw conflictError(error instanceof Error ? error.message : "Work Graph cancellation failed.");
+      }
     }
     if (graph.status === "running") {
       throw conflictError(
@@ -181,7 +290,105 @@ export class ApplicationCommands {
       username: origin.username ?? null,
       metadata: { graphId: graph.id, runId: graph.runId, reason: redactSensitiveText(cancellationReason) }
     });
-    return this.database.getWorkGraphDetails(graph.id);
+    return this.toWorkGraphView(this.database.getWorkGraphDetails(graph.id));
+  }
+
+  private getRawWorkGraph(workGraphId: number): WorkGraphDetails {
+    try {
+      return this.database.getWorkGraphDetails(workGraphId);
+    } catch (error) {
+      throw notFoundError(error instanceof Error ? error.message : `Work Graph #${workGraphId} not found.`);
+    }
+  }
+
+  private toWorkGraphView(
+    graph: WorkGraphDetails,
+    events = this.database.listEvents(200)
+  ): WorkGraphView {
+    const run = this.database.getGoalRun(graph.runId);
+    const task = this.database.getTask(run.taskId);
+    const artifacts = this.database.listWorkerArtifacts(graph.id).map((artifact): WorkGraphArtifactView => ({
+      nodeId: artifact.nodeId,
+      key: publicArtifactKey(artifact.key),
+      kind: artifact.kind,
+      summary: publicText(artifact.summary),
+      contentHash: artifact.contentHash,
+      bytes: artifact.bytes
+    }));
+    let fallbackCount = 0;
+    let conflictCount = 0;
+    let attemptCount = 0;
+    let durationMs = 0;
+    let degraded = false;
+    const nodes = graph.nodes.map((node): WorkGraphNodeView => {
+      const attempts = this.database.listWorkerAttempts(node.id).map((attempt): WorkGraphAttemptView => {
+        attemptCount += 1;
+        durationMs += attempt.durationMs ?? 0;
+        if (!["completed", "running"].includes(attempt.status)) degraded = true;
+        if (attempt.error && /(?:outside|beyond).*scope|scope violation|write conflict|mutation scope/i.test(attempt.error)) {
+          conflictCount += 1;
+        }
+        return {
+          attemptNumber: attempt.attemptNumber,
+          provider: attempt.provider,
+          status: attempt.status,
+          durationMs: attempt.durationMs,
+          summary: publicText(attempt.summary),
+          error: attempt.error ? publicText(attempt.error) : null,
+          createdAt: attempt.createdAt,
+          finishedAt: attempt.finishedAt
+        };
+      });
+      const nodeFallbacks = attempts.reduce((count, attempt, index) => (
+        index > 0 && attempt.provider !== attempts[index - 1]!.provider ? count + 1 : count
+      ), 0);
+      fallbackCount += nodeFallbacks;
+      return {
+        ...node,
+        key: publicText(node.key),
+        objective: publicText(node.objective),
+        dependsOn: node.dependsOn.map(publicText),
+        inputArtifacts: node.inputArtifacts.map(publicArtifactKey),
+        outputContract: publicText(node.outputContract),
+        skillVersions: node.skillVersions.map(publicText),
+        writeScope: node.writeScope.map(publicScope),
+        lastError: node.lastError ? publicText(node.lastError) : null,
+        attempts,
+        fallbackCount: nodeFallbacks
+      };
+    });
+    const adoptionEvent = events.find((event) => (
+      event.type === "goal.work_graph_adoption_decision" && Number(event.metadata.runId) === graph.runId
+    ));
+    const adoption = adoptionEvent ? adoptionView(adoptionEvent.metadata) : null;
+    const artifactBytes = artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
+    const quality: WorkGraphCanaryEvidence["quality"] = graph.status === "completed"
+      ? degraded || fallbackCount > 0 ? "degraded" : "passed"
+      : graph.status === "blocked"
+        ? "blocked"
+        : graph.status === "cancelled"
+          ? "cancelled"
+          : "pending";
+    return {
+      ...graph,
+      taskId: task.id,
+      projectKey: task.projectKey,
+      objective: publicText(graph.objective),
+      adoption,
+      nodes,
+      artifacts,
+      artifactCount: artifacts.length,
+      artifactBytes,
+      canary: {
+        durationMs,
+        estimatedTokens: Math.ceil(artifactBytes / 4),
+        attempts: attemptCount,
+        fallbacks: fallbackCount,
+        conflicts: conflictCount,
+        quality
+      },
+      cancellable: !["completed", "blocked", "cancelled"].includes(graph.status)
+    };
   }
 
   createFeaturePlan(origin: CommandOrigin, input: CreateFeaturePlanInput): FeaturePlanWriteResult {

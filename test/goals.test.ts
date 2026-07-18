@@ -17,6 +17,7 @@ import { runTaskGoal } from "../src/goals/runner.js";
 import { ManualScheduler } from "../src/goals/scheduler.js";
 import { recoverGoalStepRawOutput } from "../src/runtime/artifacts.js";
 import type { ValidationReport } from "../src/validation/runner.js";
+import { WorkGraphCoordinator } from "../src/work-graphs/coordinator.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -69,6 +70,348 @@ describe("goal runner", () => {
       versionId: `sha256:${"a".repeat(64)}`,
       risk: "low"
     }]);
+  });
+
+  it("records a governed Work Graph adoption decision before routing without fanning out automatically", async () => {
+    const projectDir = path.join(tempDir, "work-graph-project");
+    const worktreeDir = path.join(tempDir, "work-graph-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "workgraph", path: projectDir });
+    const task = database.createTask("plan a small change", "dashboard", "workgraph");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => completed("planned"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1,
+      workGraphAdoption: { mode: "shadow" }
+    });
+
+    const events = database.listEvents();
+    const decisionIndex = events.findIndex((event) => event.type === "goal.work_graph_adoption_decision");
+    const stepStartedIndex = events.findIndex((event) => event.type === "goal.step_started");
+    expect(decisionIndex).toBeGreaterThanOrEqual(0);
+    expect(stepStartedIndex).toBeLessThan(decisionIndex);
+    expect(events[decisionIndex].id).toBeLessThan(events[stepStartedIndex].id);
+    expect(events[decisionIndex].metadata).toMatchObject({
+      mode: "shadow",
+      decision: "shadow",
+      reason: "shadow_mode_records_only",
+      executionMode: "linear",
+      automaticFanOut: false
+    });
+    expect(database.listGoalSteps(run.id)).toHaveLength(1);
+  });
+
+  it("defaults Work Graph adoption to off when the runner option is not provided", async () => {
+    const projectDir = path.join(tempDir, "work-graph-default-project");
+    const worktreeDir = path.join(tempDir, "work-graph-default-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "workgraphdefault", path: projectDir });
+    const task = database.createTask("plan a small change", "dashboard", "workgraphdefault");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => completed("planned"));
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1
+    });
+
+    const decision = database.listEvents().find((event) => event.type === "goal.work_graph_adoption_decision");
+    expect(decision?.metadata).toMatchObject({
+      mode: "off",
+      decision: "off",
+      reason: "disabled_by_config"
+    });
+  });
+
+  it("executes an explicit Work Graph inline for implementing and continues to validation, review and delivery", async () => {
+    const projectDir = path.join(tempDir, "explicit-graph-project");
+    const worktreeDir = path.join(tempDir, "explicit-graph-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "explicitgraph", path: projectDir });
+    const task = database.createTask("deliver a bounded change", "dashboard", "explicitgraph");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-explicit",
+      worktreePath: worktreeDir
+    });
+    database.createFeaturePlan({
+      projectKey: "explicitgraph",
+      objective: "Deliver a bounded change through an explicit Work Graph.",
+      acceptanceCriteria: ["The change ships through the deterministic pipeline."],
+      taskIds: [task.id],
+      taskContracts: [{
+        taskId: task.id,
+        objective: "Deliver a bounded change through an explicit Work Graph.",
+        acceptanceCriteria: ["The change ships through the deterministic pipeline."],
+        mutationScope: ["src/feature/**"],
+        workGraphRequest: {
+          objective: "Implement the bounded change.",
+          nodes: [{
+            key: "implement",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the change.",
+            outputContract: "Implementation report.",
+            writeScope: ["src/feature/**"]
+          }]
+        }
+      }]
+    });
+    let directImplementingCalls = 0;
+    let workerNodeCalls = 0;
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "implementing" && !request.workerContext) directImplementingCalls += 1;
+        if (request.workerContext) workerNodeCalls += 1;
+        return completed("provider completed");
+      }
+    );
+    const registry = new AgentRegistry([provider]);
+    const workGraphCoordinator = new WorkGraphCoordinator(database, registry, path.join(tempDir, "artifacts"));
+
+    const run = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8,
+      workGraphAdoption: { mode: "explicit" },
+      workGraphRunner: workGraphCoordinator,
+      validationRunner: { run: async () => validationReport("passed") },
+      delivery: async () => ({
+        commitSha: "abc123",
+        pullRequestUrl: "https://github.com/example/repo/pull/9",
+        branchName: "maestro/task-explicit"
+      })
+    });
+
+    expect(run.status).toBe("completed");
+    expect(directImplementingCalls).toBe(0);
+    expect(workerNodeCalls).toBe(1);
+    expect(database.listGoalSteps(run.id).map((step) => `${step.phase}/${step.provider}/${step.status}`)).toEqual([
+      "planning/codex/completed",
+      "implementing/work-graph/completed",
+      "testing/maestro-validation/completed",
+      "reviewing/codex/completed"
+    ]);
+    const graph = database.findWorkGraphByRunId(run.id);
+    expect(graph?.status).toBe("completed");
+    expect(database.listEvents().some((event) => event.type === "goal.work_graph_created")).toBe(true);
+    expect(database.listEvents().find((event) => event.type === "goal.work_graph_adoption_decision")?.metadata)
+      .toMatchObject({ decision: "explicit", executionMode: "work_graph", telemetry: { trigger: "task_metadata" } });
+    await workGraphCoordinator.shutdown();
+  });
+
+  it("resumes a completed explicit Work Graph by creating its handoff without repeating implementation", async () => {
+    const projectDir = path.join(tempDir, "completed-graph-project");
+    const worktreeDir = path.join(tempDir, "completed-graph-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "completedgraph", path: projectDir });
+    const task = database.createTask("resume a completed graph", "dashboard", "completedgraph");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "maestro/task-completed-graph",
+      worktreePath: worktreeDir
+    });
+    database.createFeaturePlan({
+      projectKey: "completedgraph",
+      objective: "Resume a completed graph without repeating implementation.",
+      acceptanceCriteria: ["The graph handoff continues through deterministic delivery."],
+      taskIds: [task.id],
+      taskContracts: [{
+        taskId: task.id,
+        objective: "Resume a completed graph without repeating implementation.",
+        acceptanceCriteria: ["The graph handoff continues through deterministic delivery."],
+        mutationScope: ["src/feature/**"],
+        workGraphRequest: {
+          objective: "Implement the bounded change once.",
+          nodes: [{
+            key: "implement",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the change.",
+            outputContract: "Implementation report.",
+            writeScope: ["src/feature/**"]
+          }]
+        }
+      }]
+    });
+    const existingRun = database.createGoalRun(task.id, 8);
+    const planningStep = database.createGoalStep(existingRun.id, "planning", "claude");
+    database.finishGoalStep({
+      id: planningStep.id,
+      status: "completed",
+      summary: "Planning completed before restart.",
+      durationMs: 1
+    });
+    database.updateGoalRun({
+      id: existingRun.id,
+      status: "running",
+      currentPhase: "implementing",
+      stepCount: 1
+    });
+    const graph = database.createWorkGraph({
+      runId: existingRun.id,
+      objective: "Implement the bounded change once.",
+      nodes: [{
+        key: "implement",
+        role: "implementer",
+        capability: "coding",
+        objective: "Implement the change.",
+        outputContract: "Implementation report.",
+        mode: "writer",
+        writeScope: ["src/feature/**"],
+        budget: { maxAttempts: 2, deadlineMs: 300_000, outputChars: 8_000 }
+      }]
+    });
+    database.updateWorkGraphStatus(graph.id, "validated");
+    database.updateWorkGraphStatus(graph.id, "running");
+    database.updateWorkerNodeStatus(graph.nodes[0]!.id, "ready");
+    const completedAttempt = database.createWorkerAttempt(graph.nodes[0]!.id, "codex");
+    database.finishWorkerAttempt({
+      id: completedAttempt.id,
+      status: "completed",
+      summary: "Implementation completed before restart.",
+      durationMs: 1
+    });
+    database.updateWorkerNodeStatus(graph.nodes[0]!.id, "completed");
+    database.updateWorkGraphStatus(graph.id, "completed");
+
+    let directImplementingCalls = 0;
+    const provider = new FakeProvider("codex", ["coding", "reviewing"], (request) => {
+      if (request.phase === "implementing" && !request.workerContext) directImplementingCalls += 1;
+      return completed("provider completed");
+    });
+    const registry = new AgentRegistry([provider]);
+    const workGraphCoordinator = new WorkGraphCoordinator(database, registry, path.join(tempDir, "artifacts"));
+
+    const result = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: database.getGoalRun(existingRun.id),
+      workGraphAdoption: { mode: "explicit" },
+      workGraphRunner: workGraphCoordinator,
+      validationRunner: { run: async () => validationReport("passed") },
+      delivery: async () => ({
+        commitSha: "resume123",
+        pullRequestUrl: "https://github.com/example/repo/pull/11",
+        branchName: "maestro/task-completed-graph"
+      })
+    });
+
+    expect(result.status).toBe("completed");
+    expect(directImplementingCalls).toBe(0);
+    expect(database.listGoalSteps(result.id).map((step) => `${step.phase}/${step.provider}/${step.status}`)).toEqual([
+      "planning/claude/completed",
+      "implementing/work-graph/completed",
+      "testing/maestro-validation/completed",
+      "reviewing/codex/completed"
+    ]);
+    await workGraphCoordinator.shutdown();
+  });
+
+  it("keeps the linear single-agent path when explicit mode has no persisted Work Graph request", async () => {
+    const projectDir = path.join(tempDir, "explicit-no-request-project");
+    const worktreeDir = path.join(tempDir, "explicit-no-request-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "explicitnorequest", path: projectDir });
+    const task = database.createTask("small unplanned change", "dashboard", "explicitnorequest");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("provider completed")
+    );
+    const registry = new AgentRegistry([provider]);
+    const workGraphCoordinator = new WorkGraphCoordinator(database, registry, path.join(tempDir, "artifacts"));
+
+    const run = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8,
+      workGraphAdoption: { mode: "explicit", explicitRequest: true },
+      workGraphRunner: workGraphCoordinator,
+      validationRunner: { run: async () => validationReport("passed") }
+    });
+
+    expect(run.status).toBe("completed");
+    const implementingStep = database.listGoalSteps(run.id).find((step) => step.phase === "implementing");
+    expect(implementingStep?.provider).toBe("codex");
+    expect(database.findWorkGraphByRunId(run.id)).toBeNull();
+    await workGraphCoordinator.shutdown();
+  });
+
+  it("does not execute a Work Graph in shadow mode even when a request is persisted", async () => {
+    const projectDir = path.join(tempDir, "shadow-graph-project");
+    const worktreeDir = path.join(tempDir, "shadow-graph-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "shadowgraph", path: projectDir });
+    const task = database.createTask("deliver a bounded change", "dashboard", "shadowgraph");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-shadow",
+      worktreePath: worktreeDir
+    });
+    database.createFeaturePlan({
+      projectKey: "shadowgraph",
+      objective: "Deliver a bounded change with a shadowed Work Graph request.",
+      acceptanceCriteria: ["The change ships through the deterministic pipeline."],
+      taskIds: [task.id],
+      taskContracts: [{
+        taskId: task.id,
+        objective: "Deliver a bounded change with a shadowed Work Graph request.",
+        acceptanceCriteria: ["The change ships through the deterministic pipeline."],
+        mutationScope: ["src/feature/**"],
+        workGraphRequest: {
+          objective: "Implement the bounded change.",
+          nodes: [{
+            key: "implement",
+            role: "implementer",
+            capability: "coding",
+            objective: "Implement the change.",
+            outputContract: "Implementation report.",
+            writeScope: ["src/feature/**"]
+          }]
+        }
+      }]
+    });
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      () => completed("provider completed")
+    );
+    const registry = new AgentRegistry([provider]);
+    const workGraphCoordinator = new WorkGraphCoordinator(database, registry, path.join(tempDir, "artifacts"));
+
+    const run = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8,
+      workGraphAdoption: { mode: "shadow" },
+      workGraphRunner: workGraphCoordinator,
+      validationRunner: { run: async () => validationReport("passed") },
+      delivery: async () => ({
+        commitSha: "def456",
+        pullRequestUrl: "https://github.com/example/repo/pull/10",
+        branchName: "maestro/task-shadow"
+      })
+    });
+
+    expect(run.status).toBe("completed");
+    const implementingStep = database.listGoalSteps(run.id).find((step) => step.phase === "implementing");
+    expect(implementingStep?.provider).toBe("codex");
+    expect(database.findWorkGraphByRunId(run.id)).toBeNull();
+    await workGraphCoordinator.shutdown();
   });
 
   it("blocks before provider execution when the absolute goal deadline is exhausted", async () => {
@@ -526,6 +869,40 @@ describe("goal runner", () => {
     expect(implementationResumeContext).toContain("Nao reverta nem refaca trabalho valido");
     expect(database.getTask(task.id).status).toBe("done");
     expect(database.listEvents().some((event) => event.type === "goal.recovered_after_restart")).toBe(true);
+    coordinator.shutdown();
+  });
+
+  it("does not recover a Goal owned by another resident coordinator", () => {
+    const projectDir = path.join(tempDir, "owned-run-project");
+    fs.mkdirSync(projectDir);
+    initializeRepository(projectDir);
+    database.registerProject({ key: "owned-run", path: projectDir });
+    const task = database.createTask("leave owned run untouched", "dashboard", "owned-run");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "maestro/task-owned-run",
+      worktreePath: projectDir
+    });
+    const run = database.createGoalRun(task.id, 6);
+    const step = database.createGoalStep(run.id, "implementing", "codex");
+    const scheduler = new ManualScheduler();
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([]),
+      path.join(tempDir, "artifacts"),
+      20,
+      undefined,
+      undefined,
+      undefined,
+      scheduler
+    );
+
+    expect(coordinator.recoverWaitingRuns((candidate) => candidate.id === run.id)).toBe(0);
+    expect(database.getGoalRun(run.id).status).toBe("running");
+    expect(database.getGoalStep(step.id).status).toBe("running");
+    expect(database.getTask(task.id).status).toBe("implementing");
+    expect(scheduler.pendingCount).toBe(0);
     coordinator.shutdown();
   });
 

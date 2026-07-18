@@ -43,7 +43,9 @@ export class GoalCoordinator {
     private readonly preflight?: GoalPreflight,
     private readonly validationRunner?: Pick<DeterministicValidationRunner, "run">,
     private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">,
-    private readonly goalDeadlineMs?: number
+    private readonly goalDeadlineMs?: number,
+    private readonly workGraphAdoption?: GoalRunnerOptions["workGraphAdoption"],
+    private readonly workGraphRunner?: GoalRunnerOptions["workGraphRunner"]
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -113,10 +115,12 @@ export class GoalCoordinator {
     return reopened;
   }
 
-  recoverWaitingRuns(): number {
-    const interrupted = this.database.listActiveGoalRuns().filter((run) => run.status === "running");
+  recoverWaitingRuns(skipRun: (run: GoalRunRecord) => boolean = () => false): number {
+    const interrupted = this.database.listActiveGoalRuns()
+      .filter((run) => run.status === "running" && !skipRun(run));
     for (const run of interrupted) this.recoverInterruptedRun(run);
-    const waiting = this.database.listActiveGoalRuns().filter((run) => run.status === "waiting_provider");
+    const waiting = this.database.listActiveGoalRuns()
+      .filter((run) => run.status === "waiting_provider" && !skipRun(run));
     for (const run of waiting) this.scheduleRetry(run);
     return waiting.length;
   }
@@ -195,6 +199,8 @@ export class GoalCoordinator {
       validationRunner: this.validationRunner,
       skillRuntime: this.skillRuntime,
       deadlineMs: this.goalDeadlineMs,
+      workGraphAdoption: this.workGraphAdoption,
+      workGraphRunner: this.workGraphRunner,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
         if (!this.notifyProgress) return;

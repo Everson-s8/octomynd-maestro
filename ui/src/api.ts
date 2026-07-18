@@ -141,6 +141,30 @@ export type DashboardWorkGraph = {
   artifactCount: number;
   artifactBytes: number;
   cancellable: boolean;
+  adoption: {
+    mode: string;
+    decision: string;
+    reason: string;
+    executionMode: string;
+    automaticFanOut: boolean;
+    telemetry: unknown;
+  } | null;
+  artifacts: Array<{
+    nodeId: number;
+    key: string;
+    kind: string;
+    summary: string;
+    contentHash: string | null;
+    bytes: number;
+  }>;
+  canary: {
+    durationMs: number;
+    estimatedTokens: number;
+    attempts: number;
+    fallbacks: number;
+    conflicts: number;
+    quality: "passed" | "degraded" | "blocked" | "cancelled" | "pending";
+  };
   nodes: Array<{
     id: number;
     key: string;
@@ -155,6 +179,17 @@ export type DashboardWorkGraph = {
     dependsOn: string[];
     writeScope: string[];
     lastError: string | null;
+    fallbackCount: number;
+    attempts: Array<{
+      attemptNumber: number;
+      provider: string;
+      status: string;
+      durationMs: number | null;
+      summary: string;
+      error: string | null;
+      createdAt: string;
+      finishedAt: string | null;
+    }>;
   }>;
   createdAt: string;
   updatedAt: string;

@@ -12,9 +12,14 @@ Worker Nodes; they do not own the workflow or communicate independently with the
 - read-only mode is enforced by provider adapters: Codex uses a read-only sandbox and Claude uses plan mode without edit/write tools, including tester nodes;
 - the runner fingerprints dirty repository paths before and after every Worker, blocking any mutation by a read-only Worker as a fail-closed fallback;
 - every node declares role, capability, dependencies, output contract and budgets;
+- role-aware absolute deadlines keep read-only analysis bounded while allowing up to 20 minutes for
+  the single writer and 10 minutes for a tester; inactivity and output breakers still apply;
 - a writer declares repository-relative write scopes;
 - provider absence moves the graph to `waiting_provider` without spending an attempt;
+- provider waits emit typed, redacted evidence while the resident coordinator owns their retry timer;
 - handoffs and reports are sanitized, hashed and stored outside coordinator context;
+- the resident `WorkGraphCoordinator` owns one `AbortController` per active graph and deduplicates
+  active execution by both Work Graph id and Goal run id;
 - scope violations preserve changes for inspection and block the graph fail-closed.
 
 ## Lifecycle
@@ -24,12 +29,21 @@ draft -> validated -> running -> completed
                          |  \
                          |   -> waiting_provider -> running
                          -> blocked
-draft/validated/waiting_provider -> cancelled
+draft/validated/running/waiting_provider -> cancelled
 ```
 
-Running cancellation is intentionally unavailable from Dashboard and Telegram until a resident
-Work Graph coordinator can abort the active provider process. Reporting a graph as cancelled while
-its process still runs would violate the execution contract.
+Dashboard and Telegram cancel through the shared application command. If the graph is active, the
+resident coordinator aborts the provider with the graph `AbortSignal`, waits for the execution to
+settle, marks the graph and unfinished nodes as cancelled, and leaves Goal lifecycle, worktree changes
+and artifacts intact for the owning workflow.
+
+On Maestro restart, the coordinator recovers `draft`, `validated`, `running` and `waiting_provider`
+graphs from the existing `src/work-graphs` persistence. An interrupted running Worker attempt is
+finalized as cancelled evidence; if budget remains, recovery creates one new attempt with correct
+provider lineage. Completed nodes and artifact keys are never duplicated.
+
+Work Graph completion is not Goal completion. The runner only owns Work Graph and Worker state;
+validation, review, delivery and terminal Goal/Task transitions remain in the Goal lifecycle.
 
 ## Scheduling
 
@@ -55,3 +69,31 @@ The deterministic complexity classifier and runtime are available, but automatic
 in the first release. Simple Tasks continue through the existing single-agent Goal path. A later
 feature may enable automatic selection after before/after telemetry demonstrates quality or latency
 benefit without uncontrolled token multiplication.
+
+## Goal lifecycle integration
+
+A Work Graph only executes when `MAESTRO_WORK_GRAPH_MODE=explicit` **and** the Task's persisted
+`FeatureTaskContract.workGraphRequest` declares one. `off` and `shadow` never create or run a Work
+Graph, even when a request is persisted; the heuristic classifier only ever produces telemetry. See
+[Explicit Work Graph execution inside the Goal lifecycle](GOAL_RUNTIME.md#explicit-work-graph-execution-inside-the-goal-lifecycle)
+for how the `implementing` phase creates, validates, runs and hands off the graph without repeating
+implementation or bypassing validation, review or delivery.
+
+## Operational surface
+
+`ApplicationCommands` is the single public projection used by the Work Graph API, Dashboard and
+Telegram. It exposes the persisted adoption decision and reason, graph/node status and budgets,
+provider attempts and duration, fallback count, relative artifact references and a comparable
+canary evidence summary. The projection redacts secrets, absolute local paths, raw provider prompts
+and unsafe artifact keys before any interface receives the data.
+
+The canary evidence is observational and never activates a Work Graph automatically. It records:
+
+- total provider duration and attempt count;
+- estimated token volume from bounded artifact bytes;
+- provider fallback and write-scope conflict counts;
+- a quality state derived from terminal graph and attempt outcomes.
+
+Running graphs are cancellable only through a runtime-aware `ApplicationCommands` instance. The
+resident coordinator aborts the active provider through its `AbortSignal`; interfaces do not fake a
+database-only cancellation. Terminal graphs remain visible as immutable operational evidence.

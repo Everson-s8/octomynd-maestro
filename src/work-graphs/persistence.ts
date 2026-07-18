@@ -124,6 +124,16 @@ export function createWorkGraphPersistence(db: Database.Database) {
       return rows.map((row) => ({ ...mapGraph(row), nodes: listNodeRows(db, row.id).map(mapNode) }));
     },
 
+    listRecoverableWorkGraphs(): WorkGraphDetails[] {
+      const rows = db.prepare(`
+        SELECT *
+        FROM work_graphs
+        WHERE status IN ('draft', 'validated', 'running', 'waiting_provider')
+        ORDER BY id ASC
+      `).all() as WorkGraphRow[];
+      return rows.map((row) => ({ ...mapGraph(row), nodes: listNodeRows(db, row.id).map(mapNode) }));
+    },
+
     listWorkerNodes(graphId: number): WorkerNodeRecord[] {
       getGraphRow(db, graphId);
       return listNodeRows(db, graphId).map(mapNode);
@@ -224,12 +234,28 @@ export function createWorkGraphPersistence(db: Database.Database) {
       if (!Number.isInteger(input.bytes) || input.bytes < 0) throw new Error("Worker artifact bytes are invalid.");
       const key = input.key.trim();
       if (!key || key.length > 500) throw new Error("Worker artifact key is invalid.");
+      const summary = bounded(input.summary, 1_000);
+      const contentHash = input.contentHash?.trim() || null;
+      const existing = findArtifactByKey(db, input.graphId, key);
+      if (existing) {
+        if (
+          existing.nodeId === input.nodeId
+          && existing.attemptId === (input.attemptId ?? null)
+          && existing.kind === input.kind
+          && existing.summary === summary
+          && existing.contentHash === contentHash
+          && existing.bytes === input.bytes
+        ) {
+          return existing;
+        }
+        throw new Error(`Worker artifact key already exists with different content or lineage: ${key}`);
+      }
       const result = insertArtifact.run({
         ...input,
         attemptId: input.attemptId ?? null,
         key,
-        summary: bounded(input.summary, 1_000),
-        contentHash: input.contentHash?.trim() || null,
+        summary,
+        contentHash,
         now: new Date().toISOString()
       });
       return mapArtifact(getArtifactRow(db, Number(result.lastInsertRowid)));
@@ -436,6 +462,12 @@ function getArtifactRow(db: Database.Database, id: number): WorkerArtifactRow {
   const row = db.prepare("SELECT * FROM worker_artifacts WHERE id = ?").get(id) as WorkerArtifactRow | undefined;
   if (!row) throw new Error(`Worker artifact not found: ${id}`);
   return row;
+}
+
+function findArtifactByKey(db: Database.Database, graphId: number, key: string): WorkerArtifactRecord | null {
+  const row = db.prepare("SELECT * FROM worker_artifacts WHERE graph_id = ? AND artifact_key = ?")
+    .get(graphId, key) as WorkerArtifactRow | undefined;
+  return row ? mapArtifact(row) : null;
 }
 
 function mapGraph(row: WorkGraphRow): WorkGraphRecord {

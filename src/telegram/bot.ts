@@ -3,6 +3,7 @@ import { MaestroConfig } from "../config.js";
 import { FeaturePlanDetails, FeatureRecord, MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
 import { parseProjectTaskInput } from "../orchestrator.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
+import type { WorkGraphRuntimeCommands, WorkGraphView } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
@@ -16,6 +17,7 @@ export type TelegramBotOptions = {
   featureGithub?: FeatureGitHubGateway;
   environmentDoctor?: (projectKey: string) => Promise<EnvironmentDoctorReport>;
   providerStatus?: () => Promise<AgentProviderSnapshot[]>;
+  workGraphRuntime?: WorkGraphRuntimeCommands;
 };
 
 export function createTelegramBot(
@@ -24,7 +26,7 @@ export function createTelegramBot(
   options: TelegramBotOptions = {}
 ) {
   const bot = new Bot(config.telegram.botToken);
-  const commands = new ApplicationCommands(database, options.featureGithub);
+  const commands = new ApplicationCommands(database, options.featureGithub, options.workGraphRuntime);
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -206,7 +208,7 @@ export function createTelegramBot(
       username: ctx.from?.username ?? null,
       metadata: { projectKey }
     });
-    await ctx.reply(formatWorkGraphs(database, commands.listWorkGraphs(10), projectKey));
+    await ctx.reply(formatWorkGraphs(commands.listWorkGraphs(10), projectKey));
   });
 
   bot.command("graph_cancel", async (ctx) => {
@@ -216,7 +218,7 @@ export function createTelegramBot(
       return;
     }
     try {
-      const graph = commands.cancelWorkGraph(telegramOrigin(ctx), graphId, "Cancelado pelo Telegram.");
+      const graph = await commands.cancelWorkGraph(telegramOrigin(ctx), graphId, "Cancelado pelo Telegram.");
       await ctx.reply(`Work Graph #${graph.id} cancelado. Artefatos e historico foram preservados.`);
     } catch (error) {
       await ctx.reply(["Cancelamento do Work Graph nao aplicado.", ...commandErrorDetails(error)].join("\n"));
@@ -568,7 +570,7 @@ function formatHelp(): string {
     "/queue - listar tasks recentes",
     "/queue @projeto - listar tasks do projeto",
     "/graphs [@projeto] - listar Work Graphs e budgets",
-    "/graph_cancel id - cancelar graph parado, preservando evidencias",
+    "/graph_cancel id - cancelar graph ativo ou parado, preservando evidencias",
     "/features - listar Feature Plans e Feature PRs",
       "/features @projeto - listar Feature Plans e Feature PRs do projeto",
       "/improvements - listar melhorias candidatas",
@@ -580,32 +582,43 @@ function formatHelp(): string {
 }
 
 export function formatWorkGraphs(
-  database: MaestroDatabase,
-  graphs: ReturnType<MaestroDatabase["listWorkGraphs"]>,
+  graphs: WorkGraphView[],
   projectKey: string | null = null
 ): string {
-  const filtered = graphs.filter((graph) => {
-    if (!projectKey) return true;
-    const task = database.getTask(database.getGoalRun(graph.runId).taskId);
-    return task.projectKey === projectKey;
-  });
+  const filtered = graphs.filter((graph) => !projectKey || graph.projectKey === projectKey);
   if (filtered.length === 0) return "Nenhum Work Graph registrado.";
   return filtered.map((graph) => {
-    const task = database.getTask(database.getGoalRun(graph.runId).taskId);
-    const artifacts = database.listWorkerArtifacts(graph.id);
-    const nodes = graph.nodes.map((node) => (
-      `  - ${node.key} [${node.status}] ${node.mode === "writer" ? "WRITE" : "READ"} tentativas ${node.attemptCount}/${node.maxAttempts}`
-    ));
+    const nodes = graph.nodes.flatMap((node) => {
+      const attempts = node.attempts.map((attempt) => (
+        `      #${attempt.attemptNumber} ${attempt.provider} [${attempt.status}] ${formatDuration(attempt.durationMs)}`
+      ));
+      return [
+        `  - ${node.key} [${node.status}] ${node.mode === "writer" ? "WRITE" : "READ"} tentativas ${node.attemptCount}/${node.maxAttempts}${node.fallbackCount ? `; fallbacks ${node.fallbackCount}` : ""}`,
+        ...attempts
+      ];
+    });
+    const adoption = graph.adoption
+      ? `Adocao: ${graph.adoption.decision}/${graph.adoption.executionMode} (${graph.adoption.reason})`
+      : "Adocao: sem evento persistido";
     return [
-      `Graph #${graph.id} @${task.projectKey ?? "inbox"} task #${task.id} [${graph.status}]`,
+      `Graph #${graph.id} @${graph.projectKey ?? "inbox"} task #${graph.taskId} [${graph.status}]`,
       `${graph.objective}`,
-      `Readers paralelos: ${graph.maxParallelReaders}; artefatos: ${artifacts.length}`,
+      adoption,
+      `Readers paralelos: ${graph.maxParallelReaders}; artefatos: ${graph.artifactCount}`,
+      `Canario: ${graph.canary.quality}; ${formatDuration(graph.canary.durationMs)}; attempts ${graph.canary.attempts}; fallbacks ${graph.canary.fallbacks}; conflitos ${graph.canary.conflicts}; tokens~${graph.canary.estimatedTokens}`,
       ...nodes,
-      ...(["draft", "validated", "waiting_provider"].includes(graph.status)
+      ...graph.artifacts.slice(0, 4).map((artifact) => `  artifact: ${artifact.key} (${artifact.kind}, ${artifact.bytes} bytes)`),
+      ...(graph.cancellable
         ? [`  cancelar: /graph_cancel ${graph.id}`]
         : [])
     ].join("\n");
   }).join("\n\n");
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null) return "em andamento";
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
 export function formatImprovementCandidates(

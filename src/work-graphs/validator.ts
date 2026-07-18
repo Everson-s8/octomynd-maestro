@@ -3,8 +3,15 @@ import type { WorkGraphDetails, WorkerMode, WorkerNodeRecord, WorkerRole } from 
 
 const MAX_NODES = 4;
 const MAX_ATTEMPTS = 3;
-const MAX_DEADLINE_MS = 6 * 60_000;
 const MAX_OUTPUT_CHARS = 12_000;
+
+const MAX_DEADLINE_MS_BY_ROLE: Record<WorkerRole, number> = {
+  researcher: 6 * 60_000,
+  planner: 6 * 60_000,
+  implementer: 20 * 60_000,
+  tester: 10 * 60_000,
+  reviewer: 6 * 60_000
+};
 
 const ROLE_CAPABILITIES: Record<WorkerRole, ReadonlySet<AgentCapability>> = {
   researcher: new Set(["research"]),
@@ -48,6 +55,19 @@ export type WorkGraphValidationResult = {
   issues: WorkGraphValidationIssue[];
   topologicalOrder: string[];
 };
+
+export function workerBudgetExceedsLimits(
+  role: WorkerRole,
+  budget: { maxAttempts: number; deadlineMs: number; outputChars: number }
+): boolean {
+  return budget.maxAttempts > MAX_ATTEMPTS
+    || budget.deadlineMs > MAX_DEADLINE_MS_BY_ROLE[role]
+    || budget.outputChars > MAX_OUTPUT_CHARS;
+}
+
+export function workerDeadlineLimitMs(role: WorkerRole): number {
+  return MAX_DEADLINE_MS_BY_ROLE[role];
+}
 
 export function validateWorkGraph(
   graph: WorkGraphDetails,
@@ -113,12 +133,12 @@ function validateNode(
   if (node.mode === "read_only" && node.writeScope.length > 0) {
     issues.push({ code: "read_only_write_scope", message: "Read-only Worker cannot declare write scope.", nodeKey: node.key });
   }
-  if (
-    node.maxAttempts > MAX_ATTEMPTS
-    || node.deadlineMs > MAX_DEADLINE_MS
-    || node.outputChars > MAX_OUTPUT_CHARS
-  ) {
-    issues.push({ code: "budget_exceeded", message: "Worker exceeds bounded execution limits.", nodeKey: node.key });
+  if (workerBudgetExceedsLimits(node.role, node)) {
+    issues.push({
+      code: "budget_exceeded",
+      message: `${node.role} exceeds bounded execution limits (deadline ${MAX_DEADLINE_MS_BY_ROLE[node.role]} ms).`,
+      nodeKey: node.key
+    });
   }
   for (const dependency of node.dependsOn) {
     if (dependency === node.key) {
