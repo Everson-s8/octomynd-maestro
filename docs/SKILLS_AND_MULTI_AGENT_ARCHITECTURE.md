@@ -371,7 +371,8 @@ After telemetry proves the runtime, consider:
 
 ### Feature A: Governed Skill Catalog and Eval Harness ([#40](https://github.com/Everson-s8/octomynd-maestro/issues/40))
 
-Implementation status: complete on the Feature branch; pending consolidated Final Review and merge.
+Implementation status: merged into `main` by Feature PR
+[#46](https://github.com/Everson-s8/octomynd-maestro/pull/46).
 
 1. [x] Define portable Skill metadata and Maestro policy schemas.
 2. [x] Discover and validate repository Skills without executing them.
@@ -382,7 +383,10 @@ Implementation status: complete on the Feature branch; pending consolidated Fina
 
 ### Feature B: Multi-Agent Work Graph ([#47](https://github.com/Everson-s8/octomynd-maestro/issues/47))
 
-Implementation status: complete on the Feature branch; pending consolidated Final Review and merge.
+Implementation status: merged into `main` by Feature PR
+[#52](https://github.com/Everson-s8/octomynd-maestro/pull/52), with operational adoption and canary
+validation completed by Feature PR
+[#63](https://github.com/Everson-s8/octomynd-maestro/pull/63).
 
 1. [x] Define Work Graph and Worker Node schemas.
 2. [x] Add deterministic validation and complexity classification.
