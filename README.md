@@ -80,7 +80,13 @@ O `AgentRegistry` e a fonte unica para capacidade, carga, saude e cooldown dos
 providers. O Dashboard e `/status` no Telegram exibem o mesmo estado operacional,
 sem inferir autenticacao ou disponibilidade por regras visuais separadas.
 Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
-draft PR. O merge continua sendo a decisao humana importante.
+draft PR. Para uma Task avulsa, o merge continua sendo uma decisao humana. Em uma
+Feature, os Work PRs permanecem Draft como evidencia e nunca sao mergeados
+individualmente. O unico candidato a merge e o Feature PR consolidado: quando o
+usuario o marca como Ready for review, o Maestro valida checks e mergeabilidade,
+executa um Final Review read-only sobre o SHA exato e, se aprovado, faz o merge,
+fecha os Work PRs e limpa branches integradas. Qualquer mudanca no SHA ou falha de
+gate invalida a revisao e impede o merge.
 
 ## Work Graph multiagente
 
@@ -107,7 +113,7 @@ Draft PRs entregues aparecem em **Aguardando revisao** com projeto, demanda, age
 resumo do review, arquivos relativos, testes e o resultado do secret guard. A pessoa
 responsavel registra uma justificativa e escolhe:
 
-- **Aprovar para merge**: usa `gh pr ready`; nunca executa merge.
+- **Aprovar PR avulso para merge**: usa `gh pr ready`; nao executa merge.
 - **Solicitar ajustes**: devolve o PR para draft e reabre o mesmo goal em implementacao,
   incluindo a justificativa no contexto do agente.
 - **Rejeitar**: fecha o PR sem merge e encerra a task como rejeitada.
@@ -115,6 +121,10 @@ responsavel registra uma justificativa e escolhe:
 Todas as decisoes ficam no SQLite e geram eventos e notificacoes do Telegram. Segredos,
 IDs privados e caminhos locais sao removidos do payload visual; justificativas contendo
 segredo ou caminho privado sao bloqueadas antes de persistencia ou envio.
+
+Esta fila de decisao manual e diferente do protocolo de Feature PR descrito acima.
+Marcar somente o Feature PR consolidado como Ready for review autoriza o Final Review
+e o merge automatico governado; Work PRs individuais devem permanecer Draft.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 
