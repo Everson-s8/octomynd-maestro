@@ -1,4 +1,6 @@
 import path from "node:path";
+import { AntigravityProvider } from "./agents/antigravity.js";
+import type { AgentProvider } from "./agents/types.js";
 import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
 import { ClaudeProvider } from "./agents/claude.js";
 import { CodexProvider } from "./agents/codex.js";
@@ -49,7 +51,7 @@ database.addEvent({
   metadata: { fingerprint: environmentFingerprint }
 });
 const providerLimits = { maxRuntimeMs: config.runtime.providerMaxRuntimeMs };
-const agentRegistry = new AgentRegistry([
+const agentProviders: AgentProvider[] = [
   new CodexProvider({
     ...providerLimits,
     inactivityTimeoutMs: config.runtime.codexInactivityTimeoutMs
@@ -58,7 +60,18 @@ const agentRegistry = new AgentRegistry([
     ...providerLimits,
     inactivityTimeoutMs: config.runtime.claudeInactivityTimeoutMs
   })
-]);
+];
+if (config.runtime.antigravityEnabled) {
+  agentProviders.push(new AntigravityProvider({
+    model: config.runtime.antigravityModel,
+    effort: config.runtime.antigravityEffort ?? "medium",
+    executionLimits: {
+      ...providerLimits,
+      inactivityTimeoutMs: config.runtime.antigravityInactivityTimeoutMs
+    }
+  }));
+}
+const agentRegistry = new AgentRegistry(agentProviders);
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
 const skillBootstrap = config.skills.enabled

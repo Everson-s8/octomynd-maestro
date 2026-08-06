@@ -8,13 +8,13 @@ import {
 import type { FailureCategory } from "./failure.js";
 
 const ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
-  planning: ["claude", "codex"],
-  coding: ["codex", "claude"],
-  testing: ["codex", "claude"],
-  reviewing: ["claude", "codex"],
-  improvement_reviewing: ["claude", "codex"],
-  research: ["claude", "codex"],
-  conversation: ["claude", "codex"]
+  planning: ["antigravity", "claude", "codex"],
+  coding: ["antigravity", "codex", "claude"],
+  testing: ["antigravity", "codex", "claude"],
+  reviewing: ["claude", "antigravity", "codex"],
+  improvement_reviewing: ["antigravity", "claude", "codex"],
+  research: ["antigravity", "claude", "codex"],
+  conversation: ["antigravity", "claude", "codex"]
 };
 
 export type RoutedAgent = {
@@ -60,7 +60,11 @@ export class AgentRegistry {
 
   constructor(
     providers: AgentProvider[],
-    private readonly providerLimits: Partial<Record<AgentProviderId, number>> = { codex: 1, claude: 1 },
+    private readonly providerLimits: Partial<Record<AgentProviderId, number>> = {
+      codex: 1,
+      claude: 1,
+      antigravity: 1
+    },
     private readonly now: () => number = Date.now
   ) {
     for (const provider of providers) {

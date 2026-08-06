@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentExecutionResult } from "../agents/types.js";
+import type { AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { AgentRegistry } from "../agents/registry.js";
 import type { GoalPhase, GoalWaitReason, MaestroDatabase } from "../db.js";
 import { redactSensitiveText } from "../security/redaction.js";
@@ -14,7 +14,7 @@ import { validateWorkGraph } from "./validator.js";
 export type WorkGraphRunnerOptions = {
   artifactsRoot: string;
   signal?: AbortSignal;
-  onProgress?: (graph: WorkGraphDetails, node: WorkerNodeRecord, provider: "codex" | "claude") => void;
+  onProgress?: (graph: WorkGraphDetails, node: WorkerNodeRecord, provider: AgentProviderId) => void;
 };
 
 export const WORK_GRAPH_RUNTIME_SHUTDOWN = "maestro_runtime_shutdown";
@@ -294,7 +294,7 @@ function persistProviderWait(
   wait: {
     reason: GoalWaitReason;
     retryAfterMs?: number;
-    provider?: "codex" | "claude";
+    provider?: AgentProviderId;
     summary: string;
   }
 ): { summary: string } {

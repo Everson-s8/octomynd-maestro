@@ -5,10 +5,11 @@ import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from 
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
+import type { AgentProviderId } from "../agents/types.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 
 export type AgentPresence = {
-  id: "codex" | "claude" | "telegram";
+  id: AgentProviderId | "telegram";
   label: string;
   state: "ready" | "working" | "attention" | "offline";
   detail: string;
@@ -328,8 +329,8 @@ function currentProviderWork(
     const step = database.listGoalSteps(goal.id).at(-1);
     if (!task || !step || step.status !== "running") continue;
     working.set(step.provider, {
-      id: step.provider as "codex" | "claude",
-      label: step.provider === "codex" ? "Codex" : "Claude",
+      id: step.provider as AgentProviderId,
+      label: providerLabel(step.provider as AgentProviderId),
       state: "working",
       detail: `@${task.projectKey ?? "inbox"} · task #${task.id} · ${goal.currentPhase}`,
       taskId: task.id,
@@ -338,6 +339,12 @@ function currentProviderWork(
     });
   }
   return working;
+}
+
+function providerLabel(provider: AgentProviderId): string {
+  if (provider === "codex") return "Codex";
+  if (provider === "claude") return "Claude";
+  return "Gemini Antigravity";
 }
 
 function telegramPresence(config: MaestroConfig): AgentPresence {

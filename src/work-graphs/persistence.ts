@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import type { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import type {
   WorkGraphDetails,
@@ -167,7 +168,7 @@ export function createWorkGraphPersistence(db: Database.Database) {
       return mapNode(getNodeRow(db, id));
     },
 
-    createWorkerAttempt(nodeId: number, provider: "codex" | "claude"): WorkerAttemptRecord {
+    createWorkerAttempt(nodeId: number, provider: AgentProviderId): WorkerAttemptRecord {
       return db.transaction(() => {
         const node = mapNode(getNodeRow(db, nodeId));
         if (node.attemptCount >= node.maxAttempts) {

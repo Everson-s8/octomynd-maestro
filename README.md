@@ -1,9 +1,9 @@
 # Octomynd Maestro
 
-Chat-first local orchestrator for Codex, Claude and GitHub workflows, com uma
+Chat-first local orchestrator for Antigravity, Codex, Claude and GitHub workflows, com uma
 central visual local para acompanhar projetos, fila, agentes e eventos.
 
-O Maestro usa as autenticacoes dos CLIs Codex e Claude. Ele nao requer
+O Maestro usa as autenticacoes dos CLIs Antigravity, Codex e Claude. Ele nao requer
 `OPENAI_API_KEY` nem cria faturamento separado da OpenAI API.
 
 This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
@@ -73,12 +73,17 @@ parar o processo tambem interrompe Dashboard, Telegram e coordenadores.
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
 isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,
-implementacao, testes e revisao. Codex e Claude sao roteados por capacidade; quando
-ambos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
+implementacao, testes e revisao. Antigravity, Codex e Claude sao roteados por capacidade; quando
+todos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
 retomado automaticamente sem perder os passos concluidos.
 O `AgentRegistry` e a fonte unica para capacidade, carga, saude e cooldown dos
 providers. O Dashboard e `/status` no Telegram exibem o mesmo estado operacional,
 sem inferir autenticacao ou disponibilidade por regras visuais separadas.
+O Antigravity usa a assinatura Google autenticada no CLI, sem API key no projeto. Por
+padrao ele recebe planejamento, implementacao, testes, pesquisa e revisao de melhoria
+antes dos providers com cota mais escassa. O Claude continua como primeira opcao de
+Final Review independente. Work Graphs podem usar providers diferentes em nodes
+independentes, mas nunca permitem dois writers concorrentes sobre a mesma Task.
 Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
 draft PR. Para uma Task avulsa, o merge continua sendo uma decisao humana. Em uma
 Feature, os Work PRs permanecem Draft como evidencia e nunca sao mergeados

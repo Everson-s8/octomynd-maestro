@@ -21,6 +21,10 @@ describe("config", () => {
     });
     expect(config.runtime).toEqual({
       tokenEfficient: true,
+      antigravityEnabled: true,
+      antigravityModel: null,
+      antigravityEffort: "medium",
+      antigravityInactivityTimeoutMs: 1_800_000,
       codexInactivityTimeoutMs: 600_000,
       claudeInactivityTimeoutMs: 1_800_000,
       providerMaxRuntimeMs: undefined,

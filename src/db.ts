@@ -181,6 +181,7 @@ export type GoalWaitReason =
   | "quota"
   | "auth_required"
   | "timeout"
+  | "output_limit"
   | "offline"
   | "capacity"
   | "runtime_restart"
