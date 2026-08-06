@@ -844,8 +844,8 @@ function latestWorkGraphWaitReason(
     ? event.metadata.waitReason as GoalWaitReason
     : "unknown";
   const retryAfterMs = typeof event?.metadata?.retryAfterMs === "number" ? event.metadata.retryAfterMs : undefined;
-  const provider = event?.metadata?.provider === "codex" || event?.metadata?.provider === "claude"
-    ? event.metadata.provider as AgentProviderId
+  const provider = isAgentProviderId(event?.metadata?.provider)
+    ? event.metadata.provider
     : undefined;
   return { reason, retryAfterMs, provider };
 }
@@ -898,8 +898,12 @@ function initialExcludedProviders(
     .reverse()
     .find((step) => step.phase === phase);
   if (latestStep?.status !== "failed") return new Set();
-  if (latestStep.provider !== "codex" && latestStep.provider !== "claude") return new Set();
+  if (!isAgentProviderId(latestStep.provider)) return new Set();
   return new Set([latestStep.provider]);
+}
+
+function isAgentProviderId(value: unknown): value is AgentProviderId {
+  return value === "codex" || value === "claude" || value === "antigravity";
 }
 
 function pauseRun(

@@ -7,6 +7,7 @@ import {
   resolveExecutionContract
 } from "./execution/contract.js";
 import {
+  DEFAULT_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS,
   DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS,
   DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS
 } from "./agents/execution-limits.js";
@@ -33,6 +34,10 @@ export type MaestroConfig = {
   };
   runtime: {
     tokenEfficient: boolean;
+    antigravityEnabled?: boolean;
+    antigravityModel?: string | null;
+    antigravityEffort?: "low" | "medium" | "high";
+    antigravityInactivityTimeoutMs?: number;
     codexInactivityTimeoutMs?: number;
     claudeInactivityTimeoutMs?: number;
     providerMaxRuntimeMs?: number;
@@ -77,6 +82,14 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     },
     runtime: {
       tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true),
+      antigravityEnabled: normalizeBoolean(env.MAESTRO_ANTIGRAVITY_ENABLED, true),
+      antigravityModel: normalizeOptional(env.MAESTRO_ANTIGRAVITY_MODEL),
+      antigravityEffort: normalizeEffort(env.MAESTRO_ANTIGRAVITY_EFFORT),
+      antigravityInactivityTimeoutMs: normalizePositiveInteger(
+        env.MAESTRO_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS,
+        DEFAULT_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS,
+        1_000
+      ),
       codexInactivityTimeoutMs: normalizePositiveInteger(
         env.MAESTRO_CODEX_INACTIVITY_TIMEOUT_MS,
         DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS,
@@ -178,6 +191,11 @@ function normalizePositiveInteger(value: string | undefined, fallback: number, m
 function normalizeWorkGraphAdoptionMode(value: string | undefined): WorkGraphAdoptionMode {
   const normalized = value?.trim().toLowerCase();
   return normalized && isWorkGraphAdoptionMode(normalized) ? normalized : "off";
+}
+
+function normalizeEffort(value: string | undefined): "low" | "medium" | "high" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "low" || normalized === "high" ? normalized : "medium";
 }
 
 function normalizeOptionalPositiveInteger(value: string | undefined, minimum: number): number | undefined {

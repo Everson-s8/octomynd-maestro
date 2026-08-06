@@ -3,6 +3,17 @@ import { AgentRegistry } from "../src/agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProvider, AgentProviderId } from "../src/agents/types.js";
 
 describe("agent registry leases", () => {
+  it("prefers the subscription provider for general work and Claude for final review", async () => {
+    const registry = new AgentRegistry([
+      provider("codex", ["coding", "reviewing"]),
+      provider("claude", ["coding", "reviewing"]),
+      provider("antigravity", ["coding", "reviewing"])
+    ]);
+
+    expect((await registry.acquire("coding"))?.provider.id).toBe("antigravity");
+    expect((await registry.acquire("reviewing"))?.provider.id).toBe("claude");
+  });
+
   it("routes concurrent work to another provider and releases capacity", async () => {
     const claude = provider("claude", ["planning"]);
     const codex = provider("codex", ["planning"]);

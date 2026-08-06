@@ -11,7 +11,7 @@ import type {
 import type { FailureCategory } from "./failure.js";
 import type { FeatureTaskContract } from "../features/task-graph.js";
 
-export type AgentProviderId = "codex" | "claude";
+export type AgentProviderId = "codex" | "claude" | "antigravity";
 export type AgentCapability =
   | "planning"
   | "coding"

@@ -299,7 +299,7 @@ export type DashboardData = {
   environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{
-    id: "codex" | "claude" | "telegram";
+    id: "codex" | "claude" | "antigravity" | "telegram";
     label: string;
     state: "ready" | "working" | "attention" | "offline";
     detail: string;
