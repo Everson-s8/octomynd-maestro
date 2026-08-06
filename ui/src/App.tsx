@@ -753,7 +753,19 @@ function FeaturePlanBoard({
 
 function TaskRow({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) {
   return (
-    <article className="task-row">
+    <article
+      className="task-row"
+      role="button"
+      tabIndex={0}
+      aria-label={`Abrir detalhes da task ${task.id}`}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
       <span className={`status-rail status-${task.status}`} />
       <div className="task-id">#{String(task.id).padStart(2, "0")}</div>
       <div className="task-copy">

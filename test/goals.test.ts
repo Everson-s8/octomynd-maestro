@@ -439,6 +439,40 @@ describe("goal runner", () => {
       .toBe("deadline");
   });
 
+  it("pauses output-limited work for automatic resume instead of blocking the task", async () => {
+    const projectDir = path.join(tempDir, "output-limit-project");
+    const worktreeDir = path.join(tempDir, "output-limit-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "output-limit", path: projectDir });
+    const task = database.createTask("verbose provider task", "dashboard", "output-limit");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => ({
+      outcome: "failed",
+      summary: "Provider produced too much output.",
+      output: "partial output",
+      error: "output limit",
+      durationMs: 1,
+      retryable: true,
+      processRuntime: {
+        breakerReason: "output_limit",
+        outputStats: { receivedChars: 2_000_001, retainedChars: 500_000, duplicateChunks: 0, truncatedChars: 1_500_001 }
+      }
+    }));
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts")
+    });
+
+    expect(run.status).toBe("waiting_provider");
+    expect(run.waitReason).toBe("output_limit");
+    expect(database.getTask(task.id).status).toBe("waiting_provider");
+    expect(database.listEvents().find((event) => event.type === "goal.output_limit_checkpoint")?.metadata)
+      .toMatchObject({ worktreePreserved: true, provider: "codex" });
+    expect(database.listEvents().some((event) => event.type === "goal.circuit_breaker")).toBe(false);
+  });
+
   it("stops repeated provider failures instead of spending another fallback cycle", async () => {
     const projectDir = path.join(tempDir, "failure-project");
     const worktreeDir = path.join(tempDir, "failure-worktree");

@@ -116,6 +116,7 @@ export class GoalCoordinator {
   }
 
   recoverWaitingRuns(skipRun: (run: GoalRunRecord) => boolean = () => false): number {
+    this.recoverLegacyOutputLimitedRuns(skipRun);
     const interrupted = this.database.listActiveGoalRuns()
       .filter((run) => run.status === "running" && !skipRun(run));
     for (const run of interrupted) this.recoverInterruptedRun(run);
@@ -123,6 +124,36 @@ export class GoalCoordinator {
       .filter((run) => run.status === "waiting_provider" && !skipRun(run));
     for (const run of waiting) this.scheduleRetry(run);
     return waiting.length;
+  }
+
+  private recoverLegacyOutputLimitedRuns(skipRun: (run: GoalRunRecord) => boolean): void {
+    const recoverable = this.database.listGoalRuns(500).filter((run) => (
+      run.status === "blocked"
+      && !skipRun(run)
+      && run.lastError?.includes("output_limit")
+    ));
+    for (const run of recoverable) {
+      this.database.withTransaction(() => {
+        this.database.updateGoalRun({
+          id: run.id,
+          status: "waiting_provider",
+          currentPhase: run.currentPhase,
+          stepCount: run.stepCount,
+          lastError: "Legacy output-limit block recovered. Partial work will resume automatically.",
+          waitReason: "output_limit",
+          nextRetryAt: new Date(Date.now() + RESTART_RETRY_DELAY_MS).toISOString(),
+          lastProvider: run.lastProvider
+        });
+        this.database.updateTaskStatus(run.taskId, "waiting_provider");
+        this.database.addEvent({
+          source: "maestro",
+          type: "goal.output_limit_recovered",
+          text: `Goal #${run.id} recovered from a legacy output-limit block.`,
+          taskId: run.taskId,
+          metadata: { runId: run.id, worktreePreserved: true }
+        });
+      });
+    }
   }
 
   shutdown() {

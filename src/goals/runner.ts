@@ -606,6 +606,34 @@ export async function runTaskGoal(
         workspaceAfter
       });
       if (circuitDecision) {
+        if (circuitDecision.reason === "output_limit") {
+          database.addEvent({
+            source: "maestro",
+            type: "goal.output_limit_checkpoint",
+            text: "Provider output limit reached; checkpoint preserved for automatic resume.",
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              phase,
+              stepCount,
+              provider: routed.provider.id,
+              worktreePreserved: true
+            }
+          });
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            "Provider output limit reached. Partial work was preserved and will resume with another provider.",
+            task.id,
+            {
+              reason: "output_limit",
+              retryAfterMs: 5_000,
+              provider: routed.provider.id
+            }
+          );
+        }
         return finishCircuitBreak(
           database,
           currentRun,
