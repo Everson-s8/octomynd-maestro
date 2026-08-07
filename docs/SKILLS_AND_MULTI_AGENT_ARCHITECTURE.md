@@ -402,11 +402,37 @@ resident coordinator that owns and propagates its `AbortController`.
 
 ### Feature C: Governed Skill Lifecycle and Curator
 
-1. Connect improvement candidates to Skill drafts.
-2. Add version comparison and promotion gates.
-3. Add snapshots, rollback and protected ownership.
-4. Add stale telemetry and Curator dry-run reports.
-5. Permit automatic archive only for agent-owned Skills after policy thresholds.
+1. [x] Connect improvement candidates to Skill drafts. Approving a `skill` category
+   improvement proposal now also creates a `skill_proposals` draft row (owner `agent`,
+   status `requested`) carrying provenance back to the improvement, its evidence and its
+   fingerprint. The generated Task explicitly instructs the implementer to ship the Skill
+   as an agent-owned candidate; nothing is activated automatically. A separate
+   reconciliation step (`SkillLifecycleService.reconcileSkillProposalDrafts`) links the
+   draft to the immutable candidate version once it lands in the catalog.
+2. [x] Add version comparison and promotion gates. Immutable version comparison already
+   existed in the Skill eval harness (`SkillEvaluationComparison`); promotion between
+   `candidate -> evaluated -> approved -> active` now has an explicit command surface
+   (`evaluateSkillVersion`, `approveSkillVersion`, `activateSkillVersion`) instead of being
+   reachable only through built-in bootstrap.
+3. [x] Add snapshots, rollback and protected ownership. Skill snapshots were already
+   content-addressed and immutable; `rollbackSkillVersion` reactivates a previously
+   approved version without rewriting history, `restoreSkillVersion` brings a retired
+   version back to `approved`, and `archiveSkillVersion` enforces that automatic
+   (`curator`) actors can only archive agent-owned Skills while explicit human actors keep
+   full control of their own or system Skills.
+4. [x] Add stale telemetry and Curator dry-run reports. `getSkillUsageSummary` exposes
+   usage count and last-used timestamp per version; `SkillCurator.dryRun` reports the
+   exact proposed action and reason per Skill and defaults to read-only.
+5. [x] Permit automatic archive only for agent-owned Skills after policy thresholds.
+   `SkillCurator.applyAutomaticArchival` only archives entries flagged `autoApplicable`
+   (agent-owned and past the configured `staleDays` threshold); it is invoked by an opt-in
+   `SkillCuratorWorker` gated behind `MAESTRO_SKILL_CURATOR_AUTO_ARCHIVE_ENABLED` (default
+   `false`).
+
+Dashboard: the snapshot and dedicated `/api/skills/*` endpoints expose Skill proposals,
+lifecycle actions and the Curator dry-run report. Telegram surfacing for this Feature is
+deferred to a follow-up increment; the governed lifecycle is fully usable today through
+the Dashboard.
 
 ### Feature D: Native Provider Delegation Adapters
 

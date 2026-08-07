@@ -375,7 +375,13 @@ function testConfig(): MaestroConfig {
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
     workGraph: { adoptionMode: "off" },
-    skills: { enabled: false, catalogPath: path.join(tempDir, "skills"), versionsPath: path.join(tempDir, "versions"), projectKey: "boo" },
+    skills: {
+      enabled: false,
+      catalogPath: path.join(tempDir, "skills"),
+      versionsPath: path.join(tempDir, "versions"),
+      projectKey: "boo",
+      curator: { staleDays: 30, autoArchiveEnabled: false, pollIntervalMs: 21_600_000 }
+    },
     telegram: { botToken: "test-token", allowedUserId: "123" }
   };
 }

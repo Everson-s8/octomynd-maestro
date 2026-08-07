@@ -407,7 +407,13 @@ function telegramConfig(): MaestroConfig {
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
     workGraph: { adoptionMode: "off" },
-    skills: { enabled: false, catalogPath: "skills", versionsPath: "versions", projectKey: "maestro" },
+    skills: {
+      enabled: false,
+      catalogPath: "skills",
+      versionsPath: "versions",
+      projectKey: "maestro",
+      curator: { staleDays: 30, autoArchiveEnabled: false, pollIntervalMs: 21_600_000 }
+    },
     telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
   };
 }

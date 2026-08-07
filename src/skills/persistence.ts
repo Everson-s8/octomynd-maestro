@@ -125,6 +125,39 @@ export type SkillUsageRecord = {
   createdAt: string;
 };
 
+export type SkillUsageSummary = {
+  usageCount: number;
+  lastUsedAt: string | null;
+};
+
+export const SKILL_PROPOSAL_STATUSES = ["requested", "linked", "rejected"] as const;
+export type SkillProposalStatus = typeof SKILL_PROPOSAL_STATUSES[number];
+
+export type SkillProposalRecord = {
+  id: number;
+  improvementProposalId: number;
+  suggestedQualifiedName: string;
+  owner: "agent";
+  status: SkillProposalStatus;
+  skillVersionRecordId: number | null;
+  qualifiedName: string | null;
+  versionId: string | null;
+  evidence: string[];
+  provenance: Record<string, unknown>;
+  decisionNote: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillProposalInput = {
+  improvementProposalId: number;
+  suggestedQualifiedName: string;
+  evidence: string[];
+  provenance: Record<string, unknown>;
+};
+
+export type SkillArchiveActor = "human" | "curator";
+
 export function createSkillPersistence(db: Database.Database) {
   const upsertSkill = db.prepare(`
     INSERT INTO skills (
@@ -188,6 +221,46 @@ export function createSkillPersistence(db: Database.Database) {
       @durationMs, @estimatedTokens, @now
     )
   `);
+  const clearActiveSkillVersion = db.prepare(`
+    UPDATE skills SET active_skill_version_id = NULL, updated_at = @now WHERE id = @skillId
+  `);
+  const insertSkillProposal = db.prepare(`
+    INSERT INTO skill_proposals (
+      improvement_proposal_id, suggested_qualified_name, owner, status,
+      skill_version_id, evidence_json, provenance_json, decision_note, created_at, updated_at
+    ) VALUES (
+      @improvementProposalId, @suggestedQualifiedName, 'agent', 'requested',
+      NULL, @evidenceJson, @provenanceJson, NULL, @now, @now
+    )
+  `);
+  const linkSkillProposal = db.prepare(`
+    UPDATE skill_proposals
+    SET status = 'linked', skill_version_id = @skillVersionRecordId, updated_at = @now
+    WHERE id = @id AND status = 'requested'
+  `);
+  const rejectSkillProposalStatement = db.prepare(`
+    UPDATE skill_proposals
+    SET status = 'rejected', decision_note = @decisionNote, updated_at = @now
+    WHERE id = @id AND status = 'requested'
+  `);
+
+  function promoteVersion(id: number): SkillVersionRecord {
+    return db.transaction(() => {
+      const selected = getVersionRow(db, id);
+      if (!(["approved", "active"] as const).includes(selected.status as "approved" | "active")) {
+        throw new Error(`Skill version ${selected.qualified_name}@${selected.version_id} is not approved.`);
+      }
+      assertPassingEvaluation(db, selected.id);
+      const skill = getSkillRow(db, selected.qualified_name);
+      const now = new Date().toISOString();
+      if (skill.active_skill_version_id && skill.active_skill_version_id !== selected.id) {
+        updateVersionStatus.run({ id: skill.active_skill_version_id, status: "approved", now });
+      }
+      updateVersionStatus.run({ id: selected.id, status: "active", now });
+      activateSkill.run({ skillId: skill.id, skillVersionRecordId: selected.id, now });
+      return mapVersion(getVersionRow(db, selected.id));
+    })();
+  }
 
   return {
     registerSkillVersion(input: SkillVersionRegistrationInput): SkillVersionRecord {
@@ -261,21 +334,122 @@ export function createSkillPersistence(db: Database.Database) {
     },
 
     activateSkillVersion(id: number): SkillVersionRecord {
+      return promoteVersion(id);
+    },
+
+    rollbackSkillVersion(id: number): SkillVersionRecord {
+      const target = getVersionRow(db, id);
+      const skill = getSkillRow(db, target.qualified_name);
+      if (skill.active_skill_version_id === target.id) {
+        throw new Error(`Skill version ${target.qualified_name}@${target.version_id} is already active.`);
+      }
+      if (target.status !== "approved") {
+        throw new Error(
+          `Rollback target must be a previously approved Skill version: ${target.qualified_name}@${target.version_id}.`
+        );
+      }
+      return promoteVersion(id);
+    },
+
+    restoreSkillVersion(id: number): SkillVersionRecord {
+      const current = getVersionRow(db, id);
+      if (current.status !== "retired") {
+        throw new Error(`Only retired Skill versions can be restored: ${current.qualified_name}@${current.version_id}.`);
+      }
+      updateVersionStatus.run({ id, status: "approved", now: new Date().toISOString() });
+      return mapVersion(getVersionRow(db, id));
+    },
+
+    archiveSkillVersion(id: number, actor: SkillArchiveActor): SkillVersionRecord {
       return db.transaction(() => {
-        const selected = getVersionRow(db, id);
-        if (!(["approved", "active"] as const).includes(selected.status as "approved" | "active")) {
-          throw new Error(`Skill version ${selected.qualified_name}@${selected.version_id} is not approved.`);
+        const current = getVersionRow(db, id);
+        const skill = getSkillRow(db, current.qualified_name);
+        if (skill.active_skill_version_id !== current.id) {
+          throw new Error(`Only the active Skill version can be archived: ${current.qualified_name}@${current.version_id}.`);
         }
-        assertPassingEvaluation(db, selected.id);
-        const skill = getSkillRow(db, selected.qualified_name);
+        if (actor === "curator" && skill.owner !== "agent") {
+          throw new Error(`Automatic archival is restricted to agent-owned Skills: ${current.qualified_name}.`);
+        }
         const now = new Date().toISOString();
-        if (skill.active_skill_version_id && skill.active_skill_version_id !== selected.id) {
-          updateVersionStatus.run({ id: skill.active_skill_version_id, status: "approved", now });
-        }
-        updateVersionStatus.run({ id: selected.id, status: "active", now });
-        activateSkill.run({ skillId: skill.id, skillVersionRecordId: selected.id, now });
-        return mapVersion(getVersionRow(db, selected.id));
+        updateVersionStatus.run({ id: current.id, status: "retired", now });
+        clearActiveSkillVersion.run({ skillId: skill.id, now });
+        return mapVersion(getVersionRow(db, current.id));
       })();
+    },
+
+    getSkillUsageSummary(skillVersionRecordId: number): SkillUsageSummary {
+      getVersionRow(db, skillVersionRecordId);
+      const row = db.prepare(`
+        SELECT COUNT(*) AS count, MAX(created_at) AS lastUsedAt
+        FROM skill_usage WHERE skill_version_id = ?
+      `).get(skillVersionRecordId) as { count: number; lastUsedAt: string | null };
+      return { usageCount: row.count, lastUsedAt: row.lastUsedAt };
+    },
+
+    createSkillProposal(input: SkillProposalInput): SkillProposalRecord {
+      const suggestedQualifiedName = input.suggestedQualifiedName.trim();
+      if (!/^(?:system|user|repository|project):[a-z0-9]+(?:-[a-z0-9]+)*$/.test(suggestedQualifiedName)) {
+        throw new Error(`Skill proposal has an invalid suggested qualified name: ${suggestedQualifiedName}.`);
+      }
+      const evidence = normalizeSkillProposalEvidence(input.evidence);
+      if (evidence.length === 0) {
+        throw new Error("Skill proposal requires at least one evidence reference.");
+      }
+      const now = new Date().toISOString();
+      const result = insertSkillProposal.run({
+        improvementProposalId: input.improvementProposalId,
+        suggestedQualifiedName,
+        evidenceJson: JSON.stringify(evidence),
+        provenanceJson: JSON.stringify(input.provenance ?? {}),
+        now
+      });
+      return getSkillProposalRecord(db, Number(result.lastInsertRowid));
+    },
+
+    getSkillProposal(id: number): SkillProposalRecord {
+      return getSkillProposalRecord(db, id);
+    },
+
+    findSkillProposalByImprovementId(improvementProposalId: number): SkillProposalRecord | null {
+      const row = db.prepare(`${SKILL_PROPOSAL_SELECT} WHERE skill_proposals.improvement_proposal_id = ?`)
+        .get(improvementProposalId) as SkillProposalRow | undefined;
+      return row ? mapSkillProposal(row) : null;
+    },
+
+    listSkillProposals(status?: SkillProposalStatus): SkillProposalRecord[] {
+      const rows = status
+        ? db.prepare(`${SKILL_PROPOSAL_SELECT} WHERE skill_proposals.status = ? ORDER BY skill_proposals.id DESC`)
+          .all(status)
+        : db.prepare(`${SKILL_PROPOSAL_SELECT} ORDER BY skill_proposals.id DESC`).all();
+      return (rows as SkillProposalRow[]).map(mapSkillProposal);
+    },
+
+    linkSkillProposalDraft(id: number, skillVersionRecordId: number): SkillProposalRecord {
+      const proposal = getSkillProposalRow(db, id);
+      if (proposal.status !== "requested") {
+        throw new Error(`Skill proposal ${id} is not awaiting a draft link.`);
+      }
+      const version = getVersionRow(db, skillVersionRecordId);
+      const skill = getSkillRow(db, version.qualified_name);
+      if (skill.owner !== "agent") {
+        throw new Error(`Skill proposal drafts must link to agent-owned Skills: ${version.qualified_name}.`);
+      }
+      const linked = db.prepare("SELECT id FROM skill_proposals WHERE skill_version_id = ?")
+        .get(skillVersionRecordId);
+      if (linked) {
+        throw new Error(`Skill version ${version.qualified_name}@${version.version_id} is already linked to a draft.`);
+      }
+      const result = linkSkillProposal.run({ id, skillVersionRecordId, now: new Date().toISOString() });
+      if (result.changes !== 1) throw new Error(`Skill proposal ${id} could not be linked.`);
+      return getSkillProposalRecord(db, id);
+    },
+
+    rejectSkillProposal(id: number, decisionNote: string): SkillProposalRecord {
+      const note = redactSensitiveText(decisionNote.trim()).slice(0, 500);
+      if (!note) throw new Error("Skill proposal rejection requires a decision note.");
+      const result = rejectSkillProposalStatement.run({ id, decisionNote: note, now: new Date().toISOString() });
+      if (result.changes !== 1) throw new Error(`Skill proposal ${id} is not awaiting a draft link.`);
+      return getSkillProposalRecord(db, id);
     },
 
     pinGoalSkill(input: {
@@ -458,10 +632,28 @@ export function migrateSkillPersistence(db: Database.Database): void {
       FOREIGN KEY (step_id) REFERENCES goal_steps(id),
       FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
     );
+    CREATE TABLE IF NOT EXISTS skill_proposals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      improvement_proposal_id INTEGER NOT NULL UNIQUE,
+      suggested_qualified_name TEXT NOT NULL,
+      owner TEXT NOT NULL DEFAULT 'agent',
+      status TEXT NOT NULL DEFAULT 'requested',
+      skill_version_id INTEGER,
+      evidence_json TEXT NOT NULL,
+      provenance_json TEXT NOT NULL,
+      decision_note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (improvement_proposal_id) REFERENCES improvement_proposals(id),
+      FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
     CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, id);
     CREATE INDEX IF NOT EXISTS idx_goal_skill_pins_run_id ON goal_skill_pins(run_id, id);
     CREATE INDEX IF NOT EXISTS idx_skill_evaluations_version_id ON skill_evaluations(skill_version_id, id);
     CREATE INDEX IF NOT EXISTS idx_skill_usage_run_id ON skill_usage(run_id, id);
+    CREATE INDEX IF NOT EXISTS idx_skill_proposals_status ON skill_proposals(status, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_proposals_skill_version
+      ON skill_proposals(skill_version_id) WHERE skill_version_id IS NOT NULL;
   `);
 }
 
@@ -488,6 +680,13 @@ const USAGE_SELECT = `
   FROM skill_usage
   JOIN skill_versions ON skill_versions.id = skill_usage.skill_version_id
   JOIN skills ON skills.id = skill_versions.skill_id
+`;
+const SKILL_PROPOSAL_SELECT = `
+  SELECT skill_proposals.*, skill_versions.version_id AS linked_version_id,
+         skills.qualified_name AS linked_qualified_name
+  FROM skill_proposals
+  LEFT JOIN skill_versions ON skill_versions.id = skill_proposals.skill_version_id
+  LEFT JOIN skills ON skills.id = skill_versions.skill_id
 `;
 
 type SkillRow = {
@@ -560,6 +759,21 @@ type SkillUsageRow = {
   duration_ms: number;
   estimated_tokens: number;
   created_at: string;
+};
+type SkillProposalRow = {
+  id: number;
+  improvement_proposal_id: number;
+  suggested_qualified_name: string;
+  owner: "agent";
+  status: SkillProposalStatus;
+  skill_version_id: number | null;
+  linked_qualified_name: string | null;
+  linked_version_id: string | null;
+  evidence_json: string;
+  provenance_json: string;
+  decision_note: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 function normalizeRegistration(input: SkillVersionRegistrationInput): SkillVersionRegistrationInput {
@@ -693,6 +907,25 @@ function validateEvaluationInput(input: SkillEvaluationInput): void {
   }
 }
 
+function normalizeSkillProposalEvidence(evidence: string[]): string[] {
+  if (!Array.isArray(evidence)) return [];
+  return evidence
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => redactSensitiveText(item.trim()).slice(0, 200))
+    .slice(0, 20);
+}
+
+function getSkillProposalRow(db: Database.Database, id: number): SkillProposalRow {
+  const row = db.prepare(`${SKILL_PROPOSAL_SELECT} WHERE skill_proposals.id = ?`)
+    .get(id) as SkillProposalRow | undefined;
+  if (!row) throw new Error(`Skill proposal not found: ${id}`);
+  return row;
+}
+
+function getSkillProposalRecord(db: Database.Database, id: number): SkillProposalRecord {
+  return mapSkillProposal(getSkillProposalRow(db, id));
+}
+
 function getPin(db: Database.Database, runId: number, versionId: number): GoalSkillPinRecord {
   const row = db.prepare(`${PIN_SELECT} WHERE goal_skill_pins.run_id = ? AND goal_skill_pins.skill_version_id = ?`)
     .get(runId, versionId) as GoalSkillPinRow | undefined;
@@ -795,5 +1028,23 @@ function mapUsage(row: SkillUsageRow): SkillUsageRecord {
     durationMs: row.duration_ms,
     estimatedTokens: row.estimated_tokens,
     createdAt: row.created_at
+  };
+}
+
+function mapSkillProposal(row: SkillProposalRow): SkillProposalRecord {
+  return {
+    id: row.id,
+    improvementProposalId: row.improvement_proposal_id,
+    suggestedQualifiedName: row.suggested_qualified_name,
+    owner: row.owner,
+    status: row.status,
+    skillVersionRecordId: row.skill_version_id,
+    qualifiedName: row.linked_qualified_name,
+    versionId: row.linked_version_id,
+    evidence: JSON.parse(row.evidence_json) as string[],
+    provenance: JSON.parse(row.provenance_json) as Record<string, unknown>,
+    decisionNote: row.decision_note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }

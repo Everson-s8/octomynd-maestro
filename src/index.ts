@@ -29,6 +29,11 @@ import { RestrictedImprovementReviewCoordinator } from "./improvements/coordinat
 import { ImprovementReviewWorker } from "./improvements/worker.js";
 import { createTelegramImprovementCandidateNotifier } from "./telegram/notifications.js";
 import { bootstrapSkills } from "./skills/bootstrap.js";
+import { SkillCurator } from "./skills/curator.js";
+import { SkillCuratorWorker } from "./skills/curator-worker.js";
+import { SkillEvaluationHarness } from "./skills/evaluation.js";
+import { SkillVersionStore } from "./skills/store.js";
+import type { SkillLifecycleRuntime } from "./skills/lifecycle.js";
 import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
 
 const config = loadConfig();
@@ -90,6 +95,21 @@ if (skillBootstrap) {
     metadata: { active: skillBootstrap.active }
   });
 }
+const skillLifecycleRuntime: SkillLifecycleRuntime | undefined = config.skills.enabled
+  ? (() => {
+    const store = new SkillVersionStore(database, config.skills.versionsPath);
+    return {
+      store,
+      harness: new SkillEvaluationHarness(database, store),
+      curator: new SkillCurator(database, { staleDays: config.skills.curator.staleDays })
+    };
+  })()
+  : undefined;
+const skillCuratorWorker = skillLifecycleRuntime && config.skills.curator.autoArchiveEnabled
+  ? new SkillCuratorWorker(database, skillLifecycleRuntime.curator, {
+    pollIntervalMs: config.skills.curator.pollIntervalMs
+  })
+  : null;
 let goalCoordinator!: GoalCoordinator;
 let backlogAutopilot!: BacklogAutopilot;
 const workGraphCoordinator = new WorkGraphCoordinator(
@@ -220,10 +240,12 @@ const dashboardServer = config.dashboard.enabled
     backlogAutopilot,
     environmentDoctor,
     agentRegistry,
-    workGraphRuntime: workGraphCoordinator
+    workGraphRuntime: workGraphCoordinator,
+    skillLifecycle: skillLifecycleRuntime
   })
   : null;
 backlogAutopilot.start();
+skillCuratorWorker?.start();
 void environmentDoctor.inspectAll().catch((error) => {
   database.addEvent({
     source: "maestro",
@@ -252,6 +274,7 @@ if (recoveredWorkGraphs > 0) {
   console.log(`Work Graphs recovered: ${recoveredWorkGraphs}.`);
 }
 console.log(`Backlog autopilot: ${config.autopilot.enabled ? "enabled" : "disabled"}.`);
+console.log(`Skill Curator auto-archive: ${skillCuratorWorker ? "enabled" : "disabled (dry-run only)"}.`);
 console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled" : "disabled"}.`);
 console.log(`Work Graph adoption: ${config.workGraph.adoptionMode}.`);
 console.log(`Execution environment: ${environmentFingerprint.id}.`);
@@ -274,6 +297,7 @@ async function shutdown() {
   featureCoordinator.shutdown();
   featureAssemblyCoordinator.shutdown();
   improvementReviewWorker.shutdown();
+  skillCuratorWorker?.shutdown();
   await workGraphCoordinator.shutdown();
   goalCoordinator.shutdown();
   if (dashboardServer) {
