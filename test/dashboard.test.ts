@@ -107,7 +107,8 @@ describe("dashboard", () => {
           state: "cooldown",
           activeCount: 0,
           cooldownUntil: "2026-07-15T12:00:00.000Z",
-          detail: "Claude atingiu timeout transitorio."
+          detail: "Claude atingiu timeout transitorio.",
+          control: { mode: "enabled", fallbackEnabled: true }
         }]
       }
     });
@@ -123,6 +124,51 @@ describe("dashboard", () => {
       expect(payload.agents.find((agent) => agent.id === "claude")).toMatchObject({
         state: "attention",
         detail: expect.stringContaining("Cooldown ate 2026-07-15T12:00:00.000Z")
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
+  it("persists provider controls and capability routing through the dashboard API", async () => {
+    const registry = new AgentRegistry([successfulGoalProvider], undefined, Date.now, database);
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full",
+      agentRegistry: registry
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const controlResponse = await fetch(`http://127.0.0.1:${port}/api/provider-policy/providers/codex`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "paused", fallbackEnabled: false })
+      });
+      expect(controlResponse.status).toBe(200);
+
+      const routingResponse = await fetch(`http://127.0.0.1:${port}/api/provider-policy/capabilities/reviewing`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: ["codex", "claude", "antigravity"], requiredProviderId: "codex" })
+      });
+      expect(routingResponse.status).toBe(200);
+
+      const policyResponse = await fetch(`http://127.0.0.1:${port}/api/provider-policy`);
+      const payload = await policyResponse.json() as { policy: ReturnType<AgentRegistry["policySnapshot"]> };
+      expect(payload.policy.controls).toContainEqual(expect.objectContaining({
+        providerId: "codex",
+        mode: "paused",
+        fallbackEnabled: false
+      }));
+      expect(payload.policy.capabilities.find((item) => item.capability === "reviewing")).toMatchObject({
+        order: ["codex", "claude", "antigravity"],
+        requiredProviderId: "codex"
       });
     } finally {
       await new Promise<void>((resolve, reject) => server.close(

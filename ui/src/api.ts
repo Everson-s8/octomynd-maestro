@@ -309,6 +309,81 @@ export type DashboardData = {
   }>;
 };
 
+export type AgentProviderId = "codex" | "claude" | "antigravity";
+export type AgentCapability =
+  | "planning"
+  | "coding"
+  | "testing"
+  | "reviewing"
+  | "improvement_reviewing"
+  | "research"
+  | "conversation";
+export type ProviderMode = "enabled" | "paused" | "disabled";
+export type ProviderControl = {
+  providerId: AgentProviderId;
+  mode: ProviderMode;
+  fallbackEnabled: boolean;
+  updatedAt: string | null;
+};
+export type CapabilityRoutingPolicy = {
+  capability: AgentCapability;
+  order: AgentProviderId[];
+  requiredProviderId: AgentProviderId | null;
+  updatedAt: string | null;
+};
+export type ProviderPolicySnapshot = {
+  controls: ProviderControl[];
+  capabilities: CapabilityRoutingPolicy[];
+};
+
+export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot> {
+  const response = await fetch("/api/provider-policy");
+  const payload = await response.json() as { policy?: ProviderPolicySnapshot; error?: string };
+  if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
+  return payload.policy;
+}
+
+export async function updateProviderControl(
+  providerId: AgentProviderId,
+  input: Pick<ProviderControl, "mode" | "fallbackEnabled">
+): Promise<ProviderControl> {
+  const response = await fetch(`/api/provider-policy/providers/${providerId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as { control?: ProviderControl; error?: string };
+  if (!response.ok || !payload.control) throw new Error(payload.error || "Nao foi possivel atualizar o provider.");
+  return payload.control;
+}
+
+export async function updateProviderControls(
+  controls: Array<Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled">>
+): Promise<ProviderControl[]> {
+  const response = await fetch("/api/provider-policy/providers", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ controls })
+  });
+  const payload = await response.json() as { controls?: ProviderControl[]; error?: string };
+  if (!response.ok || !payload.controls) throw new Error(payload.error || "Nao foi possivel atualizar os providers.");
+  return payload.controls;
+}
+
+export async function updateCapabilityRouting(
+  capability: AgentCapability,
+  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId">
+): Promise<CapabilityRoutingPolicy> {
+  const response = await fetch(`/api/provider-policy/capabilities/${capability}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as { routing?: CapabilityRoutingPolicy; error?: string };
+  if (!response.ok || !payload.routing) throw new Error(payload.error || "Nao foi possivel atualizar o roteamento.");
+  return payload.routing;
+}
+
 export type GoalRun = {
   id: number;
   taskId: number;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
+import { defaultProviderPolicySnapshot, ProviderPolicyStore } from "../src/agents/policy.js";
 import { AgentCapability, AgentExecutionResult, AgentProvider, AgentProviderId } from "../src/agents/types.js";
 
 describe("agent registry leases", () => {
@@ -105,7 +106,63 @@ describe("agent registry leases", () => {
     now += 15_001;
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
+
+  it("honors persisted provider modes, priorities and strict routing", async () => {
+    const policy = policyStore();
+    policy.updateProviderControl({ providerId: "antigravity", mode: "paused", fallbackEnabled: true });
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["claude", "codex", "antigravity"],
+      requiredProviderId: null
+    });
+    const registry = new AgentRegistry([
+      provider("codex", ["coding"]),
+      provider("claude", ["coding"]),
+      provider("antigravity", ["coding"])
+    ], undefined, Date.now, policy);
+
+    expect((await registry.acquire("coding"))?.provider.id).toBe("claude");
+    policy.updateProviderControl({ providerId: "claude", mode: "enabled", fallbackEnabled: false });
+    expect(await registry.acquire("coding")).toBeNull();
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["codex", "claude", "antigravity"],
+      requiredProviderId: "codex"
+    });
+    expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
+  });
 });
+
+function policyStore(): ProviderPolicyStore {
+  let snapshot = defaultProviderPolicySnapshot();
+  return {
+    getProviderPolicySnapshot: () => snapshot,
+    updateProviderControl: (input) => {
+      const control = { ...input, updatedAt: new Date().toISOString() };
+      snapshot = {
+        ...snapshot,
+        controls: [...snapshot.controls.filter((item) => item.providerId !== input.providerId), control]
+      };
+      return control;
+    },
+    updateProviderControls: (inputs) => inputs.map((input) => {
+      const control = { ...input, updatedAt: new Date().toISOString() };
+      snapshot = {
+        ...snapshot,
+        controls: [...snapshot.controls.filter((item) => item.providerId !== input.providerId), control]
+      };
+      return control;
+    }),
+    updateCapabilityRouting: (input) => {
+      const routing = { ...input, updatedAt: new Date().toISOString() };
+      snapshot = {
+        ...snapshot,
+        capabilities: snapshot.capabilities.map((item) => item.capability === input.capability ? routing : item)
+      };
+      return routing;
+    }
+  };
+}
 
 function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentProvider {
   const completed: AgentExecutionResult = {

@@ -6,16 +6,13 @@ import {
   AgentProviderId
 } from "./types.js";
 import type { FailureCategory } from "./failure.js";
+import {
+  ProviderPolicySnapshot,
+  ProviderPolicyStore,
+  defaultProviderPolicySnapshot,
+  resolveProviderOrder
+} from "./policy.js";
 
-const ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
-  planning: ["antigravity", "claude", "codex"],
-  coding: ["antigravity", "codex", "claude"],
-  testing: ["antigravity", "codex", "claude"],
-  reviewing: ["claude", "antigravity", "codex"],
-  improvement_reviewing: ["antigravity", "claude", "codex"],
-  research: ["antigravity", "claude", "codex"],
-  conversation: ["antigravity", "claude", "codex"]
-};
 
 export type RoutedAgent = {
   provider: AgentProvider;
@@ -45,6 +42,10 @@ export type AgentProviderSnapshot = {
   activeCount: number;
   cooldownUntil: string | null;
   detail: string;
+  control: {
+    mode: "enabled" | "paused" | "disabled";
+    fallbackEnabled: boolean;
+  };
 };
 
 type ProviderCooldown = {
@@ -65,7 +66,8 @@ export class AgentRegistry {
       claude: 1,
       antigravity: 1
     },
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly policyStore?: ProviderPolicyStore
   ) {
     for (const provider of providers) {
       if (this.providers.has(provider.id)) {
@@ -83,7 +85,7 @@ export class AgentRegistry {
     capability: AgentCapability,
     excluded: ReadonlySet<AgentProviderId> = new Set()
   ): Promise<RoutedAgent | null> {
-    for (const providerId of ROUTING_ORDER[capability]) {
+    for (const providerId of this.providerOrder(capability)) {
       if (excluded.has(providerId)) continue;
       if (this.activeCooldown(providerId)) continue;
       const provider = this.providers.get(providerId);
@@ -100,7 +102,7 @@ export class AgentRegistry {
     capability: AgentCapability,
     excluded: ReadonlySet<AgentProviderId> = new Set()
   ): Promise<AgentLease | null> {
-    for (const providerId of ROUTING_ORDER[capability]) {
+    for (const providerId of this.providerOrder(capability)) {
       if (excluded.has(providerId)) continue;
       if (this.activeCooldown(providerId)) continue;
       const provider = this.providers.get(providerId);
@@ -144,7 +146,7 @@ export class AgentRegistry {
     excluded: ReadonlySet<AgentProviderId> = new Set()
   ): Promise<ProviderAvailabilityWait> {
     const candidates: ProviderAvailabilityWait[] = [];
-    for (const providerId of ROUTING_ORDER[capability]) {
+    for (const providerId of this.providerOrder(capability)) {
       if (excluded.has(providerId)) continue;
       const provider = this.providers.get(providerId);
       if (!provider || !provider.capabilities.has(capability)) continue;
@@ -178,6 +180,8 @@ export class AgentRegistry {
   }
 
   async snapshot(): Promise<AgentProviderSnapshot[]> {
+    const policy = this.policySnapshot();
+    const controls = new Map(policy.controls.map((control) => [control.providerId, control]));
     return Promise.all(this.list().map(async (provider) => {
       const health = await provider.health();
       const activeCount = this.activeCount(provider.id);
@@ -197,9 +201,36 @@ export class AgentRegistry {
         state,
         activeCount,
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
-        detail: cooldown?.detail ?? health.detail
+        detail: cooldown?.detail ?? health.detail,
+        control: {
+          mode: controls.get(provider.id)?.mode ?? "enabled",
+          fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true
+        }
       };
     }));
+  }
+
+  policySnapshot(): ProviderPolicySnapshot {
+    return this.policyStore?.getProviderPolicySnapshot() ?? defaultProviderPolicySnapshot();
+  }
+
+  updateProviderControl(...args: Parameters<ProviderPolicyStore["updateProviderControl"]>) {
+    if (!this.policyStore) throw new Error("Provider policy store is unavailable.");
+    return this.policyStore.updateProviderControl(...args);
+  }
+
+  updateProviderControls(...args: Parameters<ProviderPolicyStore["updateProviderControls"]>) {
+    if (!this.policyStore) throw new Error("Provider policy persistence is unavailable.");
+    return this.policyStore.updateProviderControls(...args);
+  }
+
+  updateCapabilityRouting(...args: Parameters<ProviderPolicyStore["updateCapabilityRouting"]>) {
+    if (!this.policyStore) throw new Error("Provider policy store is unavailable.");
+    return this.policyStore.updateCapabilityRouting(...args);
+  }
+
+  private providerOrder(capability: AgentCapability): AgentProviderId[] {
+    return resolveProviderOrder(capability, this.policySnapshot());
   }
 
   private activeCooldown(providerId: AgentProviderId): ProviderCooldown | null {

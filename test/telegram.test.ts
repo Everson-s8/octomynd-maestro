@@ -264,7 +264,8 @@ describe("telegram helpers", () => {
         state: "working",
         activeCount: 1,
         cooldownUntil: null,
-        detail: "Claude CLI autenticado"
+        detail: "Claude CLI autenticado",
+        control: { mode: "enabled", fallbackEnabled: true }
       }]);
 
       expect(status).toContain("Providers:");
