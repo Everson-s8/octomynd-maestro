@@ -32,6 +32,7 @@ import {
   TaskStatus
 } from "./api";
 import { formatWorkGraphDuration, isWorkGraphCancellable } from "./workGraphs";
+import { agentStateLabel, heroAgentChip } from "./agentPresentation";
 
 const taskStatusLabels: Record<TaskStatus, string> = {
   queued: "na fila",
@@ -269,6 +270,8 @@ function Topbar({
 
 function HeroConsole({ data }: { data: DashboardData }) {
   const leadTask = data.tasks.find((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status));
+  const codexChip = heroAgentChip(data.agents, "codex", "Codex");
+  const claudeChip = heroAgentChip(data.agents, "claude", "Claude");
   return (
     <section className="hero-console panel" aria-labelledby="hero-title">
       <div className="hero-grid" aria-hidden="true" />
@@ -290,8 +293,8 @@ function HeroConsole({ data }: { data: DashboardData }) {
         <div className="orbit orbit-a" />
         <div className="orbit orbit-b" />
         <div className="mascot-core"><OctoMark large /></div>
-        <span className="agent-satellite satellite-codex">Codex<small>ready</small></span>
-        <span className="agent-satellite satellite-claude">Claude<small>review</small></span>
+        <span className="agent-satellite satellite-codex">{codexChip.label}<small>{agentStateLabel(codexChip.state)}</small></span>
+        <span className="agent-satellite satellite-claude">{claudeChip.label}<small>{agentStateLabel(claudeChip.state)}</small></span>
         <span className="agent-satellite satellite-telegram">Telegram<small>live</small></span>
       </div>
       <div className="hero-now">
@@ -797,7 +800,7 @@ function AgentDock({
           <article className={`agent-card agent-${agent.id}`} key={agent.id}>
             <div className="agent-avatar">{agent.id === "telegram" ? <Icon name="send" /> : agent.label.slice(0, 1)}</div>
             <div><strong>{agent.label}</strong><small>{agent.detail}</small></div>
-            <span className={`agent-state state-${agent.state}`}>{agent.state === "working" ? "trabalhando" : agent.state === "ready" ? "pronto" : agent.state === "attention" ? "atenção" : "offline"}</span>
+            <span className={`agent-state state-${agent.state}`}>{agentStateLabel(agent.state)}</span>
           </article>
         ))}
         {environments.map((environment) => (

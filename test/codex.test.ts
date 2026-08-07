@@ -109,21 +109,50 @@ describe("codex provider telemetry", () => {
 
   it("reports a short, structured summary for a quota failure and marks it retryable", async () => {
     process.env.FAKE_CODEX_MODE = "quota";
-    const result = await new CodexProvider(5_000).execute(executionRequest(cwd, "implementing"));
+    const provider = new CodexProvider(5_000);
+    const result = await provider.execute(executionRequest(cwd, "implementing"));
 
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Codex (implementing): cota do provedor esgotada.");
     expect(result.retryable).toBe(true);
     expect(result.error).toContain("usage limit");
+    expect(await provider.health()).toMatchObject({
+      state: "quota",
+      detail: expect.stringContaining("cota do provider")
+    });
   });
 
-  it("reports authentication failures distinctly from quota", async () => {
+  it("reports authentication failures distinctly from quota, with a remediation command", async () => {
     process.env.FAKE_CODEX_MODE = "auth";
-    const result = await new CodexProvider(5_000).execute(executionRequest(cwd, "planning"));
+    const provider = new CodexProvider(5_000);
+    const result = await provider.execute(executionRequest(cwd, "planning"));
 
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Codex (planning): autenticacao necessaria.");
     expect(result.retryable).toBe(true);
+    expect(await provider.health()).toMatchObject({
+      state: "auth_required",
+      detail: expect.stringContaining("codex login")
+    });
+  });
+
+  it("names the install and login commands when the Codex CLI is not found", async () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-codex-missing-"));
+    const originalPrefix = process.env.NPM_CONFIG_PREFIX;
+    process.env.APPDATA = emptyDir;
+    process.env.NPM_CONFIG_PREFIX = emptyDir;
+    try {
+      const provider = new CodexProvider(5_000);
+
+      expect(await provider.health()).toMatchObject({
+        state: "offline",
+        detail: expect.stringContaining("npm install -g @openai/codex")
+      });
+    } finally {
+      if (originalPrefix === undefined) delete process.env.NPM_CONFIG_PREFIX;
+      else process.env.NPM_CONFIG_PREFIX = originalPrefix;
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
   });
 
   it("classifies a killed process as a timeout instead of an unknown failure", async () => {
