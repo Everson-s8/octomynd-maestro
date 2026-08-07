@@ -9,6 +9,7 @@ import type {
 } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
+import { classifyFailure } from "../agents/failure.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../runtime/compression.js";
@@ -662,6 +663,7 @@ export async function runTaskGoal(
               fromProvider: routed.provider.id,
               toProvider: fallback.provider.id,
               retryable: result.retryable,
+              failureCategory: result.failureCategory ?? classifyFailure(result.summary || result.error || "", result.failureCategory === "timeout"),
               breakerReason: result.processRuntime?.breakerReason ?? null,
               resumeCheckpointId: resumeCheckpoint?.id ?? null,
               preservedFiles: resumeCheckpoint?.changedFiles ?? []
@@ -984,6 +986,7 @@ function pauseRun(
   const safeError = sanitizeForRunSummary(error);
   const retryAfterMs = Math.max(1_000, wait.retryAfterMs ?? 60_000);
   const nextRetryAt = new Date(Date.now() + retryAfterMs).toISOString();
+  const checkpoint = database.getLatestGoalCheckpoint(run.id);
   return database.withTransaction(() => {
     database.updateTaskStatus(taskId, "waiting_provider");
     const paused = database.updateGoalRun({
@@ -1007,7 +1010,12 @@ function pauseRun(
         stepCount,
         waitReason: wait.reason,
         nextRetryAt,
-        provider: wait.provider ?? run.lastProvider ?? null
+        provider: wait.provider ?? run.lastProvider ?? null,
+        fromProvider: run.lastProvider ?? null,
+        toProvider: wait.provider ?? null,
+        retryable: true,
+        resumeCheckpointId: checkpoint?.id ?? null,
+        preservedFiles: checkpoint?.changedFiles ?? []
       }
     });
     return paused;
@@ -1037,6 +1045,8 @@ function finishRun(
   taskId: number
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
+  const checkpoint = database.getLatestGoalCheckpoint(run.id);
+  const failureCategory = classifyFailure(safeError);
   return database.withTransaction(() => {
     database.updateTaskStatus(taskId, status);
     const finished = database.updateGoalRun({
@@ -1051,7 +1061,15 @@ function finishRun(
       type: `goal.${status}`,
       text: safeError,
       taskId,
-      metadata: { runId: run.id, phase, stepCount }
+      metadata: {
+        runId: run.id,
+        phase,
+        stepCount,
+        failureCategory,
+        lastProvider: run.lastProvider ?? null,
+        resumeCheckpointId: checkpoint?.id ?? null,
+        preservedFiles: checkpoint?.changedFiles ?? []
+      }
     });
     return finished;
   });

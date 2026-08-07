@@ -9,6 +9,8 @@ import type { AgentProviderId } from "../agents/types.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { SkillCurator } from "../skills/curator.js";
 
+import { buildGoalObservability } from "../goals/observability.js";
+
 export type AgentPresence = {
   id: AgentProviderId | "telegram";
   label: string;
@@ -191,7 +193,8 @@ export function buildDashboardSnapshot(
       ...goal,
       lastError: goal.lastError
         ? truncateForDisplay(redactSensitiveText(goal.lastError), EVENT_TEXT_MAX_LENGTH)
-        : null
+        : null,
+      observability: buildGoalObservability(database, goal)
     })),
     features: features.map((feature) => ({
       id: feature.id,
