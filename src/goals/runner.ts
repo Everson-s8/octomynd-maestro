@@ -352,13 +352,9 @@ export async function runTaskGoal(
       }
 
       let routed = await registry.acquire(CAPABILITIES[phase], excluded);
-      if (!routed && excluded.size > 0) {
-        excluded = new Set();
-        routed = await registry.acquire(CAPABILITIES[phase]);
-      }
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
-        const availability = await registry.nextAvailability(CAPABILITIES[phase]);
+        const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
         return pauseRun(database, currentRun, phase, stepCount, error, task.id, {
           reason: availability.reason,
           retryAfterMs: availability.retryAfterMs,
@@ -605,35 +601,36 @@ export async function runTaskGoal(
         workspaceBefore,
         workspaceAfter
       });
-      if (circuitDecision) {
-        if (circuitDecision.reason === "output_limit") {
-          database.addEvent({
-            source: "maestro",
-            type: "goal.output_limit_checkpoint",
-            text: "Provider output limit reached; checkpoint preserved for automatic resume.",
-            taskId: task.id,
-            metadata: {
-              runId: run.id,
-              phase,
-              stepCount,
-              provider: routed.provider.id,
-              worktreePreserved: true
-            }
-          });
-          return pauseRun(
-            database,
-            currentRun,
+      if (circuitDecision?.reason === "output_limit") {
+        database.addEvent({
+          source: "maestro",
+          type: "goal.output_limit_checkpoint",
+          text: "Provider output limit reached; checkpoint preserved for automatic resume.",
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
             phase,
             stepCount,
-            "Provider output limit reached. Partial work was preserved and will resume with another provider.",
-            task.id,
-            {
-              reason: "output_limit",
-              retryAfterMs: 5_000,
-              provider: routed.provider.id
-            }
-          );
-        }
+            provider: routed.provider.id,
+            worktreePreserved: true
+          }
+        });
+        return pauseRun(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          "Provider output limit reached. Partial work was preserved and will resume with another provider.",
+          task.id,
+          {
+            reason: "output_limit",
+            retryAfterMs: 5_000,
+            provider: routed.provider.id
+          }
+        );
+      }
+
+      if (circuitDecision && result.outcome !== "failed") {
         return finishCircuitBreak(
           database,
           currentRun,
@@ -652,6 +649,7 @@ export async function runTaskGoal(
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
         if (fallback) {
+          const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
           database.addEvent({
             source: "maestro",
             type: "goal.provider_fallback",
@@ -664,13 +662,15 @@ export async function runTaskGoal(
               fromProvider: routed.provider.id,
               toProvider: fallback.provider.id,
               retryable: result.retryable,
-              breakerReason: result.processRuntime?.breakerReason ?? null
+              breakerReason: result.processRuntime?.breakerReason ?? null,
+              resumeCheckpointId: resumeCheckpoint?.id ?? null,
+              preservedFiles: resumeCheckpoint?.changedFiles ?? []
             }
           });
           continue;
         }
-        if (result.retryable) {
-          const availability = await registry.nextAvailability(CAPABILITIES[phase]);
+        const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
+        if (availability.provider) {
           return pauseRun(
             database,
             currentRun,
@@ -681,7 +681,35 @@ export async function runTaskGoal(
             {
               reason: availability.reason,
               retryAfterMs: availability.retryAfterMs,
-              provider: availability.provider ?? routed.provider.id
+              provider: availability.provider ?? undefined
+            }
+          );
+        }
+        if (circuitDecision) {
+          return finishCircuitBreak(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            task.id,
+            circuitDecision.reason,
+            circuitDecision.summary
+          );
+        }
+        if (result.retryable) {
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            result.summary || result.error || "Provider failure.",
+            task.id,
+            {
+              reason: result.failureCategory === "quota" || result.failureCategory === "capacity"
+                ? result.failureCategory
+                : availability.reason,
+              retryAfterMs: result.retryAfterMs ?? availability.retryAfterMs,
+              provider: routed.provider.id
             }
           );
         }
@@ -922,12 +950,18 @@ function initialExcludedProviders(
   phase: GoalPhase
 ): Set<AgentProviderId> {
   if (run.status !== "waiting_provider") return new Set();
-  const latestStep = [...database.listGoalSteps(run.id)]
-    .reverse()
-    .find((step) => step.phase === phase);
-  if (latestStep?.status !== "failed") return new Set();
-  if (!isAgentProviderId(latestStep.provider)) return new Set();
-  return new Set([latestStep.provider]);
+  const failed = database.listGoalSteps(run.id)
+    .filter((step) => step.phase === phase && step.status === "failed")
+    .map((step) => step.provider)
+    .filter(isAgentProviderId);
+  const excluded = new Set(failed);
+  if (
+    (run.waitReason === "quota" || run.waitReason === "capacity")
+    && isAgentProviderId(run.lastProvider)
+  ) {
+    excluded.delete(run.lastProvider);
+  }
+  return excluded;
 }
 
 function isAgentProviderId(value: unknown): value is AgentProviderId {

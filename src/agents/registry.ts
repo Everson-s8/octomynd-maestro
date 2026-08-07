@@ -139,9 +139,13 @@ export class AgentRegistry {
     return this.activeLeases.get(providerId) ?? 0;
   }
 
-  async nextAvailability(capability: AgentCapability): Promise<ProviderAvailabilityWait> {
+  async nextAvailability(
+    capability: AgentCapability,
+    excluded: ReadonlySet<AgentProviderId> = new Set()
+  ): Promise<ProviderAvailabilityWait> {
     const candidates: ProviderAvailabilityWait[] = [];
     for (const providerId of ROUTING_ORDER[capability]) {
+      if (excluded.has(providerId)) continue;
       const provider = this.providers.get(providerId);
       if (!provider || !provider.capabilities.has(capability)) continue;
       const cooldown = this.activeCooldown(providerId);

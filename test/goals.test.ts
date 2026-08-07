@@ -688,6 +688,86 @@ describe("goal runner", () => {
     });
   });
 
+  it("waits for an untried provider and resumes it with preserved context", async () => {
+    const projectDir = path.join(tempDir, "exhaustion-project");
+    const worktreeDir = path.join(tempDir, "exhaustion-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "exhaustion", path: projectDir });
+    const task = database.createTask("preserve handoff across providers", "dashboard", "exhaustion");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const failure = (provider: string): AgentExecutionResult => ({
+      outcome: "failed",
+      summary: `${provider} failed`,
+      output: "",
+      error: `${provider} unavailable`,
+      durationMs: 1,
+      retryable: true,
+      retryAfterMs: 1_000,
+      failureCategory: "capacity"
+    });
+    const antigravity = new FakeProvider(
+      "antigravity",
+      ["planning", "coding"],
+      (request) => {
+        if (request.phase === "planning") return completed("Antigravity plan");
+        fs.writeFileSync(path.join(worktreeDir, "partial.ts"), "export const partial = true;\n", "utf8");
+        return failure("antigravity");
+      }
+    );
+    const codex = new FakeProvider("codex", ["coding"], () => failure("codex"));
+    let claudeHealthChecks = 0;
+    const claudeRequests: AgentExecutionRequest[] = [];
+    const claude: AgentProvider = {
+      id: "claude",
+      label: "claude",
+      capabilities: new Set(["coding", "testing", "reviewing"]),
+      async health() {
+        claudeHealthChecks += 1;
+        return claudeHealthChecks === 1
+          ? { state: "offline", detail: "temporarily busy", checkedAt: new Date().toISOString() }
+          : { state: "ready", detail: "ready", checkedAt: new Date().toISOString() };
+      },
+      async execute(request) {
+        claudeRequests.push(request);
+        return completed(`Claude ${request.phase}`);
+      }
+    };
+    const registry = new AgentRegistry([antigravity, codex, claude]);
+
+    const waiting = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8
+    });
+
+    expect(waiting.status).toBe("waiting_provider");
+    expect(database.listGoalSteps(waiting.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider)).toEqual(["antigravity", "codex"]);
+    expect(database.listEvents().some((event) => event.type === "goal.circuit_breaker")).toBe(false);
+
+    const resumed = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: waiting,
+      maxSteps: 8
+    });
+
+    expect(resumed.status).toBe("completed");
+    expect(database.listGoalSteps(resumed.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider)).toEqual(["antigravity", "codex", "claude"]);
+    const resumedRequest = claudeRequests.find((request) => request.phase === "implementing");
+    expect(resumedRequest?.previousSteps.map((step) => step.provider)).toEqual([
+      "antigravity",
+      "antigravity",
+      "codex"
+    ]);
+    expect(resumedRequest?.resumeContext).toContain("partial.ts");
+    expect(fs.readFileSync(path.join(worktreeDir, "partial.ts"), "utf8")).toContain("partial = true");
+  });
+
   it("delivers an approved goal to a draft pull request and leaves merge as the human gate", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");
