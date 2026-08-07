@@ -37,7 +37,12 @@ describe("config", () => {
       enabled: false,
       catalogPath: path.resolve("skills"),
       versionsPath: path.resolve(".maestro/skill-versions"),
-      projectKey: "maestro"
+      projectKey: "maestro",
+      curator: {
+        staleDays: 30,
+        autoArchiveEnabled: false,
+        pollIntervalMs: 6 * 60 * 60_000
+      }
     });
     expect(config.execution.expectedNodeVersion).toBe("20.17.0");
     expect(config.worktreesPath).toBe(config.execution.worktreesPath);
@@ -123,6 +128,20 @@ describe("config", () => {
 
     expect(config.skills.enabled).toBe(true);
     expect(config.skills.projectKey).toBe("octomynd");
+  });
+
+  it("keeps the Skill Curator in dry-run unless auto-archive is explicitly enabled", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_SKILL_CURATOR_STALE_DAYS: "10",
+      MAESTRO_SKILL_CURATOR_AUTO_ARCHIVE_ENABLED: "true",
+      MAESTRO_SKILL_CURATOR_POLL_MS: "120000"
+    });
+
+    expect(config.skills.curator).toEqual({
+      staleDays: 10,
+      autoArchiveEnabled: true,
+      pollIntervalMs: 120_000
+    });
   });
 
   it("blocks unsafe Windows execution roots before long-running work", () => {

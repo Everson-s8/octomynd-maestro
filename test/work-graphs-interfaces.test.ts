@@ -34,7 +34,13 @@ beforeEach(() => {
     autopilot: { enabled: false, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
     runtime: { tokenEfficient: true },
     workGraph: { adoptionMode: "off" },
-    skills: { enabled: false, catalogPath: path.join(root, "skills"), versionsPath: path.join(root, "versions"), projectKey: "fixture" },
+    skills: {
+      enabled: false,
+      catalogPath: path.join(root, "skills"),
+      versionsPath: path.join(root, "versions"),
+      projectKey: "fixture",
+      curator: { staleDays: 30, autoArchiveEnabled: false, pollIntervalMs: 21_600_000 }
+    },
     telegram: { botToken: "", allowedUserId: null }
   };
 });

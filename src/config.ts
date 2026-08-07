@@ -51,6 +51,11 @@ export type MaestroConfig = {
     catalogPath: string;
     versionsPath: string;
     projectKey: string;
+    curator: {
+      staleDays: number;
+      autoArchiveEnabled: boolean;
+      pollIntervalMs: number;
+    };
   };
   telegram: {
     botToken: string;
@@ -119,7 +124,12 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
         cwd,
         env.MAESTRO_SKILL_VERSIONS_PATH?.trim() || ".maestro/skill-versions"
       ),
-      projectKey: env.MAESTRO_SKILLS_PROJECT_KEY?.trim().toLowerCase() || "maestro"
+      projectKey: env.MAESTRO_SKILLS_PROJECT_KEY?.trim().toLowerCase() || "maestro",
+      curator: {
+        staleDays: normalizePositiveInteger(env.MAESTRO_SKILL_CURATOR_STALE_DAYS, 30, 1),
+        autoArchiveEnabled: normalizeBoolean(env.MAESTRO_SKILL_CURATOR_AUTO_ARCHIVE_ENABLED, false),
+        pollIntervalMs: normalizePositiveInteger(env.MAESTRO_SKILL_CURATOR_POLL_MS, 6 * 60 * 60_000, 60_000)
+      }
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || "",

@@ -26,16 +26,22 @@ import {
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
+  SkillArchiveActor,
   SkillEvaluationCheck,
   SkillEvaluationComparison,
   SkillEvaluationInput,
   SkillEvaluationRecord,
+  SkillProposalInput,
+  SkillProposalRecord,
+  SkillProposalStatus,
   SkillRecord,
   SkillUsageRecord,
+  SkillUsageSummary,
   SkillVersionLifecycleStatus,
   SkillVersionRecord,
   SkillVersionRegistrationInput
 } from "./skills/persistence.js";
+export type { SkillOwner, SkillRisk, SkillScope } from "./skills/types.js";
 
 export type TaskStatus =
   | "queued"

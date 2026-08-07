@@ -7,6 +7,7 @@ import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { AgentProviderId } from "../agents/types.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
+import { SkillCurator } from "../skills/curator.js";
 
 export type AgentPresence = {
   id: AgentProviderId | "telegram";
@@ -70,7 +71,9 @@ export function buildDashboardSnapshot(
   const features = database.listFeatures(30);
   const featurePlans = database.listFeaturePlans(30);
   const skills = database.listSkills();
-  const workGraphs = new ApplicationCommands(database).listWorkGraphs(30);
+  const skillProposals = database.listSkillProposals();
+  const commands = new ApplicationCommands(database);
+  const workGraphs = commands.listWorkGraphs(30);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -130,6 +133,12 @@ export function buildDashboardSnapshot(
       };
     }),
     skillUsage: database.listSkillUsage(undefined, 40),
+    skillProposals: skillProposals.map((proposal) => ({
+      ...proposal,
+      evidence: proposal.evidence.map(redactSensitiveText),
+      decisionNote: proposal.decisionNote ? redactSensitiveText(proposal.decisionNote) : null
+    })),
+    skillCuratorReport: new SkillCurator(database, { staleDays: config.skills.curator.staleDays }).dryRun(),
     projects: projects.map((project) => {
       const projectTasks = tasks.filter((task) => task.projectKey === project.key);
       const currentWork = goals.flatMap((goal) => {

@@ -152,6 +152,42 @@ describe("approved improvement activation", () => {
     expect(database.listFeaturePlans()).toHaveLength(1);
   });
 
+  it("drafts an agent-owned Skill proposal linked to the improvement without activating anything", () => {
+    const proposal = database.createImprovementProposal({
+      category: "skill",
+      title: "Improve delivery evidence",
+      rationale: "Completed Features repeatedly need clearer validation evidence.",
+      proposedChange: "Add a bounded validation checklist to the delivery skill.",
+      evidence: ["feature:24:review_summary: Final review passed"],
+      risk: "low",
+      source: "background-review:codex",
+      projectKey: "maestro",
+      targets: ["agent-owned/delivery-skill"],
+      confidence: 0.9,
+      fingerprint: "e".repeat(64),
+      provenance: { runId: "completion-review:2" }
+    });
+    const commands = new ApplicationCommands(database);
+
+    const result = commands.decideImprovementProposal({ channel: "dashboard" }, proposal.id, "approved");
+
+    const drafts = database.listSkillProposals();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      improvementProposalId: result.improvement.id,
+      owner: "agent",
+      status: "requested",
+      suggestedQualifiedName: "repository:improve-delivery-evidence",
+      skillVersionRecordId: null
+    });
+    expect(database.listSkills()).toHaveLength(0);
+    expect(database.listEvents().some((event) => event.type === "skill.proposal_drafted")).toBe(true);
+
+    const secondDecision = commands.decideImprovementProposal({ channel: "dashboard" }, proposal.id, "approved");
+    expect(secondDecision.improvement.id).toBe(result.improvement.id);
+    expect(database.listSkillProposals()).toHaveLength(1);
+  });
+
   it("records rejection without creating execution work", () => {
     const proposal = database.createImprovementProposal({
       category: "memory",

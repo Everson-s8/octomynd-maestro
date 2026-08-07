@@ -25,6 +25,8 @@ import { AgentRegistry } from "../agents/registry.js";
 import type { WorkGraphRuntimeCommands } from "../commands/application-commands.js";
 import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
+import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
+import { SkillCurator } from "../skills/curator.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -43,12 +45,18 @@ export type DashboardServerOptions = {
     "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
+  skillLifecycle?: SkillLifecycleRuntime;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
-  const commands = new ApplicationCommands(options.database, options.featureGithub, options.workGraphRuntime);
+  const commands = new ApplicationCommands(
+    options.database,
+    options.featureGithub,
+    options.workGraphRuntime,
+    options.skillLifecycle
+  );
 
   return http.createServer(async (request, response) => {
     try {
@@ -378,6 +386,71 @@ async function routeRequest(
         error: "improvement_decision_failed",
         details: message
       });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/skills/proposals") {
+    const status = url.searchParams.get("status");
+    const allowedStatuses = ["requested", "linked", "rejected"] as const;
+    if (status && !(allowedStatuses as readonly string[]).includes(status)) {
+      sendJson(response, 400, { error: "invalid_skill_proposal_status" });
+      return;
+    }
+    sendJson(response, 200, {
+      proposals: commands.listSkillProposals(status as typeof allowedStatuses[number] | undefined)
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/skills/proposals/reconcile") {
+    try {
+      sendJson(response, 200, { linked: commands.reconcileSkillProposalDrafts({ channel: "dashboard" }) });
+    } catch (error) {
+      sendCommandError(response, error, "skill_proposal_reconcile_failed");
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/skills/curator/report") {
+    const report = new SkillCurator(options.database, {
+      staleDays: options.config.skills.curator.staleDays
+    }).dryRun();
+    sendJson(response, 200, { report });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/skills/curator/apply") {
+    try {
+      sendJson(response, 200, commands.applySkillCuratorAutomaticArchival({ channel: "dashboard" }));
+    } catch (error) {
+      sendCommandError(response, error, "skill_curator_apply_failed");
+    }
+    return;
+  }
+
+  const skillVersionActionMatch = url.pathname.match(
+    /^\/api\/skills\/versions\/(\d+)\/(evaluate|approve|activate|rollback|restore|archive)$/
+  );
+  if (request.method === "POST" && skillVersionActionMatch) {
+    const skillVersionRecordId = Number(skillVersionActionMatch[1]);
+    const action = skillVersionActionMatch[2];
+    try {
+      const origin = { channel: "dashboard" as const };
+      const result = action === "evaluate"
+        ? commands.evaluateSkillVersion(origin, skillVersionRecordId)
+        : action === "approve"
+          ? commands.approveSkillVersion(origin, skillVersionRecordId)
+          : action === "activate"
+            ? commands.activateSkillVersion(origin, skillVersionRecordId)
+            : action === "rollback"
+              ? commands.rollbackSkillVersion(origin, skillVersionRecordId)
+              : action === "restore"
+                ? commands.restoreSkillVersion(origin, skillVersionRecordId)
+                : commands.archiveSkillVersion(origin, skillVersionRecordId);
+      sendJson(response, 200, { result });
+    } catch (error) {
+      sendCommandError(response, error, `skill_version_${action}_failed`);
     }
     return;
   }

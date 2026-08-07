@@ -9,6 +9,10 @@ import {
   ImprovementStatus,
   MaestroDatabase,
   ProjectRecord,
+  SkillEvaluationRecord,
+  SkillProposalRecord,
+  SkillProposalStatus,
+  SkillVersionRecord,
   TaskRecord
 } from "../db.js";
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
@@ -20,6 +24,8 @@ import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
+import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
+import type { SkillCuratorReport } from "../skills/curator.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -170,11 +176,18 @@ function adoptionView(metadata: Record<string, unknown>): WorkGraphAdoptionView 
 }
 
 export class ApplicationCommands {
+  private readonly skillLifecycleService?: SkillLifecycleService;
+
   constructor(
     private readonly database: MaestroDatabase,
     private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway(),
-    private readonly workGraphRuntime?: WorkGraphRuntimeCommands
-  ) {}
+    private readonly workGraphRuntime?: WorkGraphRuntimeCommands,
+    skillLifecycle?: SkillLifecycleRuntime
+  ) {
+    this.skillLifecycleService = skillLifecycle
+      ? new SkillLifecycleService(database, skillLifecycle)
+      : undefined;
+  }
 
   registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {
     const warnings: string[] = [];
@@ -461,13 +474,20 @@ export class ApplicationCommands {
           ? this.database.findProjectByKey(decided.projectKey)
           : this.database.getDefaultProject();
         if (!project) throw new Error(`Project not found for improvement proposal ${improvementId}.`);
+        const isSkillProposal = decided.category === "skill";
+        const suggestedQualifiedName = suggestSkillProposalQualifiedName(decided.title);
         const task = this.createTask(origin, {
           projectKey: project.key,
           text: [
             `Implement approved improvement #${decided.id}: ${decided.title}`,
             decided.proposedChange,
             `Targets: ${decided.targets.length > 0 ? decided.targets.join(", ") : "determine during planning"}`,
-            "Preserve the Maestro Constitution, human gates, secret handling, audit trail and rollback boundaries."
+            "Preserve the Maestro Constitution, human gates, secret handling, audit trail and rollback boundaries.",
+            ...(isSkillProposal ? [
+              `Create the Skill as an agent-owned draft under skills/repository/, qualified name ${suggestedQualifiedName}.`,
+              "Set maestro.yaml owner: agent and include evals/cases.yaml with trigger, content and script checks.",
+              "Do not activate, approve or wire the Skill into any runtime path; governed evaluation and promotion happen separately."
+            ] : [])
           ].join("\n\n")
         });
         const featurePlan = this.createFeaturePlan(origin, {
@@ -477,7 +497,10 @@ export class ApplicationCommands {
             decided.proposedChange,
             "Run deterministic typecheck, tests, build and secret scan.",
             "Deliver a Draft Work PR and require Final Review only on the consolidated Feature PR.",
-            "Do not mutate protected policy, permission, audit or rollback layers automatically."
+            "Do not mutate protected policy, permission, audit or rollback layers automatically.",
+            ...(isSkillProposal ? [
+              "Ship the Skill as an agent-owned candidate only; never activate, approve or self-promote it."
+            ] : [])
           ],
           taskIds: [task.id],
           idempotencyKey: `improvement:${decided.id}:activation`
@@ -501,11 +524,173 @@ export class ApplicationCommands {
             projectKey: project.key
           }
         });
+        if (isSkillProposal) {
+          const skillProposal = this.database.createSkillProposal({
+            improvementProposalId: improvement.id,
+            suggestedQualifiedName,
+            evidence: improvement.evidence,
+            provenance: {
+              improvementProposalId: improvement.id,
+              source: improvement.source,
+              fingerprint: improvement.fingerprint,
+              taskId: task.id,
+              featurePlanId: featurePlan.plan.id
+            }
+          });
+          this.database.addEvent({
+            source: origin.channel,
+            type: "skill.proposal_drafted",
+            text: skillProposal.suggestedQualifiedName,
+            userId: origin.userId ?? null,
+            username: origin.username ?? null,
+            taskId: task.id,
+            metadata: {
+              skillProposalId: skillProposal.id,
+              improvementId: improvement.id,
+              suggestedQualifiedName: skillProposal.suggestedQualifiedName
+            }
+          });
+        }
         return { improvement, task, featurePlan };
       });
     } catch (error) {
       throw validationError(error instanceof Error ? error.message : "Improvement decision failed.");
     }
+  }
+
+  listSkillProposals(status?: SkillProposalStatus): SkillProposalRecord[] {
+    return this.database.listSkillProposals(status);
+  }
+
+  reconcileSkillProposalDrafts(origin: CommandOrigin): SkillProposalRecord[] {
+    const linked = this.requireSkillLifecycle().reconcileSkillProposalDrafts();
+    for (const proposal of linked) {
+      this.database.addEvent({
+        source: origin.channel,
+        type: "skill.proposal_linked",
+        text: proposal.suggestedQualifiedName,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: {
+          skillProposalId: proposal.id,
+          improvementId: proposal.improvementProposalId,
+          qualifiedName: proposal.qualifiedName,
+          versionId: proposal.versionId
+        }
+      });
+    }
+    return linked;
+  }
+
+  evaluateSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillEvaluationRecord {
+    try {
+      const evaluation = this.requireSkillLifecycle().evaluateVersion(skillVersionRecordId);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "skill.version_evaluated",
+        text: evaluation.qualifiedName,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: {
+          skillVersionRecordId,
+          qualifiedName: evaluation.qualifiedName,
+          versionId: evaluation.versionId,
+          status: evaluation.status,
+          qualityScore: evaluation.qualityScore,
+          regressionDetected: evaluation.regressionDetected
+        }
+      });
+      return evaluation;
+    } catch (error) {
+      throw this.toSkillLifecycleError(error);
+    }
+  }
+
+  approveSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillVersionRecord {
+    return this.runSkillLifecycleTransition(origin, "skill.version_approved", skillVersionRecordId, () => (
+      this.requireSkillLifecycle().approveVersion(skillVersionRecordId)
+    ));
+  }
+
+  activateSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillVersionRecord {
+    return this.runSkillLifecycleTransition(origin, "skill.version_activated", skillVersionRecordId, () => (
+      this.requireSkillLifecycle().activateVersion(skillVersionRecordId)
+    ));
+  }
+
+  rollbackSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillVersionRecord {
+    return this.runSkillLifecycleTransition(origin, "skill.version_rolled_back", skillVersionRecordId, () => (
+      this.requireSkillLifecycle().rollbackVersion(skillVersionRecordId)
+    ));
+  }
+
+  restoreSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillVersionRecord {
+    return this.runSkillLifecycleTransition(origin, "skill.version_restored", skillVersionRecordId, () => (
+      this.requireSkillLifecycle().restoreVersion(skillVersionRecordId)
+    ));
+  }
+
+  archiveSkillVersion(origin: CommandOrigin, skillVersionRecordId: number): SkillVersionRecord {
+    return this.runSkillLifecycleTransition(origin, "skill.version_archived", skillVersionRecordId, () => (
+      this.requireSkillLifecycle().archiveVersion(skillVersionRecordId, "human")
+    ));
+  }
+
+  getSkillCuratorReport(): SkillCuratorReport {
+    return this.requireSkillLifecycle().curatorDryRun();
+  }
+
+  applySkillCuratorAutomaticArchival(origin: CommandOrigin): { archived: string[]; report: SkillCuratorReport } {
+    const result = this.requireSkillLifecycle().curatorApplyAutomaticArchival();
+    if (result.archived.length > 0) {
+      this.database.addEvent({
+        source: origin.channel,
+        type: "skill.curator_applied",
+        text: `${result.archived.length} Skill(s) archived by Curator.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { archived: result.archived }
+      });
+    }
+    return result;
+  }
+
+  private runSkillLifecycleTransition(
+    origin: CommandOrigin,
+    eventType: string,
+    skillVersionRecordId: number,
+    transition: () => SkillVersionRecord
+  ): SkillVersionRecord {
+    try {
+      const version = transition();
+      this.database.addEvent({
+        source: origin.channel,
+        type: eventType,
+        text: version.qualifiedName,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: {
+          skillVersionRecordId: version.id,
+          qualifiedName: version.qualifiedName,
+          versionId: version.versionId,
+          status: version.status
+        }
+      });
+      return version;
+    } catch (error) {
+      throw this.toSkillLifecycleError(error);
+    }
+  }
+
+  private requireSkillLifecycle(): SkillLifecycleService {
+    if (!this.skillLifecycleService) throw notFoundError("Governed Skill lifecycle is unavailable in this runtime.");
+    return this.skillLifecycleService;
+  }
+
+  private toSkillLifecycleError(error: unknown): never {
+    const message = error instanceof Error ? error.message : "Skill lifecycle operation failed.";
+    if (/not found/i.test(message)) throw notFoundError(message);
+    throw conflictError(message);
   }
 
   getFeaturePlan(featurePlanId: number): FeaturePlanDetails {
