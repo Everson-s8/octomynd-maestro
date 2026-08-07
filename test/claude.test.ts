@@ -187,9 +187,13 @@ describe("claude provider telemetry", () => {
     expect(result.summary).toBe("Claude (reviewing): cota do provedor esgotada.");
     expect(result.retryable).toBe(true);
     expect(result.error).toContain("rate limit");
+    expect(await provider.health()).toMatchObject({
+      state: "quota",
+      detail: expect.stringContaining("cota do provider")
+    });
   });
 
-  it("reports authentication failures distinctly from quota", async () => {
+  it("reports authentication failures distinctly from quota, with a remediation command", async () => {
     process.env.FAKE_CLAUDE_MODE = "auth";
     const provider = new ClaudeProvider(5_000);
 
@@ -198,6 +202,29 @@ describe("claude provider telemetry", () => {
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Claude (reviewing): autenticacao necessaria.");
     expect(result.retryable).toBe(true);
+    expect(await provider.health()).toMatchObject({
+      state: "auth_required",
+      detail: expect.stringContaining("claude login")
+    });
+  });
+
+  it("names the install and login commands when the Claude CLI is not found", async () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-claude-missing-"));
+    const originalPrefix = process.env.NPM_CONFIG_PREFIX;
+    process.env.APPDATA = emptyDir;
+    process.env.NPM_CONFIG_PREFIX = emptyDir;
+    try {
+      const provider = new ClaudeProvider(5_000);
+
+      expect(await provider.health()).toMatchObject({
+        state: "offline",
+        detail: expect.stringContaining("npm install -g @anthropic-ai/claude-code")
+      });
+    } finally {
+      if (originalPrefix === undefined) delete process.env.NPM_CONFIG_PREFIX;
+      else process.env.NPM_CONFIG_PREFIX = originalPrefix;
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
   });
 
   it("classifies a killed process as a timeout instead of an unknown failure", async () => {

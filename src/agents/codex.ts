@@ -21,6 +21,7 @@ import type {
 } from "../improvements/reviewer.js";
 import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { withRemediation } from "./remediation.js";
 import { filesystemAccessForExecution } from "./execution-policy.js";
 import {
   DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS,
@@ -69,7 +70,11 @@ export class CodexProvider implements AgentProvider {
     const cliEntry = resolveCodexCliEntry();
     const health: AgentHealth = cliEntry
       ? { state: "ready", detail: "Codex CLI disponivel", checkedAt: new Date().toISOString() }
-      : { state: "offline", detail: "Codex CLI nao encontrado", checkedAt: new Date().toISOString() };
+      : {
+        state: "offline",
+        detail: withRemediation("codex", "offline", "Codex CLI nao encontrado."),
+        checkedAt: new Date().toISOString()
+      };
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + 30_000;
     return health;
@@ -146,8 +151,10 @@ export class CodexProvider implements AgentProvider {
       const category = classifyFailure(combined, processResult.timedOut);
       const retryable = isRetryableFailureCategory(category);
       const summary = buildFailureSummary(this.label, request.phase, category);
-      if (category === "quota") this.cacheHealth("quota", summary, 10 * 60_000);
-      if (category === "auth_required") this.cacheHealth("auth_required", summary, 10 * 60_000);
+      if (category === "quota") this.cacheHealth("quota", withRemediation("codex", "quota", summary), 10 * 60_000);
+      if (category === "auth_required") {
+        this.cacheHealth("auth_required", withRemediation("codex", "auth_required", summary), 10 * 60_000);
+      }
       return {
         outcome: "failed",
         summary,

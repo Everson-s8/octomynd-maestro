@@ -21,6 +21,7 @@ import type {
 } from "../improvements/reviewer.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { isWritableExecution } from "./execution-policy.js";
+import { withRemediation } from "./remediation.js";
 import {
   DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS,
   normalizeProviderExecutionLimits,
@@ -115,7 +116,11 @@ export class ClaudeProvider implements AgentProvider {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const health: AgentHealth = resolveClaudeCliCommand()
       ? { state: "ready", detail: "Claude CLI disponivel", checkedAt: new Date().toISOString() }
-      : { state: "offline", detail: "Claude CLI nao encontrado", checkedAt: new Date().toISOString() };
+      : {
+        state: "offline",
+        detail: withRemediation("claude", "offline", "Claude CLI nao encontrado."),
+        checkedAt: new Date().toISOString()
+      };
     this.cacheHealth(health, 30_000);
     return health;
   }
@@ -145,7 +150,7 @@ export class ClaudeProvider implements AgentProvider {
       if (category === "auth_required" || category === "quota") {
         this.cacheHealth({
           state: category,
-          detail: summary,
+          detail: withRemediation("claude", category, summary),
           checkedAt: new Date().toISOString()
         }, 10 * 60_000);
       } else if (category === "timeout") {
