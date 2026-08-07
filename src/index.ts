@@ -71,7 +71,7 @@ if (config.runtime.antigravityEnabled) {
     }
   }));
 }
-const agentRegistry = new AgentRegistry(agentProviders);
+const agentRegistry = new AgentRegistry(agentProviders, undefined, Date.now, database);
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
 const skillBootstrap = config.skills.enabled

@@ -14,6 +14,10 @@ import {
 import { createSkillPersistence, migrateSkillPersistence } from "./skills/persistence.js";
 import { createWorkGraphPersistence, migrateWorkGraphPersistence } from "./work-graphs/persistence.js";
 import {
+  createProviderPolicyPersistence,
+  migrateProviderPolicyPersistence
+} from "./agents/policy-persistence.js";
+import {
   FeatureTaskContract,
   FeatureTaskContractInput,
   legacyFeatureTaskContract,
@@ -491,8 +495,10 @@ export function createDatabase(databasePath: string) {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   migrate(db);
+  migrateProviderPolicyPersistence(db);
   const skillPersistence = createSkillPersistence(db);
   const workGraphPersistence = createWorkGraphPersistence(db);
+  const providerPolicyPersistence = createProviderPolicyPersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -766,6 +772,7 @@ export function createDatabase(databasePath: string) {
 
     ...skillPersistence,
     ...workGraphPersistence,
+    ...providerPolicyPersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();

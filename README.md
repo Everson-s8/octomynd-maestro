@@ -47,6 +47,18 @@ npm test
 
 O dashboard usa dados reais do SQLite e permanece restrito ao computador local.
 
+### Provider control plane
+
+The `Providers` dashboard section is the operational interface for AI routing. It persists provider
+mode (`enabled`, `paused`, or `disabled`), fallback permission, preferred provider by capability,
+and optional strict provider requirements in SQLite. Changes apply to the next lease without a
+runtime restart. The `Use only this provider` action pauses every other connected provider and
+disables fallback for the selected one; it is intended for temporary quota conservation.
+
+Routing remains fail-closed: a required, paused, unhealthy, or unavailable provider does not
+silently fall through to another provider. With automatic fallback enabled, the configured order is
+used before the built-in defaults.
+
 ```powershell
 npm run dev:platform
 ```

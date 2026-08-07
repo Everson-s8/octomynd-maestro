@@ -23,6 +23,8 @@ import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
 import { AgentRegistry } from "../agents/registry.js";
 import type { WorkGraphRuntimeCommands } from "../commands/application-commands.js";
+import type { AgentCapability, AgentProviderId } from "../agents/types.js";
+import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -36,7 +38,10 @@ export type DashboardServerOptions = {
   featureGithub?: FeatureGitHubGateway;
   backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
-  agentRegistry?: Pick<AgentRegistry, "snapshot">;
+  agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
+    AgentRegistry,
+    "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
+  >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
 };
 
@@ -93,6 +98,106 @@ async function routeRequest(
       agents,
       options.backlogAutopilot?.snapshot()
     ));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/provider-policy") {
+    if (!options.agentRegistry?.policySnapshot) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    sendJson(response, 200, { policy: options.agentRegistry.policySnapshot() });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/provider-policy/providers") {
+    if (!options.agentRegistry?.updateProviderControls) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    const body = await readJsonBody(request);
+    const controls = Array.isArray(body.controls) ? body.controls : [];
+    const validControls: ProviderControlUpdate[] = controls.flatMap((item) => {
+      const providerId = readEnum(item?.providerId, ["codex", "claude", "antigravity"] as const);
+      const mode = readEnum(item?.mode, ["enabled", "paused", "disabled"] as const);
+      return providerId && mode && typeof item?.fallbackEnabled === "boolean"
+        ? [{
+            providerId: providerId as AgentProviderId,
+            mode: mode as ProviderMode,
+            fallbackEnabled: item.fallbackEnabled as boolean
+          }]
+        : [];
+    });
+    if (validControls.length !== controls.length || validControls.length === 0) {
+      sendJson(response, 400, { error: "valid_controls_are_required" });
+      return;
+    }
+    const updated = options.agentRegistry.updateProviderControls(validControls);
+    options.database.addEvent({
+      source: "dashboard",
+      type: "provider.controls_updated",
+      text: `${updated.length} provider controls updated atomically.`,
+      metadata: { controls: updated }
+    });
+    sendJson(response, 200, { controls: updated });
+    return;
+  }
+
+  const providerControlMatch = url.pathname.match(/^\/api\/provider-policy\/providers\/(codex|claude|antigravity)$/);
+  if (request.method === "PUT" && providerControlMatch) {
+    if (!options.agentRegistry?.updateProviderControl) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    const body = await readJsonBody(request);
+    const mode = readEnum(body.mode, ["enabled", "paused", "disabled"] as const);
+    if (!mode || typeof body.fallbackEnabled !== "boolean") {
+      sendJson(response, 400, { error: "valid_mode_and_fallbackEnabled_are_required" });
+      return;
+    }
+    const control = options.agentRegistry.updateProviderControl({
+      providerId: providerControlMatch[1] as AgentProviderId,
+      mode: mode as ProviderMode,
+      fallbackEnabled: body.fallbackEnabled
+    });
+    options.database.addEvent({
+      source: "dashboard",
+      type: "provider.control_updated",
+      text: `${control.providerId} set to ${control.mode}.`,
+      metadata: { control }
+    });
+    sendJson(response, 200, { control });
+    return;
+  }
+
+  const capabilityRoutingMatch = url.pathname.match(/^\/api\/provider-policy\/capabilities\/([a-z_]+)$/);
+  if (request.method === "PUT" && capabilityRoutingMatch) {
+    if (!options.agentRegistry?.updateCapabilityRouting) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    const capability = readEnum(capabilityRoutingMatch[1], [
+      "planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"
+    ] as const) as AgentCapability | null;
+    const body = await readJsonBody(request);
+    const order = Array.isArray(body.order)
+      ? body.order.filter((item): item is AgentProviderId => ["codex", "claude", "antigravity"].includes(String(item)))
+      : [];
+    const requiredProviderId = body.requiredProviderId === null
+      ? null
+      : readEnum(body.requiredProviderId, ["codex", "claude", "antigravity"] as const) as AgentProviderId | null;
+    if (!capability || order.length === 0 || (body.requiredProviderId !== null && !requiredProviderId)) {
+      sendJson(response, 400, { error: "valid_capability_order_and_requiredProviderId_are_required" });
+      return;
+    }
+    const routing = options.agentRegistry.updateCapabilityRouting({ capability, order, requiredProviderId });
+    options.database.addEvent({
+      source: "dashboard",
+      type: "provider.routing_updated",
+      text: `${capability} routing updated.`,
+      metadata: { routing }
+    });
+    sendJson(response, 200, { routing });
     return;
   }
 
