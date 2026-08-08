@@ -118,6 +118,7 @@ export class ReviewCoordinator {
     let changes = 0;
     const candidates = this.database.listGoalRuns(100).filter((run) => {
       if (!run.pullRequestUrl || run.status !== "completed") return false;
+      if (this.database.findFeatureByTaskId(run.taskId)) return false;
       const status = this.database.getTask(run.taskId).status;
       return status === "awaiting_human" || status === "ready_to_merge";
     });

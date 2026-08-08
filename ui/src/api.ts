@@ -62,6 +62,7 @@ export type DashboardFeature = {
 };
 
 export type FeaturePlanStatus = "planned" | "cancelled";
+export type FeaturePlanLifecycleStatus = "active" | "completed" | "cancelled";
 
 export type FeaturePlanIntegrationSummary = {
   status: "preparing" | "integrating" | "verifying" | "completed" | "failed";
@@ -105,6 +106,7 @@ export type DashboardFeaturePlan = {
   objective: string;
   acceptanceCriteria: string[];
   status: FeaturePlanStatus;
+  lifecycleStatus: FeaturePlanLifecycleStatus;
   source: string;
   revision: number;
   taskIds: number[];

@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "status", "restart", "stop")]
+    [ValidateSet("start", "status", "restart", "stop", "apply-update")]
     [string]$Action = "status",
 
     [ValidateRange(1, 120)]
-    [int]$WaitSeconds = 20
+    [int]$WaitSeconds = 20,
+
+    [string]$TargetCommit = "",
+
+    [string]$PreviousCommit = ""
 )
 
 Set-StrictMode -Version Latest
@@ -85,6 +89,7 @@ function Get-DescendantProcessIds([int]$ParentProcessId) {
 }
 
 function Stop-MaestroRuntime {
+    param([int[]]$ExcludeProcessIds = @())
     $processId = Get-StoredProcessId
     if ($null -eq $processId) {
         Write-Output "Maestro runtime: stopped (no PID)."
@@ -99,9 +104,12 @@ function Stop-MaestroRuntime {
     }
 
     foreach ($descendantId in Get-DescendantProcessIds -ParentProcessId $processId) {
+        if ($ExcludeProcessIds -contains $descendantId) { continue }
         Stop-Process -Id $descendantId -Force -ErrorAction SilentlyContinue
     }
-    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    if ($ExcludeProcessIds -notcontains $processId) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
     Write-Output "Maestro runtime: stopped."
 }
@@ -167,6 +175,62 @@ function Show-MaestroStatus {
     }
 }
 
+function Apply-MaestroUpdate {
+    $previousCommit = if ($PreviousCommit) { $PreviousCommit } else { (git rev-parse HEAD).Trim() }
+    Write-Output "Maestro update: starting update from $previousCommit..."
+
+    $status = (git status --porcelain).Trim()
+    if ($status) {
+        throw "Maestro update: uncommitted changes in worktree. Refusing to update."
+    }
+
+    Write-Output "Maestro update: fetching remote changes..."
+    git fetch origin main | Out-Null
+
+    $target = if ($TargetCommit) { $TargetCommit } else { (git rev-parse origin/main).Trim() }
+    git merge-base --is-ancestor $target origin/main
+    if ($LASTEXITCODE -ne 0) {
+        throw "Maestro update: target commit $target is not contained in origin/main."
+    }
+    Write-Output "Maestro update: fast-forward merging origin/main at $target..."
+    $mergeResult = git merge --ff-only origin/main 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Maestro update: fast-forward merge failed. Local main branch diverged. $mergeResult"
+    }
+
+    $newCommit = (git rev-parse HEAD).Trim()
+    Write-Output "Maestro update: fast-forwarded to $newCommit."
+
+    Write-Output "Maestro update: stopping current runtime..."
+    Stop-MaestroRuntime -ExcludeProcessIds @($PID)
+
+    try {
+        Write-Output "Maestro update: starting new runtime..."
+        Start-MaestroRuntime
+        Write-Output "Maestro update: successfully updated to $newCommit and restarted."
+    }
+    catch {
+        $startupError = $_.Exception.Message
+        Write-Output "Maestro update: startup failed: $startupError. Initiating rollback..."
+
+        $rollbackSucceeded = $false
+        try {
+            Stop-MaestroRuntime -ExcludeProcessIds @($PID)
+            Write-Output "Maestro update: rolling back git commit to $previousCommit..."
+            git reset --hard $previousCommit | Out-Null
+            Start-MaestroRuntime
+            Write-Output "Maestro update: rollback to $previousCommit completed successfully."
+            $rollbackSucceeded = $true
+        }
+        catch {
+            throw "Maestro update failed and rollback failed: $($_)"
+        }
+        if ($rollbackSucceeded) {
+            throw "Maestro update failed: $startupError (rolled back to $previousCommit)."
+        }
+    }
+}
+
 switch ($Action) {
     "start" { Start-MaestroRuntime }
     "status" { Show-MaestroStatus }
@@ -175,4 +239,5 @@ switch ($Action) {
         Start-MaestroRuntime
     }
     "stop" { Stop-MaestroRuntime }
+    "apply-update" { Apply-MaestroUpdate }
 }

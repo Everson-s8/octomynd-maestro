@@ -813,7 +813,8 @@ export async function runTaskGoal(
       phase,
       stepCount,
       `Goal reached its ${run.maxSteps}-step budget.`,
-      task.id
+      task.id,
+      "budget_exhausted"
     );
   } catch (error) {
     return finishRun(
@@ -1042,11 +1043,12 @@ function finishRun(
   phase: GoalPhase,
   stepCount: number,
   error: string,
-  taskId: number
+  taskId: number,
+  explicitFailureCategory?: string
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
   const checkpoint = database.getLatestGoalCheckpoint(run.id);
-  const failureCategory = classifyFailure(safeError);
+  const failureCategory = explicitFailureCategory ?? classifyFailure(safeError);
   return database.withTransaction(() => {
     database.updateTaskStatus(taskId, status);
     const finished = database.updateGoalRun({

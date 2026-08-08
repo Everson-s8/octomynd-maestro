@@ -68,10 +68,17 @@ export function buildDashboardSnapshot(
   const goals = database.listGoalRuns(30);
   const counts = database.countTasksByStatus();
   const improvementCounts = database.countImprovementProposalsByStatus();
-  const featurePlanCounts = database.countFeaturePlansByStatus();
   const reviewQueue = listReviewQueue(database);
   const features = database.listFeatures(30);
   const featurePlans = database.listFeaturePlans(30);
+  const completedFeaturePlanIds = new Set(
+    features
+      .filter((feature) => feature.status === "completed" && feature.featurePlanId)
+      .map((feature) => feature.featurePlanId as number)
+  );
+  const activeFeaturePlanCount = featurePlans.filter((plan) => (
+    plan.status === "planned" && !completedFeaturePlanIds.has(plan.id)
+  )).length;
   const skills = database.listSkills();
   const skillProposals = database.listSkillProposals();
   const commands = new ApplicationCommands(database);
@@ -102,7 +109,7 @@ export function buildDashboardSnapshot(
       queuedTasks: counts.queued ?? 0,
       humanGates: reviewQueue.length + (counts.ready_to_merge ?? 0) + (improvementCounts.candidate ?? 0),
       improvementCandidates: improvementCounts.candidate ?? 0,
-      plannedFeaturePlans: featurePlanCounts.planned ?? 0,
+      plannedFeaturePlans: activeFeaturePlanCount,
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
@@ -222,12 +229,31 @@ export function buildDashboardSnapshot(
       createdAt: feature.createdAt,
       updatedAt: feature.updatedAt
     })),
+    runtimeUpdate: (() => {
+      const latest = database.getLatestRuntimeUpdate();
+      if (!latest) return null;
+      return {
+        id: latest.id,
+        featureId: latest.featureId,
+        targetCommit: latest.targetCommit,
+        previousCommit: latest.previousCommit,
+        status: latest.status,
+        error: latest.error ? truncateForDisplay(redactSensitiveText(latest.error), EVENT_TEXT_MAX_LENGTH) : null,
+        createdAt: latest.createdAt,
+        updatedAt: latest.updatedAt
+      };
+    })(),
     featurePlans: featurePlans.map((plan) => {
       const tasks = database.listFeaturePlanTasks(plan.id);
       const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
       const associatedFeature = database.findFeatureByFeaturePlanId(plan.id);
+      const lifecycleStatus = plan.status === "cancelled"
+        ? "cancelled"
+        : associatedFeature?.status === "completed"
+          ? "completed"
+          : "active";
       const blockers = tasks
-        .filter((task) => task.taskStatus !== "awaiting_human")
+        .filter((task) => lifecycleStatus === "active" && task.taskStatus !== "awaiting_human")
         .map((task) => `Task #${task.taskId} esta ${task.taskStatus}, aguardando Draft Work PR entregue.`);
       return {
         id: plan.id,
@@ -238,6 +264,7 @@ export function buildDashboardSnapshot(
           truncateForDisplay(redactSensitiveText(item), EVENT_TEXT_MAX_LENGTH)
         )),
         status: plan.status,
+        lifecycleStatus,
         source: plan.source,
         revision: plan.revision,
         taskIds: tasks.map((task) => task.taskId),
@@ -256,7 +283,7 @@ export function buildDashboardSnapshot(
           mutationScope: task.contract.mutationScope,
           parallelMode: task.contract.parallelMode
         })),
-        eligible: plan.status === "planned" && tasks.length > 0 && blockers.length === 0,
+        eligible: lifecycleStatus === "active" && tasks.length > 0 && blockers.length === 0,
         blockers,
         feature: associatedFeature ? {
           id: associatedFeature.id,

@@ -666,7 +666,9 @@ function FeaturePlanBoard({
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const activePlans = [...featurePlans].sort((left, right) => (
+  const [showHistory, setShowHistory] = useState(false);
+  const visiblePlans = featurePlans.filter((plan) => showHistory || plan.lifecycleStatus === "active");
+  const sortedPlans = [...visiblePlans].sort((left, right) => (
     new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
   ));
 
@@ -689,19 +691,26 @@ function FeaturePlanBoard({
       <SectionHeader
         eyebrow="Planejamento"
         title="Feature Plans"
-        meta={`${featurePlans.filter((plan) => plan.status === "planned").length} ativo(s)`}
+        meta={`${featurePlans.filter((plan) => plan.lifecycleStatus === "active").length} ativo(s)`}
       />
+      {featurePlans.some((plan) => plan.lifecycleStatus !== "active") ? (
+        <button className="row-action" onClick={() => setShowHistory((current) => !current)}>
+          {showHistory ? "Ocultar historico" : "Ver historico"}
+        </button>
+      ) : null}
       {error ? <p className="detail-error">{error}</p> : null}
       <div className="feature-plan-list">
-        {activePlans.length === 0 ? (
+        {sortedPlans.length === 0 ? (
           <EmptyState icon="spark" title="Nenhum Feature Plan" text="Planos agrupando varias tasks em um unico PR consolidado aparecem aqui." />
-        ) : activePlans.slice(0, 6).map((plan) => (
-          <article className={`feature-plan-row plan-${plan.status}`} key={plan.id}>
+        ) : sortedPlans.slice(0, 6).map((plan) => (
+          <article className={`feature-plan-row plan-${plan.lifecycleStatus}`} key={plan.id}>
             <div className="feature-plan-copy">
               <div>
                 <span className="project-tag">@{plan.projectKey}</span>
-                <span className={`status-pill plan-status-${plan.status}`}>{plan.status === "planned" ? "planejado" : "cancelado"}</span>
-                {plan.status === "planned" ? (
+                <span className={`status-pill plan-status-${plan.lifecycleStatus}`}>
+                  {plan.lifecycleStatus === "active" ? "ativo" : plan.lifecycleStatus === "completed" ? "concluido" : "cancelado"}
+                </span>
+                {plan.lifecycleStatus === "active" ? (
                   <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
                     {plan.eligible ? "elegivel para integrar" : "aguardando tasks"}
                   </span>

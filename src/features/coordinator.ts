@@ -76,7 +76,8 @@ export class FeatureCoordinator {
     private readonly github: FeatureGitHubGateway = new GhFeatureGateway(),
     private readonly notifyCompleted?: FeatureNotificationHandler,
     private readonly notifyBlocked?: FeatureBlockedNotificationHandler,
-    private readonly pollIntervalMs = 15_000
+    private readonly pollIntervalMs = 15_000,
+    private readonly onFeatureMerged?: (feature: FeatureRecord, headSha: string) => Promise<void>
   ) {}
 
   start(): void {
@@ -618,6 +619,13 @@ export class FeatureCoordinator {
         await this.notifyCompleted({ feature: completed, items: completedItems });
       } catch (error) {
         this.addEvent(completed, "feature.notification_failed", safeSummary(error));
+      }
+    }
+    if (this.onFeatureMerged) {
+      try {
+        await this.onFeatureMerged(completed, state.headSha);
+      } catch (error) {
+        this.addEvent(completed, "feature.self_update_failed", safeSummary(error));
       }
     }
   }
