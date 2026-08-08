@@ -26,6 +26,7 @@ import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
+import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -182,11 +183,41 @@ export class ApplicationCommands {
     private readonly database: MaestroDatabase,
     private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway(),
     private readonly workGraphRuntime?: WorkGraphRuntimeCommands,
-    skillLifecycle?: SkillLifecycleRuntime
+    skillLifecycle?: SkillLifecycleRuntime,
+    private readonly featureCoordinator?: FeatureCoordinator
   ) {
     this.skillLifecycleService = skillLifecycle
       ? new SkillLifecycleService(database, skillLifecycle)
       : undefined;
+  }
+
+  async triggerFeatureReview(
+    origin: CommandOrigin,
+    targetInput: string,
+    isRetry = false
+  ): Promise<ManualReviewResult> {
+    const feature = this.database.findFeatureByTarget(targetInput);
+    if (!feature) {
+      throw notFoundError("Feature PR nao encontrado para o alvo especificado.");
+    }
+    if (!this.featureCoordinator) {
+      throw validationError("Feature Coordinator indisponivel.");
+    }
+    return this.featureCoordinator.triggerManualReview(feature.id, isRetry);
+  }
+
+  async getFeatureReviewStatus(
+    origin: CommandOrigin,
+    targetInput: string
+  ): Promise<ManualReviewStatusResult> {
+    const feature = this.database.findFeatureByTarget(targetInput);
+    if (!feature) {
+      throw notFoundError("Feature PR nao encontrado para o alvo especificado.");
+    }
+    if (!this.featureCoordinator) {
+      throw validationError("Feature Coordinator indisponivel.");
+    }
+    return this.featureCoordinator.getReviewStatus(feature.id);
   }
 
   registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {

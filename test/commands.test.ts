@@ -225,6 +225,54 @@ describe("ApplicationCommands.cancelFeature", () => {
   });
 });
 
+describe("ApplicationCommands.triggerFeatureReview", () => {
+  it("resolves target by PR URL or numeric ID and delegates to FeatureCoordinator", async () => {
+    const feature = database.createFeature({
+      projectKey: "boo",
+      name: "Feature para revisao manual",
+      objective: "Validar comando /review",
+      branchName: "maestro/feature-review-cmd",
+      worktreePath: path.join(tempDir, "feature-review-cmd"),
+      pullRequestUrl: "https://github.com/example/boo/pull/7"
+    });
+
+    const fakeCoordinator = {
+      triggerManualReview: async (featureId: number, isRetry = false) => ({
+        success: true,
+        feature,
+        status: "completed" as const,
+        providerId: "codex" as const,
+        summary: "Aprovado via comando manual.",
+        message: "Revisao final aprovada e Feature PR mesclado com sucesso!"
+      }),
+      getReviewStatus: async (featureId: number) => ({
+        feature,
+        prState: featureGithub.state,
+        isReady: true,
+        notReadyReason: null,
+        isReviewActive: false
+      })
+    } as any;
+
+    const cmds = new ApplicationCommands(database, featureGithub, undefined, undefined, fakeCoordinator);
+
+    // 1. Resolve by numeric Feature ID
+    const resId = await cmds.triggerFeatureReview({ channel: "telegram" }, String(feature.id));
+    expect(resId.success).toBe(true);
+    expect(resId.summary).toBe("Aprovado via comando manual.");
+
+    // 2. Resolve by PR URL
+    const statusRes = await cmds.getFeatureReviewStatus({ channel: "telegram" }, feature.pullRequestUrl);
+    expect(statusRes.isReady).toBe(true);
+    expect(statusRes.feature.id).toBe(feature.id);
+
+    // 3. Throw notFoundError for unknown target
+    await expect(cmds.triggerFeatureReview({ channel: "telegram" }, "999")).rejects.toMatchObject({
+      code: "not_found"
+    });
+  });
+});
+
 function runGit(args: string[], cwd: string) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
   if (result.status !== 0) {

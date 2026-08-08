@@ -128,12 +128,31 @@ const workGraphCoordinator = new WorkGraphCoordinator(
     }
   }
 );
+const featureNotifier = createTelegramFeatureNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const featureBlockedNotifier = createTelegramFeatureBlockedNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const featureCoordinator = new FeatureCoordinator(
+  database,
+  agentRegistry,
+  path.join(path.dirname(config.databasePath), "feature-runs"),
+  undefined,
+  featureNotifier,
+  featureBlockedNotifier
+);
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),
   autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
   environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey),
   providerStatus: () => agentRegistry.snapshot(),
-  workGraphRuntime: workGraphCoordinator
+  workGraphRuntime: workGraphCoordinator,
+  featureCoordinator
 });
 const goalNotifier = createTelegramGoalNotifier(
   config,
@@ -172,16 +191,6 @@ const reviewSyncNotifier = createTelegramReviewSyncNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
-const featureNotifier = createTelegramFeatureNotifier(
-  config,
-  database,
-  (chatId, text) => bot.api.sendMessage(chatId, text)
-);
-const featureBlockedNotifier = createTelegramFeatureBlockedNotifier(
-  config,
-  database,
-  (chatId, text) => bot.api.sendMessage(chatId, text)
-);
 const featureAssemblyNotifier = createTelegramFeatureAssemblyNotifier(
   config,
   database,
@@ -198,14 +207,6 @@ const reviewCoordinator = new ReviewCoordinator(
   undefined,
   reviewNotifier,
   reviewSyncNotifier
-);
-const featureCoordinator = new FeatureCoordinator(
-  database,
-  agentRegistry,
-  path.join(path.dirname(config.databasePath), "feature-runs"),
-  undefined,
-  featureNotifier,
-  featureBlockedNotifier
 );
 const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(
   database,

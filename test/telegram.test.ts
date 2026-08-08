@@ -14,7 +14,10 @@ import {
   parseQueueProjectKey,
   parseStatusProjectKey,
   parseTaskId,
-  parseTaskText
+  parseTaskText,
+  parseReviewTargetText,
+  formatManualReviewMessage,
+  formatManualReviewStatusMessage
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
 import {
@@ -161,6 +164,78 @@ describe("telegram helpers", () => {
       reason: "prioridade mudou"
     });
     expect(parseFeatureCancelText("/feature_cancel nope")).toBeNull();
+  });
+
+  it("parses review command target text", () => {
+    expect(parseReviewTargetText("/review 12", "review")).toBe("12");
+    expect(parseReviewTargetText("/review@MaestroBot https://github.com/org/repo/pull/5", "review")).toBe("https://github.com/org/repo/pull/5");
+    expect(parseReviewTargetText("/review_status 42", "review_status")).toBe("42");
+    expect(parseReviewTargetText("/review_retry 42", "review_retry")).toBe("42");
+    expect(parseReviewTargetText("/review", "review")).toBeNull();
+    expect(parseReviewTargetText("/review_status", "review_status")).toBeNull();
+  });
+
+  it("formats manual review messages and status clearly in Portuguese", () => {
+    const dummyFeature = {
+      id: 12,
+      projectId: 1,
+      projectKey: "maestro",
+      projectName: "Maestro",
+      featurePlanId: 1,
+      name: "Feature Test",
+      objective: "Test objective",
+      status: "completed" as const,
+      branchName: "maestro/feature-12",
+      worktreePath: "/tmp/worktree",
+      pullRequestUrl: "https://github.com/org/repo/pull/12",
+      reviewerProvider: "codex",
+      reviewSummary: "Approved cleanly.",
+      reviewedHeadSha: "abc1234",
+      lastError: null,
+      mergedAt: "2026-08-07T12:00:00.000Z",
+      cancelledAt: null,
+      cancelReason: null,
+      createdAt: "2026-08-07T10:00:00.000Z",
+      updatedAt: "2026-08-07T12:00:00.000Z"
+    };
+
+    const successMsg = formatManualReviewMessage({
+      success: true,
+      feature: dummyFeature,
+      status: "completed",
+      providerId: "codex",
+      summary: "Approved cleanly.",
+      message: "Revisao final aprovada e Feature PR mesclado com sucesso!"
+    });
+    expect(successMsg).toContain("Revisao final aprovada para Feature #12!");
+    expect(successMsg).toContain("Projeto: @maestro");
+    expect(successMsg).toContain("Revisor: codex");
+    expect(successMsg).toContain("Feature PR mesclado com sucesso.");
+
+    const statusMsg = formatManualReviewStatusMessage({
+      feature: dummyFeature,
+      prState: {
+        number: 12,
+        url: "https://github.com/org/repo/pull/12",
+        title: "Feature PR",
+        state: "OPEN",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        headRefName: "feature-branch",
+        headRepositoryOwner: "org",
+        headRepositoryName: "repo",
+        baseRefName: "main",
+        headSha: "abc1234",
+        checks: [{ name: "build", status: "COMPLETED", conclusion: "SUCCESS" }]
+      },
+      isReady: true,
+      notReadyReason: null,
+      isReviewActive: false
+    });
+    expect(statusMsg).toContain("Status da revisao final - Feature #12");
+    expect(statusMsg).toContain("Estado no Maestro: completed");
+    expect(statusMsg).toContain("Estado no GitHub: OPEN | Ready | MERGEABLE");
+    expect(statusMsg).toContain("Pronto para revisao: Sim");
   });
 
   it("formats improvement candidates with the governed activation rule", () => {
