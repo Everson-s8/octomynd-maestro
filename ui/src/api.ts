@@ -384,6 +384,18 @@ export async function updateCapabilityRouting(
   return payload.routing;
 }
 
+export type GoalObservability = {
+  classifiedReason: string | null;
+  classifiedReasonLabel: string | null;
+  sourceProvider: string | null;
+  nextProvider: string | null;
+  preservedChanges: boolean;
+  preservedFiles: string[];
+  checkpointId: number | null;
+  retryable: boolean;
+  nextAction: string;
+};
+
 export type GoalRun = {
   id: number;
   taskId: number;
@@ -392,7 +404,7 @@ export type GoalRun = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
-  waitReason: "quota" | "auth_required" | "timeout" | "offline" | "capacity" | "runtime_restart" | "unknown" | null;
+  waitReason: "quota" | "auth_required" | "timeout" | "output_limit" | "offline" | "capacity" | "runtime_restart" | "unknown" | null;
   nextRetryAt: string | null;
   lastProvider: string | null;
   commitSha: string | null;
@@ -400,6 +412,7 @@ export type GoalRun = {
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
+  observability?: GoalObservability;
 };
 
 export type ImprovementCategory = "skill" | "memory" | "routing" | "policy" | "integration";

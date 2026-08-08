@@ -12,6 +12,8 @@ import type {
 } from "../features/coordinator.js";
 import type { FeatureAssemblyEvent, FeatureAssemblyNotificationHandler } from "../features/assembly.js";
 
+import { buildGoalObservability } from "../goals/observability.js";
+
 export type GoalNotificationHandler = (run: GoalRunRecord) => Promise<void>;
 export type GoalProgressNotificationHandler = (run: GoalRunRecord, providerId: AgentProviderId) => Promise<void>;
 export type TelegramMessageSender = (chatId: string, text: string) => Promise<unknown>;
@@ -54,7 +56,7 @@ export function createTelegramGoalNotifier(
 
   return async (run) => {
     const task = database.getTask(run.taskId);
-    const text = formatGoalNotification(run, task);
+    const text = formatGoalNotification(run, task, database);
     await sendMessage(chatId, text);
     database.addEvent({
       source: "telegram",
@@ -98,7 +100,7 @@ export function createTelegramGoalProgressNotifier(
   };
 }
 
-export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord): string {
+export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord, database?: MaestroDatabase): string {
   const project = task.projectKey ? `@${task.projectKey}` : "sem projeto";
 
   if (run.status === "completed" && run.pullRequestUrl) {
@@ -127,11 +129,31 @@ export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord): st
     ].join("\n");
   }
 
+  const obs = database ? buildGoalObservability(database, run) : null;
+  const reasonLabel = obs?.classifiedReasonLabel
+    ?? (run.waitReason ? redactSensitiveText(run.waitReason) : null)
+    ?? (run.lastError ? truncate(redactSensitiveText(run.lastError), 240) : "Erro de provedor/execucao");
+  const sourceProv = obs?.sourceProvider ?? run.lastProvider ?? "desconhecido";
+  const nextProv = obs?.nextProvider ?? (run.status === "waiting_provider" ? "aguardando cota/liberacao" : "nenhum");
+  const preservedStr = obs
+    ? (obs.preservedChanges ? `sim (${obs.preservedFiles.length} arquivos)` : "nao")
+    : "desconhecido";
+  const checkpointStr = obs?.checkpointId ? `#${obs.checkpointId}` : "nao disponivel";
+  const retryableStr = obs ? (obs.retryable ? "sim" : "nao") : (run.status === "waiting_provider" ? "sim" : "nao");
+  const nextAction = obs?.nextAction
+    ?? (run.status === "waiting_provider" ? "Retomada automatica agendada pelo Maestro." : "Requer intervencao manual.");
+
   return [
     `Task #${task.id} requer atencao.`,
     `Projeto: ${project}`,
     `Goal #${run.id}: ${run.status}`,
-    run.lastError ? `Motivo: ${truncate(redactSensitiveText(run.lastError), 240)}` : "Consulte o dashboard para detalhes."
+    `Motivo: ${reasonLabel}`,
+    `Provedor origem: ${sourceProv}`,
+    `Proximo provedor: ${nextProv}`,
+    `Alteracoes preservadas: ${preservedStr}`,
+    `Checkpoint: ${checkpointStr}`,
+    `Retomavel: ${retryableStr}`,
+    `Proxima acao: ${nextAction}`
   ].join("\n");
 }
 

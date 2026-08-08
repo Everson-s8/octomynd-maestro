@@ -252,9 +252,8 @@ export class GoalCoordinator {
         this.active.delete(run.taskId);
         if (result.status === "waiting_provider") {
           this.scheduleRetry(result);
-          return;
         }
-        if (this.notify && ["completed", "blocked", "failed", "cancelled"].includes(result.status)) {
+        if (this.notify && ["completed", "blocked", "failed", "cancelled", "waiting_provider"].includes(result.status)) {
           void this.notify(result).catch((error) => {
             this.database.addEvent({
               source: "maestro",

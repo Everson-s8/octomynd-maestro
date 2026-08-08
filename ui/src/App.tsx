@@ -1382,7 +1382,17 @@ function TaskDetail({
             <div className={`goal-state goal-${goal.status}`}>
               <span>goal #{goal.id} · {goal.status}</span>
               <strong>{goal.currentPhase} · passo {goal.stepCount}/{goal.maxSteps}</strong>
-              {goal.status === "waiting_provider" && goal.waitReason ? (
+              {goal.observability ? (
+                <small className="goal-observability">
+                  {goal.observability.classifiedReasonLabel ? `Motivo: ${goal.observability.classifiedReasonLabel}` : goal.waitReason ? `Motivo: ${goal.waitReason}` : ""}
+                  {goal.observability.sourceProvider ? ` · Origem: ${goal.observability.sourceProvider}` : goal.lastProvider ? ` · Origem: ${goal.lastProvider}` : ""}
+                  {goal.observability.nextProvider ? ` · Próximo: ${goal.observability.nextProvider}` : ""}
+                  {goal.observability.checkpointId ? ` · Checkpoint: #${goal.observability.checkpointId}` : ""}
+                  {` · Preservado: ${goal.observability.preservedChanges ? "sim" : "não"}`}
+                  {` · Retomável: ${goal.observability.retryable ? "sim" : "não"}`}
+                  {goal.observability.nextAction ? ` · Ação: ${goal.observability.nextAction}` : ""}
+                </small>
+              ) : goal.status === "waiting_provider" && goal.waitReason ? (
                 <small>
                   Motivo: {goal.waitReason}
                   {goal.lastProvider ? ` · provider: ${goal.lastProvider}` : ""}
