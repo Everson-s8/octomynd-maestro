@@ -17,6 +17,7 @@ import {
   GhFeatureGateway,
   featureChecksPassed
 } from "./github.js";
+import { revalidateQueuedFeaturePlans } from "./task-scheduler.js";
 
 const REVIEW_SUMMARY_MAX_LENGTH = 2_000;
 
@@ -82,6 +83,11 @@ export class FeatureCoordinator {
 
   start(): void {
     if (this.timer) return;
+    try {
+      revalidateQueuedFeaturePlans(this.database);
+    } catch {
+      // best-effort restart recovery
+    }
     void this.reconcile();
     this.timer = setInterval(() => void this.reconcile(), this.pollIntervalMs);
     this.timer.unref?.();
@@ -610,10 +616,22 @@ export class FeatureCoordinator {
         lastError: null,
         mergedAt: new Date().toISOString()
       });
+      if (feature.featurePlanId !== null) {
+        try {
+          this.database.updateFeaturePlanQueueStatus(feature.featurePlanId, "completed");
+        } catch {
+          // ignore if already completed/cancelled
+        }
+      }
       this.database.enqueueFeatureCompletionReview(updated.id);
       this.addEvent(updated, "feature.completed", `Feature PR #${state.number} merged and child work closed.`);
       return updated;
     });
+    try {
+      revalidateQueuedFeaturePlans(this.database, feature.projectKey);
+    } catch {
+      // non-fatal, best-effort queue revalidation
+    }
     if (this.notifyCompleted) {
       try {
         await this.notifyCompleted({ feature: completed, items: completedItems });
