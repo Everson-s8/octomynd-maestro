@@ -9,6 +9,7 @@ import { ApplicationCommandError } from "../src/commands/errors.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { evaluateFeatureTaskReadiness, revalidateQueuedFeaturePlans } from "../src/features/task-scheduler.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -443,6 +444,123 @@ describe("Feature Plan Queue Scheduler Block 1", () => {
     expect(legacyPlan.status).toBe("queued");
     expect(legacyPlan.priority).toBe(0);
     expect(legacyPlan.isPaused).toBe(false);
+  });
+});
+
+describe("Feature Plan Queue Scheduler Block 2", () => {
+  it("enforces per-project writer lease and allows cross-project concurrency", () => {
+    const t1 = database.createTask("task boo 1", "dashboard", "boo");
+    const t2 = database.createTask("task boo 2", "dashboard", "boo");
+    const tf = database.createTask("task far 1", "dashboard", "far");
+
+    const planBoo1 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 1", acceptanceCriteria: ["Pass"], taskIds: [t1.id] }
+    ).plan;
+
+    const planBoo2 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 2", acceptanceCriteria: ["Pass"], taskIds: [t2.id] }
+    ).plan;
+
+    const planFar1 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "far", objective: "Far plan 1", acceptanceCriteria: ["Pass"], taskIds: [tf.id] }
+    ).plan;
+
+    expect(planBoo1.status).toBe("queued");
+    expect(planBoo2.status).toBe("queued");
+    expect(planFar1.status).toBe("queued");
+
+    const admittedBoo1 = commands.admitFeaturePlan({ channel: "dashboard" }, planBoo1.id);
+    expect(admittedBoo1.plan.status).toBe("admitted");
+    expect(admittedBoo1.plan.admittedAt).not.toBeNull();
+
+    const eligibilityBoo2 = commands.getFeaturePlanEligibility(planBoo2.id);
+    expect(eligibilityBoo2.eligible).toBe(false);
+    expect(eligibilityBoo2.blockedByActiveProjectPlan?.id).toBe(planBoo1.id);
+
+    const eligibilityFar1 = commands.getFeaturePlanEligibility(planFar1.id);
+    expect(eligibilityFar1.eligible).toBe(true);
+
+    const admittedFar1 = commands.admitFeaturePlan({ channel: "dashboard" }, planFar1.id);
+    expect(admittedFar1.plan.status).toBe("admitted");
+  });
+
+  it("revalidates queued features after merge and admits successor", () => {
+    const t1 = database.createTask("task boo 1", "dashboard", "boo");
+    const t2 = database.createTask("task boo 2", "dashboard", "boo");
+
+    const planBoo1 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 1", acceptanceCriteria: ["Pass"], taskIds: [t1.id] }
+    ).plan;
+
+    const planBoo2 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 2", acceptanceCriteria: ["Pass"], taskIds: [t2.id] }
+    ).plan;
+
+    commands.admitFeaturePlan({ channel: "dashboard" }, planBoo1.id);
+    expect(database.getFeaturePlan(planBoo1.id).status).toBe("admitted");
+
+    database.updateFeaturePlanQueueStatus(planBoo1.id, "active");
+    database.updateFeaturePlanQueueStatus(planBoo1.id, "waiting_review");
+    database.updateFeaturePlanQueueStatus(planBoo1.id, "waiting_merge");
+    database.updateFeaturePlanQueueStatus(planBoo1.id, "completed");
+
+    const admitted = commands.revalidateFeaturePlanQueue("boo");
+    expect(admitted.map((p) => p.plan.id)).toContain(planBoo2.id);
+    expect(database.getFeaturePlan(planBoo2.id).status).toBe("admitted");
+  });
+
+  it("blocks dependent queued feature when predecessor is cancelled", () => {
+    const t1 = database.createTask("task boo 1", "dashboard", "boo");
+    const t2 = database.createTask("task boo 2", "dashboard", "boo");
+
+    const planBoo1 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 1", acceptanceCriteria: ["Pass"], taskIds: [t1.id] }
+    ).plan;
+
+    const planBoo2 = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Boo plan 2 dependent",
+        acceptanceCriteria: ["Pass"],
+        taskIds: [t2.id],
+        dependsOnFeaturePlanIds: [planBoo1.id]
+      }
+    ).plan;
+
+    commands.cancelFeaturePlan({ channel: "dashboard" }, planBoo1.id, "cancelled by user");
+    expect(database.getFeaturePlan(planBoo1.id).status).toBe("cancelled");
+
+    expect(database.getFeaturePlan(planBoo2.id).status).toBe("blocked");
+    expect(database.getFeaturePlan(planBoo2.id).blockedReason).toBe(`predecessor_feature_plan_${planBoo1.id}_cancelled`);
+
+    const readiness = evaluateFeatureTaskReadiness(database, t2, []);
+    expect(readiness.state).toBe("blocked");
+    expect(readiness.reason).toBe("feature_plan_blocked");
+  });
+
+  it("prevents duplicate execution of blocked/cancelled/paused feature plan tasks", () => {
+    const t1 = database.createTask("task boo 1", "dashboard", "boo");
+    const plan = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Boo plan 1", acceptanceCriteria: ["Pass"], taskIds: [t1.id] }
+    ).plan;
+
+    commands.pauseFeaturePlan({ channel: "dashboard" }, plan.id, "paused for maintenance");
+    let readiness = evaluateFeatureTaskReadiness(database, t1, []);
+    expect(readiness.state).toBe("waiting");
+    expect(readiness.reason).toBe("feature_plan_paused_paused for maintenance");
+
+    commands.resumeFeaturePlan({ channel: "dashboard" }, plan.id);
+    readiness = evaluateFeatureTaskReadiness(database, t1, []);
+    expect(readiness.state).toBe("ready");
+    expect(database.getFeaturePlan(plan.id).status).toBe("active");
   });
 });
 

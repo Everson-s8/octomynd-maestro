@@ -45,12 +45,23 @@ export function prepareFeatureTaskBaseline(
   const remoteExists = runGit(["ls-remote", "--exit-code", "--heads", "origin", baseBranch], project.path).ok;
   if (remoteExists) {
     requireGit(runGit(["fetch", "origin", baseBranch], project.path), `fetch ${baseBranch}`);
-    validateBaselineEvidence(project.path, `origin/${baseBranch}`, commits);
-    return { baseRef: `origin/${baseBranch}`, baseBranch, dependencyTaskIds };
+    const isUpToDate = runGit(
+      ["merge-base", "--is-ancestor", `origin/${project.defaultBranch}`, `origin/${baseBranch}`],
+      project.path
+    ).ok;
+    if (isUpToDate) {
+      validateBaselineEvidence(project.path, `origin/${baseBranch}`, commits);
+      return { baseRef: `origin/${baseBranch}`, baseBranch, dependencyTaskIds };
+    }
+    runGit(["push", "origin", "--delete", baseBranch], project.path);
+    runGit(["branch", "-D", baseBranch], project.path);
   }
 
   if (fs.existsSync(baselinePath)) {
-    throw new Error(`Managed Feature baseline path already exists: ${baselinePath}`);
+    runGit(["worktree", "remove", "--force", baselinePath], project.path);
+    if (fs.existsSync(baselinePath)) {
+      fs.rmSync(baselinePath, { recursive: true, force: true });
+    }
   }
   fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
   requireGit(

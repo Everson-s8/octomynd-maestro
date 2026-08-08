@@ -24,6 +24,7 @@ import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
+import { revalidateQueuedFeaturePlans } from "../features/task-scheduler.js";
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
@@ -773,6 +774,11 @@ export class ApplicationCommands {
             revision: result.plan.revision
           }
         });
+        try {
+          revalidateQueuedFeaturePlans(this.database, result.plan.projectKey);
+        } catch {
+          // best-effort
+        }
       }
       return result;
     } catch (error) {
@@ -825,6 +831,11 @@ export class ApplicationCommands {
           pullRequestUrl: feature.pullRequestUrl
         }
       });
+      try {
+        revalidateQueuedFeaturePlans(this.database, feature.projectKey);
+      } catch {
+        // best-effort
+      }
       return feature;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown feature cancellation error.";
@@ -1075,6 +1086,31 @@ export class ApplicationCommands {
   getFeaturePlanHistory(featurePlanId: number): import("../db.js").FeaturePlanHistoryRecord[] {
     try {
       return this.database.getFeaturePlanHistory(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  admitFeaturePlan(origin: CommandOrigin, featurePlanId: number): FeaturePlanDetails {
+    try {
+      const result = this.database.admitFeaturePlan(featurePlanId, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.admitted",
+        text: `Feature Plan #${featurePlanId} admitted to project writer lease.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  revalidateFeaturePlanQueue(projectKey?: string | null): FeaturePlanDetails[] {
+    try {
+      return revalidateQueuedFeaturePlans(this.database, projectKey || undefined);
     } catch (error) {
       throw this.toFeaturePlanCommandError(error);
     }

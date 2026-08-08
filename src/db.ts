@@ -1945,6 +1945,14 @@ export function createDatabase(databasePath: string) {
       return this.getFeaturePlanDetails(id);
     },
 
+    admitFeaturePlan(id: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const eligibility = this.evaluateFeaturePlanEligibility(id);
+      if (!eligibility.eligible) {
+        throw new Error(`Cannot admit Feature Plan #${id}: ${eligibility.reason}`);
+      }
+      return this.updateFeaturePlanQueueStatus(id, "admitted", "Admitted to project writer lease", actorUserId, actorUsername);
+    },
+
     getFeaturePlanHistory(featurePlanId: number): FeaturePlanHistoryRecord[] {
       const rows = db.prepare("SELECT * FROM feature_plan_history WHERE feature_plan_id = ? ORDER BY id ASC")
         .all(featurePlanId) as FeaturePlanHistoryRow[];
