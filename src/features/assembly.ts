@@ -100,7 +100,7 @@ export class FeatureAssemblyCoordinator {
 
   private async reconcilePlans(): Promise<number> {
     let changes = 0;
-    const plans = this.database.listFeaturePlans(100).filter((plan) => plan.status === "planned");
+    const plans = this.database.listFeaturePlans(100).filter((plan) => !["completed", "cancelled"].includes(plan.status));
     for (const plan of plans) {
       if (this.active.has(plan.id)) continue;
       this.active.add(plan.id);
@@ -132,6 +132,11 @@ export class FeatureAssemblyCoordinator {
     if (details.tasks.length === 0) return false;
     const eligible = details.tasks.every((task) => task.taskStatus === "awaiting_human");
     if (!eligible) return false;
+
+    if (details.plan.status === "queued") {
+      const queueEligibility = this.database.evaluateFeaturePlanEligibility(featurePlanId);
+      if (!queueEligibility.eligible) return false;
+    }
 
     return this.assemblePlan(details.plan);
   }
@@ -176,6 +181,11 @@ export class FeatureAssemblyCoordinator {
       worktreePath: integration.worktreePath,
       pullRequestUrl
     });
+
+    const currentPlan = this.database.getFeaturePlan(plan.id);
+    if (currentPlan.status === "active") {
+      this.database.updateFeaturePlanQueueStatus(plan.id, "waiting_review");
+    }
 
     this.ensureFeatureItemsRegistered(plan.id, feature, integrationDetails);
     this.addPlanEvent(
