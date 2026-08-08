@@ -2,7 +2,7 @@ import type { FeaturePlanDetails, FeaturePlanTaskRecord, MaestroDatabase, TaskRe
 import { featureTaskContractsConflict, transitiveDependencyIds } from "./task-graph.js";
 
 export type FeatureTaskReadiness =
-  | { state: "ready"; featurePlan: FeaturePlanDetails | null }
+  | { state: "ready"; reason?: undefined; featurePlan: FeaturePlanDetails | null }
   | { state: "waiting"; reason: string; featurePlan: FeaturePlanDetails | null }
   | { state: "blocked"; reason: string; featurePlan: FeaturePlanDetails };
 
@@ -14,12 +14,49 @@ export function evaluateFeatureTaskReadiness(
   task: TaskRecord,
   activeTasks: TaskRecord[]
 ): FeatureTaskReadiness {
-  const featurePlan = database.findFeaturePlanDetailsByTask(task.id);
+  let featurePlan = database.findFeaturePlanDetailsByTask(task.id);
   if (!featurePlan) {
     const occupied = activeTasks.find((candidate) => candidate.projectKey === task.projectKey);
     return occupied
       ? { state: "waiting", reason: `project_busy_by_task_${occupied.id}`, featurePlan: null }
       : { state: "ready", featurePlan: null };
+  }
+
+  if (featurePlan.plan.isPaused) {
+    return {
+      state: "waiting",
+      reason: featurePlan.plan.pauseReason
+        ? `feature_plan_paused_${featurePlan.plan.pauseReason}`
+        : "feature_plan_paused",
+      featurePlan
+    };
+  }
+
+  if (featurePlan.plan.status === "blocked" || featurePlan.plan.status === "cancelled") {
+    return {
+      state: "blocked",
+      reason: `feature_plan_${featurePlan.plan.status}`,
+      featurePlan
+    };
+  }
+
+  if (featurePlan.plan.status === "queued") {
+    const eligibility = database.evaluateFeaturePlanEligibility(featurePlan.plan.id);
+    if (!eligibility.eligible) {
+      return {
+        state: "waiting",
+        reason: eligibility.reason,
+        featurePlan
+      };
+    }
+
+    try {
+      database.admitFeaturePlan(featurePlan.plan.id);
+      const updated = database.findFeaturePlanDetailsByTask(task.id);
+      if (updated) featurePlan = updated;
+    } catch {
+      // Transition might fail if already admitted concurrently
+    }
   }
 
   const node = requirePlanTask(featurePlan, task.id);
@@ -61,7 +98,85 @@ export function evaluateFeatureTaskReadiness(
     }
   }
 
+  if (featurePlan.plan.status === "admitted") {
+    try {
+      database.updateFeaturePlanQueueStatus(featurePlan.plan.id, "active", "Task implementation started");
+      const updated = database.findFeaturePlanDetailsByTask(task.id);
+      if (updated) featurePlan = updated;
+    } catch {
+      // Transition might fail if already active
+    }
+  }
+
   return { state: "ready", featurePlan };
+}
+
+export function revalidateQueuedFeaturePlans(
+  database: MaestroDatabase,
+  projectKey?: string
+): FeaturePlanDetails[] {
+  const admittedPlans: FeaturePlanDetails[] = [];
+  const queue = database.listFeaturePlanQueue(projectKey);
+
+  for (const details of queue) {
+    const { plan } = details;
+
+    const dependencies = database.listFeaturePlanDependencies(plan.id);
+    let hasCancelledDep = false;
+    let cancelledDepId: number | null = null;
+    let hasBlockedDep = false;
+    let blockedDepId: number | null = null;
+
+    for (const dep of dependencies) {
+      const depPlan = database.getFeaturePlan(dep.dependsOnFeaturePlanId);
+      if (depPlan.status === "cancelled") {
+        hasCancelledDep = true;
+        cancelledDepId = depPlan.id;
+        break;
+      }
+      if (depPlan.status === "blocked") {
+        hasBlockedDep = true;
+        blockedDepId = depPlan.id;
+      }
+    }
+
+    if (hasCancelledDep) {
+      if (plan.status === "queued" || plan.status === "admitted") {
+        database.updateFeaturePlanQueueStatus(
+          plan.id,
+          "blocked",
+          `predecessor_feature_plan_${cancelledDepId}_cancelled`
+        );
+      }
+      continue;
+    }
+
+    if (hasBlockedDep) {
+      if (plan.status === "queued" || plan.status === "admitted") {
+        database.updateFeaturePlanQueueStatus(
+          plan.id,
+          "blocked",
+          `predecessor_feature_plan_${blockedDepId}_blocked`
+        );
+      }
+      continue;
+    }
+
+    if (plan.status === "blocked" && plan.blockedReason?.startsWith("predecessor_feature_plan_")) {
+      database.updateFeaturePlanQueueStatus(plan.id, "queued", null);
+    }
+
+    const currentPlan = database.getFeaturePlan(plan.id);
+    if (currentPlan.status === "queued") {
+      const eligibility = database.evaluateFeaturePlanEligibility(plan.id);
+      if (eligibility.eligible) {
+        const admitted = database.admitFeaturePlan(plan.id);
+        admittedPlans.push(admitted);
+      }
+    }
+  }
+
+  return admittedPlans;
 }
 
 function requirePlanTask(details: FeaturePlanDetails, taskId: number): FeaturePlanTaskRecord {
