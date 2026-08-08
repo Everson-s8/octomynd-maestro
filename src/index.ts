@@ -14,6 +14,7 @@ import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
 import { createTelegramGoalNotifier } from "./telegram/notifications.js";
 import { createTelegramReviewNotifier } from "./telegram/notifications.js";
 import { createTelegramGoalProgressNotifier, createTelegramReviewSyncNotifier } from "./telegram/notifications.js";
+import { createTelegramTaskBlockedNotifier } from "./telegram/notifications.js";
 import { ReviewCoordinator } from "./reviews/coordinator.js";
 import { BacklogAutopilot } from "./backlog/autopilot.js";
 import { FeatureCoordinator } from "./features/coordinator.js";
@@ -201,6 +202,11 @@ const improvementCandidateNotifier = createTelegramImprovementCandidateNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const taskBlockedNotifier = createTelegramTaskBlockedNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
 const reviewCoordinator = new ReviewCoordinator(
   database,
   goalCoordinator,
@@ -223,7 +229,7 @@ const improvementReviewWorker = new ImprovementReviewWorker(
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
   ...config.autopilot,
   worktreesRoot: config.worktreesPath
-});
+}, undefined, taskBlockedNotifier);
 reviewCoordinator.start();
 featureCoordinator.start();
 featureAssemblyCoordinator.start();

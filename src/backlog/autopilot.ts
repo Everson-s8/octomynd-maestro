@@ -34,6 +34,12 @@ export type TaskPreparer = (
   worktreesRoot: string
 ) => TaskPreparationResult;
 
+export type TaskBlockedNotifier = (
+  task: TaskRecord,
+  reason: string,
+  details: string[]
+) => Promise<void> | void;
+
 export type TaskPreparationResult =
   | { ok: true; task: TaskRecord; branchName: string; worktreePath: string }
   | { ok: false; errors: string[] };
@@ -50,7 +56,8 @@ export class BacklogAutopilot {
     private readonly database: MaestroDatabase,
     private readonly goals: GoalStarter,
     private readonly options: BacklogAutopilotOptions,
-    private readonly taskPreparer: TaskPreparer = prepareTaskWithCommands
+    private readonly taskPreparer: TaskPreparer = prepareTaskWithCommands,
+    private readonly taskBlockedNotifier?: TaskBlockedNotifier
   ) {}
 
   start(): void {
@@ -92,12 +99,12 @@ export class BacklogAutopilot {
       for (const task of queued) {
         const revalidation = revalidateQueuedTask(task, tasks);
         if (!revalidation.applicable) {
-          this.blockTask(task, revalidation.reason);
+          await this.blockTask(task, revalidation.reason);
           continue;
         }
         const readiness = evaluateFeatureTaskReadiness(this.database, task, activeTasks);
         if (readiness.state === "blocked") {
-          this.blockTask(task, readiness.reason);
+          await this.blockTask(task, readiness.reason);
           continue;
         }
         if (readiness.state === "waiting") {
@@ -124,14 +131,14 @@ export class BacklogAutopilot {
         }
         if (!prepared.ok) {
           if (this.database.getTask(task.id).status !== "queued") continue;
-          this.blockTask(task, "preparation_failed");
+          await this.blockTask(task, "preparation_failed", prepared.errors);
           continue;
         }
         let run: GoalRunRecord;
         try {
           run = this.goals.start(task.id);
         } catch {
-          this.blockTask(this.database.getTask(task.id), "goal_start_failed");
+          await this.blockTask(this.database.getTask(task.id), "goal_start_failed");
           continue;
         }
         this.database.addEvent({
@@ -178,15 +185,28 @@ export class BacklogAutopilot {
     };
   }
 
-  private blockTask(task: TaskRecord, reason: string): void {
+  private async blockTask(task: TaskRecord, reason: string, details: string[] = []): Promise<void> {
     this.database.updateTaskStatus(task.id, "blocked");
     this.database.addEvent({
       source: "maestro",
       type: "backlog.task_blocked",
       text: `Autopilot blocked task #${task.id} for human review.`,
       taskId: task.id,
-      metadata: { reason, projectKey: task.projectKey }
+      metadata: { reason, details, projectKey: task.projectKey }
     });
+    if (this.taskBlockedNotifier) {
+      try {
+        await this.taskBlockedNotifier(task, reason, details);
+      } catch (error) {
+        this.database.addEvent({
+          source: "telegram",
+          type: "backlog.blocked_notification_failed",
+          text: `Failed to notify blocked task #${task.id}.`,
+          taskId: task.id,
+          metadata: { reason, error: error instanceof Error ? error.message : String(error) }
+        });
+      }
+    }
     this.lastAction = `blocked_task_${task.id}_${reason}`;
   }
 

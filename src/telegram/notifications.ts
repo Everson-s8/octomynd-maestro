@@ -18,6 +18,33 @@ export type GoalNotificationHandler = (run: GoalRunRecord) => Promise<void>;
 export type GoalProgressNotificationHandler = (run: GoalRunRecord, providerId: AgentProviderId) => Promise<void>;
 export type TelegramMessageSender = (chatId: string, text: string) => Promise<unknown>;
 
+export function createTelegramTaskBlockedNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): ((task: TaskRecord, reason: string, details: string[]) => Promise<void>) | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (task, reason, details) => {
+    const explanation = details.length > 0 ? details.join("\n") : reason;
+    await sendMessage(chatId, [
+      `Task #${task.id} bloqueada.`,
+      `Projeto: ${task.projectKey ? `@${task.projectKey}` : "sem projeto"}`,
+      `Motivo: ${reason}`,
+      `Detalhe: ${redactSensitiveText(explanation)}`,
+      "Acao: corrija a causa e tente novamente."
+    ].join("\n"));
+    database.addEvent({
+      source: "telegram",
+      type: "backlog.blocked_notification_sent",
+      text: `Blocked notification sent for task #${task.id}.`,
+      taskId: task.id,
+      metadata: { reason, projectKey: task.projectKey }
+    });
+  };
+}
+
 export function createTelegramImprovementCandidateNotifier(
   config: MaestroConfig,
   database: MaestroDatabase,

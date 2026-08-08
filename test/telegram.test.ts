@@ -131,6 +131,10 @@ describe("telegram helpers", () => {
       projectKey: "octomynd",
       text: "melhorar resposta"
     });
+    expect(parseProjectTaskInput("@maestro primeira etapa\n\nsegunda etapa")).toEqual({
+      projectKey: "maestro",
+      text: "primeira etapa\n\nsegunda etapa"
+    });
     expect(parseProjectTaskInput("sem projeto explicito")).toEqual({
       projectKey: null,
       text: "sem projeto explicito"
