@@ -802,10 +802,10 @@ function formatFeatures(
   const planLines = plans.slice(0, 8).flatMap((details) => {
     const { plan, tasks } = details;
     const blockers = tasks.filter((task) => task.taskStatus !== "awaiting_human");
-    const eligible = plan.status === "planned" && tasks.length > 0 && blockers.length === 0;
+    const eligible = plan.status === "queued" && tasks.length > 0 && blockers.length === 0;
     const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
     const lines = [
-      `#${plan.id} @${plan.projectKey} [${plan.status}]${plan.status === "planned" ? (eligible ? " elegivel" : " aguardando tasks") : ""} - ${truncate(plan.objective, 160)}`
+      `#${plan.id} @${plan.projectKey} [${plan.status}]${plan.status === "queued" ? (eligible ? " elegivel" : " aguardando tasks") : ""} - ${truncate(plan.objective, 160)}`
     ];
     if (blockers.length > 0) {
       lines.push(...blockers.map((task) => `   blocker: task #${task.taskId} (${task.taskStatus})`));
