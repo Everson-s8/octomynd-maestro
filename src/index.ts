@@ -22,8 +22,10 @@ import { FeatureAssemblyCoordinator } from "./features/assembly.js";
 import {
   createTelegramFeatureAssemblyNotifier,
   createTelegramFeatureBlockedNotifier,
-  createTelegramFeatureNotifier
+  createTelegramFeatureNotifier,
+  createTelegramSelfUpdateNotifier
 } from "./telegram/notifications.js";
+import { SelfUpdateManager } from "./runtime/self-update.js";
 import { EnvironmentDoctor } from "./environment/doctor.js";
 import { DeterministicValidationRunner } from "./validation/runner.js";
 import { RestrictedImprovementReviewCoordinator } from "./improvements/coordinator.js";
@@ -139,13 +141,35 @@ const featureBlockedNotifier = createTelegramFeatureBlockedNotifier(
   database,
   (chatId, text) => bot.api.sendMessage(chatId, text)
 );
+const selfUpdateNotifier = createTelegramSelfUpdateNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const selfUpdateManager = new SelfUpdateManager(
+  database,
+  config.execution.rootPath,
+  path.join(config.execution.rootPath, "scripts", "maestro-runtime.ps1"),
+  selfUpdateNotifier
+);
+void selfUpdateManager.reconcileLatestUpdate().catch((error) => {
+  database.addEvent({
+    source: "maestro",
+    type: "self_update.reconciliation_failed",
+    text: error instanceof Error ? error.message : "Unable to reconcile the latest runtime update."
+  });
+});
 const featureCoordinator = new FeatureCoordinator(
   database,
   agentRegistry,
   path.join(path.dirname(config.databasePath), "feature-runs"),
   undefined,
   featureNotifier,
-  featureBlockedNotifier
+  featureBlockedNotifier,
+  undefined,
+  async (feature, headSha) => {
+    await selfUpdateManager.triggerUpdate(feature, headSha);
+  }
 );
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId) => goalCoordinator.cancel(taskId),

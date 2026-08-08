@@ -337,6 +337,7 @@ describe("dashboard", () => {
     const featurePlan = snapshot.featurePlans.find((item) => item.id === plan.plan.id)!;
 
     expect(featurePlan.eligible).toBe(true);
+    expect(featurePlan.lifecycleStatus).toBe("active");
     expect(featurePlan.blockers).toEqual([]);
     expect(featurePlan.tasks).toEqual([
       expect.objectContaining({ id: first.id, status: "awaiting_human" }),
@@ -348,6 +349,13 @@ describe("dashboard", () => {
       pullRequestUrl: feature.pullRequestUrl
     });
     expect(featurePlan.cancellable).toBe(false);
+
+    database.updateFeature({ id: feature.id, status: "completed" });
+    const completedSnapshot = buildDashboardSnapshot(config, database);
+    const completedPlan = completedSnapshot.featurePlans.find((item) => item.id === plan.plan.id)!;
+    expect(completedPlan.lifecycleStatus).toBe("completed");
+    expect(completedPlan.eligible).toBe(false);
+    expect(completedSnapshot.summary.plannedFeaturePlans).toBe(0);
   });
 
   it("preserves explicit Feature Task contracts through the dashboard API", async () => {

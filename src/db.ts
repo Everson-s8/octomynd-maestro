@@ -356,6 +356,19 @@ export type FeaturePlanWriteResult = FeaturePlanDetails & {
   applied: boolean;
 };
 
+export type RuntimeUpdateStatus = "pending" | "in_progress" | "completed" | "failed" | "rolled_back";
+
+export type RuntimeUpdateRecord = {
+  id: number;
+  featureId: number | null;
+  targetCommit: string;
+  previousCommit: string;
+  status: RuntimeUpdateStatus;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type GitHubIssueSubjectType = "feature_plan" | "task";
 
 export type GitHubIssueLinkRecord = {
@@ -761,16 +774,23 @@ export function createDatabase(databasePath: string) {
   `);
   const enqueueCompletionReviewStatement = db.prepare(`
     INSERT INTO completion_review_outbox (
-      subject_type, subject_id, completion_version, status, evidence_json,
-      attempt_count, available_at, lease_owner, lease_expires_at, last_error,
-      created_at, updated_at, started_at, finished_at
+      subject_type, subject_id, completion_version, status,
+      evidence_json, available_at, created_at, updated_at
     )
     VALUES (
-      @subjectType, @subjectId, @completionVersion, 'pending', @evidenceJson,
-      0, @now, NULL, NULL, NULL,
-      @now, @now, NULL, NULL
+      @subjectType, @subjectId, @completionVersion, 'pending',
+      @evidenceJson, @now, @now, @now
     )
     ON CONFLICT(subject_type, subject_id, completion_version) DO NOTHING
+  `);
+  const enqueueRuntimeUpdateStatement = db.prepare(`
+    INSERT INTO runtime_updates (feature_id, target_commit, previous_commit, status, error, created_at, updated_at)
+    VALUES (@featureId, @targetCommit, @previousCommit, 'pending', NULL, @now, @now)
+  `);
+  const updateRuntimeUpdateStatement = db.prepare(`
+    UPDATE runtime_updates
+    SET status = @status, error = @error, updated_at = @now
+    WHERE id = @id
   `);
 
   return {
@@ -1933,6 +1953,58 @@ export function createDatabase(databasePath: string) {
         `)
         .get(taskId) as GoalRunRow | undefined;
       return row ? mapGoalRun(row) : null;
+    },
+
+    enqueueRuntimeUpdate(input: {
+      featureId?: number | null;
+      targetCommit: string;
+      previousCommit: string;
+    }): RuntimeUpdateRecord {
+      if (input.featureId !== undefined && input.featureId !== null) {
+        const existingRow = db
+          .prepare("SELECT * FROM runtime_updates WHERE feature_id = ?")
+          .get(input.featureId) as RuntimeUpdateRow | undefined;
+        if (existingRow) return mapRuntimeUpdate(existingRow);
+      }
+      const now = new Date().toISOString();
+      const result = enqueueRuntimeUpdateStatement.run({
+        featureId: input.featureId ?? null,
+        targetCommit: input.targetCommit,
+        previousCommit: input.previousCommit,
+        now
+      });
+      return this.getRuntimeUpdate(Number(result.lastInsertRowid));
+    },
+
+    updateRuntimeUpdate(input: {
+      id: number;
+      status: RuntimeUpdateStatus;
+      error?: string | null;
+    }): RuntimeUpdateRecord {
+      const now = new Date().toISOString();
+      updateRuntimeUpdateStatement.run({
+        id: input.id,
+        status: input.status,
+        error: input.error ?? null,
+        now
+      });
+      return this.getRuntimeUpdate(input.id);
+    },
+
+    getRuntimeUpdate(id: number): RuntimeUpdateRecord {
+      const row = db.prepare("SELECT * FROM runtime_updates WHERE id = ?").get(id) as RuntimeUpdateRow | undefined;
+      if (!row) throw new Error(`Runtime update not found: ${id}`);
+      return mapRuntimeUpdate(row);
+    },
+
+    listRuntimeUpdates(limit = 30): RuntimeUpdateRecord[] {
+      const rows = db.prepare("SELECT * FROM runtime_updates ORDER BY id DESC LIMIT ?").all(limit) as RuntimeUpdateRow[];
+      return rows.map(mapRuntimeUpdate);
+    },
+
+    getLatestRuntimeUpdate(): RuntimeUpdateRecord | null {
+      const row = db.prepare("SELECT * FROM runtime_updates ORDER BY id DESC LIMIT 1").get() as RuntimeUpdateRow | undefined;
+      return row ? mapRuntimeUpdate(row) : null;
     }
   };
 }
@@ -2211,6 +2283,17 @@ function migrate(db: Database.Database) {
       UNIQUE(subject_type, subject_id, completion_version)
     );
 
+    CREATE TABLE IF NOT EXISTS runtime_updates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_id INTEGER UNIQUE,
+      target_commit TEXT NOT NULL,
+      previous_commit TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'in_progress', 'completed', 'failed', 'rolled_back')),
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_feature_plan_tasks_task_id
       ON feature_plan_tasks(task_id);
     CREATE INDEX IF NOT EXISTS idx_github_issue_links_issue_number
@@ -2227,6 +2310,10 @@ function migrate(db: Database.Database) {
       ON completion_review_outbox(status, available_at, lease_expires_at, id);
     CREATE INDEX IF NOT EXISTS idx_goal_checkpoints_run_id
       ON goal_checkpoints(run_id, id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_updates_feature_id
+      ON runtime_updates(feature_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_updates_status
+      ON runtime_updates(status);
   `);
 
   migrateSkillPersistence(db);
@@ -2967,6 +3054,30 @@ function mapFeatureItem(row: FeatureItemRow): FeatureItemRecord {
     pullRequestUrl: row.pull_request_url,
     branchName: row.branch_name,
     status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+type RuntimeUpdateRow = {
+  id: number;
+  feature_id: number | null;
+  target_commit: string;
+  previous_commit: string;
+  status: RuntimeUpdateStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapRuntimeUpdate(row: RuntimeUpdateRow): RuntimeUpdateRecord {
+  return {
+    id: row.id,
+    featureId: row.feature_id,
+    targetCommit: row.target_commit,
+    previousCommit: row.previous_commit,
+    status: row.status,
+    error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

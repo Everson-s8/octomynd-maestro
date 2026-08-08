@@ -22,6 +22,7 @@ const WAIT_REASON_LABELS: Record<string, string> = {
   offline: "provedor indisponivel",
   capacity: "nenhum provedor com capacidade disponivel",
   runtime_restart: "reinicio do runtime Maestro",
+  budget_exhausted: "orcamento de etapas da Goal esgotado",
   unknown: "erro desconhecido do provedor"
 };
 
@@ -48,7 +49,7 @@ export function buildGoalObservability(
   const classifiedReason = rawReason ?? null;
   const classifiedReasonLabel = classifiedReason ? formatReasonLabel(classifiedReason) : null;
 
-  const sourceProvider = (fallbackEvent?.metadata?.fromProvider as string | undefined)
+  const sourceProvider = classifiedReason === "budget_exhausted" ? null : (fallbackEvent?.metadata?.fromProvider as string | undefined)
     ?? (waitEvent?.metadata?.fromProvider as string | undefined)
     ?? (terminalEvent?.metadata?.lastProvider as string | undefined)
     ?? goal.lastProvider
@@ -75,7 +76,9 @@ export function buildGoalObservability(
 
   const retryable = goal.status === "waiting_provider"
     || Boolean(fallbackEvent?.metadata?.retryable)
-    || (classifiedReason ? isRetryableFailureCategory(classifiedReason as FailureCategory) : false);
+    || (classifiedReason === "budget_exhausted"
+      ? false
+      : classifiedReason ? isRetryableFailureCategory(classifiedReason as FailureCategory) : false);
 
   const nextAction = determineNextAction({
     status: goal.status,
@@ -131,6 +134,9 @@ function determineNextAction(input: {
   }
   if (input.retryable) {
     return "Falha transitoria detectada. Maestro agendou nova tentativa.";
+  }
+  if (input.waitReason === "budget_exhausted") {
+    return "O trabalho preservado atingiu o limite de etapas da Goal. Continue a Goal a partir do checkpoint ou aumente o budget apos revisar o escopo.";
   }
   return "Interrupcao definitiva. Requer intervencao manual ou alteracao de politicas de provider.";
 }

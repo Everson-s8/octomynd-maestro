@@ -11,6 +11,7 @@ import type {
   FeatureNotificationHandler
 } from "../features/coordinator.js";
 import type { FeatureAssemblyEvent, FeatureAssemblyNotificationHandler } from "../features/assembly.js";
+import type { SelfUpdateNotificationEvent } from "../runtime/self-update.js";
 
 import { buildGoalObservability } from "../goals/observability.js";
 
@@ -366,6 +367,63 @@ export function formatFeatureAssemblyNotification(event: FeatureAssemblyEvent): 
     `Projeto: @${event.plan.projectKey}`,
     `Detalhe: ${truncate(redactSensitiveText(event.message), 500)}`
   ].join("\n"), 4_000);
+}
+
+export function createTelegramSelfUpdateNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): ((event: SelfUpdateNotificationEvent) => Promise<void>) | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (event) => {
+    await sendMessage(chatId, formatSelfUpdateNotification(event));
+    database.addEvent({
+      source: "telegram",
+      type: `self_update.${event.type}_notification_sent`,
+      text: `Self-update ${event.type} notification sent.`,
+      metadata: { eventType: event.type }
+    });
+  };
+}
+
+export function formatSelfUpdateNotification(event: SelfUpdateNotificationEvent): string {
+  switch (event.type) {
+    case "start":
+      return truncate([
+        "🔄 Self-update do Maestro iniciado.",
+        `Commit de destino: ${event.targetCommit.slice(0, 8)}`,
+        event.pullRequestUrl ? `PR: ${event.pullRequestUrl}` : null,
+        "O Maestro aplicara o merge fast-forward e iniciara o supervised restart."
+      ].filter(Boolean).join("\n"), 4_000);
+    case "commit":
+      return truncate([
+        "📦 Main branch atualizada com sucesso.",
+        `Commit resultante: ${event.resultingCommit.slice(0, 8)}`,
+        "Iniciando verificacao de saude do novo runtime..."
+      ].join("\n"), 4_000);
+    case "success":
+      return truncate([
+        "✅ Self-update e supervised restart concluidos com sucesso!",
+        `Commit atual: ${event.resultingCommit.slice(0, 8)}`,
+        "Maestro runtime operacional."
+      ].filter(Boolean).join("\n"), 4_000);
+    case "failure":
+      return truncate([
+        "⚠️ Falha no self-update do Maestro.",
+        `Commit: ${event.commit.slice(0, 8)}`,
+        `Motivo: ${redactSensitiveText(event.error)}`,
+        "Nenhuma alteracao destrutiva foi realizada."
+      ].join("\n"), 4_000);
+    case "rollback":
+      return truncate([
+        "⏪ Startup do novo runtime falhou. Rollback executado.",
+        `Commit restaurado: ${event.previousCommit.slice(0, 8)}`,
+        `Erro de startup: ${redactSensitiveText(event.error)}`,
+        "O Maestro foi restaurado para a versao anterior conhecida e saudavel."
+      ].join("\n"), 4_000);
+  }
 }
 
 function truncate(text: string, maxLength: number): string {

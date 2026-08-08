@@ -181,4 +181,56 @@ describe("Goal Observability", () => {
       database.close();
     }
   });
+
+  it("reports a Goal step-budget stop as resumable work rather than a provider failure", () => {
+    const database = createDatabase(":memory:");
+    try {
+      database.registerProject({ key: "maestro", path: process.cwd() });
+      const task = database.createTask("continue bounded work", "telegram", "maestro");
+      const run = database.createGoalRun(task.id);
+      const step = database.createGoalStep(run.id, "implementing", "claude");
+      const checkpoint = database.createGoalCheckpoint({
+        runId: run.id,
+        stepId: step.id,
+        phase: "implementing",
+        provider: "claude",
+        status: "completed",
+        summary: "Work preserved after the bounded run.",
+        workspaceFingerprint: "fp-budget",
+        changedFiles: ["src/runtime/self-update.ts"],
+        artifactKeys: []
+      });
+      database.addEvent({
+        source: "maestro",
+        type: "goal.blocked",
+        text: "Goal reached its 12-step budget.",
+        taskId: task.id,
+        metadata: {
+          runId: run.id,
+          phase: "reviewing",
+          stepCount: 12,
+          failureCategory: "budget_exhausted",
+          lastProvider: "claude",
+          resumeCheckpointId: checkpoint.id,
+          preservedFiles: checkpoint.changedFiles
+        }
+      });
+      const blocked = database.updateGoalRun({
+        id: run.id,
+        status: "blocked",
+        currentPhase: "reviewing",
+        stepCount: 12,
+        lastError: "Goal reached its 12-step budget.",
+        lastProvider: "claude"
+      });
+      const observation = buildGoalObservability(database, blocked);
+      expect(observation.classifiedReason).toBe("budget_exhausted");
+      expect(observation.classifiedReasonLabel).toBe("orcamento de etapas da Goal esgotado");
+      expect(observation.sourceProvider).toBeNull();
+      expect(observation.preservedChanges).toBe(true);
+      expect(observation.nextAction).toContain("Continue a Goal a partir do checkpoint");
+    } finally {
+      database.close();
+    }
+  });
 });

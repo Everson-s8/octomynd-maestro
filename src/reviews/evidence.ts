@@ -46,7 +46,8 @@ export function listReviewQueue(database: MaestroDatabase): ReviewQueueItem[] {
     .filter((run) => (
       run.pullRequestUrl &&
       run.status === "completed" &&
-      database.getTask(run.taskId).status === "awaiting_human"
+      database.getTask(run.taskId).status === "awaiting_human" &&
+      !database.findFeatureByTaskId(run.taskId)
     ))
     .map((run) => buildReviewQueueItem(database, run))
     .filter((item) => !["approved", "rejected"].includes(item.status));
