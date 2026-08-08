@@ -247,6 +247,45 @@ describe("feature completion protocol", () => {
     fixture.database.close();
   });
 
+  it("handles manual final review triggering, readiness checks and duplicate prevention", async () => {
+    const fixture = createFixture("completed");
+    const coordinator = new FeatureCoordinator(
+      fixture.database,
+      new AgentRegistry([fixture.provider]),
+      path.join(fixture.tempDir, "artifacts"),
+      fixture.github
+    );
+
+    // 1. Get status when ready
+    const statusBefore = await coordinator.getReviewStatus(fixture.feature.id);
+    expect(statusBefore.isReady).toBe(true);
+    expect(statusBefore.notReadyReason).toBeNull();
+
+    // 2. Reject trigger when PR is draft
+    fixture.github.state.isDraft = true;
+    const draftResult = await coordinator.triggerManualReview(fixture.feature.id);
+    expect(draftResult.success).toBe(false);
+    expect(draftResult.reason).toBe("is_draft");
+    expect(draftResult.message).toContain("Feature PR esta em draft");
+
+    // Fix draft
+    fixture.github.state.isDraft = false;
+
+    // 3. Trigger manual review successfully
+    const reviewResult = await coordinator.triggerManualReview(fixture.feature.id);
+    expect(reviewResult.success).toBe(true);
+    expect(reviewResult.status).toBe("completed");
+    expect(reviewResult.providerId).toBe("claude");
+    expect(fixture.github.merges).toHaveLength(1);
+
+    // 4. Duplicate/already completed trigger is rejected
+    const repeatResult = await coordinator.triggerManualReview(fixture.feature.id);
+    expect(repeatResult.success).toBe(false);
+    expect(repeatResult.reason).toBe("already_completed");
+
+    fixture.database.close();
+  });
+
   it("does not merge when the Feature is cancelled while final review is running", async () => {
     const fixture = createFixture("completed");
     const cancellingProvider: AgentProvider = {

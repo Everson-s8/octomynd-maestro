@@ -45,6 +45,25 @@ export type FeatureBlockedEvent = {
 export type FeatureNotificationHandler = (completion: FeatureCompletion) => Promise<void>;
 export type FeatureBlockedNotificationHandler = (event: FeatureBlockedEvent) => Promise<void>;
 
+export type ManualReviewResult = {
+  success: boolean;
+  feature: FeatureRecord;
+  prState?: FeaturePullRequestState;
+  status: FeatureRecord["status"];
+  providerId?: AgentProviderId;
+  summary?: string;
+  reason?: string;
+  message: string;
+};
+
+export type ManualReviewStatusResult = {
+  feature: FeatureRecord;
+  prState: FeaturePullRequestState;
+  isReady: boolean;
+  notReadyReason: string | null;
+  isReviewActive: boolean;
+};
+
 export class FeatureCoordinator {
   private readonly active = new Set<number>();
   private timer: NodeJS.Timeout | null = null;
@@ -78,6 +97,230 @@ export class FeatureCoordinator {
       this.reconcilePromise = null;
     });
     return this.reconcilePromise;
+  }
+
+  async getReviewStatus(featureId: number): Promise<ManualReviewStatusResult> {
+    const feature = this.database.getFeature(featureId);
+    const prState = await this.github.inspect(feature.pullRequestUrl);
+    const isReviewActive = this.active.has(feature.id) || feature.status === "reviewing" || feature.status === "merging";
+
+    let isReady = true;
+    let notReadyReason: string | null = null;
+
+    if (feature.status === "completed") {
+      isReady = false;
+      notReadyReason = "Feature PR ja foi concluido e integrado.";
+    } else if (feature.status === "cancelled") {
+      isReady = false;
+      notReadyReason = "Feature PR foi cancelado.";
+    } else if (isReviewActive) {
+      isReady = false;
+      notReadyReason = "Revisao final ja esta em andamento.";
+    } else if (prState.state === "CLOSED") {
+      isReady = false;
+      notReadyReason = "Feature PR foi fechado no GitHub.";
+    } else if (prState.state === "MERGED") {
+      isReady = false;
+      notReadyReason = "Feature PR ja foi mesclado no GitHub.";
+    } else if (prState.isDraft) {
+      isReady = false;
+      notReadyReason = "Feature PR esta em draft no GitHub.";
+    } else if (prState.mergeable === "CONFLICTING") {
+      isReady = false;
+      notReadyReason = "Feature PR possui conflitos de merge.";
+    } else if (prState.mergeable !== "MERGEABLE") {
+      isReady = false;
+      notReadyReason = "GitHub ainda nao confirmou se o Feature PR e mesclavel.";
+    } else if (!featureChecksPassed(prState)) {
+      isReady = false;
+      notReadyReason = "Checks obrigatorios do GitHub nao passaram.";
+    }
+
+    return {
+      feature,
+      prState,
+      isReady,
+      notReadyReason,
+      isReviewActive
+    };
+  }
+
+  async triggerManualReview(featureId: number, isRetry = false): Promise<ManualReviewResult> {
+    const feature = this.database.getFeature(featureId);
+
+    if (feature.status === "completed") {
+      return {
+        success: false,
+        feature,
+        status: feature.status,
+        reason: "already_completed",
+        message: "Feature PR ja foi concluido e integrado."
+      };
+    }
+
+    if (feature.status === "cancelled") {
+      return {
+        success: false,
+        feature,
+        status: feature.status,
+        reason: "cancelled",
+        message: "Feature PR foi cancelado."
+      };
+    }
+
+    if (this.active.has(feature.id) || (feature.status === "reviewing" && !isRetry) || (feature.status === "merging" && !isRetry)) {
+      return {
+        success: false,
+        feature,
+        status: feature.status,
+        reason: "already_in_progress",
+        message: `Revisao final ja esta em andamento para a Feature #${feature.id}.`
+      };
+    }
+
+    this.active.add(feature.id);
+    try {
+      const state = await this.github.inspect(feature.pullRequestUrl);
+
+      if (state.state === "MERGED") {
+        await this.completeFeature(feature, state);
+        const updated = this.database.getFeature(feature.id);
+        return {
+          success: true,
+          feature: updated,
+          prState: state,
+          status: "completed",
+          message: "Feature PR ja foi mesclado no GitHub."
+        };
+      }
+
+      if (state.state === "CLOSED") {
+        const message = "Feature PR was closed without merge.";
+        const failed = this.database.updateFeature({ id: feature.id, status: "failed", lastError: message });
+        this.addEvent(failed, "feature.closed_without_merge", message);
+        await this.emitBlocked(failed, "closed_without_merge", message);
+        return {
+          success: false,
+          feature: failed,
+          prState: state,
+          status: "failed",
+          reason: "closed_without_merge",
+          message: "Feature PR foi fechado no GitHub sem merge."
+        };
+      }
+
+      if (state.isDraft) {
+        const message = "Feature PR esta em draft. Altere para 'Ready for review' no GitHub antes da revisao final.";
+        const updated = this.database.updateFeature({ id: feature.id, status: "draft", lastError: message });
+        this.addEvent(updated, "feature.manual_review_rejected", message);
+        return {
+          success: false,
+          feature: updated,
+          prState: state,
+          status: "draft",
+          reason: "is_draft",
+          message
+        };
+      }
+
+      if (state.mergeable === "CONFLICTING") {
+        const message = "Feature PR possui conflitos de merge.";
+        await this.requestChanges(feature, "conflict", message);
+        const updated = this.database.getFeature(feature.id);
+        return {
+          success: false,
+          feature: updated,
+          prState: state,
+          status: "changes_requested",
+          reason: "conflict",
+          message
+        };
+      }
+
+      if (state.mergeable !== "MERGEABLE") {
+        const message = "GitHub ainda nao confirmou se o Feature PR e mesclavel.";
+        const updated = this.database.updateFeature({ id: feature.id, status: "waiting_checks", lastError: message });
+        this.addEvent(updated, "feature.waiting_mergeability", message);
+        return {
+          success: false,
+          feature: updated,
+          prState: state,
+          status: "waiting_checks",
+          reason: "not_mergeable",
+          message
+        };
+      }
+
+      if (!featureChecksPassed(state)) {
+        const message = "Checks obrigatorios do GitHub nao passaram.";
+        const updated = this.database.updateFeature({ id: feature.id, status: "waiting_checks", lastError: message });
+        this.addEvent(updated, "feature.waiting_checks", message);
+        return {
+          success: false,
+          feature: updated,
+          prState: state,
+          status: "waiting_checks",
+          reason: "checks_failed",
+          message
+        };
+      }
+
+      this.addEvent(
+        feature,
+        isRetry ? "feature.manual_review_retried" : "feature.manual_review_requested",
+        `Manual final review requested for head ${state.headSha.slice(0, 8)}.`
+      );
+
+      await this.runFinalReview(feature, state);
+
+      const finalFeature = this.database.getFeature(feature.id);
+      if (finalFeature.status === "completed") {
+        return {
+          success: true,
+          feature: finalFeature,
+          prState: state,
+          status: "completed",
+          providerId: (finalFeature.reviewerProvider as AgentProviderId) || undefined,
+          summary: finalFeature.reviewSummary || undefined,
+          message: "Revisao final aprovada e Feature PR mesclado com sucesso!"
+        };
+      }
+
+      if (finalFeature.status === "changes_requested") {
+        return {
+          success: false,
+          feature: finalFeature,
+          prState: state,
+          status: "changes_requested",
+          providerId: (finalFeature.reviewerProvider as AgentProviderId) || undefined,
+          summary: finalFeature.reviewSummary || undefined,
+          reason: "changes_requested",
+          message: `Revisao final solicitou ajustes: ${finalFeature.reviewSummary || "sem detalhes"}`
+        };
+      }
+
+      if (finalFeature.status === "waiting_provider") {
+        return {
+          success: false,
+          feature: finalFeature,
+          prState: state,
+          status: "waiting_provider",
+          reason: "waiting_provider",
+          message: finalFeature.lastError || "Aguardando provider de revisao disponivel."
+        };
+      }
+
+      return {
+        success: false,
+        feature: finalFeature,
+        prState: state,
+        status: finalFeature.status,
+        reason: finalFeature.status,
+        message: finalFeature.lastError || `Revisao concluida com estado: ${finalFeature.status}`
+      };
+    } finally {
+      this.active.delete(feature.id);
+    }
   }
 
   private async reconcileFeatures(): Promise<number> {

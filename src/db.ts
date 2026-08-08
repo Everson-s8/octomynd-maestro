@@ -1304,6 +1304,52 @@ export function createDatabase(databasePath: string) {
       return row ? mapFeature(row) : null;
     },
 
+    findFeatureByTaskId(taskId: number): FeatureRecord | null {
+      const itemRow = db
+        .prepare("SELECT feature_id FROM feature_items WHERE task_id = ? ORDER BY id DESC LIMIT 1")
+        .get(taskId) as { feature_id: number } | undefined;
+      if (itemRow) {
+        try {
+          return this.getFeature(itemRow.feature_id);
+        } catch {
+          // ignore if feature deleted
+        }
+      }
+      return null;
+    },
+
+    findFeatureByTarget(target: string): FeatureRecord | null {
+      const trimmed = target.trim();
+      if (!trimmed) return null;
+
+      if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.includes("github.com")) {
+        return this.findFeatureByPullRequestUrl(trimmed);
+      }
+
+      const id = parseInt(trimmed, 10);
+      if (Number.isNaN(id)) {
+        return this.findFeatureByPullRequestUrl(trimmed);
+      }
+
+      try {
+        const feature = this.getFeature(id);
+        if (feature) return feature;
+      } catch {
+        // Not found by feature ID directly
+      }
+
+      const byTask = this.findFeatureByTaskId(id);
+      if (byTask) return byTask;
+
+      const plan = this.findFeaturePlanDetailsByTask(id);
+      if (plan) {
+        const feature = this.findFeatureByFeaturePlanId(plan.plan.id);
+        if (feature) return feature;
+      }
+
+      return null;
+    },
+
     listFeatures(limit = 30): FeatureRecord[] {
       const rows = db
         .prepare(featureSelectSql("ORDER BY features.id DESC LIMIT ?"))

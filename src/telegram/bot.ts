@@ -7,9 +7,10 @@ import type { WorkGraphRuntimeCommands, WorkGraphView } from "../commands/applic
 import { ApplicationCommandError } from "../commands/errors.js";
 import { CommandOrigin } from "../commands/types.js";
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
-import { FeatureGitHubGateway } from "../features/github.js";
+import { FeatureGitHubGateway, featureChecksPassed } from "../features/github.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
+import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
@@ -18,6 +19,7 @@ export type TelegramBotOptions = {
   environmentDoctor?: (projectKey: string) => Promise<EnvironmentDoctorReport>;
   providerStatus?: () => Promise<AgentProviderSnapshot[]>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
+  featureCoordinator?: FeatureCoordinator;
 };
 
 export function createTelegramBot(
@@ -26,7 +28,13 @@ export function createTelegramBot(
   options: TelegramBotOptions = {}
 ) {
   const bot = new Bot(config.telegram.botToken);
-  const commands = new ApplicationCommands(database, options.featureGithub, options.workGraphRuntime);
+  const commands = new ApplicationCommands(
+    database,
+    options.featureGithub,
+    options.workGraphRuntime,
+    undefined,
+    options.featureCoordinator
+  );
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -338,6 +346,75 @@ export function createTelegramBot(
     );
   });
 
+  bot.command("review", async (ctx) => {
+    const target = parseReviewTargetText(ctx.message?.text ?? "", "review");
+    if (!target) {
+      await ctx.reply("Use: /review <id-ou-url-pr>");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.review",
+      text: ctx.message?.text ?? "/review",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { target }
+    });
+
+    try {
+      const result = await commands.triggerFeatureReview(telegramOrigin(ctx), target, false);
+      await ctx.reply(formatManualReviewMessage(result));
+    } catch (error) {
+      await ctx.reply(["Revisao nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("review_status", async (ctx) => {
+    const target = parseReviewTargetText(ctx.message?.text ?? "", "review_status");
+    if (!target) {
+      await ctx.reply("Use: /review_status <id-ou-url-pr>");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.review_status",
+      text: ctx.message?.text ?? "/review_status",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { target }
+    });
+
+    try {
+      const statusResult = await commands.getFeatureReviewStatus(telegramOrigin(ctx), target);
+      await ctx.reply(formatManualReviewStatusMessage(statusResult));
+    } catch (error) {
+      await ctx.reply(["Consulta de revisao nao realizada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("review_retry", async (ctx) => {
+    const target = parseReviewTargetText(ctx.message?.text ?? "", "review_retry");
+    if (!target) {
+      await ctx.reply("Use: /review_retry <id-ou-url-pr>");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.review_retry",
+      text: ctx.message?.text ?? "/review_retry",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { target }
+    });
+
+    try {
+      const result = await commands.triggerFeatureReview(telegramOrigin(ctx), target, true);
+      await ctx.reply(formatManualReviewMessage(result));
+    } catch (error) {
+      await ctx.reply(["Nova tentativa de revisao nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
 
@@ -572,13 +649,80 @@ function formatHelp(): string {
     "/graphs [@projeto] - listar Work Graphs e budgets",
     "/graph_cancel id - cancelar graph ativo ou parado, preservando evidencias",
     "/features - listar Feature Plans e Feature PRs",
-      "/features @projeto - listar Feature Plans e Feature PRs do projeto",
-      "/improvements - listar melhorias candidatas",
-      "/improve_approve id - aprovar como nova Task + Feature Plan",
-      "/improve_reject id - rejeitar sem apagar a auditoria",
-      "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
-    "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria"
+    "/features @projeto - listar Feature Plans e Feature PRs do projeto",
+    "/improvements - listar melhorias candidatas",
+    "/improve_approve id - aprovar como nova Task + Feature Plan",
+    "/improve_reject id - rejeitar sem apagar a auditoria",
+    "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
+    "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria",
+    "/review id-ou-url - solicitar revisao final manual de Feature PR",
+    "/review_status id-ou-url - verificar estado da revisao final de Feature PR",
+    "/review_retry id-ou-url - tentar novamente a revisao final de Feature PR"
   ].join("\n");
+}
+
+export function parseReviewTargetText(messageText: string, commandName: string): string | null {
+  const regex = new RegExp(`^\\/${commandName}(?:@\\w+)?\\s*(.*)$`, "i");
+  const match = messageText.trim().match(regex);
+  if (!match || !match[1]?.trim()) {
+    return null;
+  }
+  return match[1].trim();
+}
+
+export function formatManualReviewMessage(result: ManualReviewResult): string {
+  const lines: string[] = [];
+  if (result.success && result.status === "completed") {
+    lines.push(
+      `Revisao final aprovada para Feature #${result.feature.id}!`,
+      `Projeto: @${result.feature.projectKey}`,
+      `PR: ${result.feature.pullRequestUrl}`,
+      `Revisor: ${result.providerId ?? result.feature.reviewerProvider ?? "provider configurado"}`,
+      "Status: Feature PR mesclado com sucesso."
+    );
+  } else if (result.status === "changes_requested") {
+    lines.push(
+      `Revisao final solicitou ajustes para Feature #${result.feature.id}.`,
+      `Projeto: @${result.feature.projectKey}`,
+      `PR: ${result.feature.pullRequestUrl}`,
+      `Revisor: ${result.providerId ?? result.feature.reviewerProvider ?? "provider configurado"}`,
+      `Ajustes: ${result.summary || result.message}`,
+      "O PR retornou para draft para correcoes."
+    );
+  } else {
+    lines.push(
+      `Revisao final nao executada para Feature #${result.feature.id}.`,
+      `Projeto: @${result.feature.projectKey}`,
+      `PR: ${result.feature.pullRequestUrl}`,
+      `Status: ${result.status}`,
+      `Motivo: ${result.message}`
+    );
+  }
+  return lines.join("\n");
+}
+
+export function formatManualReviewStatusMessage(result: ManualReviewStatusResult): string {
+  const { feature, prState, isReady, notReadyReason, isReviewActive } = result;
+  const checksPassed = featureChecksPassed(prState);
+  const lines: string[] = [
+    `Status da revisao final - Feature #${feature.id}`,
+    `Projeto: @${feature.projectKey}`,
+    `PR: ${feature.pullRequestUrl}`,
+    `Estado no Maestro: ${feature.status}${isReviewActive ? " (em andamento)" : ""}`,
+    `Estado no GitHub: ${prState.state} | ${prState.isDraft ? "Draft" : "Ready"} | ${prState.mergeable}`,
+    `Checks obrigatorios: ${prState.checks.length > 0 ? (checksPassed ? "passaram" : "pendentes/falharam") : "sem checks"}`,
+    `Revisor: ${feature.reviewerProvider ?? "Nenhum"}`
+  ];
+
+  if (feature.reviewSummary) {
+    lines.push(`Ultimo resultado: ${truncate(feature.reviewSummary, 200)}`);
+  } else if (feature.lastError) {
+    lines.push(`Ultimo erro: ${truncate(feature.lastError, 200)}`);
+  }
+
+  lines.push(`Pronto para revisao: ${isReady ? "Sim" : `Nao (${notReadyReason ?? "alvo nao elegivel"})`}`);
+
+  return lines.join("\n");
 }
 
 export function formatWorkGraphs(
