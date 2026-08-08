@@ -52,6 +52,10 @@ export class FeatureIntegrationBuilder {
       }
 
       if (!integration) {
+        if (details.plan.status === "queued") {
+          this.database.updateFeaturePlanQueueStatus(details.plan.id, "admitted");
+          this.database.updateFeaturePlanQueueStatus(details.plan.id, "active");
+        }
         const validatedItems = await this.validateWorkItems(details, project);
         integration = this.createIntegration(details.plan, project);
         this.ensureItems(integration, validatedItems);
@@ -99,7 +103,7 @@ export class FeatureIntegrationBuilder {
   }
 
   private validatePlan(plan: FeaturePlanRecord): void {
-    if (plan.status !== "planned") {
+    if (["completed", "cancelled"].includes(plan.status)) {
       throw new Error(`Feature Plan #${plan.id} cannot be integrated from status ${plan.status}.`);
     }
   }

@@ -2,6 +2,8 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 import {
   cancelFeature,
   cancelFeaturePlan,
+  pauseFeaturePlan,
+  resumeFeaturePlan,
   cancelTask,
   cancelWorkGraph,
   createImprovement,
@@ -686,6 +688,34 @@ function FeaturePlanBoard({
     }
   }
 
+  async function handlePause(plan: DashboardFeaturePlan) {
+    const reason = window.prompt(`Motivo da pausa para o Feature Plan #${plan.id}:`, "Pausa manual pelo operador");
+    if (reason === null) return;
+    setBusyId(plan.id);
+    setError(null);
+    try {
+      await pauseFeaturePlan(plan.id, reason);
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel pausar o Feature Plan.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleResume(plan: DashboardFeaturePlan) {
+    setBusyId(plan.id);
+    setError(null);
+    try {
+      await resumeFeaturePlan(plan.id);
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel retomar o Feature Plan.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <section className="panel feature-plan-board" id="feature-plans" aria-labelledby="feature-plans-title">
       <SectionHeader
@@ -707,17 +737,28 @@ function FeaturePlanBoard({
             <div className="feature-plan-copy">
               <div>
                 <span className="project-tag">@{plan.projectKey}</span>
-                <span className={`status-pill plan-status-${plan.lifecycleStatus}`}>
-                  {plan.lifecycleStatus === "active" ? "ativo" : plan.lifecycleStatus === "completed" ? "concluido" : "cancelado"}
+                <span className={`status-pill plan-status-${plan.status}`}>
+                  {plan.status}
                 </span>
+                {plan.priority !== undefined && plan.priority !== 0 ? (
+                  <span className="status-pill priority-pill">prio: {plan.priority}</span>
+                ) : null}
+                {plan.isPaused ? (
+                  <span className="status-pill paused-pill" title={plan.pauseReason || "Pausado"}>pausado</span>
+                ) : null}
                 {plan.lifecycleStatus === "active" ? (
                   <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
-                    {plan.eligible ? "elegivel para integrar" : "aguardando tasks"}
+                    {plan.eligible ? "elegivel para integrar" : "aguardando"}
                   </span>
                 ) : null}
               </div>
               <strong>{plan.objective}</strong>
-              <small>{plan.taskCount} task(s) no bloco - revisao {plan.revision}</small>
+              <small>
+                {plan.taskCount} task(s) no bloco - revisao {plan.revision}
+                {plan.dependsOnFeaturePlanIds && plan.dependsOnFeaturePlanIds.length > 0 ? (
+                  ` · depende de: ${plan.dependsOnFeaturePlanIds.map((id) => `#${id}`).join(", ")}`
+                ) : ""}
+              </small>
               <div className="feature-plan-tasks">
                 {plan.tasks.map((task) => (
                   <span
@@ -750,6 +791,24 @@ function FeaturePlanBoard({
               {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
             </div>
             <div className="feature-plan-actions">
+              {plan.cancellable && !plan.isPaused ? (
+                <button
+                  className="row-action"
+                  disabled={busyId !== null}
+                  onClick={() => void handlePause(plan)}
+                >
+                  {busyId === plan.id ? "..." : "Pausar"}
+                </button>
+              ) : null}
+              {plan.cancellable && plan.isPaused ? (
+                <button
+                  className="row-action"
+                  disabled={busyId !== null}
+                  onClick={() => void handleResume(plan)}
+                >
+                  {busyId === plan.id ? "..." : "Retomar"}
+                </button>
+              ) : null}
               {plan.cancellable ? (
                 <button
                   className="row-action row-action-danger"

@@ -77,7 +77,7 @@ export function buildDashboardSnapshot(
       .map((feature) => feature.featurePlanId as number)
   );
   const activeFeaturePlanCount = featurePlans.filter((plan) => (
-    plan.status === "planned" && !completedFeaturePlanIds.has(plan.id)
+    plan.status !== "completed" && plan.status !== "cancelled" && !completedFeaturePlanIds.has(plan.id)
   )).length;
   const skills = database.listSkills();
   const skillProposals = database.listSkillProposals();
@@ -247,14 +247,19 @@ export function buildDashboardSnapshot(
       const tasks = database.listFeaturePlanTasks(plan.id);
       const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
       const associatedFeature = database.findFeatureByFeaturePlanId(plan.id);
+      const dependencies = database.listFeaturePlanDependencies(plan.id);
+      const eligibility = database.evaluateFeaturePlanEligibility(plan.id);
       const lifecycleStatus = plan.status === "cancelled"
         ? "cancelled"
-        : associatedFeature?.status === "completed"
+        : associatedFeature?.status === "completed" || plan.status === "completed"
           ? "completed"
           : "active";
       const blockers = tasks
         .filter((task) => lifecycleStatus === "active" && task.taskStatus !== "awaiting_human")
         .map((task) => `Task #${task.taskId} esta ${task.taskStatus}, aguardando Draft Work PR entregue.`);
+      if (!eligibility.eligible) {
+        blockers.unshift(eligibility.reason);
+      }
       return {
         id: plan.id,
         projectKey: plan.projectKey,
@@ -264,11 +269,21 @@ export function buildDashboardSnapshot(
           truncateForDisplay(redactSensitiveText(item), EVENT_TEXT_MAX_LENGTH)
         )),
         status: plan.status,
+        priority: plan.priority,
+        isPaused: plan.isPaused,
+        pausedAt: plan.pausedAt,
+        pauseReason: plan.pauseReason ? truncateForDisplay(redactSensitiveText(plan.pauseReason), EVENT_TEXT_MAX_LENGTH) : null,
+        blockedAt: plan.blockedAt,
+        blockedReason: plan.blockedReason ? truncateForDisplay(redactSensitiveText(plan.blockedReason), EVENT_TEXT_MAX_LENGTH) : null,
+        admittedAt: plan.admittedAt,
+        completedAt: plan.completedAt,
         lifecycleStatus,
         source: plan.source,
         revision: plan.revision,
         taskIds: tasks.map((task) => task.taskId),
         taskCount: tasks.length,
+        dependsOnFeaturePlanIds: dependencies.map((dep) => dep.dependsOnFeaturePlanId),
+        eligibility,
         tasks: tasks.map((task) => ({
           id: task.taskId,
           position: task.position,
@@ -283,7 +298,7 @@ export function buildDashboardSnapshot(
           mutationScope: task.contract.mutationScope,
           parallelMode: task.contract.parallelMode
         })),
-        eligible: lifecycleStatus === "active" && tasks.length > 0 && blockers.length === 0,
+        eligible: eligibility.eligible && lifecycleStatus === "active" && tasks.length > 0,
         blockers,
         feature: associatedFeature ? {
           id: associatedFeature.id,
@@ -297,7 +312,7 @@ export function buildDashboardSnapshot(
             ? truncateForDisplay(redactSensitiveText(integration.integration.lastError), EVENT_TEXT_MAX_LENGTH)
             : null
         } : null,
-        cancellable: plan.status === "planned" && !integration && !associatedFeature,
+        cancellable: !["completed", "cancelled"].includes(plan.status) && !integration && !associatedFeature,
         cancelledAt: plan.cancelledAt,
         cancelReason: plan.cancelReason
           ? truncateForDisplay(redactSensitiveText(plan.cancelReason), EVENT_TEXT_MAX_LENGTH)
