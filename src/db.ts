@@ -1052,6 +1052,30 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    listEventsAfter(id: number, limit = 100): EventRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT ?")
+        .all(id, limit) as EventRow[];
+      return rows.map(mapEvent);
+    },
+
+    findLatestEventByType(type: string): EventRecord | null {
+      const row = db
+        .prepare("SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1")
+        .get(type) as EventRow | undefined;
+      return row ? mapEvent(row) : null;
+    },
+
+    hasEventForSource(type: string, sourceEventId: number): boolean {
+      const row = db.prepare(`
+        SELECT 1 FROM events
+        WHERE type = ?
+          AND CAST(json_extract(metadata_json, '$.sourceEventId') AS INTEGER) = ?
+        LIMIT 1
+      `).get(type, sourceEventId);
+      return Boolean(row);
+    },
+
     hasFeaturePlanEvent(
       type: string,
       featurePlanId: number,

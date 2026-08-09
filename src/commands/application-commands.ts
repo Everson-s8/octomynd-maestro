@@ -19,7 +19,7 @@ import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
-import { conflictError, notFoundError, validationError } from "./errors.js";
+import { ApplicationCommandError, conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
@@ -1124,10 +1124,43 @@ export class ApplicationCommands {
     }
   }
 
+  retryFeaturePlan(
+    origin: CommandOrigin,
+    featurePlanId: number,
+    reason?: string | null
+  ): FeaturePlanDetails {
+    try {
+      const current = this.database.getFeaturePlanDetails(featurePlanId);
+      if (current.plan.status !== "blocked") {
+        throw conflictError(`Feature Plan #${featurePlanId} is not blocked.`);
+      }
+      const result = this.database.updateFeaturePlanQueueStatus(
+        featurePlanId,
+        "queued",
+        reason,
+        origin.userId ?? null,
+        origin.username ?? null
+      );
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.retried",
+        text: `Feature Plan #${featurePlanId} retried.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId, reason: reason || null }
+      });
+      revalidateQueuedFeaturePlans(this.database, result.plan.projectKey);
+      return this.database.getFeaturePlanDetails(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
   private toFeaturePlanCommandError(error: unknown): never {
+    if (error instanceof ApplicationCommandError) throw error;
     const message = error instanceof Error ? error.message : "Unknown feature plan error.";
     if (/not found/i.test(message)) throw notFoundError(message);
-    if (/already associated|already used|cannot be|cancelled|conflict|dirty|cherry-pick|secret guard|diff whitespace|checkpoint|changed after|Invalid Feature Plan status transition/i.test(message)) {
+    if (/already associated|already used|cannot be|cancelled|conflict|dirty|cherry-pick|secret guard|diff whitespace|checkpoint|changed after|Invalid Feature Plan status transition|is not blocked/i.test(message)) {
       throw conflictError(message);
     }
     if (/Cyclic dependency|Self-dependencies|Cross-project|must be|positive integer|required|at least/i.test(message)) {

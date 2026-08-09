@@ -52,6 +52,12 @@ export function evaluateFeatureTaskReadiness(
 
     try {
       database.admitFeaturePlan(featurePlan.plan.id);
+      database.addEvent({
+        source: "maestro",
+        type: "feature_plan.admitted",
+        text: `Feature Plan #${featurePlan.plan.id} admitted to project writer lease.`,
+        metadata: { featurePlanId: featurePlan.plan.id }
+      });
       const updated = database.findFeaturePlanDetailsByTask(task.id);
       if (updated) featurePlan = updated;
     } catch {
@@ -147,6 +153,16 @@ export function revalidateQueuedFeaturePlans(
           "blocked",
           `predecessor_feature_plan_${cancelledDepId}_cancelled`
         );
+        database.addEvent({
+          source: "maestro",
+          type: "feature_plan.status_changed",
+          text: `Feature Plan #${plan.id} blocked by cancelled predecessor.`,
+          metadata: {
+            featurePlanId: plan.id,
+            status: "blocked",
+            reason: `predecessor_feature_plan_${cancelledDepId}_cancelled`
+          }
+        });
       }
       continue;
     }
@@ -158,6 +174,16 @@ export function revalidateQueuedFeaturePlans(
           "blocked",
           `predecessor_feature_plan_${blockedDepId}_blocked`
         );
+        database.addEvent({
+          source: "maestro",
+          type: "feature_plan.status_changed",
+          text: `Feature Plan #${plan.id} blocked by blocked predecessor.`,
+          metadata: {
+            featurePlanId: plan.id,
+            status: "blocked",
+            reason: `predecessor_feature_plan_${blockedDepId}_blocked`
+          }
+        });
       }
       continue;
     }
@@ -171,6 +197,12 @@ export function revalidateQueuedFeaturePlans(
       const eligibility = database.evaluateFeaturePlanEligibility(plan.id);
       if (eligibility.eligible) {
         const admitted = database.admitFeaturePlan(plan.id);
+        database.addEvent({
+          source: "maestro",
+          type: "feature_plan.admitted",
+          text: `Feature Plan #${plan.id} admitted to project writer lease.`,
+          metadata: { featurePlanId: plan.id }
+        });
         admittedPlans.push(admitted);
       }
     }

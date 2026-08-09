@@ -757,6 +757,19 @@ export async function updateFeaturePlanPriority(featurePlanId: number, priority:
   return payload;
 }
 
+export async function retryFeaturePlan(featurePlanId: number, reason = ""): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel tentar novamente o plano.");
+  }
+  return payload;
+}
+
 export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<GoalRun> {
   const response = await fetch(`/api/tasks/${taskId}/goal`, {
     method: "POST",
