@@ -3,14 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApplicationCommands } from "../src/commands/application-commands.js";
 import { ApplicationCommandError } from "../src/commands/errors.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { FeaturePlanLifecycleNotificationWorker } from "../src/features/lifecycle-notification-worker.js";
-import { evaluateFeatureTaskReadiness, revalidateQueuedFeaturePlans } from "../src/features/task-scheduler.js";
+import {
+  evaluateFeatureTaskReadiness,
+  revalidateQueuedFeaturePlans,
+  revalidateQueuedFeaturePlansWithAudit
+} from "../src/features/task-scheduler.js";
 import { formatFeaturePlanLifecycleNotification } from "../src/telegram/notifications.js";
 import {
   parseFeaturePriorityText,
@@ -744,6 +748,24 @@ describe("Feature Plan Queue Scheduler Block 3", () => {
       expect.objectContaining({
         type: "feature_plan.admitted",
         metadata: expect.objectContaining({ featurePlanId: plan.id })
+      })
+    ]));
+  });
+
+  it("records queue revalidation failures instead of hiding them", () => {
+    vi.spyOn(database, "listFeaturePlanQueue").mockImplementation(() => {
+      throw new Error("simulated queue read failure");
+    });
+
+    expect(revalidateQueuedFeaturePlansWithAudit(database, "test_revalidation", "boo")).toEqual([]);
+    expect(database.listEvents(20)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "feature_plan.revalidation_failed",
+        text: expect.stringContaining("simulated queue read failure"),
+        metadata: expect.objectContaining({
+          trigger: "test_revalidation",
+          projectKey: "boo"
+        })
       })
     ]));
   });

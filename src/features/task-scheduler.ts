@@ -60,8 +60,10 @@ export function evaluateFeatureTaskReadiness(
       });
       const updated = database.findFeaturePlanDetailsByTask(task.id);
       if (updated) featurePlan = updated;
-    } catch {
-      // Transition might fail if already admitted concurrently
+    } catch (error) {
+      const updated = database.findFeaturePlanDetailsByTask(task.id);
+      if (!updated || !["admitted", "active"].includes(updated.plan.status)) throw error;
+      featurePlan = updated;
     }
   }
 
@@ -109,8 +111,10 @@ export function evaluateFeatureTaskReadiness(
       database.updateFeaturePlanQueueStatus(featurePlan.plan.id, "active", "Task implementation started");
       const updated = database.findFeaturePlanDetailsByTask(task.id);
       if (updated) featurePlan = updated;
-    } catch {
-      // Transition might fail if already active
+    } catch (error) {
+      const updated = database.findFeaturePlanDetailsByTask(task.id);
+      if (!updated || updated.plan.status !== "active") throw error;
+      featurePlan = updated;
     }
   }
 
@@ -209,6 +213,29 @@ export function revalidateQueuedFeaturePlans(
   }
 
   return admittedPlans;
+}
+
+export function revalidateQueuedFeaturePlansWithAudit(
+  database: MaestroDatabase,
+  trigger: string,
+  projectKey?: string
+): FeaturePlanDetails[] {
+  try {
+    return revalidateQueuedFeaturePlans(database, projectKey);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      database.addEvent({
+        source: "maestro",
+        type: "feature_plan.revalidation_failed",
+        text: `Feature Plan queue revalidation failed during ${trigger}: ${message}`,
+        metadata: { trigger, projectKey: projectKey ?? null, error: message }
+      });
+    } catch (eventError) {
+      console.error("Feature Plan queue revalidation and audit persistence failed.", error, eventError);
+    }
+    return [];
+  }
 }
 
 function requirePlanTask(details: FeaturePlanDetails, taskId: number): FeaturePlanTaskRecord {

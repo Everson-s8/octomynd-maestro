@@ -24,7 +24,10 @@ import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
-import { revalidateQueuedFeaturePlans } from "../features/task-scheduler.js";
+import {
+  revalidateQueuedFeaturePlans,
+  revalidateQueuedFeaturePlansWithAudit
+} from "../features/task-scheduler.js";
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
@@ -774,11 +777,11 @@ export class ApplicationCommands {
             revision: result.plan.revision
           }
         });
-        try {
-          revalidateQueuedFeaturePlans(this.database, result.plan.projectKey);
-        } catch {
-          // best-effort
-        }
+        revalidateQueuedFeaturePlansWithAudit(
+          this.database,
+          "feature_plan_cancelled",
+          result.plan.projectKey
+        );
       }
       return result;
     } catch (error) {
@@ -831,11 +834,11 @@ export class ApplicationCommands {
           pullRequestUrl: feature.pullRequestUrl
         }
       });
-      try {
-        revalidateQueuedFeaturePlans(this.database, feature.projectKey);
-      } catch {
-        // best-effort
-      }
+      revalidateQueuedFeaturePlansWithAudit(
+        this.database,
+        "feature_cancelled",
+        feature.projectKey
+      );
       return feature;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown feature cancellation error.";

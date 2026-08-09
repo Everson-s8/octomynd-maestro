@@ -805,7 +805,7 @@ export function createDatabase(databasePath: string) {
         cancelled_at = CASE WHEN @status = 'cancelled' THEN COALESCE(cancelled_at, @now) ELSE cancelled_at END,
         cancel_reason = CASE WHEN @status = 'cancelled' THEN COALESCE(@blockedReason, cancel_reason) ELSE cancel_reason END,
         updated_at = @now
-    WHERE id = @id
+    WHERE id = @id AND status = @fromStatus
   `);
   const addFeaturePlanDependencyStatement = db.prepare(`
     INSERT INTO feature_plan_dependencies (feature_plan_id, depends_on_feature_plan_id, created_at)
@@ -1947,13 +1947,15 @@ export function createDatabase(databasePath: string) {
       }
 
       const now = new Date().toISOString();
-      db.transaction(() => {
-        updateFeaturePlanQueueStatusStatement.run({
+      const applied = db.transaction(() => {
+        const update = updateFeaturePlanQueueStatusStatement.run({
           id,
+          fromStatus: plan.status,
           status: toStatus,
           blockedReason: reason?.trim() || null,
           now
         });
+        if (update.changes === 0) return false;
         addFeaturePlanHistoryStatement.run({
           featurePlanId: id,
           fromStatus: plan.status,
@@ -1965,11 +1967,64 @@ export function createDatabase(databasePath: string) {
           metadataJson: "{}",
           now
         });
+        return true;
       })();
+      if (!applied) {
+        const current = this.getFeaturePlan(id);
+        if (current.status === toStatus) return this.getFeaturePlanDetails(id);
+        throw new Error(
+          `Feature Plan #${id} changed concurrently from '${plan.status}' to '${current.status}'.`
+        );
+      }
+      return this.getFeaturePlanDetails(id);
+    },
+
+    completeFeaturePlanAfterMerge(id: number): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === "completed") return this.getFeaturePlanDetails(id);
+      if (plan.status === "cancelled") {
+        throw new Error(`Feature Plan #${id} cannot be completed because it was cancelled.`);
+      }
+
+      const now = new Date().toISOString();
+      const applied = db.transaction(() => {
+        const update = updateFeaturePlanQueueStatusStatement.run({
+          id,
+          fromStatus: plan.status,
+          status: "completed",
+          blockedReason: null,
+          now
+        });
+        if (update.changes === 0) return false;
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus: "completed",
+          action: "reconciled_after_feature_merge",
+          reason: "Consolidated Feature PR merged",
+          actorUserId: null,
+          actorUsername: null,
+          metadataJson: "{}",
+          now
+        });
+        return true;
+      })();
+
+      if (!applied) {
+        const current = this.getFeaturePlan(id);
+        if (current.status === "completed") return this.getFeaturePlanDetails(id);
+        throw new Error(
+          `Feature Plan #${id} changed concurrently from '${plan.status}' to '${current.status}' during merge reconciliation.`
+        );
+      }
       return this.getFeaturePlanDetails(id);
     },
 
     admitFeaturePlan(id: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (["admitted", "active", "waiting_review", "waiting_merge", "completed"].includes(plan.status)) {
+        return this.getFeaturePlanDetails(id);
+      }
       const eligibility = this.evaluateFeaturePlanEligibility(id);
       if (!eligibility.eligible) {
         throw new Error(`Cannot admit Feature Plan #${id}: ${eligibility.reason}`);
