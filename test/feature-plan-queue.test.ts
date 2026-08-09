@@ -9,7 +9,15 @@ import { ApplicationCommandError } from "../src/commands/errors.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { FeaturePlanLifecycleNotificationWorker } from "../src/features/lifecycle-notification-worker.js";
 import { evaluateFeatureTaskReadiness, revalidateQueuedFeaturePlans } from "../src/features/task-scheduler.js";
+import { formatFeaturePlanLifecycleNotification } from "../src/telegram/notifications.js";
+import {
+  parseFeaturePriorityText,
+  parseFeaturePauseText,
+  parseFeatureRetryText,
+  parseFeaturePlanCancelText
+} from "../src/telegram/bot.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -561,6 +569,183 @@ describe("Feature Plan Queue Scheduler Block 2", () => {
     readiness = evaluateFeatureTaskReadiness(database, t1, []);
     expect(readiness.state).toBe("ready");
     expect(database.getFeaturePlan(plan.id).status).toBe("active");
+  });
+});
+
+describe("Feature Plan Queue Scheduler Block 3", () => {
+  it("retries blocked feature plan (blocked -> queued) and revalidates queue", () => {
+    const t1 = database.createTask("task for retry", "dashboard", "boo");
+    const plan = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Plan to test retry", acceptanceCriteria: ["Pass"], taskIds: [t1.id] }
+    ).plan;
+
+    // Advance to active then block
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "admitted");
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "active");
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "blocked", "Build pipeline error");
+
+    let current = database.getFeaturePlan(plan.id);
+    expect(current.status).toBe("blocked");
+    expect(current.blockedReason).toBe("Build pipeline error");
+
+    // Retry non-existent plan should fail with not_found
+    expectCommandError(() => commands.retryFeaturePlan({ channel: "dashboard" }, 999999), "not_found");
+
+    // Retry blocked plan
+    const retried = commands.retryFeaturePlan({ channel: "dashboard" }, plan.id, "Fixed pipeline script");
+    expect(["queued", "admitted"]).toContain(retried.plan.status);
+    expect(retried.plan.blockedReason).toBeNull();
+    expect(retried.plan.blockedAt).toBeNull();
+
+    // Verify retry event in history and event log
+    const history = database.getFeaturePlanHistory(plan.id);
+    expect(history.some((entry) => entry.toStatus === "queued")).toBe(true);
+
+    const events = database.listEvents(20);
+    expect(events.some((event) => event.type === "feature_plan.retried")).toBe(true);
+
+    // Re-retrying a plan that is not blocked should fail with conflict
+    expectCommandError(() => commands.retryFeaturePlan({ channel: "dashboard" }, plan.id), "conflict");
+  });
+
+  it("exposes retry endpoint via REST API POST /api/feature-plans/:id/retry", async () => {
+    const task = database.createTask("task for api retry", "dashboard", "boo");
+    const plan = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "API Retry Test Feature Plan", acceptanceCriteria: ["Pass"], taskIds: [task.id] }
+    ).plan;
+
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "admitted");
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "active");
+    commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, plan.id, "blocked", "Failed check");
+
+    const server = createDashboardServer({ config: testConfig(), database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const retryRes = await fetch(`http://127.0.0.1:${port}/api/feature-plans/${plan.id}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Retried via API" })
+      });
+      expect(retryRes.status).toBe(200);
+      const payload = await retryRes.json() as { plan: { status: string; blockedReason: string | null } };
+      expect(["queued", "admitted"]).toContain(payload.plan.status);
+      expect(payload.plan.blockedReason).toBeNull();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("parses Telegram queue governance text commands", () => {
+    expect(parseFeaturePriorityText("/feature_priority 12 25")).toEqual({ planId: 12, priority: 25 });
+    expect(parseFeaturePauseText("/feature_pause 12 review window")).toEqual({ planId: 12, reason: "review window" });
+    expect(parseFeaturePauseText("/feature_pause 12")).toEqual({ planId: 12, reason: null });
+    expect(parseFeatureRetryText("/feature_retry 12 fixed build")).toEqual({ planId: 12, reason: "fixed build" });
+    expect(parseFeaturePlanCancelText("/feature_plan_cancel 12 stale plan")).toEqual({ planId: 12, reason: "stale plan" });
+  });
+
+  it("formats Telegram lifecycle notifications with blockers and next action", () => {
+    const planRecord: import("../src/db.js").FeaturePlanRecord = {
+      id: 42,
+      projectId: 1,
+      projectKey: "boo",
+      projectName: "Boo",
+      objective: "Test Telegram notification formatting",
+      acceptanceCriteria: [],
+      status: "blocked",
+      priority: 10,
+      isPaused: false,
+      pausedAt: null,
+      pauseReason: null,
+      blockedAt: "2026-08-08T00:00:00.000Z",
+      blockedReason: "Dependency conflict",
+      admittedAt: null,
+      completedAt: null,
+      source: "dashboard",
+      createdByUserId: null,
+      createdByUsername: null,
+      revision: 1,
+      cancelledAt: null,
+      cancelReason: null,
+      createdAt: "2026-08-08T00:00:00.000Z",
+      updatedAt: "2026-08-08T00:00:00.000Z"
+    };
+
+    const notificationText = formatFeaturePlanLifecycleNotification({
+      plan: planRecord,
+      action: "blocked",
+      reason: "Dependency conflict"
+    });
+
+    expect(notificationText).toContain("Feature Plan #42 - ⚠️ Bloqueado");
+    expect(notificationText).toContain("Projeto: @boo");
+    expect(notificationText).toContain("Bloqueio: Dependency conflict");
+    expect(notificationText).toContain("Proxima acao: Resolva o motivo do bloqueio e execute /feature_retry id.");
+  });
+
+  it("delivers new lifecycle events once and resumes without duplicates after restart", async () => {
+    const delivered: Array<{ action: string; sourceEventId?: number }> = [];
+    const notify = async (event: import("../src/telegram/notifications.js").FeaturePlanLifecycleEvent) => {
+      delivered.push({ action: event.action, sourceEventId: event.sourceEventId });
+      database.addEvent({
+        source: "telegram",
+        type: "feature_plan.lifecycle_notification_sent",
+        text: `Feature Plan #${event.plan.id} notification sent.`,
+        metadata: {
+          featurePlanId: event.plan.id,
+          action: event.action,
+          sourceEventId: event.sourceEventId ?? null
+        }
+      });
+    };
+    const firstWorker = new FeaturePlanLifecycleNotificationWorker(database, notify);
+
+    await firstWorker.reconcile();
+    const task = database.createTask("lifecycle notification task", "dashboard", "boo");
+    const plan = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Notify lifecycle changes durably",
+        acceptanceCriteria: ["Notify once"],
+        taskIds: [task.id]
+      }
+    ).plan;
+    commands.pauseFeaturePlan({ channel: "dashboard" }, plan.id, "operator pause");
+
+    expect(await firstWorker.reconcile()).toBe(1);
+    expect(delivered).toEqual([{ action: "paused", sourceEventId: expect.any(Number) }]);
+    expect(await firstWorker.reconcile()).toBe(0);
+
+    const restartedWorker = new FeaturePlanLifecycleNotificationWorker(database, notify);
+    expect(await restartedWorker.reconcile()).toBe(0);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("emits an admission event when the scheduler acquires the writer lease", () => {
+    const task = database.createTask("scheduler admission task", "dashboard", "boo");
+    const plan = commands.createFeaturePlan(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Admit through scheduler",
+        acceptanceCriteria: ["Admission is observable"],
+        taskIds: [task.id]
+      }
+    ).plan;
+
+    const readiness = evaluateFeatureTaskReadiness(database, task, []);
+
+    expect(readiness.state).toBe("ready");
+    expect(database.listEvents(20)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "feature_plan.admitted",
+        metadata: expect.objectContaining({ featurePlanId: plan.id })
+      })
+    ]));
   });
 });
 

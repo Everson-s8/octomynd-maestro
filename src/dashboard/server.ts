@@ -643,6 +643,22 @@ async function routeRequest(
     return;
   }
 
+  const retryFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/retry$/);
+  if (request.method === "POST" && retryFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.retryFeaturePlan(
+        { channel: "dashboard" },
+        Number(retryFeaturePlanMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_retry_failed");
+    }
+    return;
+  }
+
   const replanFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/replan$/);
   if (request.method === "POST" && replanFeaturePlanMatch) {
     const body = await readJsonBody(request);

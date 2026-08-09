@@ -22,9 +22,11 @@ import { FeatureAssemblyCoordinator } from "./features/assembly.js";
 import {
   createTelegramFeatureAssemblyNotifier,
   createTelegramFeatureBlockedNotifier,
+  createTelegramFeaturePlanLifecycleNotifier,
   createTelegramFeatureNotifier,
   createTelegramSelfUpdateNotifier
 } from "./telegram/notifications.js";
+import { FeaturePlanLifecycleNotificationWorker } from "./features/lifecycle-notification-worker.js";
 import { SelfUpdateManager } from "./runtime/self-update.js";
 import { EnvironmentDoctor } from "./environment/doctor.js";
 import { DeterministicValidationRunner } from "./validation/runner.js";
@@ -179,6 +181,15 @@ const bot = createTelegramBot(config, database, {
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator
 });
+const featurePlanLifecycleNotifier = createTelegramFeaturePlanLifecycleNotifier(
+  config,
+  database,
+  (chatId, text) => bot.api.sendMessage(chatId, text)
+);
+const featurePlanLifecycleWorker = new FeaturePlanLifecycleNotificationWorker(
+  database,
+  featurePlanLifecycleNotifier
+);
 const goalNotifier = createTelegramGoalNotifier(
   config,
   database,
@@ -258,6 +269,7 @@ reviewCoordinator.start();
 featureCoordinator.start();
 featureAssemblyCoordinator.start();
 improvementReviewWorker.start();
+featurePlanLifecycleWorker.start();
 const recoveredWorkGraphs = workGraphCoordinator.recoverActiveGraphs();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns((run) => workGraphCoordinator.isRunActive(run.id));
 const dashboardServer = config.dashboard.enabled
@@ -328,6 +340,7 @@ async function shutdown() {
   featureCoordinator.shutdown();
   featureAssemblyCoordinator.shutdown();
   improvementReviewWorker.shutdown();
+  featurePlanLifecycleWorker.shutdown();
   skillCuratorWorker?.shutdown();
   await workGraphCoordinator.shutdown();
   goalCoordinator.shutdown();

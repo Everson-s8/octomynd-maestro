@@ -330,6 +330,76 @@ export function formatFeatureBlockedNotification(event: FeatureBlockedEvent): st
   ].join("\n"), 4_000);
 }
 
+export type FeaturePlanLifecycleEvent = {
+  plan: import("../db.js").FeaturePlanRecord;
+  action: "admitted" | "paused" | "resumed" | "blocked" | "retried" | "cancelled" | "priority_updated";
+  reason?: string | null;
+  sourceEventId?: number;
+};
+
+export type FeaturePlanLifecycleNotificationHandler = (event: FeaturePlanLifecycleEvent) => Promise<void>;
+
+export function createTelegramFeaturePlanLifecycleNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): FeaturePlanLifecycleNotificationHandler | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+
+  return async (event) => {
+    await sendMessage(chatId, formatFeaturePlanLifecycleNotification(event));
+    database.addEvent({
+      source: "telegram",
+      type: "feature_plan.lifecycle_notification_sent",
+      text: `Feature Plan #${event.plan.id} ${event.action} notification sent.`,
+      metadata: {
+        featurePlanId: event.plan.id,
+        action: event.action,
+        reason: event.reason ?? null,
+        sourceEventId: event.sourceEventId ?? null
+      }
+    });
+  };
+}
+
+export function formatFeaturePlanLifecycleNotification(event: FeaturePlanLifecycleEvent): string {
+  const { plan, action, reason } = event;
+  const project = `@${plan.projectKey}`;
+  const actionLabels: Record<string, string> = {
+    admitted: "🚀 Admitido na fila de escrita",
+    paused: "⏸️ Pausado pelo operador",
+    resumed: "▶️ Retomado para a fila",
+    blocked: "⚠️ Bloqueado",
+    retried: "🔄 Retomado (Retry) para a fila",
+    cancelled: "❌ Cancelado",
+    priority_updated: `⬆️ Prioridade atualizada para ${plan.priority}`
+  };
+
+  const nextActions: Record<string, string> = {
+    admitted: "As tasks estao prontas para inicio pelo Maestro.",
+    paused: "O plano nao sera executado ate ser retomado.",
+    resumed: "Aguardando liberacao de dependencias/recursos.",
+    blocked: "Resolva o motivo do bloqueio e execute /feature_retry id.",
+    retried: "Aguardando revalidacao da fila e admissao.",
+    cancelled: "O historico e evidencias foram preservados.",
+    priority_updated: "A ordem de admissao na fila foi reordenada."
+  };
+
+  const lines = [
+    `Feature Plan #${plan.id} - ${actionLabels[action] ?? action}`,
+    `Projeto: ${project}`,
+    `Objetivo: ${truncate(redactSensitiveText(plan.objective), 200)}`,
+    `Status: ${plan.status}${plan.isPaused ? " (pausado)" : ""}`,
+    `Prioridade: ${plan.priority ?? 0}`,
+    reason ? `Motivo: ${redactSensitiveText(reason)}` : null,
+    plan.blockedReason ? `Bloqueio: ${redactSensitiveText(plan.blockedReason)}` : null,
+    `Proxima acao: ${nextActions[action] ?? "Verifique a fila com /queue."}`
+  ].filter(Boolean) as string[];
+
+  return truncate(lines.join("\n"), 4_000);
+}
+
 export function createTelegramFeatureAssemblyNotifier(
   config: MaestroConfig,
   _database: MaestroDatabase,

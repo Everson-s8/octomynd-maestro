@@ -4,6 +4,8 @@ import {
   cancelFeaturePlan,
   pauseFeaturePlan,
   resumeFeaturePlan,
+  retryFeaturePlan,
+  updateFeaturePlanPriority,
   cancelTask,
   cancelWorkGraph,
   createImprovement,
@@ -716,6 +718,37 @@ function FeaturePlanBoard({
     }
   }
 
+  async function handleRetry(plan: DashboardFeaturePlan) {
+    const reason = window.prompt(`Motivo da nova tentativa para o Feature Plan #${plan.id}:`, "Reinicio manual pelo operador");
+    if (reason === null) return;
+    setBusyId(plan.id);
+    setError(null);
+    try {
+      await retryFeaturePlan(plan.id, reason);
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel tentar novamente o Feature Plan.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handlePriority(plan: DashboardFeaturePlan, delta: number) {
+    const current = plan.priority ?? 0;
+    const newPriority = Math.max(0, current + delta);
+    if (newPriority === current && delta < 0) return;
+    setBusyId(plan.id);
+    setError(null);
+    try {
+      await updateFeaturePlanPriority(plan.id, newPriority);
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel atualizar a prioridade.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <section className="panel feature-plan-board" id="feature-plans" aria-labelledby="feature-plans-title">
       <SectionHeader
@@ -740,9 +773,7 @@ function FeaturePlanBoard({
                 <span className={`status-pill plan-status-${plan.status}`}>
                   {plan.status}
                 </span>
-                {plan.priority !== undefined && plan.priority !== 0 ? (
-                  <span className="status-pill priority-pill">prio: {plan.priority}</span>
-                ) : null}
+                <span className="status-pill priority-pill">prio: {plan.priority ?? 0}</span>
                 {plan.isPaused ? (
                   <span className="status-pill paused-pill" title={plan.pauseReason || "Pausado"}>pausado</span>
                 ) : null}
@@ -782,6 +813,24 @@ function FeaturePlanBoard({
                   {plan.blockers.map((blocker, index) => <li key={index}>{blocker}</li>)}
                 </ul>
               ) : null}
+              {plan.blockedReason ? (
+                <small className="feature-plan-integration-error">
+                  Bloqueio: {plan.blockedReason}
+                </small>
+              ) : null}
+              <small className="feature-plan-next-action">
+                Proxima acao: {
+                  plan.status === "blocked"
+                    ? "Resolva o motivo do bloqueio e clique em Tentar novamente."
+                    : plan.isPaused
+                    ? "Clique em Retomar para reenviar o plano para a fila."
+                    : plan.status === "queued" && plan.eligible
+                    ? "Plano elegivel, aguardando inicio das tasks."
+                    : plan.status === "queued"
+                    ? "Aguardando liberacao de dependencias ou do projeto."
+                    : "Tasks em andamento pelo agente."
+                }
+              </small>
               {plan.integration ? (
                 <small className={plan.integration.status === "failed" ? "feature-plan-integration-error" : ""}>
                   Integracao: {plan.integration.status} ({plan.integration.checkpoint})
@@ -791,6 +840,35 @@ function FeaturePlanBoard({
               {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
             </div>
             <div className="feature-plan-actions">
+              {plan.cancellable ? (
+                <div className="priority-actions">
+                  <button
+                    className="row-action"
+                    disabled={busyId !== null}
+                    onClick={() => void handlePriority(plan, 5)}
+                    title="Aumentar prioridade (+5)"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    className="row-action"
+                    disabled={busyId !== null || (plan.priority ?? 0) <= 0}
+                    onClick={() => void handlePriority(plan, -5)}
+                    title="Reduzir prioridade (-5)"
+                  >
+                    ▼
+                  </button>
+                </div>
+              ) : null}
+              {plan.status === "blocked" ? (
+                <button
+                  className="row-action row-action-accent"
+                  disabled={busyId !== null}
+                  onClick={() => void handleRetry(plan)}
+                >
+                  {busyId === plan.id ? "..." : "Tentar novamente"}
+                </button>
+              ) : null}
               {plan.cancellable && !plan.isPaused ? (
                 <button
                   className="row-action"
