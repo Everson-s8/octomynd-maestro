@@ -38,19 +38,70 @@ Completed and cancelled Feature Plans remain as audit history but do not appear 
 
 ## Prioritized Features
 
-### F1. Feature Queue Scheduler and Mainline Admission Gate
+### F1. Feature Queue Scheduler and Mainline Admission Gate [COMPLETED]
 
 Goal: make Feature Plans the first-class scheduling unit and guarantee conflict-safe sequential delivery per project.
 
 Tasks:
 
-1. Add explicit persisted Feature lifecycle states and dependency edges.
-2. Add a per-project writer lease and mainline freshness check.
-3. Revalidate queued Features after predecessor merge or cancellation.
-4. Add queue reorder, pause, resume, cancel, and retry controls to Dashboard and Telegram.
-5. Add deterministic tests for restart recovery, duplicate events, stale branches, and cross-project concurrency.
+1. Add explicit persisted Feature lifecycle states and dependency edges. [Completed]
+2. Add a per-project writer lease and mainline freshness check. [Completed]
+3. Revalidate queued Features after predecessor merge or cancellation. [Completed]
+4. Add queue reorder, pause, resume, cancel, and retry controls to Dashboard and Telegram. [Completed]
+5. Add deterministic tests for restart recovery, duplicate events, stale branches, and cross-project concurrency. [Completed]
 
 Acceptance: two Features for one project cannot mutate concurrently; Features for different projects can run concurrently; the successor always starts from the latest validated `main`.
+
+## Operator Guide: Feature Queue Scheduler
+
+### 1. Delivery & Execution Model
+
+The Feature Plan is the primary unit of delivery:
+- **Project Writer Lease**: Only 1 mutating Feature Plan per project may be `admitted` or `active` at any time.
+- **Cross-Project Concurrency**: Feature Plans belonging to different registered projects run in parallel without mutual exclusion locks.
+- **Mainline Freshness**: Successor Feature Plans start execution only after predecessor Feature Plans are merged into local `main` and validated.
+
+### 2. Lifecycle State Machine
+
+- `draft`: Initial plan definition being prepared.
+- `queued`: Admitted to the queue, waiting for writer lease eligibility and predecessor completion.
+- `admitted`: Writer lease acquired for the project; ready for goal/task execution.
+- `active`: Work PRs and goals are actively executing.
+- `waiting_review`: Implementation delivered; waiting for human review gate.
+- `waiting_merge`: Approved; waiting for PR merge into `main`.
+- `completed`: Merged and main updated; writer lease released.
+- `blocked`: Execution or validation failed; holds error reason. Can be recovered to `queued` via operator retry.
+- `cancelled`: Explicitly cancelled by operator; PRs closed.
+
+### 3. Operator Governance Controls
+
+Operators can manage feature queues via Dashboard REST API, Telegram Bot, or internal CLI application commands:
+
+- **Pause / Resume**:
+  - Dashboard: `POST /api/feature-plans/:id/pause` | `POST /api/feature-plans/:id/resume`
+  - Telegram: `/feature_pause <id> <reason>` | `/feature_resume <id>`
+- **Queue Priority Reordering**:
+  - Dashboard: `POST /api/feature-plans/:id/priority`
+  - Telegram: `/feature_priority <id> <priority>`
+- **Retry Blocked Plan**:
+  - Dashboard: `POST /api/feature-plans/:id/retry`
+  - Telegram: `/feature_retry <id>`
+- **Cancel Plan**:
+  - Dashboard: `DELETE /api/feature-plans/:id`
+  - Telegram: `/feature_cancel <id> [reason]`
+
+### 4. Restart Safety & Idempotency Guarantees
+
+- **Process Restart Recovery**: All queue states, priorities, pause reasons, dependencies, and project writer leases are durably persisted in SQLite (`feature_plans`, `feature_plan_dependencies`, `feature_plan_history`). Upon restart, state is restored without data loss or duplicate execution.
+- **Command Idempotency**: Commands accept an `idempotencyKey`. Duplicate requests with identical payload hash return cached results from `feature_plan_operations` without duplicating history or events.
+- **Event Outbox Workers**: `FeaturePlanLifecycleNotificationWorker` maintains persistent cursor tracking (`feature_plan.lifecycle_worker_initialized`). Process restarts do not re-emit previously processed lifecycle notifications.
+
+### 5. Operator Canary & Verification Checks
+
+To verify queue scheduler health:
+1. `npm run typecheck` & `npm run typecheck:ui`: Ensure backend and UI type safety.
+2. `npx vitest run test/feature-plan-queue.test.ts`: Run deterministic queue tests (restart, idempotency, concurrency, migration, canary).
+3. `npm run build:ui`: Validate UI production bundle.
 
 ### F2. Runtime Recovery and Lifecycle Reconciliation Hardening
 

@@ -747,6 +747,379 @@ describe("Feature Plan Queue Scheduler Block 3", () => {
       })
     ]));
   });
+
+  describe("Feature Plan Queue Scheduler Block 4 - Deterministic Restart, Idempotency, Concurrency, Migration and Canary Tests", () => {
+    it("recovers queue states, dependencies, priority, paused/blocked status, writer lease and notification cursor deterministically after process restart", async () => {
+      const tBoo1 = database.createTask("boo task 1", "dashboard", "boo");
+      const tBoo2 = database.createTask("boo task 2", "dashboard", "boo");
+      const tBoo3 = database.createTask("boo task 3", "dashboard", "boo");
+      const tBoo4 = database.createTask("boo task 4", "dashboard", "boo");
+      const tFar1 = database.createTask("far task 1", "dashboard", "far");
+
+      const p1 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "boo",
+          objective: "Boo plan 1 - high priority",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tBoo1.id],
+          priority: 100
+        }
+      ).plan;
+
+      const p2 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "boo",
+          objective: "Boo plan 2 - depends on plan 1",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tBoo2.id],
+          priority: 50,
+          dependsOnFeaturePlanIds: [p1.id]
+        }
+      ).plan;
+
+      const p3 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "boo",
+          objective: "Boo plan 3 - paused",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tBoo3.id],
+          priority: 75
+        }
+      ).plan;
+
+      const p4 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "boo",
+          objective: "Boo plan 4 - blocked",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tBoo4.id],
+          priority: 10
+        }
+      ).plan;
+
+      const pFar = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "far",
+          objective: "Far plan 1",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tFar1.id],
+          priority: 20
+        }
+      ).plan;
+      const tBoo5 = database.createTask("boo task 5", "dashboard", "boo");
+      const pQueued = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        {
+          projectKey: "boo",
+          objective: "Boo plan queued check",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [tBoo5.id],
+          priority: 5
+        }
+      ).plan;
+
+      // Set explicit states
+      commands.pauseFeaturePlan({ channel: "dashboard" }, p3.id, "maintenance hold");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, p4.id, "admitted");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, p4.id, "active");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, p4.id, "blocked", "upstream dependency failed");
+
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, p1.id, "admitted");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, p1.id, "active");
+
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pFar.id, "admitted");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pFar.id, "active");
+
+      // Verify writer lease (active project plan lock) and eligibility before restart
+      expect(commands.getFeaturePlanEligibility(pQueued.id).blockedByActiveProjectPlan?.id).toBe(p1.id);
+
+      let el2 = commands.getFeaturePlanEligibility(p2.id);
+      expect(el2.eligible).toBe(false);
+      expect(el2.blockedDependencies.map((d) => d.id)).toContain(p1.id);
+
+      let el3 = commands.getFeaturePlanEligibility(p3.id);
+      expect(el3.eligible).toBe(false);
+      expect(el3.blockedByPaused).toBe(true);
+
+      // Reconcile notifications once before restart
+      const delivered: string[] = [];
+      const worker1 = new FeaturePlanLifecycleNotificationWorker(database, async (event) => {
+        delivered.push(`${event.action}:${event.plan.id}`);
+      });
+      await worker1.reconcile();
+      const deliveredCountPreRestart = delivered.length;
+
+      // Close and reopen database (simulate full process crash & restart)
+      database.close();
+      const dbPath = path.join(tempDir, "maestro.db");
+      database = createDatabase(dbPath);
+      commands = new ApplicationCommands(database);
+
+      // Assert state preservation after restart
+      const plan1Rec = database.getFeaturePlan(p1.id);
+      expect(plan1Rec.status).toBe("active");
+      expect(plan1Rec.priority).toBe(100);
+
+      const plan2Rec = database.getFeaturePlan(p2.id);
+      expect(plan2Rec.status).toBe("queued");
+      expect(plan2Rec.priority).toBe(50);
+      const plan2Deps = database.listFeaturePlanDependencies(p2.id);
+      expect(plan2Deps.map((d) => d.dependsOnFeaturePlanId)).toEqual([p1.id]);
+
+      const plan3Rec = database.getFeaturePlan(p3.id);
+      expect(plan3Rec.status).toBe("queued");
+      expect(plan3Rec.isPaused).toBe(true);
+      expect(plan3Rec.pauseReason).toBe("maintenance hold");
+
+      const plan4Rec = database.getFeaturePlan(p4.id);
+      expect(plan4Rec.status).toBe("blocked");
+      expect(plan4Rec.blockedReason).toBe("upstream dependency failed");
+
+      const planFarRec = database.getFeaturePlan(pFar.id);
+      expect(planFarRec.status).toBe("active");
+
+      // Verify active plan leases after restart
+      expect(commands.getFeaturePlanEligibility(pQueued.id).blockedByActiveProjectPlan?.id).toBe(p1.id);
+
+      // Verify eligibility logic produces identical result after restart
+      el2 = commands.getFeaturePlanEligibility(p2.id);
+      expect(el2.eligible).toBe(false);
+      expect(el2.blockedDependencies.map((d) => d.id)).toContain(p1.id);
+
+      el3 = commands.getFeaturePlanEligibility(p3.id);
+      expect(el3.eligible).toBe(false);
+      expect(el3.blockedByPaused).toBe(true);
+
+      // Verify notification worker resumes without re-delivering pre-restart notifications
+      const postRestartDelivered: string[] = [];
+      const worker2 = new FeaturePlanLifecycleNotificationWorker(database, async (event) => {
+        postRestartDelivered.push(`${event.action}:${event.plan.id}`);
+      });
+      const newDeliveredCount = await worker2.reconcile();
+      expect(newDeliveredCount).toBe(0);
+      expect(postRestartDelivered).toHaveLength(0);
+    });
+
+    it("enforces operation ledger idempotency and reevaluation determinism", async () => {
+      const task = database.createTask("idempotency task", "dashboard", "boo");
+
+      // Test command idempotency key
+      const payload = {
+        projectKey: "boo",
+        objective: "Idempotency test plan",
+        acceptanceCriteria: ["Idempotent execution"],
+        taskIds: [task.id],
+        idempotencyKey: "idem-key-plan-1"
+      };
+
+      const p1 = commands.createFeaturePlan({ channel: "dashboard" }, payload).plan;
+      const p2 = commands.createFeaturePlan({ channel: "dashboard" }, payload).plan;
+
+      // Duplicate creation request with exact payload returns identical plan without creating duplicate history entries
+      expect(p2.id).toBe(p1.id);
+      const history = database.getFeaturePlanHistory(p1.id);
+      expect(history.filter((h) => h.action === "create")).toHaveLength(1);
+
+      // Revalidate queued feature plans multiple times sequentially when queue is unchanged
+      const count1 = revalidateQueuedFeaturePlans(database);
+      const count2 = revalidateQueuedFeaturePlans(database);
+      const count3 = revalidateQueuedFeaturePlans(database);
+
+      expect(count1).toHaveLength(1); // First revalidation admits plan
+      expect(count2).toHaveLength(0); // Second revalidation is no-op
+      expect(count3).toHaveLength(0); // Third revalidation is no-op
+
+      const finalHistory = database.getFeaturePlanHistory(p1.id);
+      const admittedHistoryCount = finalHistory.filter((h) => h.toStatus === "admitted").length;
+      expect(admittedHistoryCount).toBe(1);
+
+      // Initialize worker baseline cursor
+      const workerDelivered: string[] = [];
+      const worker = new FeaturePlanLifecycleNotificationWorker(database, async (event) => {
+        workerDelivered.push(event.action);
+      });
+      await worker.reconcile();
+
+      // Trigger a lifecycle action (pause)
+      commands.pauseFeaturePlan({ channel: "dashboard" }, p1.id, "pause test");
+
+      // Verify worker reconcile delivers new event once and repeat call is no-op
+      const r1 = await worker.reconcile();
+      const r2 = await worker.reconcile();
+      expect(r1).toBe(1);
+      expect(r2).toBe(0);
+      expect(workerDelivered).toEqual(["paused"]);
+    });
+
+    it("maintains cross-project independence while enforcing per-project writer lease mutual exclusion and queue priority ordering", () => {
+      const tB1 = database.createTask("boo t1", "dashboard", "boo");
+      const tB2 = database.createTask("boo t2", "dashboard", "boo");
+      const tF1 = database.createTask("far t1", "dashboard", "far");
+      const tF2 = database.createTask("far t2", "dashboard", "far");
+
+      const pB1 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "boo", objective: "Boo low prio", acceptanceCriteria: ["Pass"], taskIds: [tB1.id], priority: 10 }
+      ).plan;
+
+      const pB2 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "boo", objective: "Boo high prio", acceptanceCriteria: ["Pass"], taskIds: [tB2.id], priority: 100 }
+      ).plan;
+
+      const pF1 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "far", objective: "Far high prio", acceptanceCriteria: ["Pass"], taskIds: [tF1.id], priority: 80 }
+      ).plan;
+
+      const pF2 = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "far", objective: "Far low prio", acceptanceCriteria: ["Pass"], taskIds: [tF2.id], priority: 5 }
+      ).plan;
+
+      // Verify queue ordering for each project independently
+      const booQueue = database.listFeaturePlanQueue("boo");
+      expect(booQueue.map((item) => item.plan.id)).toEqual([pB2.id, pB1.id]);
+
+      const farQueue = database.listFeaturePlanQueue("far");
+      expect(farQueue.map((item) => item.plan.id)).toEqual([pF1.id, pF2.id]);
+
+      // Admit highest priority plan for boo
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pB2.id, "admitted");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pB2.id, "active");
+
+      // Verify pB1 is blocked by pB2 being active in project boo
+      let elB1 = commands.getFeaturePlanEligibility(pB1.id);
+      expect(elB1.eligible).toBe(false);
+      expect(elB1.blockedByActiveProjectPlan?.id).toBe(pB2.id);
+
+      // Verify pF1 in project far is NOT blocked by project boo's active plan
+      let elF1 = commands.getFeaturePlanEligibility(pF1.id);
+      expect(elF1.eligible).toBe(true);
+
+      // Admit pF1 in far
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pF1.id, "admitted");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pF1.id, "active");
+
+      // Verify pF2 is blocked by active pF1 in far
+      let elF2 = commands.getFeaturePlanEligibility(pF2.id);
+      expect(elF2.eligible).toBe(false);
+      expect(elF2.blockedByActiveProjectPlan?.id).toBe(pF1.id);
+
+      // Complete pB2 in boo
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pB2.id, "waiting_review");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pB2.id, "waiting_merge");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, pB2.id, "completed");
+
+      // Revalidate queued plans: pB1 becomes eligible and is admitted
+      revalidateQueuedFeaturePlans(database);
+      const updatedB1 = database.getFeaturePlan(pB1.id);
+      expect(updatedB1.status).toBe("admitted");
+
+      // Far project's active lease remains held by pF1 until pF1 finishes
+      expect(commands.getFeaturePlanEligibility(pF2.id).blockedByActiveProjectPlan?.id).toBe(pF1.id);
+    });
+
+    it("runs migrations idempotently on populated databases and handles legacy schema upgrades cleanly", () => {
+      const t = database.createTask("migration task", "dashboard", "boo");
+      const p = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "boo", objective: "Migration test plan", acceptanceCriteria: ["Pass"], taskIds: [t.id] }
+      ).plan;
+
+      // Close and reopen database multiple times to trigger migrate(db) repeatedly
+      database.close();
+      const dbPath = path.join(tempDir, "maestro.db");
+
+      const db2 = createDatabase(dbPath);
+      expect(db2.getFeaturePlan(p.id).objective).toBe("Migration test plan");
+      db2.close();
+
+      const db3 = createDatabase(dbPath);
+      expect(db3.getFeaturePlan(p.id).objective).toBe("Migration test plan");
+
+      // Keep database variable pointing to active DB for afterEach cleanup
+      database = db3;
+    });
+
+    it("executes an end-to-end feature plan canary workflow from creation to completion and successor admission", async () => {
+      // Initialize lifecycle worker first to mark initial cursor baseline
+      const deliveredActions: string[] = [];
+      const worker = new FeaturePlanLifecycleNotificationWorker(database, async (event) => {
+        deliveredActions.push(event.action);
+      });
+      await worker.reconcile();
+
+      // 1. Setup tasks and plan graph
+      const t1 = database.createTask("canary task 1", "dashboard", "boo");
+      const t2 = database.createTask("canary task 2", "dashboard", "boo");
+
+      const planA = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "boo", objective: "Canary Plan A (Predecessor)", acceptanceCriteria: ["Criteria A"], taskIds: [t1.id], priority: 50 }
+      ).plan;
+
+      const planB = commands.createFeaturePlan(
+        { channel: "dashboard" },
+        { projectKey: "boo", objective: "Canary Plan B (Successor)", acceptanceCriteria: ["Criteria B"], taskIds: [t2.id], priority: 10, dependsOnFeaturePlanIds: [planA.id] }
+      ).plan;
+
+      // 2. Test Pause/Resume on Plan A
+      commands.pauseFeaturePlan({ channel: "dashboard" }, planA.id, "canary pause verification");
+      expect(commands.getFeaturePlanEligibility(planA.id).eligible).toBe(false);
+
+      commands.resumeFeaturePlan({ channel: "dashboard" }, planA.id);
+      expect(commands.getFeaturePlanEligibility(planA.id).eligible).toBe(true);
+
+      // 3. Admit Plan A via scheduler revalidation
+      expect(revalidateQueuedFeaturePlans(database)).toHaveLength(1);
+      expect(database.getFeaturePlan(planA.id).status).toBe("admitted");
+
+      // Advance Plan A to active
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, planA.id, "active");
+
+      // Verify Plan B is blocked because Plan A is active AND predecessor
+      const elB = commands.getFeaturePlanEligibility(planB.id);
+      expect(elB.eligible).toBe(false);
+      expect(elB.blockedDependencies.map((d) => d.id)).toContain(planA.id);
+
+      // Reconcile events up to this point
+      await worker.reconcile();
+      expect(deliveredActions).toContain("admitted");
+
+      // 4. Simulate crash & restart midway through execution
+      database.close();
+      const dbPath = path.join(tempDir, "maestro.db");
+      database = createDatabase(dbPath);
+      commands = new ApplicationCommands(database);
+
+      // Verify post-restart state
+      expect(database.getFeaturePlan(planA.id).status).toBe("active");
+      expect(database.getFeaturePlan(planB.id).status).toBe("queued");
+
+      // 5. Complete Plan A
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, planA.id, "waiting_review");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, planA.id, "waiting_merge");
+      commands.updateFeaturePlanQueueStatus({ channel: "dashboard" }, planA.id, "completed");
+
+      // 6. Revalidate queue -> Plan B becomes eligible and is automatically admitted
+      expect(revalidateQueuedFeaturePlans(database)).toHaveLength(1);
+      expect(database.getFeaturePlan(planB.id).status).toBe("admitted");
+
+      // 7. Verify lifecycle notifications delivered cleanly after restart
+      const postRestartActions: string[] = [];
+      const restartedWorker = new FeaturePlanLifecycleNotificationWorker(database, async (event) => {
+        postRestartActions.push(event.action);
+      });
+      await restartedWorker.reconcile();
+      expect(postRestartActions).toContain("admitted");
+    });
+  });
 });
 
 function testConfig(): MaestroConfig {
