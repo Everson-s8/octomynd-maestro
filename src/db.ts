@@ -316,7 +316,17 @@ export type FeatureInput = {
   pullRequestUrl: string;
 };
 
-export type FeaturePlanStatus = "planned" | "cancelled";
+export type FeaturePlanQueueStatus =
+  | "queued"
+  | "admitted"
+  | "active"
+  | "waiting_review"
+  | "waiting_merge"
+  | "blocked"
+  | "completed"
+  | "cancelled";
+
+export type FeaturePlanStatus = FeaturePlanQueueStatus | "planned";
 
 export type FeaturePlanRecord = {
   id: number;
@@ -325,7 +335,15 @@ export type FeaturePlanRecord = {
   projectName: string;
   objective: string;
   acceptanceCriteria: string[];
-  status: FeaturePlanStatus;
+  status: FeaturePlanQueueStatus;
+  priority: number;
+  isPaused: boolean;
+  pausedAt: string | null;
+  pauseReason: string | null;
+  blockedAt: string | null;
+  blockedReason: string | null;
+  admittedAt: string | null;
+  completedAt: string | null;
   source: string;
   createdByUserId: string | null;
   createdByUsername: string | null;
@@ -334,6 +352,37 @@ export type FeaturePlanRecord = {
   cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type FeaturePlanDependencyRecord = {
+  id: number;
+  featurePlanId: number;
+  dependsOnFeaturePlanId: number;
+  createdAt: string;
+};
+
+export type FeaturePlanHistoryRecord = {
+  id: number;
+  featurePlanId: number;
+  fromStatus: FeaturePlanQueueStatus | null;
+  toStatus: FeaturePlanQueueStatus;
+  action: string;
+  reason: string | null;
+  actorUserId: string | null;
+  actorUsername: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type FeaturePlanEligibilityResult = {
+  featurePlanId: number;
+  projectKey: string;
+  eligible: boolean;
+  reason: string;
+  blockedByPaused: boolean;
+  blockedByStatus: boolean;
+  blockedDependencies: Array<{ id: number; status: FeaturePlanQueueStatus }>;
+  blockedByActiveProjectPlan: { id: number; status: FeaturePlanQueueStatus } | null;
 };
 
 export type FeaturePlanTaskRecord = {
@@ -390,6 +439,8 @@ export type FeaturePlanInput = {
   acceptanceCriteria: string[];
   taskIds: number[];
   taskContracts?: FeatureTaskContractInput[];
+  priority?: number;
+  dependsOnFeaturePlanIds?: number[];
   featureIssueNumber?: number | null;
   taskIssueNumbers?: Record<number, number>;
   source?: string;
@@ -686,12 +737,12 @@ export function createDatabase(databasePath: string) {
   `);
   const createFeaturePlanStatement = db.prepare(`
     INSERT INTO feature_plans (
-      project_id, objective, acceptance_criteria_json, status, source,
+      project_id, objective, acceptance_criteria_json, status, priority, is_paused, source,
       created_by_user_id, created_by_username, revision,
       cancelled_at, cancel_reason, created_at, updated_at
     )
     VALUES (
-      @projectId, @objective, @acceptanceCriteriaJson, 'planned', @source,
+      @projectId, @objective, @acceptanceCriteriaJson, 'queued', @priority, 0, @source,
       @createdByUserId, @createdByUsername, 1,
       NULL, NULL, @now, @now
     )
@@ -712,7 +763,7 @@ export function createDatabase(databasePath: string) {
         cancelled_at = @now,
         cancel_reason = @cancelReason,
         updated_at = @now
-    WHERE id = @id AND status = 'planned'
+    WHERE id = @id AND status NOT IN ('completed', 'cancelled')
   `);
   const replanFeaturePlanStatement = db.prepare(`
     UPDATE feature_plans
@@ -720,7 +771,59 @@ export function createDatabase(databasePath: string) {
         acceptance_criteria_json = @acceptanceCriteriaJson,
         revision = revision + 1,
         updated_at = @now
-    WHERE id = @id AND status = 'planned'
+    WHERE id = @id AND status NOT IN ('completed', 'cancelled')
+  `);
+  const updateFeaturePlanPriorityStatement = db.prepare(`
+    UPDATE feature_plans
+    SET priority = @priority,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const pauseFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET is_paused = 1,
+        paused_at = @now,
+        pause_reason = @pauseReason,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const resumeFeaturePlanStatement = db.prepare(`
+    UPDATE feature_plans
+    SET is_paused = 0,
+        paused_at = NULL,
+        pause_reason = NULL,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const updateFeaturePlanQueueStatusStatement = db.prepare(`
+    UPDATE feature_plans
+    SET status = @status,
+        admitted_at = CASE WHEN @status = 'admitted' THEN COALESCE(admitted_at, @now) ELSE admitted_at END,
+        blocked_at = CASE WHEN @status = 'blocked' THEN @now WHEN @status = 'queued' THEN NULL ELSE blocked_at END,
+        blocked_reason = CASE WHEN @status = 'blocked' THEN @blockedReason WHEN @status = 'queued' THEN NULL ELSE blocked_reason END,
+        completed_at = CASE WHEN @status = 'completed' THEN COALESCE(completed_at, @now) ELSE completed_at END,
+        cancelled_at = CASE WHEN @status = 'cancelled' THEN COALESCE(cancelled_at, @now) ELSE cancelled_at END,
+        cancel_reason = CASE WHEN @status = 'cancelled' THEN COALESCE(@blockedReason, cancel_reason) ELSE cancel_reason END,
+        updated_at = @now
+    WHERE id = @id AND status = @fromStatus
+  `);
+  const addFeaturePlanDependencyStatement = db.prepare(`
+    INSERT INTO feature_plan_dependencies (feature_plan_id, depends_on_feature_plan_id, created_at)
+    VALUES (@featurePlanId, @dependsOnFeaturePlanId, @now)
+  `);
+  const deleteFeaturePlanDependencyStatement = db.prepare(`
+    DELETE FROM feature_plan_dependencies
+    WHERE feature_plan_id = ? AND depends_on_feature_plan_id = ?
+  `);
+  const addFeaturePlanHistoryStatement = db.prepare(`
+    INSERT INTO feature_plan_history (
+      feature_plan_id, from_status, to_status, action, reason,
+      actor_user_id, actor_username, metadata_json, created_at
+    )
+    VALUES (
+      @featurePlanId, @fromStatus, @toStatus, @action, @reason,
+      @actorUserId, @actorUsername, @metadataJson, @now
+    )
   `);
   const deleteFeaturePlanTasksStatement = db.prepare("DELETE FROM feature_plan_tasks WHERE feature_plan_id = ?");
   const addFeaturePlanOperationStatement = db.prepare(`
@@ -947,6 +1050,30 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?")
         .all(limit) as EventRow[];
       return rows.map(mapEvent);
+    },
+
+    listEventsAfter(id: number, limit = 100): EventRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT ?")
+        .all(id, limit) as EventRow[];
+      return rows.map(mapEvent);
+    },
+
+    findLatestEventByType(type: string): EventRecord | null {
+      const row = db
+        .prepare("SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1")
+        .get(type) as EventRow | undefined;
+      return row ? mapEvent(row) : null;
+    },
+
+    hasEventForSource(type: string, sourceEventId: number): boolean {
+      const row = db.prepare(`
+        SELECT 1 FROM events
+        WHERE type = ?
+          AND CAST(json_extract(metadata_json, '$.sourceEventId') AS INTEGER) = ?
+        LIMIT 1
+      `).get(type, sourceEventId);
+      return Boolean(row);
     },
 
     hasFeaturePlanEvent(
@@ -1586,6 +1713,8 @@ export function createDatabase(databasePath: string) {
         acceptanceCriteria: normalized.acceptanceCriteria,
         taskIds: normalized.taskIds,
         taskContracts: [...taskContracts.entries()],
+        priority: normalized.priority,
+        dependsOnFeaturePlanIds: normalized.dependsOnFeaturePlanIds,
         featureIssueNumber: normalized.featureIssueNumber,
         taskIssueNumbers: normalized.taskIssueNumbers
       });
@@ -1604,6 +1733,7 @@ export function createDatabase(databasePath: string) {
           projectId: project.id,
           objective: normalized.objective,
           acceptanceCriteriaJson: JSON.stringify(normalized.acceptanceCriteria),
+          priority: normalized.priority,
           source: normalized.source,
           createdByUserId: normalized.createdByUserId,
           createdByUsername: normalized.createdByUsername,
@@ -1617,6 +1747,30 @@ export function createDatabase(databasePath: string) {
           taskContracts,
           now
         );
+        for (const depId of normalized.dependsOnFeaturePlanIds) {
+          if (depId === featurePlanId) {
+            throw new Error(`Self-dependencies are not allowed: Feature Plan #${featurePlanId} cannot depend on itself.`);
+          }
+          const depPlan = this.getFeaturePlan(depId);
+          if (depPlan.projectId !== project.id) {
+            throw new Error(
+              `Cross-project dependencies are not allowed: Feature Plan #${featurePlanId} and #${depId} belong to different projects.`
+            );
+          }
+          checkDependencyCycle(db, featurePlanId, depId);
+          addFeaturePlanDependencyStatement.run({ featurePlanId, dependsOnFeaturePlanId: depId, now });
+        }
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId,
+          fromStatus: null,
+          toStatus: "queued",
+          action: "create",
+          reason: null,
+          actorUserId: normalized.createdByUserId,
+          actorUsername: normalized.createdByUsername,
+          metadataJson: JSON.stringify({ priority: normalized.priority }),
+          now
+        });
         if (normalized.featureIssueNumber !== null) {
           addGitHubIssueLinkStatement.run({
             subjectType: "feature_plan",
@@ -1646,6 +1800,332 @@ export function createDatabase(databasePath: string) {
       })();
 
       return { ...this.getFeaturePlanDetails(planId), applied: true };
+    },
+
+    pauseFeaturePlan(id: number, reason?: string | null, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (plan.isPaused) return this.getFeaturePlanDetails(id);
+      if (["completed", "cancelled"].includes(plan.status)) {
+        throw new Error(`Feature plan #${id} is ${plan.status} and cannot be paused.`);
+      }
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        pauseFeaturePlanStatement.run({ id, pauseReason: reason?.trim() || null, now });
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "pause",
+          reason: reason?.trim() || null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: "{}",
+          now
+        });
+      })();
+      return this.getFeaturePlanDetails(id);
+    },
+
+    resumeFeaturePlan(id: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (!plan.isPaused) return this.getFeaturePlanDetails(id);
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        resumeFeaturePlanStatement.run({ id, now });
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "resume",
+          reason: null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: "{}",
+          now
+        });
+      })();
+      return this.getFeaturePlanDetails(id);
+    },
+
+    updateFeaturePlanPriority(id: number, priority: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (!Number.isInteger(priority)) throw new Error("Feature plan priority must be an integer.");
+      if (plan.priority === priority) return this.getFeaturePlanDetails(id);
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        updateFeaturePlanPriorityStatement.run({ id, priority, now });
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "set_priority",
+          reason: null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: JSON.stringify({ previousPriority: plan.priority, priority }),
+          now
+        });
+      })();
+      return this.getFeaturePlanDetails(id);
+    },
+
+    addFeaturePlanDependency(featurePlanId: number, dependsOnFeaturePlanId: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      if (featurePlanId === dependsOnFeaturePlanId) {
+        throw new Error(`Self-dependencies are not allowed: Feature Plan #${featurePlanId} cannot depend on itself.`);
+      }
+      const plan = this.getFeaturePlan(featurePlanId);
+      const depPlan = this.getFeaturePlan(dependsOnFeaturePlanId);
+      if (plan.projectId !== depPlan.projectId) {
+        throw new Error(
+          `Cross-project dependencies are not allowed: Feature Plan #${featurePlanId} and #${dependsOnFeaturePlanId} belong to different projects.`
+        );
+      }
+      checkDependencyCycle(db, featurePlanId, dependsOnFeaturePlanId);
+
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        addFeaturePlanDependencyStatement.run({ featurePlanId, dependsOnFeaturePlanId, now });
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "add_dependency",
+          reason: null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: JSON.stringify({ dependsOnFeaturePlanId }),
+          now
+        });
+      })();
+      return this.getFeaturePlanDetails(featurePlanId);
+    },
+
+    removeFeaturePlanDependency(featurePlanId: number, dependsOnFeaturePlanId: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(featurePlanId);
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        deleteFeaturePlanDependencyStatement.run(featurePlanId, dependsOnFeaturePlanId);
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "remove_dependency",
+          reason: null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: JSON.stringify({ dependsOnFeaturePlanId }),
+          now
+        });
+      })();
+      return this.getFeaturePlanDetails(featurePlanId);
+    },
+
+    listFeaturePlanDependencies(featurePlanId: number): FeaturePlanDependencyRecord[] {
+      const rows = db.prepare("SELECT * FROM feature_plan_dependencies WHERE feature_plan_id = ? ORDER BY id ASC")
+        .all(featurePlanId) as FeaturePlanDependencyRow[];
+      return rows.map(mapFeaturePlanDependency);
+    },
+
+    updateFeaturePlanQueueStatus(id: number, toStatus: FeaturePlanQueueStatus, reason?: string | null, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === toStatus) return this.getFeaturePlanDetails(id);
+
+      const validTransitions: Record<string, string[]> = {
+        queued: ["admitted", "blocked", "cancelled"],
+        admitted: ["active", "blocked", "cancelled"],
+        active: ["waiting_review", "blocked", "cancelled"],
+        waiting_review: ["waiting_merge", "blocked", "cancelled"],
+        waiting_merge: ["completed", "blocked", "cancelled"],
+        blocked: ["queued", "cancelled"],
+        completed: [],
+        cancelled: []
+      };
+
+      const allowed = validTransitions[plan.status] || [];
+      if (!allowed.includes(toStatus)) {
+        throw new Error(`Invalid Feature Plan status transition from '${plan.status}' to '${toStatus}'.`);
+      }
+
+      const now = new Date().toISOString();
+      const applied = db.transaction(() => {
+        const update = updateFeaturePlanQueueStatusStatement.run({
+          id,
+          fromStatus: plan.status,
+          status: toStatus,
+          blockedReason: reason?.trim() || null,
+          now
+        });
+        if (update.changes === 0) return false;
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus,
+          action: "status_changed",
+          reason: reason?.trim() || null,
+          actorUserId: actorUserId || null,
+          actorUsername: actorUsername || null,
+          metadataJson: "{}",
+          now
+        });
+        return true;
+      })();
+      if (!applied) {
+        const current = this.getFeaturePlan(id);
+        if (current.status === toStatus) return this.getFeaturePlanDetails(id);
+        throw new Error(
+          `Feature Plan #${id} changed concurrently from '${plan.status}' to '${current.status}'.`
+        );
+      }
+      return this.getFeaturePlanDetails(id);
+    },
+
+    completeFeaturePlanAfterMerge(id: number): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === "completed") return this.getFeaturePlanDetails(id);
+      if (plan.status === "cancelled") {
+        throw new Error(`Feature Plan #${id} cannot be completed because it was cancelled.`);
+      }
+
+      const now = new Date().toISOString();
+      const applied = db.transaction(() => {
+        const update = updateFeaturePlanQueueStatusStatement.run({
+          id,
+          fromStatus: plan.status,
+          status: "completed",
+          blockedReason: null,
+          now
+        });
+        if (update.changes === 0) return false;
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: id,
+          fromStatus: plan.status,
+          toStatus: "completed",
+          action: "reconciled_after_feature_merge",
+          reason: "Consolidated Feature PR merged",
+          actorUserId: null,
+          actorUsername: null,
+          metadataJson: "{}",
+          now
+        });
+        return true;
+      })();
+
+      if (!applied) {
+        const current = this.getFeaturePlan(id);
+        if (current.status === "completed") return this.getFeaturePlanDetails(id);
+        throw new Error(
+          `Feature Plan #${id} changed concurrently from '${plan.status}' to '${current.status}' during merge reconciliation.`
+        );
+      }
+      return this.getFeaturePlanDetails(id);
+    },
+
+    admitFeaturePlan(id: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
+      const plan = this.getFeaturePlan(id);
+      if (["admitted", "active", "waiting_review", "waiting_merge", "completed"].includes(plan.status)) {
+        return this.getFeaturePlanDetails(id);
+      }
+      const eligibility = this.evaluateFeaturePlanEligibility(id);
+      if (!eligibility.eligible) {
+        throw new Error(`Cannot admit Feature Plan #${id}: ${eligibility.reason}`);
+      }
+      return this.updateFeaturePlanQueueStatus(id, "admitted", "Admitted to project writer lease", actorUserId, actorUsername);
+    },
+
+    getFeaturePlanHistory(featurePlanId: number): FeaturePlanHistoryRecord[] {
+      const rows = db.prepare("SELECT * FROM feature_plan_history WHERE feature_plan_id = ? ORDER BY id ASC")
+        .all(featurePlanId) as FeaturePlanHistoryRow[];
+      return rows.map(mapFeaturePlanHistory);
+    },
+
+    evaluateFeaturePlanEligibility(featurePlanId: number): FeaturePlanEligibilityResult {
+      const plan = this.getFeaturePlan(featurePlanId);
+      if (plan.status !== "queued") {
+        return {
+          featurePlanId,
+          projectKey: plan.projectKey,
+          eligible: false,
+          reason: `Feature Plan is in status '${plan.status}', expected 'queued'`,
+          blockedByPaused: false,
+          blockedByStatus: true,
+          blockedDependencies: [],
+          blockedByActiveProjectPlan: null
+        };
+      }
+
+      if (plan.isPaused) {
+        return {
+          featurePlanId,
+          projectKey: plan.projectKey,
+          eligible: false,
+          reason: plan.pauseReason ? `Feature Plan is paused: ${plan.pauseReason}` : "Feature Plan is paused",
+          blockedByPaused: true,
+          blockedByStatus: false,
+          blockedDependencies: [],
+          blockedByActiveProjectPlan: null
+        };
+      }
+
+      const deps = this.listFeaturePlanDependencies(featurePlanId);
+      const blockedDependencies: Array<{ id: number; status: FeaturePlanQueueStatus }> = [];
+      for (const dep of deps) {
+        const depPlan = this.getFeaturePlan(dep.dependsOnFeaturePlanId);
+        if (depPlan.status !== "completed") {
+          blockedDependencies.push({ id: depPlan.id, status: depPlan.status });
+        }
+      }
+      if (blockedDependencies.length > 0) {
+        return {
+          featurePlanId,
+          projectKey: plan.projectKey,
+          eligible: false,
+          reason: `Waiting on predecessor Feature Plan #${blockedDependencies[0].id} (status: ${blockedDependencies[0].status})`,
+          blockedByPaused: false,
+          blockedByStatus: false,
+          blockedDependencies,
+          blockedByActiveProjectPlan: null
+        };
+      }
+
+      const activeProjectRow = db.prepare(`
+        SELECT id, status FROM feature_plans
+        WHERE project_id = ? AND id <> ? AND status IN ('admitted', 'active', 'waiting_review', 'waiting_merge')
+        LIMIT 1
+      `).get(plan.projectId, plan.id) as { id: number; status: FeaturePlanQueueStatus } | undefined;
+
+      if (activeProjectRow) {
+        return {
+          featurePlanId,
+          projectKey: plan.projectKey,
+          eligible: false,
+          reason: `Project '${plan.projectKey}' already has an active Feature Plan #${activeProjectRow.id} (status: ${activeProjectRow.status})`,
+          blockedByPaused: false,
+          blockedByStatus: false,
+          blockedDependencies: [],
+          blockedByActiveProjectPlan: { id: activeProjectRow.id, status: activeProjectRow.status }
+        };
+      }
+
+      return {
+        featurePlanId,
+        projectKey: plan.projectKey,
+        eligible: true,
+        reason: "Eligible for admission",
+        blockedByPaused: false,
+        blockedByStatus: false,
+        blockedDependencies: [],
+        blockedByActiveProjectPlan: null
+      };
+    },
+
+    listFeaturePlanQueue(projectKey?: string): FeaturePlanDetails[] {
+      const suffix = projectKey?.trim()
+        ? `WHERE projects.key = ? AND feature_plans.status IN ('queued', 'admitted', 'active', 'waiting_review', 'waiting_merge', 'blocked') ORDER BY feature_plans.is_paused ASC, feature_plans.priority DESC, feature_plans.created_at ASC, feature_plans.id ASC`
+        : `WHERE feature_plans.status IN ('queued', 'admitted', 'active', 'waiting_review', 'waiting_merge', 'blocked') ORDER BY feature_plans.is_paused ASC, feature_plans.priority DESC, feature_plans.created_at ASC, feature_plans.id ASC`;
+      const rows = projectKey?.trim()
+        ? (db.prepare(featurePlanSelectSql(suffix)).all(projectKey.trim().toLowerCase()) as FeaturePlanRow[])
+        : (db.prepare(featurePlanSelectSql(suffix)).all() as FeaturePlanRow[]);
+      return rows.map((row) => this.getFeaturePlanDetails(row.id));
     },
 
     getFeaturePlan(id: number): FeaturePlanRecord {
@@ -1689,7 +2169,7 @@ export function createDatabase(databasePath: string) {
         SELECT feature_plan_tasks.feature_plan_id
         FROM feature_plan_tasks
         JOIN feature_plans ON feature_plans.id = feature_plan_tasks.feature_plan_id
-        WHERE feature_plan_tasks.task_id = ? AND feature_plans.status = 'planned'
+        WHERE feature_plan_tasks.task_id = ? AND feature_plans.status NOT IN ('completed', 'cancelled')
         ORDER BY feature_plan_tasks.id DESC
         LIMIT 1
       `).get(taskId) as { feature_plan_id: number } | undefined;
@@ -1730,12 +2210,32 @@ export function createDatabase(databasePath: string) {
       if (plan.status === "cancelled") {
         return { ...this.getFeaturePlanDetails(id), applied: false };
       }
+      if (plan.status === "completed") {
+        throw new Error(`Feature plan #${id} cannot be cancelled from status completed.`);
+      }
       assertFeaturePlanIntegrationNotStarted(db, id);
-      const result = cancelFeaturePlanStatement.run({
-        id,
-        cancelReason: reason?.trim() || null,
-        now: new Date().toISOString()
-      });
+      const now = new Date().toISOString();
+      const result = db.transaction(() => {
+        const res = cancelFeaturePlanStatement.run({
+          id,
+          cancelReason: reason?.trim() || null,
+          now
+        });
+        if (res.changes > 0) {
+          addFeaturePlanHistoryStatement.run({
+            featurePlanId: id,
+            fromStatus: plan.status,
+            toStatus: "cancelled",
+            action: "cancel",
+            reason: reason?.trim() || null,
+            actorUserId: null,
+            actorUsername: null,
+            metadataJson: "{}",
+            now
+          });
+        }
+        return res;
+      })();
       if (result.changes === 0) {
         throw new Error(`Feature plan #${id} cannot be cancelled from status ${plan.status}.`);
       }
@@ -1771,7 +2271,7 @@ export function createDatabase(databasePath: string) {
         validateFeaturePlanOperationReuse(existingOperation, "replan", requestHash, plan.id);
         return { ...this.getFeaturePlanDetails(existingOperation.feature_plan_id), applied: false };
       }
-      if (plan.status !== "planned") {
+      if (["completed", "cancelled"].includes(plan.status)) {
         throw new Error(`Feature plan #${plan.id} cannot be replanned from status ${plan.status}.`);
       }
       assertFeaturePlanIntegrationNotStarted(db, plan.id);
@@ -1797,6 +2297,17 @@ export function createDatabase(databasePath: string) {
           taskContracts,
           now
         );
+        addFeaturePlanHistoryStatement.run({
+          featurePlanId: plan.id,
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          action: "replan",
+          reason: null,
+          actorUserId: null,
+          actorUsername: null,
+          metadataJson: JSON.stringify({ revision: plan.revision + 1 }),
+          now
+        });
         if (normalized.idempotencyKey) {
           addFeaturePlanOperationStatement.run({
             featurePlanId: plan.id,
@@ -2180,7 +2691,15 @@ function migrate(db: Database.Database) {
       project_id INTEGER NOT NULL,
       objective TEXT NOT NULL,
       acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'planned',
+      status TEXT NOT NULL DEFAULT 'queued',
+      priority INTEGER NOT NULL DEFAULT 0,
+      is_paused INTEGER NOT NULL DEFAULT 0,
+      paused_at TEXT,
+      pause_reason TEXT,
+      blocked_at TEXT,
+      blocked_reason TEXT,
+      admitted_at TEXT,
+      completed_at TEXT,
       source TEXT NOT NULL,
       created_by_user_id TEXT,
       created_by_username TEXT,
@@ -2190,6 +2709,30 @@ function migrate(db: Database.Database) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_dependencies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      depends_on_feature_plan_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(feature_plan_id, depends_on_feature_plan_id),
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id),
+      FOREIGN KEY (depends_on_feature_plan_id) REFERENCES feature_plans(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feature_plan_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_plan_id INTEGER NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT,
+      actor_user_id TEXT,
+      actor_username TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id)
     );
 
     CREATE TABLE IF NOT EXISTS feature_plan_tasks (
@@ -2329,7 +2872,16 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "goal_runs", "next_retry_at", "TEXT");
   addColumnIfMissing(db, "goal_runs", "last_provider", "TEXT");
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "feature_plans", "priority", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "feature_plans", "is_paused", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "feature_plans", "paused_at", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "pause_reason", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "blocked_at", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "blocked_reason", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "admitted_at", "TEXT");
+  addColumnIfMissing(db, "feature_plans", "completed_at", "TEXT");
   addColumnIfMissing(db, "feature_plans", "cancel_reason", "TEXT");
+  db.exec("UPDATE feature_plans SET status = 'queued' WHERE status = 'planned'");
   addColumnIfMissing(db, "feature_plan_tasks", "contract_json", "TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, "features", "feature_plan_id", "INTEGER REFERENCES feature_plans(id)");
   addColumnIfMissing(db, "features", "cancelled_at", "TEXT");
@@ -2516,6 +3068,14 @@ type FeaturePlanRow = {
   objective: string;
   acceptance_criteria_json: string;
   status: FeaturePlanStatus;
+  priority?: number;
+  is_paused?: number;
+  paused_at?: string | null;
+  pause_reason?: string | null;
+  blocked_at?: string | null;
+  blocked_reason?: string | null;
+  admitted_at?: string | null;
+  completed_at?: string | null;
   source: string;
   created_by_user_id: string | null;
   created_by_username: string | null;
@@ -2524,6 +3084,26 @@ type FeaturePlanRow = {
   cancel_reason: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type FeaturePlanDependencyRow = {
+  id: number;
+  feature_plan_id: number;
+  depends_on_feature_plan_id: number;
+  created_at: string;
+};
+
+type FeaturePlanHistoryRow = {
+  id: number;
+  feature_plan_id: number;
+  from_status: string | null;
+  to_status: FeaturePlanQueueStatus;
+  action: string;
+  reason: string | null;
+  actor_user_id: string | null;
+  actor_username: string | null;
+  metadata_json: string;
+  created_at: string;
 };
 
 type FeaturePlanTaskRow = {
@@ -2674,8 +3254,10 @@ function normalizeImprovementProposal(input: ImprovementProposalInput) {
 
 type NormalizedFeaturePlanInput = Required<Omit<
   FeaturePlanInput,
-  "featureIssueNumber" | "taskIssueNumbers" | "taskContracts"
+  "featureIssueNumber" | "taskIssueNumbers" | "taskContracts" | "priority" | "dependsOnFeaturePlanIds"
 >> & {
+  priority: number;
+  dependsOnFeaturePlanIds: number[];
   featureIssueNumber: number | null;
   taskIssueNumbers: Record<number, number>;
   taskContracts?: FeatureTaskContractInput[];
@@ -2690,6 +3272,10 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePl
     .map((item) => item.trim())
     .filter(Boolean);
   const taskIds = uniqueTaskIds(input.taskIds);
+  const priority = input.priority !== undefined && Number.isInteger(input.priority)
+    ? input.priority
+    : 0;
+  const dependsOnFeaturePlanIds = uniquePlanIds(input.dependsOnFeaturePlanIds ?? []);
   const source = input.source?.trim() || "dashboard";
   const idempotencyKey = input.idempotencyKey?.trim() || null;
   const featureIssueNumber = normalizeIssueNumber(input.featureIssueNumber, "Feature");
@@ -2720,6 +3306,8 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePl
     objective,
     acceptanceCriteria,
     taskIds,
+    priority,
+    dependsOnFeaturePlanIds,
     taskContracts: input.taskContracts,
     source,
     createdByUserId: input.createdByUserId?.trim() || null,
@@ -2728,6 +3316,51 @@ function normalizeFeaturePlanInput(input: FeaturePlanInput): NormalizedFeaturePl
     featureIssueNumber,
     taskIssueNumbers
   };
+}
+
+function uniquePlanIds(planIds: number[]): number[] {
+  const seen = new Set<number>();
+  const normalized: number[] = [];
+  for (const id of planIds) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error("Feature plan dependency ids must be positive integers.");
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      normalized.push(id);
+    }
+  }
+  return normalized;
+}
+
+function checkDependencyCycle(
+  db: Database.Database,
+  featurePlanId: number,
+  dependsOnFeaturePlanId: number
+): void {
+  const visited = new Set<number>();
+  const queue = [dependsOnFeaturePlanId];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current === featurePlanId) {
+      throw new Error(
+        `Cyclic dependency detected: Feature Plan #${featurePlanId} cannot depend on #${dependsOnFeaturePlanId}.`
+      );
+    }
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    const rows = db.prepare(
+      "SELECT depends_on_feature_plan_id FROM feature_plan_dependencies WHERE feature_plan_id = ?"
+    ).all(current) as Array<{ depends_on_feature_plan_id: number }>;
+
+    for (const row of rows) {
+      if (!visited.has(row.depends_on_feature_plan_id)) {
+        queue.push(row.depends_on_feature_plan_id);
+      }
+    }
+  }
 }
 
 function normalizeIssueNumber(value: number | null | undefined, label: string): number | null {
@@ -2778,7 +3411,7 @@ function validateFeaturePlanTaskAvailability(
       FROM feature_plan_tasks
       JOIN feature_plans ON feature_plans.id = feature_plan_tasks.feature_plan_id
       WHERE feature_plan_tasks.task_id = ?
-        AND feature_plans.status = 'planned'
+        AND feature_plans.status NOT IN ('completed', 'cancelled')
         AND feature_plans.id <> ?
       ORDER BY feature_plans.id ASC
       LIMIT 1
@@ -3084,6 +3717,10 @@ function mapRuntimeUpdate(row: RuntimeUpdateRow): RuntimeUpdateRecord {
 }
 
 function mapFeaturePlan(row: FeaturePlanRow): FeaturePlanRecord {
+  const status: FeaturePlanQueueStatus = (row.status as string) === "planned"
+    ? "queued"
+    : (row.status as FeaturePlanQueueStatus);
+
   return {
     id: row.id,
     projectId: row.project_id,
@@ -3091,7 +3728,15 @@ function mapFeaturePlan(row: FeaturePlanRow): FeaturePlanRecord {
     projectName: row.project_name,
     objective: row.objective,
     acceptanceCriteria: parseStringArrayJson(row.acceptance_criteria_json),
-    status: row.status,
+    status,
+    priority: row.priority ?? 0,
+    isPaused: Boolean(row.is_paused),
+    pausedAt: row.paused_at ?? null,
+    pauseReason: row.pause_reason ?? null,
+    blockedAt: row.blocked_at ?? null,
+    blockedReason: row.blocked_reason ?? null,
+    admittedAt: row.admitted_at ?? null,
+    completedAt: row.completed_at ?? null,
     source: row.source,
     createdByUserId: row.created_by_user_id,
     createdByUsername: row.created_by_username,
@@ -3101,6 +3746,41 @@ function mapFeaturePlan(row: FeaturePlanRow): FeaturePlanRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function mapFeaturePlanDependency(row: FeaturePlanDependencyRow): FeaturePlanDependencyRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    dependsOnFeaturePlanId: row.depends_on_feature_plan_id,
+    createdAt: row.created_at
+  };
+}
+
+function mapFeaturePlanHistory(row: FeaturePlanHistoryRow): FeaturePlanHistoryRecord {
+  return {
+    id: row.id,
+    featurePlanId: row.feature_plan_id,
+    fromStatus: (row.from_status as FeaturePlanQueueStatus) || null,
+    toStatus: row.to_status,
+    action: row.action,
+    reason: row.reason,
+    actorUserId: row.actor_user_id,
+    actorUsername: row.actor_username,
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at
+  };
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || "{}") as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseStringArrayJson(value: string | null): string[] {

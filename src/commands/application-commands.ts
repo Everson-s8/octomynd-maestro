@@ -19,11 +19,15 @@ import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
-import { conflictError, notFoundError, validationError } from "./errors.js";
+import { ApplicationCommandError, conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
+import {
+  revalidateQueuedFeaturePlans,
+  revalidateQueuedFeaturePlansWithAudit
+} from "../features/task-scheduler.js";
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
@@ -51,6 +55,8 @@ export type CreateFeaturePlanInput = {
   acceptanceCriteria: string[];
   taskIds: number[];
   taskContracts?: FeatureTaskContractInput[];
+  priority?: number;
+  dependsOnFeaturePlanIds?: number[];
   featureIssueNumber?: number | null;
   taskIssueNumbers?: Record<number, number>;
   idempotencyKey?: string | null;
@@ -443,6 +449,8 @@ export class ApplicationCommands {
         acceptanceCriteria: input.acceptanceCriteria,
         taskIds: input.taskIds,
         taskContracts: input.taskContracts,
+        priority: input.priority,
+        dependsOnFeaturePlanIds: input.dependsOnFeaturePlanIds,
         featureIssueNumber: input.featureIssueNumber,
         taskIssueNumbers: input.taskIssueNumbers,
         idempotencyKey: input.idempotencyKey,
@@ -769,6 +777,11 @@ export class ApplicationCommands {
             revision: result.plan.revision
           }
         });
+        revalidateQueuedFeaturePlansWithAudit(
+          this.database,
+          "feature_plan_cancelled",
+          result.plan.projectKey
+        );
       }
       return result;
     } catch (error) {
@@ -821,6 +834,11 @@ export class ApplicationCommands {
           pullRequestUrl: feature.pullRequestUrl
         }
       });
+      revalidateQueuedFeaturePlansWithAudit(
+        this.database,
+        "feature_cancelled",
+        feature.projectKey
+      );
       return feature;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown feature cancellation error.";
@@ -953,11 +971,203 @@ export class ApplicationCommands {
     });
   }
 
+  pauseFeaturePlan(origin: CommandOrigin, featurePlanId: number, reason?: string | null): FeaturePlanDetails {
+    try {
+      const result = this.database.pauseFeaturePlan(featurePlanId, reason, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.paused",
+        text: result.plan.pauseReason || `Feature Plan #${result.plan.id} paused.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId: result.plan.id, projectKey: result.plan.projectKey }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  resumeFeaturePlan(origin: CommandOrigin, featurePlanId: number): FeaturePlanDetails {
+    try {
+      const result = this.database.resumeFeaturePlan(featurePlanId, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.resumed",
+        text: `Feature Plan #${result.plan.id} resumed.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId: result.plan.id, projectKey: result.plan.projectKey }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  updateFeaturePlanPriority(origin: CommandOrigin, featurePlanId: number, priority: number): FeaturePlanDetails {
+    try {
+      const result = this.database.updateFeaturePlanPriority(featurePlanId, priority, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.priority_updated",
+        text: `Feature Plan #${result.plan.id} priority updated to ${priority}.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId: result.plan.id, priority }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  addFeaturePlanDependency(origin: CommandOrigin, featurePlanId: number, dependsOnFeaturePlanId: number): FeaturePlanDetails {
+    try {
+      const result = this.database.addFeaturePlanDependency(featurePlanId, dependsOnFeaturePlanId, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.dependency_added",
+        text: `Feature Plan #${featurePlanId} depends on #${dependsOnFeaturePlanId}.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId, dependsOnFeaturePlanId }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  removeFeaturePlanDependency(origin: CommandOrigin, featurePlanId: number, dependsOnFeaturePlanId: number): FeaturePlanDetails {
+    try {
+      const result = this.database.removeFeaturePlanDependency(featurePlanId, dependsOnFeaturePlanId, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.dependency_removed",
+        text: `Dependency on #${dependsOnFeaturePlanId} removed from Feature Plan #${featurePlanId}.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId, dependsOnFeaturePlanId }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  updateFeaturePlanQueueStatus(
+    origin: CommandOrigin,
+    featurePlanId: number,
+    toStatus: import("../db.js").FeaturePlanQueueStatus,
+    reason?: string | null
+  ): FeaturePlanDetails {
+    try {
+      const result = this.database.updateFeaturePlanQueueStatus(featurePlanId, toStatus, reason, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.status_changed",
+        text: `Feature Plan #${featurePlanId} status changed to ${toStatus}.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId, status: toStatus, reason: reason || null }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  getFeaturePlanEligibility(featurePlanId: number): import("../db.js").FeaturePlanEligibilityResult {
+    try {
+      return this.database.evaluateFeaturePlanEligibility(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  getFeaturePlanHistory(featurePlanId: number): import("../db.js").FeaturePlanHistoryRecord[] {
+    try {
+      return this.database.getFeaturePlanHistory(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  admitFeaturePlan(origin: CommandOrigin, featurePlanId: number): FeaturePlanDetails {
+    try {
+      const result = this.database.admitFeaturePlan(featurePlanId, origin.userId ?? null, origin.username ?? null);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.admitted",
+        text: `Feature Plan #${featurePlanId} admitted to project writer lease.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId }
+      });
+      return result;
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  revalidateFeaturePlanQueue(projectKey?: string | null): FeaturePlanDetails[] {
+    try {
+      return revalidateQueuedFeaturePlans(this.database, projectKey || undefined);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  listFeaturePlanQueue(projectKey?: string | null): FeaturePlanDetails[] {
+    try {
+      return this.database.listFeaturePlanQueue(projectKey || undefined);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
+  retryFeaturePlan(
+    origin: CommandOrigin,
+    featurePlanId: number,
+    reason?: string | null
+  ): FeaturePlanDetails {
+    try {
+      const current = this.database.getFeaturePlanDetails(featurePlanId);
+      if (current.plan.status !== "blocked") {
+        throw conflictError(`Feature Plan #${featurePlanId} is not blocked.`);
+      }
+      const result = this.database.updateFeaturePlanQueueStatus(
+        featurePlanId,
+        "queued",
+        reason,
+        origin.userId ?? null,
+        origin.username ?? null
+      );
+      this.database.addEvent({
+        source: origin.channel,
+        type: "feature_plan.retried",
+        text: `Feature Plan #${featurePlanId} retried.`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        metadata: { featurePlanId, reason: reason || null }
+      });
+      revalidateQueuedFeaturePlans(this.database, result.plan.projectKey);
+      return this.database.getFeaturePlanDetails(featurePlanId);
+    } catch (error) {
+      throw this.toFeaturePlanCommandError(error);
+    }
+  }
+
   private toFeaturePlanCommandError(error: unknown): never {
+    if (error instanceof ApplicationCommandError) throw error;
     const message = error instanceof Error ? error.message : "Unknown feature plan error.";
     if (/not found/i.test(message)) throw notFoundError(message);
-    if (/already associated|already used|cannot be|cancelled|conflict|dirty|cherry-pick|secret guard|diff whitespace|checkpoint|changed after/i.test(message)) {
+    if (/already associated|already used|cannot be|cancelled|conflict|dirty|cherry-pick|secret guard|diff whitespace|checkpoint|changed after|Invalid Feature Plan status transition|is not blocked/i.test(message)) {
       throw conflictError(message);
+    }
+    if (/Cyclic dependency|Self-dependencies|Cross-project|must be|positive integer|required|at least/i.test(message)) {
+      throw validationError(message);
     }
     throw validationError(message);
   }

@@ -61,7 +61,17 @@ export type DashboardFeature = {
   updatedAt: string;
 };
 
-export type FeaturePlanStatus = "planned" | "cancelled";
+export type FeaturePlanQueueStatus =
+  | "queued"
+  | "admitted"
+  | "active"
+  | "waiting_review"
+  | "waiting_merge"
+  | "blocked"
+  | "completed"
+  | "cancelled";
+
+export type FeaturePlanStatus = FeaturePlanQueueStatus | "planned";
 export type FeaturePlanLifecycleStatus = "active" | "completed" | "cancelled";
 
 export type FeaturePlanIntegrationSummary = {
@@ -105,12 +115,21 @@ export type DashboardFeaturePlan = {
   projectName: string;
   objective: string;
   acceptanceCriteria: string[];
-  status: FeaturePlanStatus;
+  status: FeaturePlanQueueStatus;
+  priority?: number;
+  isPaused?: boolean;
+  pausedAt?: string | null;
+  pauseReason?: string | null;
+  blockedAt?: string | null;
+  blockedReason?: string | null;
+  admittedAt?: string | null;
+  completedAt?: string | null;
   lifecycleStatus: FeaturePlanLifecycleStatus;
   source: string;
   revision: number;
   taskIds: number[];
   taskCount: number;
+  dependsOnFeaturePlanIds?: number[];
   tasks: FeaturePlanTaskSummary[];
   eligible: boolean;
   blockers: string[];
@@ -696,6 +715,57 @@ export async function replanFeaturePlan(
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
     throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel replanejar.");
+  }
+  return payload;
+}
+
+export async function pauseFeaturePlan(featurePlanId: number, reason = ""): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel pausar o plano.");
+  }
+  return payload;
+}
+
+export async function resumeFeaturePlan(featurePlanId: number): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel retomar o plano.");
+  }
+  return payload;
+}
+
+export async function updateFeaturePlanPriority(featurePlanId: number, priority: number): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/priority`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priority })
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel atualizar a prioridade.");
+  }
+  return payload;
+}
+
+export async function retryFeaturePlan(featurePlanId: number, reason = ""): Promise<FeaturePlanDetails> {
+  const response = await fetch(`/api/feature-plans/${featurePlanId}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
+  if (!response.ok || !payload.plan) {
+    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel tentar novamente o plano.");
   }
   return payload;
 }

@@ -455,6 +455,16 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/feature-plans/queue") {
+    const projectKey = url.searchParams.get("projectKey");
+    try {
+      sendJson(response, 200, { featurePlanQueue: commands.listFeaturePlanQueue(projectKey) });
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_queue_failed");
+    }
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/feature-plans") {
     const projectKey = url.searchParams.get("projectKey");
     try {
@@ -474,6 +484,8 @@ async function routeRequest(
         acceptanceCriteria: readStringArray(body.acceptanceCriteria),
         taskIds: readNumberArray(body.taskIds),
         taskContracts: readFeatureTaskContracts(body.taskContracts),
+        priority: typeof body.priority === "number" ? body.priority : undefined,
+        dependsOnFeaturePlanIds: Array.isArray(body.dependsOnFeaturePlanIds) ? readNumberArray(body.dependsOnFeaturePlanIds) : undefined,
         featureIssueNumber: readOptionalPositiveInteger(body.featureIssueNumber),
         taskIssueNumbers: readTaskIssueNumbers(body.taskIssueNumbers),
         idempotencyKey: readString(body.idempotencyKey) || null
@@ -481,6 +493,126 @@ async function routeRequest(
       sendJson(response, result.applied ? 201 : 200, result);
     } catch (error) {
       sendCommandError(response, error, "feature_plan_create_failed");
+    }
+    return;
+  }
+
+  const pauseFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/pause$/);
+  if (request.method === "POST" && pauseFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.pauseFeaturePlan(
+        { channel: "dashboard" },
+        Number(pauseFeaturePlanMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_pause_failed");
+    }
+    return;
+  }
+
+  const resumeFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/resume$/);
+  if (request.method === "POST" && resumeFeaturePlanMatch) {
+    try {
+      const result = commands.resumeFeaturePlan(
+        { channel: "dashboard" },
+        Number(resumeFeaturePlanMatch[1])
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_resume_failed");
+    }
+    return;
+  }
+
+  const priorityFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/priority$/);
+  if (request.method === "POST" && priorityFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const priority = typeof body.priority === "number" ? body.priority : Number(body.priority);
+      const result = commands.updateFeaturePlanPriority(
+        { channel: "dashboard" },
+        Number(priorityFeaturePlanMatch[1]),
+        priority
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_priority_failed");
+    }
+    return;
+  }
+
+  const addDependencyMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/dependencies$/);
+  if (request.method === "POST" && addDependencyMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const dependsOnFeaturePlanId = typeof body.dependsOnFeaturePlanId === "number"
+        ? body.dependsOnFeaturePlanId
+        : Number(body.dependsOnFeaturePlanId);
+      const result = commands.addFeaturePlanDependency(
+        { channel: "dashboard" },
+        Number(addDependencyMatch[1]),
+        dependsOnFeaturePlanId
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_dependency_add_failed");
+    }
+    return;
+  }
+
+  const removeDependencyMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/dependencies\/(\d+)$/);
+  if (request.method === "DELETE" && removeDependencyMatch) {
+    try {
+      const result = commands.removeFeaturePlanDependency(
+        { channel: "dashboard" },
+        Number(removeDependencyMatch[1]),
+        Number(removeDependencyMatch[2])
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_dependency_remove_failed");
+    }
+    return;
+  }
+
+  const statusFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/status$/);
+  if (request.method === "POST" && statusFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.updateFeaturePlanQueueStatus(
+        { channel: "dashboard" },
+        Number(statusFeaturePlanMatch[1]),
+        readString(body.status) as import("../db.js").FeaturePlanQueueStatus,
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_status_failed");
+    }
+    return;
+  }
+
+  const eligibilityFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/eligibility$/);
+  if (request.method === "GET" && eligibilityFeaturePlanMatch) {
+    try {
+      const eligibility = commands.getFeaturePlanEligibility(Number(eligibilityFeaturePlanMatch[1]));
+      sendJson(response, 200, { eligibility });
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_eligibility_failed");
+    }
+    return;
+  }
+
+  const historyFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/history$/);
+  if (request.method === "GET" && historyFeaturePlanMatch) {
+    try {
+      const history = commands.getFeaturePlanHistory(Number(historyFeaturePlanMatch[1]));
+      sendJson(response, 200, { history });
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_history_failed");
     }
     return;
   }
@@ -507,6 +639,22 @@ async function routeRequest(
       sendJson(response, 200, result);
     } catch (error) {
       sendCommandError(response, error, "feature_plan_cancel_failed");
+    }
+    return;
+  }
+
+  const retryFeaturePlanMatch = url.pathname.match(/^\/api\/feature-plans\/(\d+)\/retry$/);
+  if (request.method === "POST" && retryFeaturePlanMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = commands.retryFeaturePlan(
+        { channel: "dashboard" },
+        Number(retryFeaturePlanMatch[1]),
+        readString(body.reason) || null
+      );
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "feature_plan_retry_failed");
     }
     return;
   }

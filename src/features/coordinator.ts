@@ -17,6 +17,7 @@ import {
   GhFeatureGateway,
   featureChecksPassed
 } from "./github.js";
+import { revalidateQueuedFeaturePlansWithAudit } from "./task-scheduler.js";
 
 const REVIEW_SUMMARY_MAX_LENGTH = 2_000;
 
@@ -82,6 +83,7 @@ export class FeatureCoordinator {
 
   start(): void {
     if (this.timer) return;
+    revalidateQueuedFeaturePlansWithAudit(this.database, "coordinator_start");
     void this.reconcile();
     this.timer = setInterval(() => void this.reconcile(), this.pollIntervalMs);
     this.timer.unref?.();
@@ -610,10 +612,18 @@ export class FeatureCoordinator {
         lastError: null,
         mergedAt: new Date().toISOString()
       });
+      if (feature.featurePlanId !== null) {
+        this.database.completeFeaturePlanAfterMerge(feature.featurePlanId);
+      }
       this.database.enqueueFeatureCompletionReview(updated.id);
       this.addEvent(updated, "feature.completed", `Feature PR #${state.number} merged and child work closed.`);
       return updated;
     });
+    revalidateQueuedFeaturePlansWithAudit(
+      this.database,
+      "feature_completed",
+      feature.projectKey
+    );
     if (this.notifyCompleted) {
       try {
         await this.notifyCompleted({ feature: completed, items: completedItems });

@@ -346,6 +346,138 @@ export function createTelegramBot(
     );
   });
 
+  bot.command("feature_pause", async (ctx) => {
+    const parsed = parseFeaturePauseText(ctx.message?.text ?? "");
+    if (!parsed) {
+      await ctx.reply("Use: /feature_pause id [motivo]");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.feature_pause",
+      text: ctx.message?.text ?? "/feature_pause",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: parsed
+    });
+    try {
+      const result = commands.pauseFeaturePlan(telegramOrigin(ctx), parsed.planId, parsed.reason);
+      await ctx.reply(
+        [
+          `Feature Plan #${result.plan.id} pausado.`,
+          `Motivo: ${result.plan.pauseReason || "Sem motivo informado."}`,
+          `Proxima acao: Use /feature_resume ${result.plan.id} para retomar.`
+        ].join("\n")
+      );
+    } catch (error) {
+      await ctx.reply(["Pausa nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("feature_resume", async (ctx) => {
+    const planId = parseTaskId(ctx.message?.text ?? "", "feature_resume");
+    if (!planId) {
+      await ctx.reply("Use: /feature_resume id");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.feature_resume",
+      text: ctx.message?.text ?? "/feature_resume",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { planId }
+    });
+    try {
+      const result = commands.resumeFeaturePlan(telegramOrigin(ctx), planId);
+      await ctx.reply(
+        [
+          `Feature Plan #${result.plan.id} retomado.`,
+          "Proxima acao: O plano voltou para a fila governada."
+        ].join("\n")
+      );
+    } catch (error) {
+      await ctx.reply(["Retomada nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("feature_priority", async (ctx) => {
+    const parsed = parseFeaturePriorityText(ctx.message?.text ?? "");
+    if (!parsed) {
+      await ctx.reply("Use: /feature_priority id prioridade");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.feature_priority",
+      text: ctx.message?.text ?? "/feature_priority",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: parsed
+    });
+    try {
+      const result = commands.updateFeaturePlanPriority(telegramOrigin(ctx), parsed.planId, parsed.priority);
+      await ctx.reply(`Feature Plan #${result.plan.id} prioridade atualizada para ${result.plan.priority}.`);
+    } catch (error) {
+      await ctx.reply(["Atualizacao de prioridade nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("feature_retry", async (ctx) => {
+    const parsed = parseFeatureRetryText(ctx.message?.text ?? "");
+    if (!parsed) {
+      await ctx.reply("Use: /feature_retry id [motivo]");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.feature_retry",
+      text: ctx.message?.text ?? "/feature_retry",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: parsed
+    });
+    try {
+      const result = commands.retryFeaturePlan(telegramOrigin(ctx), parsed.planId, parsed.reason);
+      await ctx.reply(
+        [
+          `Feature Plan #${result.plan.id} enviado para tentativa novamente (blocked -> queued).`,
+          "Proxima acao: A fila revalidou a elegibilidade."
+        ].join("\n")
+      );
+    } catch (error) {
+      await ctx.reply(["Tentativa de retry nao executada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command("feature_plan_cancel", async (ctx) => {
+    const parsed = parseFeaturePlanCancelText(ctx.message?.text ?? "");
+    if (!parsed) {
+      await ctx.reply("Use: /feature_plan_cancel id [motivo]");
+      return;
+    }
+    database.addEvent({
+      source: "telegram",
+      type: "command.feature_plan_cancel",
+      text: ctx.message?.text ?? "/feature_plan_cancel",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: parsed
+    });
+    try {
+      const result = commands.cancelFeaturePlan(telegramOrigin(ctx), parsed.planId, parsed.reason);
+      await ctx.reply(
+        [
+          `Feature Plan #${result.plan.id} cancelado.`,
+          `Estado: ${result.plan.status}`,
+          `Motivo: ${result.plan.cancelReason || "Sem motivo"}`
+        ].join("\n")
+      );
+    } catch (error) {
+      await ctx.reply(["Cancelamento do plano nao executado.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.command("review", async (ctx) => {
     const target = parseReviewTargetText(ctx.message?.text ?? "", "review");
     if (!target) {
@@ -527,6 +659,38 @@ export function parseFeatureCancelText(
   return { featureId: Number(match[1]), reason: match[2]?.trim() || null };
 }
 
+export function parseFeaturePriorityText(
+  messageText: string
+): { planId: number; priority: number } | null {
+  const match = messageText.match(/^\/feature_priority(?:@\w+)?\s+(\d+)\s+(\d+)\s*$/i);
+  if (!match) return null;
+  return { planId: Number(match[1]), priority: Number(match[2]) };
+}
+
+export function parseFeaturePauseText(
+  messageText: string
+): { planId: number; reason: string | null } | null {
+  const match = messageText.match(/^\/feature_pause(?:@\w+)?\s+(\d+)(?:\s+(.+))?\s*$/i);
+  if (!match) return null;
+  return { planId: Number(match[1]), reason: match[2]?.trim() || null };
+}
+
+export function parseFeatureRetryText(
+  messageText: string
+): { planId: number; reason: string | null } | null {
+  const match = messageText.match(/^\/feature_retry(?:@\w+)?\s+(\d+)(?:\s+(.+))?\s*$/i);
+  if (!match) return null;
+  return { planId: Number(match[1]), reason: match[2]?.trim() || null };
+}
+
+export function parseFeaturePlanCancelText(
+  messageText: string
+): { planId: number; reason: string | null } | null {
+  const match = messageText.match(/^\/feature_plan_cancel(?:@\w+)?\s+(\d+)(?:\s+(.+))?\s*$/i);
+  if (!match) return null;
+  return { planId: Number(match[1]), reason: match[2]?.trim() || null };
+}
+
 export function executeCancelCommand(
   messageText: string,
   cancelTask?: (taskId: number) => TaskRecord
@@ -650,11 +814,16 @@ function formatHelp(): string {
     "/graph_cancel id - cancelar graph ativo ou parado, preservando evidencias",
     "/features - listar Feature Plans e Feature PRs",
     "/features @projeto - listar Feature Plans e Feature PRs do projeto",
+    "/feature_priority id prio - alterar prioridade do Feature Plan",
+    "/feature_pause id [motivo] - pausar Feature Plan na fila",
+    "/feature_resume id - retomar Feature Plan pausado",
+    "/feature_retry id [motivo] - tentar novamente Feature Plan bloqueado",
+    "/feature_plan_cancel id [motivo] - cancelar Feature Plan",
     "/improvements - listar melhorias candidatas",
     "/improve_approve id - aprovar como nova Task + Feature Plan",
     "/improve_reject id - rejeitar sem apagar a auditoria",
     "/doctor [@projeto] - verificar ambiente, providers e acao recomendada",
-    "/feature_cancel id [motivo] - cancelar Feature antes do merge, preservando auditoria",
+    "/feature_cancel id [motivo] - cancelar Feature PR consolidado antes do merge",
     "/review id-ou-url - solicitar revisao final manual de Feature PR",
     "/review_status id-ou-url - verificar estado da revisao final de Feature PR",
     "/review_retry id-ou-url - tentar novamente a revisao final de Feature PR"
@@ -802,14 +971,31 @@ function formatFeatures(
   const planLines = plans.slice(0, 8).flatMap((details) => {
     const { plan, tasks } = details;
     const blockers = tasks.filter((task) => task.taskStatus !== "awaiting_human");
-    const eligible = plan.status === "planned" && tasks.length > 0 && blockers.length === 0;
+    const eligible = plan.status === "queued" && tasks.length > 0 && blockers.length === 0;
     const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
+    const nextAction = plan.status === "blocked"
+      ? `Resolva a causa do bloqueio e execute /feature_retry ${plan.id}`
+      : plan.isPaused
+      ? `Execute /feature_resume ${plan.id} para retomar`
+      : plan.status === "queued" && eligible
+      ? "Plano elegivel para admissao/inicio"
+      : plan.status === "queued"
+      ? "Aguardando dependencias ou liberacao do projeto"
+      : "Tasks em andamento pelo agente";
+
     const lines = [
-      `#${plan.id} @${plan.projectKey} [${plan.status}]${plan.status === "planned" ? (eligible ? " elegivel" : " aguardando tasks") : ""} - ${truncate(plan.objective, 160)}`
+      `#${plan.id} @${plan.projectKey} [${plan.status}] prio:${plan.priority ?? 0}${plan.isPaused ? " [PAUSADO]" : ""}${plan.status === "queued" ? (eligible ? " (elegivel)" : " (aguardando)") : ""} - ${truncate(plan.objective, 140)}`
     ];
+    if (plan.pauseReason) {
+      lines.push(`   motivo pausa: ${truncate(plan.pauseReason, 140)}`);
+    }
+    if (plan.blockedReason) {
+      lines.push(`   bloqueio: ${truncate(plan.blockedReason, 140)}`);
+    }
     if (blockers.length > 0) {
       lines.push(...blockers.map((task) => `   blocker: task #${task.taskId} (${task.taskStatus})`));
     }
+    lines.push(`   proxima acao: ${nextAction}`);
     if (integration) {
       lines.push(
         `   integracao: ${integration.integration.status} (${integration.integration.checkpoint})`
