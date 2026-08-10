@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { ApplicationCommands } from "../src/commands/application-commands.js";
+import type { CommandOrigin } from "../src/commands/types.js";
 import {
   formatQueue,
   formatEnvironmentReport,
@@ -562,5 +567,45 @@ describe("telegram work intake integration", () => {
     const parsed = parseProjectTaskInput(parseTaskText("/task @boo refatorar API"));
     expect(parsed.projectKey).toBe("boo");
     expect(parsed.text).toBe("refatorar API");
+  });
+
+  it("processes telegram work intake submissions for direct task, clarification, and feature plan", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-tg-intake-"));
+    const projectDir = path.join(tempDir, "boo-project");
+    fs.mkdirSync(projectDir);
+    const database = createDatabase(path.join(tempDir, "maestro.db"));
+    database.registerProject({ key: "boo", name: "Boo", path: projectDir, defaultBranch: "master" });
+    const commands = new ApplicationCommands(database);
+    const origin: CommandOrigin = { channel: "telegram", userId: "42", username: "operador" };
+
+    // 1. Direct task
+    const directRes = commands.submitWorkIntake(origin, {
+      projectKey: "boo",
+      objective: "Fix typo in header"
+    });
+    expect(directRes.status).toBe("created");
+    expect(directRes.createdType).toBe("task");
+    expect(directRes.task?.source).toBe("telegram");
+
+    // 2. Needs clarification
+    const clarifyRes = commands.submitWorkIntake(origin, {
+      projectKey: "boo",
+      objective: "..."
+    });
+    expect(clarifyRes.status).toBe("needs_clarification");
+    expect(clarifyRes.createdType).toBe("none");
+
+    // 3. Feature plan
+    const featureRes = commands.submitWorkIntake(origin, {
+      projectKey: "boo",
+      objective: "Coordinated feature work",
+      coordination: { dependsOnCount: 1 }
+    });
+    expect(featureRes.status).toBe("created");
+    expect(featureRes.createdType).toBe("feature_plan");
+    expect(featureRes.featurePlan?.plan.projectKey).toBe("boo");
+
+    database.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
