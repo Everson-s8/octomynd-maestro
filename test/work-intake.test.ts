@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyWorkIntake } from "../src/intake/policy.js";
+import { explainWorkIntakeDecision } from "../src/intake/explanation.js";
 import { WORK_INTAKE_POLICY_VERSION } from "../src/intake/types.js";
 
 describe("Work Intake domain policy", () => {
@@ -129,5 +130,18 @@ describe("Work Intake domain policy", () => {
     expect(decision.objective).not.toContain("C:\\Users\\evers");
     expect(decision.acceptanceCriteria[0]).not.toContain(sampleGhpToken);
     expect(decision.acceptanceCriteria[0]).not.toContain("/home/user");
+  });
+
+  it("provides concise Portuguese explanations for internal decisions", () => {
+    const directDecision = classifyWorkIntake({ objective: "Single bounded bug fix" });
+    const featureDecision = classifyWorkIntake({
+      objective: "Multi-service feature",
+      coordination: { dependsOnCount: 2 }
+    });
+    const clarifyDecision = classifyWorkIntake({ objective: "" });
+
+    expect(explainWorkIntakeDecision(directDecision)).toContain("Tarefa Direta");
+    expect(explainWorkIntakeDecision(featureDecision)).toContain("Plano de Funcionalidade");
+    expect(explainWorkIntakeDecision(clarifyDecision)).toContain("clarificação");
   });
 });

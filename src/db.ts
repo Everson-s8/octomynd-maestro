@@ -21,8 +21,10 @@ import {
   createWorkIntakePersistence,
   migrateWorkIntakePersistence
 } from "./intake/persistence.js";
-import { classifyWorkIntake } from "./intake/policy.js";
-export { classifyWorkIntake } from "./intake/policy.js";
+import { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
+import { explainWorkIntakeDecision } from "./intake/explanation.js";
+export { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
+export { explainWorkIntakeDecision } from "./intake/explanation.js";
 export { WORK_INTAKE_POLICY_VERSION } from "./intake/types.js";
 export type {
   WorkIntakeClassification,
@@ -1212,10 +1214,14 @@ export function createDatabase(databasePath: string) {
       return this.getImprovementProposal(id);
     },
 
-    attachImprovementActivation(id: number, taskId: number, featurePlanId: number): ImprovementProposalRecord {
-      this.getTask(taskId);
-      this.getFeaturePlan(featurePlanId);
-      const result = attachImprovementActivationStatement.run({ id, taskId, featurePlanId });
+    attachImprovementActivation(id: number, taskId?: number | null, featurePlanId?: number | null): ImprovementProposalRecord {
+      if (taskId) this.getTask(taskId);
+      if (featurePlanId) this.getFeaturePlan(featurePlanId);
+      const result = attachImprovementActivationStatement.run({
+        id,
+        taskId: taskId ?? null,
+        featurePlanId: featurePlanId ?? null
+      });
       if (result.changes !== 1) throw new Error(`Improvement proposal ${id} is not approved.`);
       return this.getImprovementProposal(id);
     },

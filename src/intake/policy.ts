@@ -11,6 +11,22 @@ import {
   WorkIntakeReasonCode
 } from "./types.js";
 
+export function computeWorkIntakeId(
+  input: WorkIntakeInput & { channel?: string; userId?: string }
+): string {
+  if (input.id && input.id.trim()) {
+    return input.id.trim();
+  }
+  const payload = [
+    input.channel || "api",
+    input.userId || "anonymous",
+    input.projectKey || "",
+    (input.objective || "").trim(),
+    ...(input.acceptanceCriteria || []).map((c) => c.trim())
+  ].join(":");
+  return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 32);
+}
+
 export function classifyWorkIntake(
   input: WorkIntakeInput,
   now: string = new Date().toISOString()

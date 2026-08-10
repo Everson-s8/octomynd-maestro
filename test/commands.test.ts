@@ -310,3 +310,57 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   async deleteHeadBranch(): Promise<void> {}
   async closeIssue(): Promise<void> {}
 }
+
+describe("ApplicationCommands Work Intake integration", () => {
+  it("previews classification and returns Portuguese explanation", () => {
+    const preview = commands.previewWorkIntake(
+      { channel: "dashboard" },
+      { projectKey: "boo", objective: "Criar novo assistente de voz" }
+    );
+    expect(preview.decision.classification).toBe("direct_task");
+    expect(preview.explanation).toContain("Tarefa Direta");
+  });
+
+  it("submits request idempotently yielding exactly one Task or Feature Plan", () => {
+    const res1 = commands.submitWorkIntake(
+      { channel: "telegram", userId: "100" },
+      {
+        projectKey: "boo",
+        objective: "Integracao de pagamentos com webhook",
+        coordination: { dependsOnCount: 2 }
+      }
+    );
+    expect(res1.status).toBe("created");
+    expect(res1.createdType).toBe("feature_plan");
+    expect(res1.featurePlan).toBeDefined();
+
+    const res2 = commands.submitWorkIntake(
+      { channel: "telegram", userId: "100" },
+      {
+        projectKey: "boo",
+        objective: "Integracao de pagamentos com webhook",
+        coordination: { dependsOnCount: 2 },
+        intakeId: res1.decision.id
+      }
+    );
+    expect(res2.status).toBe("already_created");
+    expect(res2.createdType).toBe("feature_plan");
+    expect(res2.featurePlan?.plan.id).toBe(res1.featurePlan?.plan.id);
+  });
+
+  it("allows governed explicit override of classification", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Demanda complexa mas forcada como task",
+        coordination: { dependsOnCount: 5, parallelWorkstreamCount: 4 },
+        explicitOverride: "direct_task"
+      }
+    );
+    expect(res.status).toBe("created");
+    expect(res.createdType).toBe("task");
+    expect(res.decision.reasonCode).toBe("explicit_override_direct_task");
+    expect(res.explanation).toContain("Sobrescrita explícita");
+  });
+});

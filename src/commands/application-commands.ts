@@ -31,6 +31,16 @@ import {
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
+import {
+  classifyWorkIntake,
+  computeWorkIntakeId,
+  explainWorkIntakeDecision,
+  WorkIntakeClassification,
+  WorkIntakeCoordinationSignal,
+  WorkIntakeCostEstimate,
+  WorkIntakeDecision,
+  WorkIntakeInput
+} from "../intake/index.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -49,17 +59,41 @@ export type CreateTaskInput = {
   projectKey?: string | null;
 };
 
+export type WorkIntakeCommandInput = {
+  projectKey?: string | null;
+  objective: string;
+  acceptanceCriteria?: string[];
+  coordination?: Partial<WorkIntakeCoordinationSignal>;
+  costEstimate?: Partial<WorkIntakeCostEstimate>;
+  explicitOverride?: WorkIntakeClassification | null;
+  intakeId?: string;
+};
+
+export type WorkIntakeCommandResult = {
+  status: "created" | "already_created" | "needs_clarification";
+  createdType: "task" | "feature_plan" | "none";
+  task?: TaskRecord;
+  featurePlan?: FeaturePlanDetails;
+  writeResult?: FeaturePlanWriteResult;
+  decision: WorkIntakeDecision;
+  explanation: string;
+};
+
 export type CreateFeaturePlanInput = {
   projectKey: string;
   objective: string;
   acceptanceCriteria: string[];
-  taskIds: number[];
+  taskIds?: number[];
   taskContracts?: FeatureTaskContractInput[];
   priority?: number;
   dependsOnFeaturePlanIds?: number[];
   featureIssueNumber?: number | null;
   taskIssueNumbers?: Record<number, number>;
   idempotencyKey?: string | null;
+  workIntakeId?: string | null;
+  workIntakeDecisionId?: string | null;
+  classification?: string | null;
+  reasonCode?: string | null;
 };
 
 export type ReplanFeaturePlanInput = {
@@ -295,6 +329,191 @@ export class ApplicationCommands {
     return task;
   }
 
+  previewWorkIntake(
+    origin: CommandOrigin,
+    input: WorkIntakeCommandInput
+  ): { decision: WorkIntakeDecision; explanation: string } {
+    const text = input.objective.trim();
+    if (!text) {
+      throw validationError("Objective is required.");
+    }
+
+    const projectKey = input.projectKey?.trim().toLowerCase() || null;
+    const project = projectKey ? this.database.findProjectByKey(projectKey) : this.database.getDefaultProject();
+    if (projectKey && !project) {
+      throw notFoundError(`Project not found: ${projectKey}`);
+    }
+
+    const intakeId = computeWorkIntakeId({
+      ...input,
+      channel: origin.channel,
+      userId: origin.userId ?? undefined,
+      projectKey: project?.key
+    });
+
+    const decision = classifyWorkIntake({
+      ...input,
+      id: intakeId,
+      projectKey: project?.key
+    });
+
+    this.database.saveWorkIntakeDecision(decision);
+    const explanation = explainWorkIntakeDecision(decision);
+
+    return { decision, explanation };
+  }
+
+  submitWorkIntake(
+    origin: CommandOrigin,
+    input: WorkIntakeCommandInput
+  ): WorkIntakeCommandResult {
+    const text = input.objective.trim();
+    if (!text) {
+      throw validationError("Objective is required.");
+    }
+
+    const projectKey = input.projectKey?.trim().toLowerCase() || null;
+    const project = projectKey ? this.database.findProjectByKey(projectKey) : this.database.getDefaultProject();
+
+    if (projectKey && !project) {
+      throw notFoundError(`Project not found: ${projectKey}`);
+    }
+    if (!project) {
+      throw notFoundError("No project registered.");
+    }
+
+    const intakeId = input.intakeId?.trim() || computeWorkIntakeId({
+      ...input,
+      channel: origin.channel,
+      userId: origin.userId ?? undefined,
+      projectKey: project.key
+    });
+
+    const events = this.database.listEvents(200);
+
+    const existingPlanEvent = events.find(
+      (e) => e.type === "feature_plan.created" && e.metadata?.workIntakeId === intakeId && e.metadata?.featurePlanId
+    );
+    if (existingPlanEvent && existingPlanEvent.metadata?.featurePlanId) {
+      const featurePlan = this.database.getFeaturePlanDetails(Number(existingPlanEvent.metadata.featurePlanId));
+      const existingTaskEvent = events.find(
+        (e) => e.type === "task.created" && e.metadata?.workIntakeId === intakeId && e.taskId
+      );
+      const task = existingTaskEvent?.taskId ? this.database.getTask(existingTaskEvent.taskId) : undefined;
+      const existingDecision = this.database.getWorkIntakeDecision(intakeId);
+      const decision = existingDecision || classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
+      return {
+        status: "already_created",
+        createdType: "feature_plan",
+        task,
+        featurePlan,
+        decision,
+        explanation: explainWorkIntakeDecision(decision)
+      };
+    }
+
+    const existingTaskEvent = events.find(
+      (e) => e.type === "task.created" && e.metadata?.workIntakeId === intakeId && e.taskId
+    );
+    if (existingTaskEvent && existingTaskEvent.taskId) {
+      const task = this.database.getTask(existingTaskEvent.taskId);
+      const existingDecision = this.database.getWorkIntakeDecision(intakeId);
+      const decision = existingDecision || classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
+      return {
+        status: "already_created",
+        createdType: "task",
+        task,
+        decision,
+        explanation: explainWorkIntakeDecision(decision)
+      };
+    }
+
+    const decision = classifyWorkIntake({
+      ...input,
+      id: intakeId,
+      projectKey: project.key
+    });
+
+    this.database.saveWorkIntakeDecision(decision);
+    const explanation = explainWorkIntakeDecision(decision);
+
+    if (decision.classification === "needs_clarification") {
+      return {
+        status: "needs_clarification",
+        createdType: "none",
+        decision,
+        explanation
+      };
+    }
+
+    if (decision.classification === "direct_task") {
+      const task = this.database.createTask(input.objective, origin.channel, project.key);
+      this.database.addEvent({
+        source: origin.channel,
+        type: "task.created",
+        text: input.objective,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        taskId: task.id,
+        metadata: {
+          projectKey: project.key,
+          workIntakeId: intakeId,
+          workIntakeDecisionId: decision.id,
+          classification: decision.classification,
+          reasonCode: decision.reasonCode
+        }
+      });
+      return {
+        status: "created",
+        createdType: "task",
+        task,
+        decision,
+        explanation
+      };
+    }
+
+    const task = this.database.createTask(input.objective, origin.channel, project.key);
+    this.database.addEvent({
+      source: origin.channel,
+      type: "task.created",
+      text: input.objective,
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      taskId: task.id,
+      metadata: {
+        projectKey: project.key,
+        workIntakeId: intakeId,
+        workIntakeDecisionId: decision.id,
+        classification: decision.classification,
+        reasonCode: decision.reasonCode
+      }
+    });
+
+    const writeResult = this.createFeaturePlan(origin, {
+      projectKey: project.key,
+      objective: input.objective,
+      acceptanceCriteria: input.acceptanceCriteria && input.acceptanceCriteria.length > 0
+        ? input.acceptanceCriteria
+        : [input.objective],
+      taskIds: [task.id],
+      idempotencyKey: intakeId,
+      workIntakeId: intakeId,
+      workIntakeDecisionId: decision.id,
+      classification: decision.classification,
+      reasonCode: decision.reasonCode
+    });
+
+    return {
+      status: "created",
+      createdType: "feature_plan",
+      task,
+      featurePlan: this.database.getFeaturePlanDetails(writeResult.plan.id),
+      writeResult,
+      decision,
+      explanation
+    };
+  }
+
   listWorkGraphs(limit = 30): WorkGraphView[] {
     const events = this.database.listEvents(200);
     return this.database.listWorkGraphs(limit).map((graph) => this.toWorkGraphView(graph, events));
@@ -447,7 +666,7 @@ export class ApplicationCommands {
         projectKey: input.projectKey,
         objective: input.objective,
         acceptanceCriteria: input.acceptanceCriteria,
-        taskIds: input.taskIds,
+        taskIds: input.taskIds ?? [],
         taskContracts: input.taskContracts,
         priority: input.priority,
         dependsOnFeaturePlanIds: input.dependsOnFeaturePlanIds,
@@ -472,7 +691,11 @@ export class ApplicationCommands {
             taskIds: result.tasks.map((task) => task.taskId),
             githubIssues: this.database.getFeaturePlanIssueLinks(result.plan.id),
             acceptanceCriteriaCount: result.plan.acceptanceCriteria.length,
-            revision: result.plan.revision
+            revision: result.plan.revision,
+            workIntakeId: input.workIntakeId ?? null,
+            workIntakeDecisionId: input.workIntakeDecisionId ?? null,
+            classification: input.classification ?? null,
+            reasonCode: input.reasonCode ?? null
           }
         });
       }
@@ -493,11 +716,11 @@ export class ApplicationCommands {
       return this.database.withTransaction(() => {
         const before = this.database.getImprovementProposal(improvementId);
         if (before.status !== "candidate") {
-          if (before.status === status && before.taskId && before.featurePlanId) {
+          if (before.status === status && (before.taskId || before.featurePlanId)) {
             return {
               improvement: before,
-              task: this.database.getTask(before.taskId),
-              featurePlan: this.database.getFeaturePlanDetails(before.featurePlanId)
+              task: before.taskId ? this.database.getTask(before.taskId) : null,
+              featurePlan: before.featurePlanId ? this.database.getFeaturePlanDetails(before.featurePlanId) : null
             };
           }
           throw new Error(`Improvement proposal ${improvementId} is no longer awaiting a decision.`);
@@ -515,55 +738,54 @@ export class ApplicationCommands {
         if (!project) throw new Error(`Project not found for improvement proposal ${improvementId}.`);
         const isSkillProposal = decided.category === "skill";
         const suggestedQualifiedName = suggestSkillProposalQualifiedName(decided.title);
-        const task = this.createTask(origin, {
+
+        const intakeResult = this.submitWorkIntake(origin, {
           projectKey: project.key,
-          text: [
-            `Implement approved improvement #${decided.id}: ${decided.title}`,
+          objective: `Implement approved improvement #${decided.id}: ${decided.title}`,
+          acceptanceCriteria: [
             decided.proposedChange,
             `Targets: ${decided.targets.length > 0 ? decided.targets.join(", ") : "determine during planning"}`,
             "Preserve the Maestro Constitution, human gates, secret handling, audit trail and rollback boundaries.",
+            "Run deterministic typecheck, tests, build and secret scan.",
+            "Deliver a Draft Work PR and require Final Review only on the consolidated Feature PR.",
+            "Do not mutate protected policy, permission, audit or rollback layers automatically.",
             ...(isSkillProposal ? [
               `Create the Skill as an agent-owned draft under skills/repository/, qualified name ${suggestedQualifiedName}.`,
               "Set maestro.yaml owner: agent and include evals/cases.yaml with trigger, content and script checks.",
               "Do not activate, approve or wire the Skill into any runtime path; governed evaluation and promotion happen separately."
             ] : [])
-          ].join("\n\n")
-        });
-        const featurePlan = this.createFeaturePlan(origin, {
-          projectKey: project.key,
-          objective: `Implement approved improvement #${decided.id}: ${decided.title}`,
-          acceptanceCriteria: [
-            decided.proposedChange,
-            "Run deterministic typecheck, tests, build and secret scan.",
-            "Deliver a Draft Work PR and require Final Review only on the consolidated Feature PR.",
-            "Do not mutate protected policy, permission, audit or rollback layers automatically.",
-            ...(isSkillProposal ? [
-              "Ship the Skill as an agent-owned candidate only; never activate, approve or self-promote it."
-            ] : [])
           ],
-          taskIds: [task.id],
-          idempotencyKey: `improvement:${decided.id}:activation`
+          explicitOverride: "feature_plan",
+          intakeId: `improvement:${decided.id}:activation`
         });
+
+        const task = intakeResult.task ?? (intakeResult.writeResult?.tasks?.[0] ? this.database.getTask(intakeResult.writeResult.tasks[0].taskId) : null);
+        const featurePlan = intakeResult.featurePlan ?? null;
+
         const improvement = this.database.attachImprovementActivation(
           decided.id,
-          task.id,
-          featurePlan.plan.id
+          task?.id ?? null,
+          featurePlan?.plan.id ?? null
         );
         this.recordImprovementDecision(origin, improvement);
+
         this.database.addEvent({
           source: origin.channel,
-          type: "improvement.activated_as_feature_plan",
+          type: intakeResult.createdType === "feature_plan" ? "improvement.activated_as_feature_plan" : "improvement.activated_as_task",
           text: improvement.title,
           userId: origin.userId ?? null,
           username: origin.username ?? null,
-          taskId: task.id,
+          taskId: task?.id ?? null,
           metadata: {
             improvementId: improvement.id,
-            featurePlanId: featurePlan.plan.id,
-            projectKey: project.key
+            featurePlanId: featurePlan?.plan.id ?? null,
+            projectKey: project.key,
+            workIntakeId: intakeResult.decision.id,
+            classification: intakeResult.decision.classification
           }
         });
-        if (isSkillProposal) {
+
+        if (isSkillProposal && task) {
           const skillProposal = this.database.createSkillProposal({
             improvementProposalId: improvement.id,
             suggestedQualifiedName,
@@ -573,7 +795,7 @@ export class ApplicationCommands {
               source: improvement.source,
               fingerprint: improvement.fingerprint,
               taskId: task.id,
-              featurePlanId: featurePlan.plan.id
+              featurePlanId: featurePlan?.plan.id ?? null
             }
           });
           this.database.addEvent({
