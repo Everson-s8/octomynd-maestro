@@ -18,6 +18,26 @@ import {
   migrateProviderPolicyPersistence
 } from "./agents/policy-persistence.js";
 import {
+  createWorkIntakePersistence,
+  migrateWorkIntakePersistence
+} from "./intake/persistence.js";
+import { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
+import { explainWorkIntakeDecision } from "./intake/explanation.js";
+export { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
+export { explainWorkIntakeDecision } from "./intake/explanation.js";
+export { WORK_INTAKE_POLICY_VERSION } from "./intake/types.js";
+export type {
+  WorkIntakeClassification,
+  WorkIntakeCoordinationSignal,
+  WorkIntakeCostEstimate,
+  WorkIntakeDecision,
+  WorkIntakeEvidenceFact,
+  WorkIntakeEvidencePack,
+  WorkIntakeInput,
+  WorkIntakeReasonCode
+} from "./intake/types.js";
+export { createWorkIntakePersistence, migrateWorkIntakePersistence } from "./intake/persistence.js";
+import {
   FeatureTaskContract,
   FeatureTaskContractInput,
   legacyFeatureTaskContract,
@@ -566,9 +586,11 @@ export function createDatabase(databasePath: string) {
   db.pragma("foreign_keys = ON");
   migrate(db);
   migrateProviderPolicyPersistence(db);
+  migrateWorkIntakePersistence(db);
   const skillPersistence = createSkillPersistence(db);
   const workGraphPersistence = createWorkGraphPersistence(db);
   const providerPolicyPersistence = createProviderPolicyPersistence(db);
+  const workIntakePersistence = createWorkIntakePersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -902,6 +924,7 @@ export function createDatabase(databasePath: string) {
     ...skillPersistence,
     ...workGraphPersistence,
     ...providerPolicyPersistence,
+    ...workIntakePersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
@@ -1191,10 +1214,14 @@ export function createDatabase(databasePath: string) {
       return this.getImprovementProposal(id);
     },
 
-    attachImprovementActivation(id: number, taskId: number, featurePlanId: number): ImprovementProposalRecord {
-      this.getTask(taskId);
-      this.getFeaturePlan(featurePlanId);
-      const result = attachImprovementActivationStatement.run({ id, taskId, featurePlanId });
+    attachImprovementActivation(id: number, taskId?: number | null, featurePlanId?: number | null): ImprovementProposalRecord {
+      if (taskId) this.getTask(taskId);
+      if (featurePlanId) this.getFeaturePlan(featurePlanId);
+      const result = attachImprovementActivationStatement.run({
+        id,
+        taskId: taskId ?? null,
+        featurePlanId: featurePlanId ?? null
+      });
       if (result.changes !== 1) throw new Error(`Improvement proposal ${id} is not approved.`);
       return this.getImprovementProposal(id);
     },
@@ -2861,6 +2888,7 @@ function migrate(db: Database.Database) {
 
   migrateSkillPersistence(db);
   migrateWorkGraphPersistence(db);
+  migrateWorkIntakePersistence(db);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");

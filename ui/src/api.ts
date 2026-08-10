@@ -523,6 +523,76 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardDat
   return response.json() as Promise<DashboardData>;
 }
 
+export type PreviewWorkIntakeInput = {
+  projectKey?: string;
+  objective: string;
+  acceptanceCriteria?: string[];
+  coordination?: {
+    dependsOnCount?: number;
+    parallelWorkstreamCount?: number;
+    requiresMultipleReviewGates?: boolean;
+  };
+  costEstimate?: {
+    estimatedFileTouchCount?: number;
+    estimatedWorkstreamCount?: number;
+  };
+  explicitOverride?: "direct_task" | "feature_plan" | "needs_clarification" | null;
+};
+
+export type WorkIntakePreviewResult = {
+  decision: {
+    id: string;
+    projectKey: string | null;
+    objective: string;
+    classification: "direct_task" | "feature_plan" | "needs_clarification";
+    reasonCode: string;
+    confidence: number;
+    policyVersion: number;
+    acceptanceCriteria: string[];
+    explicitOverride: "direct_task" | "feature_plan" | "needs_clarification" | null;
+  };
+  explanation: string;
+};
+
+export type SubmitWorkIntakeInput = PreviewWorkIntakeInput & {
+  intakeId?: string;
+};
+
+export type SubmitWorkIntakeResult = {
+  status: "created" | "already_created" | "needs_clarification";
+  createdType: "task" | "feature_plan" | "none";
+  task?: DashboardTask;
+  featurePlan?: unknown;
+  decision: WorkIntakePreviewResult["decision"];
+  explanation: string;
+};
+
+export async function previewWorkIntake(input: PreviewWorkIntakeInput): Promise<WorkIntakePreviewResult> {
+  const response = await fetch("/api/work-intake/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error || `Não foi possível analisar a demanda (${response.status}).`);
+  }
+  return response.json();
+}
+
+export async function submitWorkIntake(input: SubmitWorkIntakeInput): Promise<SubmitWorkIntakeResult> {
+  const response = await fetch("/api/work-intake", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error || `Não foi possível submeter a demanda (${response.status}).`);
+  }
+  return response.json();
+}
+
 export async function createTask(input: { projectKey: string; text: string }) {
   const response = await fetch("/api/tasks", {
     method: "POST",
