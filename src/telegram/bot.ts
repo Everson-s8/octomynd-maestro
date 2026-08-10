@@ -155,6 +155,77 @@ export function createTelegramBot(
     await ctx.reply(lines.join("\n"));
   });
 
+  bot.command("intake", async (ctx) => {
+    const rawText = (ctx.message?.text ?? "").replace(/^\/intake(?:@\w+)?\s*/i, "").trim();
+    const taskInput = parseProjectTaskInput(rawText);
+    if (!taskInput.text) {
+      await ctx.reply("Use: /intake [@projeto] descrever a demanda");
+      return;
+    }
+    try {
+      const result = commands.submitWorkIntake(telegramOrigin(ctx), {
+        projectKey: taskInput.projectKey,
+        objective: taskInput.text
+      });
+      if (result.status === "needs_clarification") {
+        await ctx.reply([
+          "Work Intake: Necessita Clarificação.",
+          `Explicação: ${result.explanation}`,
+          "Por favor, especifique critérios de aceite ou use /task para Tarefa Direta ou /feature para Plano de Funcionalidade."
+        ].join("\n"));
+        return;
+      }
+      if (result.createdType === "feature_plan" && result.featurePlan) {
+        await ctx.reply([
+          `Feature Plan #${result.featurePlan.plan.id} criado.`,
+          `Explicação: ${result.explanation}`,
+          `Projeto: ${result.featurePlan.plan.projectKey}`,
+          `Status: ${result.featurePlan.plan.status}`
+        ].join("\n"));
+        return;
+      }
+      if (result.task) {
+        await ctx.reply([
+          `Task #${result.task.id} criada.`,
+          `Explicação: ${result.explanation}`,
+          `Projeto: ${result.task.projectKey}`,
+          `Estado: ${result.task.status}`
+        ].join("\n"));
+        return;
+      }
+      await ctx.reply(`Demanda processada. Explicação: ${result.explanation}`);
+    } catch (error) {
+      if (error instanceof ApplicationCommandError && error.code === "not_found") {
+        await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
+        return;
+      }
+      await ctx.reply(["Demanda não criada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command(["intake_preview", "preview"], async (ctx) => {
+    const rawText = (ctx.message?.text ?? "").replace(/^\/(?:intake_preview|preview)(?:@\w+)?\s*/i, "").trim();
+    const taskInput = parseProjectTaskInput(rawText);
+    if (!taskInput.text) {
+      await ctx.reply("Use: /intake_preview [@projeto] descrever a demanda");
+      return;
+    }
+    try {
+      const result = commands.previewWorkIntake(telegramOrigin(ctx), {
+        projectKey: taskInput.projectKey,
+        objective: taskInput.text
+      });
+      await ctx.reply([
+        `Análise de Work Intake:`,
+        `Classificação: ${result.decision.classification}`,
+        `Confiança: ${Math.round(result.decision.confidence * 100)}%`,
+        `Explicação: ${result.explanation}`
+      ].join("\n"));
+    } catch (error) {
+      await ctx.reply(["Preview indisponível.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.command("task", async (ctx) => {
     const taskInput = parseProjectTaskInput(parseTaskText(ctx.message?.text ?? ""));
     if (!taskInput.text) {
@@ -162,29 +233,69 @@ export function createTelegramBot(
       return;
     }
 
-    let task: TaskRecord;
     try {
-      task = commands.createTask(telegramOrigin(ctx), {
-        text: taskInput.text,
-        projectKey: taskInput.projectKey
+      const result = commands.submitWorkIntake(telegramOrigin(ctx), {
+        projectKey: taskInput.projectKey,
+        objective: taskInput.text,
+        explicitOverride: "direct_task"
       });
+
+      if (result.task) {
+        await ctx.reply(
+          [
+            `Task #${result.task.id} criada.`,
+            `Explicação: ${result.explanation}`,
+            `Projeto: ${result.task.projectKey}`,
+            `Estado: ${result.task.status}`,
+            `Demanda: ${result.task.text}`
+          ].join("\n")
+        );
+      } else {
+        await ctx.reply(`Resultado: ${result.explanation}`);
+      }
     } catch (error) {
       if (error instanceof ApplicationCommandError && error.code === "not_found") {
         await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
         return;
       }
       await ctx.reply(["Task nao criada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
+  bot.command(["feature", "feature_create"], async (ctx) => {
+    const rawText = (ctx.message?.text ?? "").replace(/^\/(?:feature|feature_create)(?:@\w+)?\s*/i, "").trim();
+    const taskInput = parseProjectTaskInput(rawText);
+    if (!taskInput.text) {
+      await ctx.reply("Use: /feature [@projeto] descrever o plano de funcionalidade");
       return;
     }
 
-    await ctx.reply(
-      [
-        `Task #${task.id} criada.`,
-        `Projeto: ${task.projectKey}`,
-        `Estado: ${task.status}`,
-        `Demanda: ${task.text}`
-      ].join("\n")
-    );
+    try {
+      const result = commands.submitWorkIntake(telegramOrigin(ctx), {
+        objective: taskInput.text,
+        projectKey: taskInput.projectKey,
+        explicitOverride: "feature_plan"
+      });
+
+      if (result.featurePlan) {
+        await ctx.reply(
+          [
+            `Feature Plan #${result.featurePlan.plan.id} criado.`,
+            `Explicação: ${result.explanation}`,
+            `Projeto: ${result.featurePlan.plan.projectKey}`,
+            `Status: ${result.featurePlan.plan.status}`
+          ].join("\n")
+        );
+      } else {
+        await ctx.reply(`Resultado: ${result.explanation}`);
+      }
+    } catch (error) {
+      if (error instanceof ApplicationCommandError && error.code === "not_found") {
+        await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
+        return;
+      }
+      await ctx.reply(["Feature Plan não criado.", ...commandErrorDetails(error)].join("\n"));
+    }
   });
 
   bot.command("queue", async (ctx) => {
@@ -805,6 +916,8 @@ function formatHelp(): string {
     "/status @projeto - ver estado de um projeto",
     "/projects - listar projetos",
     "/project_add chave caminho-do-repo - cadastrar projeto",
+    "/intake @projeto texto - classificar e submeter demanda",
+    "/intake_preview @projeto texto - analisar classificacao de demanda",
     "/task @projeto texto - criar task",
     "/prepare id - criar branch/worktree local",
     "/cancel id - cancelar task ativa ou queued",

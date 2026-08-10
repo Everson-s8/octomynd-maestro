@@ -556,3 +556,11 @@ function taskRecord(): TaskRecord {
     updatedAt: "2026-07-12T12:01:00.000Z"
   };
 }
+
+describe("telegram work intake integration", () => {
+  it("parses intake command text correctly", () => {
+    const parsed = parseProjectTaskInput(parseTaskText("/task @boo refatorar API"));
+    expect(parsed.projectKey).toBe("boo");
+    expect(parsed.text).toBe("refatorar API");
+  });
+});

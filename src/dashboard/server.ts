@@ -22,7 +22,7 @@ import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
 import { AgentRegistry } from "../agents/registry.js";
-import type { WorkGraphRuntimeCommands } from "../commands/application-commands.js";
+import type { WorkGraphRuntimeCommands, WorkIntakeCommandInput } from "../commands/application-commands.js";
 import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
@@ -708,6 +708,54 @@ async function routeRequest(
       sendJson(response, 200, { feature });
     } catch (error) {
       sendCommandError(response, error, "feature_cancel_failed");
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/work-intake/preview") {
+    const body = await readJsonBody(request);
+    const objective = typeof body.objective === "string" ? body.objective.trim() : "";
+    if (!objective) {
+      sendJson(response, 400, { error: "objective_is_required" });
+      return;
+    }
+    try {
+      const result = commands.previewWorkIntake({ channel: "dashboard" }, {
+        projectKey: typeof body.projectKey === "string" ? body.projectKey.trim() : undefined,
+        objective,
+        acceptanceCriteria: Array.isArray(body.acceptanceCriteria) ? body.acceptanceCriteria : undefined,
+        coordination: body.coordination as WorkIntakeCommandInput["coordination"],
+        costEstimate: body.costEstimate as WorkIntakeCommandInput["costEstimate"],
+        explicitOverride: body.explicitOverride as WorkIntakeCommandInput["explicitOverride"]
+      });
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendCommandError(response, error, "work_intake_preview_failed");
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/work-intake") {
+    const body = await readJsonBody(request);
+    const objective = typeof body.objective === "string" ? body.objective.trim() : "";
+    if (!objective) {
+      sendJson(response, 400, { error: "objective_is_required" });
+      return;
+    }
+    try {
+      const result = commands.submitWorkIntake({ channel: "dashboard" }, {
+        projectKey: typeof body.projectKey === "string" ? body.projectKey.trim() : undefined,
+        objective,
+        acceptanceCriteria: Array.isArray(body.acceptanceCriteria) ? body.acceptanceCriteria : undefined,
+        coordination: body.coordination as WorkIntakeCommandInput["coordination"],
+        costEstimate: body.costEstimate as WorkIntakeCommandInput["costEstimate"],
+        explicitOverride: body.explicitOverride as WorkIntakeCommandInput["explicitOverride"],
+        intakeId: typeof body.intakeId === "string" ? body.intakeId.trim() : undefined
+      });
+      const statusCode = result.status === "created" ? 201 : 200;
+      sendJson(response, statusCode, result);
+    } catch (error) {
+      sendCommandError(response, error, "work_intake_submit_failed");
     }
     return;
   }

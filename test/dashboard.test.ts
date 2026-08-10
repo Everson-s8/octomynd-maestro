@@ -561,6 +561,25 @@ describe("dashboard", () => {
       expect(database.getLastEvent()?.source).toBe("dashboard");
       const taskPayload = await taskResponse.json() as { task: { id: number; source: string } };
       expect(taskPayload.task.source).toBe("dashboard");
+
+      const previewResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", objective: "Refatorar componente de busca" })
+      });
+      expect(previewResponse.status).toBe(200);
+      const previewData = await previewResponse.json() as { decision: { classification: string }; explanation: string };
+      expect(previewData.decision.classification).toBe("direct_task");
+      expect(previewData.explanation).toContain("Tarefa Direta");
+
+      const intakeResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", objective: "Refatorar componente de busca" })
+      });
+      expect([200, 201]).toContain(intakeResponse.status);
+      const intakeData = await intakeResponse.json() as { status: string; createdType: string; explanation: string };
+      expect(intakeData.explanation).toBeDefined();
       expect(database.getTask(taskPayload.task.id).source).toBe("dashboard");
 
       const disposableResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
