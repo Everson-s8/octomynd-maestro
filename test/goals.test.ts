@@ -502,7 +502,7 @@ describe("goal runner", () => {
       .toBe("repeated_failure");
   });
 
-  it("blocks repeated no-progress implementation while preserving the worktree", async () => {
+  it("pauses repeated no-progress implementation for provider handoff while preserving the worktree", async () => {
     const projectDir = path.join(tempDir, "progress-project");
     const worktreeDir = path.join(tempDir, "progress-worktree");
     fs.mkdirSync(projectDir);
@@ -524,9 +524,9 @@ describe("goal runner", () => {
       maxSteps: 10
     });
 
-    expect(run.status).toBe("blocked");
+    expect(run.status).toBe("waiting_provider");
     expect(fs.existsSync(path.join(worktreeDir, "README.md"))).toBe(true);
-    expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata)
+    expect(database.listEvents().find((event) => event.type === "goal.no_progress_wait")?.metadata)
       .toMatchObject({ reason: "no_progress", worktreePreserved: true });
   }, 15_000);
 

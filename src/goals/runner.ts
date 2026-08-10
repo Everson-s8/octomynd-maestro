@@ -631,6 +631,46 @@ export async function runTaskGoal(
         );
       }
 
+      if (circuitDecision?.reason === "no_progress") {
+        database.finishGoalStep({
+          id: goalStep.id,
+          status: "failed",
+          summary: circuitDecision.summary,
+          output: safeOutput,
+          error: circuitDecision.summary,
+          durationMs: result.durationMs
+        });
+        excluded.add(routed.provider.id);
+        const fallback = await registry.route(CAPABILITIES[phase], excluded);
+        database.addEvent({
+          source: "maestro",
+          type: fallback ? "goal.no_progress_fallback" : "goal.no_progress_wait",
+          text: fallback
+            ? `${routed.provider.label} made no progress during ${phase}; routing to ${fallback.provider.label}.`
+            : `${routed.provider.label} made no progress during ${phase}; waiting for another provider.`,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            stepId: goalStep.id,
+            phase,
+            fromProvider: routed.provider.id,
+            toProvider: fallback?.provider.id ?? null,
+            reason: circuitDecision.reason,
+            worktreePreserved: true
+          }
+        });
+        if (fallback) continue;
+        return pauseRun(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          circuitDecision.summary,
+          task.id,
+          { reason: "capacity", retryAfterMs: 30_000, provider: routed.provider.id }
+        );
+      }
+
       if (circuitDecision && result.outcome !== "failed") {
         return finishCircuitBreak(
           database,
