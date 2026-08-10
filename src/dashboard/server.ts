@@ -214,6 +214,24 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/intake/classifications") {
+    const classifications = options.database.listWorkIntakeClassifications(100);
+    const metrics = options.database.getWorkIntakeMetrics();
+    sendJson(response, 200, { classifications, metrics });
+    return;
+  }
+
+  const intakeTaskMatch = url.pathname.match(/^\/api\/intake\/classifications\/(\d+)$/);
+  if (request.method === "GET" && intakeTaskMatch) {
+    const classification = options.database.getWorkIntakeClassificationByTaskId(Number(intakeTaskMatch[1]));
+    if (!classification) {
+      sendJson(response, 404, { error: "intake_classification_not_found" });
+      return;
+    }
+    sendJson(response, 200, { classification });
+    return;
+  }
+
   const workGraphMatch = url.pathname.match(/^\/api\/work-graphs\/(\d+)$/);
   if (request.method === "GET" && workGraphMatch) {
     try {
@@ -716,6 +734,7 @@ async function routeRequest(
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
     const text = typeof body.text === "string" ? body.text.trim() : "";
+    const overrideMode = typeof body.overrideMode === "string" ? body.overrideMode.trim().toLowerCase() as any : undefined;
 
     if (!projectKey || !text) {
       sendJson(response, 400, { error: "projectKey_and_text_are_required" });
@@ -723,8 +742,9 @@ async function routeRequest(
     }
 
     try {
-      const task = commands.createTask({ channel: "dashboard" }, { text, projectKey });
-      sendJson(response, 201, { task });
+      const task = commands.createTask({ channel: "dashboard" }, { text, projectKey, overrideMode });
+      const classification = options.database.getWorkIntakeClassificationByTaskId(task.id);
+      sendJson(response, 201, { task, classification });
     } catch (error) {
       sendCommandError(response, error, "task_create_failed");
     }

@@ -31,6 +31,8 @@ import {
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
+import { classifyWorkIntake } from "../intake/classifier.js";
+import type { WorkIntakeMode, WorkIntakeClassification } from "../intake/types.js";
 
 export type RegisterProjectInput = {
   key: string;
@@ -47,6 +49,7 @@ export type RegisterProjectOutcome = {
 export type CreateTaskInput = {
   text: string;
   projectKey?: string | null;
+  overrideMode?: WorkIntakeMode | null;
 };
 
 export type CreateFeaturePlanInput = {
@@ -282,6 +285,15 @@ export class ApplicationCommands {
 
     const task = this.database.createTask(text, origin.channel, project.key);
 
+    const classification = classifyWorkIntake({
+      taskId: task.id,
+      text,
+      overrideMode: input.overrideMode,
+      projectKey: project.key
+    });
+
+    this.database.saveWorkIntakeClassification(classification);
+
     this.database.addEvent({
       source: origin.channel,
       type: "task.created",
@@ -291,6 +303,44 @@ export class ApplicationCommands {
       taskId: task.id,
       metadata: { projectKey: project.key }
     });
+
+    this.database.addEvent({
+      source: origin.channel,
+      type: "work_intake_classified",
+      text: `Work Intake classified Task #${task.id} as ${classification.category} (${classification.actualMode})`,
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      taskId: task.id,
+      metadata: {
+        category: classification.category,
+        decisionMode: classification.decisionMode,
+        actualMode: classification.actualMode,
+        score: classification.score,
+        reasons: classification.reasons,
+        estimatedOverheadMs: classification.estimatedOverheadMs,
+        priorWorkflowOverheadMs: classification.priorWorkflowOverheadMs,
+        overrideApplied: classification.overrideApplied
+      }
+    });
+
+    if (classification.overrideApplied) {
+      this.database.addEvent({
+        source: origin.channel,
+        type: "work_intake_overridden",
+        text: `Work Intake override applied for Task #${task.id}: forced mode '${classification.actualMode}'`,
+        userId: origin.userId ?? null,
+        username: origin.username ?? null,
+        taskId: task.id,
+        metadata: {
+          category: classification.category,
+          decisionMode: classification.decisionMode,
+          actualMode: classification.actualMode,
+          overrideMode: classification.overrideMode,
+          score: classification.score,
+          reasons: classification.reasons
+        }
+      });
+    }
 
     return task;
   }

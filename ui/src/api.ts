@@ -16,6 +16,48 @@ export type TaskStatus =
   | "cancelled"
   | "done";
 
+export type WorkIntakeCategory =
+  | "tiny_fix"
+  | "documentation"
+  | "audit"
+  | "multi_deliverable_feature"
+  | "dependent_work"
+  | "parallel_safe_work"
+  | "ambiguous_request"
+  | "explicit_override";
+
+export type WorkIntakeMode =
+  | "single_agent"
+  | "feature_plan"
+  | "work_graph"
+  | "needs_clarification";
+
+export type WorkIntakeClassification = {
+  id?: number;
+  taskId: number;
+  category: WorkIntakeCategory;
+  decisionMode: WorkIntakeMode;
+  actualMode: WorkIntakeMode;
+  overrideMode?: WorkIntakeMode | null;
+  score: number;
+  reasons: string[];
+  estimatedOverheadMs: number;
+  priorWorkflowOverheadMs: number;
+  overrideApplied: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type WorkIntakeMetrics = {
+  totalClassifications: number;
+  categoryCounts: Record<WorkIntakeCategory, number>;
+  modeCounts: Record<WorkIntakeMode, number>;
+  overrideCount: number;
+  averageOverheadMs: number;
+  averagePriorWorkflowOverheadMs: number;
+  overheadReductionRatio: number;
+};
+
 export type DashboardTask = {
   id: number;
   projectKey: string | null;
@@ -25,6 +67,7 @@ export type DashboardTask = {
   source: string;
   branchName: string | null;
   worktreePrepared: boolean;
+  intakeClassification?: WorkIntakeClassification | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -317,6 +360,8 @@ export type DashboardData = {
   features: DashboardFeature[];
   featurePlans: DashboardFeaturePlan[];
   workGraphs: DashboardWorkGraph[];
+  intakeMetrics?: WorkIntakeMetrics;
+  intakeClassifications?: WorkIntakeClassification[];
   environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
   agents: Array<{

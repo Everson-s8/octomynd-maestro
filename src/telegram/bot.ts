@@ -11,6 +11,7 @@ import { FeatureGitHubGateway, featureChecksPassed } from "../features/github.js
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
+import { parseOverrideFromText } from "../intake/classifier.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
@@ -156,17 +157,21 @@ export function createTelegramBot(
   });
 
   bot.command("task", async (ctx) => {
-    const taskInput = parseProjectTaskInput(parseTaskText(ctx.message?.text ?? ""));
+    const rawText = parseTaskText(ctx.message?.text ?? "");
+    const taskInput = parseProjectTaskInput(rawText);
     if (!taskInput.text) {
-      await ctx.reply("Use: /task @projeto descrever a demanda");
+      await ctx.reply("Use: /task @projeto descrever a demanda [--mode=single_agent|feature_plan|work_graph|needs_clarification]");
       return;
     }
+
+    const { cleanedText, overrideMode } = parseOverrideFromText(taskInput.text);
 
     let task: TaskRecord;
     try {
       task = commands.createTask(telegramOrigin(ctx), {
-        text: taskInput.text,
-        projectKey: taskInput.projectKey
+        text: cleanedText,
+        projectKey: taskInput.projectKey,
+        overrideMode
       });
     } catch (error) {
       if (error instanceof ApplicationCommandError && error.code === "not_found") {
@@ -177,14 +182,25 @@ export function createTelegramBot(
       return;
     }
 
-    await ctx.reply(
-      [
-        `Task #${task.id} criada.`,
-        `Projeto: ${task.projectKey}`,
-        `Estado: ${task.status}`,
-        `Demanda: ${task.text}`
-      ].join("\n")
-    );
+    const classification = database.getWorkIntakeClassificationByTaskId(task.id);
+
+    const lines = [
+      `Task #${task.id} criada.`,
+      `Projeto: ${task.projectKey}`,
+      `Estado: ${task.status}`,
+      `Demanda: ${task.text}`
+    ];
+
+    if (classification) {
+      lines.push(
+        `Classificacao Intake: ${classification.category} (${classification.actualMode}${classification.overrideApplied ? " [OVERRIDE]" : ""})`,
+        `Score complexidade: ${classification.score}`,
+        `Overhead de decisao: ${classification.estimatedOverheadMs}ms (vs prior workflow: ${classification.priorWorkflowOverheadMs}ms)`,
+        `Razoes: ${classification.reasons.join("; ")}`
+      );
+    }
+
+    await ctx.reply(lines.join("\n"));
   });
 
   bot.command("queue", async (ctx) => {

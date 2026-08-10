@@ -18,6 +18,10 @@ import {
   migrateProviderPolicyPersistence
 } from "./agents/policy-persistence.js";
 import {
+  createWorkIntakePersistence,
+  migrateWorkIntakePersistence
+} from "./intake/persistence.js";
+import {
   FeatureTaskContract,
   FeatureTaskContractInput,
   legacyFeatureTaskContract,
@@ -566,9 +570,11 @@ export function createDatabase(databasePath: string) {
   db.pragma("foreign_keys = ON");
   migrate(db);
   migrateProviderPolicyPersistence(db);
+  migrateWorkIntakePersistence(db);
   const skillPersistence = createSkillPersistence(db);
   const workGraphPersistence = createWorkGraphPersistence(db);
   const providerPolicyPersistence = createProviderPolicyPersistence(db);
+  const workIntakePersistence = createWorkIntakePersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -902,6 +908,7 @@ export function createDatabase(databasePath: string) {
     ...skillPersistence,
     ...workGraphPersistence,
     ...providerPolicyPersistence,
+    ...workIntakePersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
@@ -988,6 +995,7 @@ export function createDatabase(databasePath: string) {
       }
       db.transaction(() => {
         db.prepare("DELETE FROM task_reviews WHERE task_id = ?").run(id);
+        db.prepare("DELETE FROM work_intake_classifications WHERE task_id = ?").run(id);
         db.prepare("DELETE FROM events WHERE task_id = ?").run(id);
         deleteTaskStatement.run(id);
       })();

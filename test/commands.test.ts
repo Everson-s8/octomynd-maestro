@@ -59,7 +59,7 @@ describe("ApplicationCommands.createTask", () => {
   it("records an audit event carrying the origin metadata", () => {
     commands.createTask({ channel: "telegram", userId: "42", username: "operador" }, { text: "com auditoria", projectKey: "boo" });
 
-    const event = database.getLastEvent();
+    const event = database.listEvents().find((e) => e.type === "task.created");
     expect(event?.type).toBe("task.created");
     expect(event?.source).toBe("telegram");
     expect(event?.userId).toBe("42");

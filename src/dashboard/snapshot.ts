@@ -176,9 +176,12 @@ export function buildDashboardSnapshot(
       source: task.source,
       branchName: task.branchName ? redactSensitiveText(task.branchName) : null,
       worktreePrepared: Boolean(task.worktreePath),
+      intakeClassification: database.getWorkIntakeClassificationByTaskId(task.id),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt
     })),
+    intakeMetrics: database.getWorkIntakeMetrics(),
+    intakeClassifications: database.listWorkIntakeClassifications(30),
     events: events.map((event) => ({
       id: event.id,
       source: event.source,

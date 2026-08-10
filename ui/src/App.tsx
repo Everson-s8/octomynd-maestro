@@ -1489,6 +1489,23 @@ function TaskDetail({
           <div><dt>Worktree</dt><dd>{task.worktreePrepared ? "isolada e preparada" : "aguardando preparo"}</dd></div>
         </dl>
 
+        {task.intakeClassification && (
+          <div className="intake-detail-section" style={{ marginTop: "1rem", padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <strong>Work Intake Classification</strong>
+              <span className="status-pill" style={{ background: task.intakeClassification.overrideApplied ? "#e65100" : "#0277bd", color: "#fff" }}>
+                {task.intakeClassification.category} ({task.intakeClassification.actualMode})
+                {task.intakeClassification.overrideApplied && " [OVERRIDE]"}
+              </span>
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary, #aaa)" }}>
+              <div>Score de complexidade: <strong>{task.intakeClassification.score}</strong></div>
+              <div>Overhead de decisão: <strong>{task.intakeClassification.estimatedOverheadMs}ms</strong> (vs prior workflow: <strong>{task.intakeClassification.priorWorkflowOverheadMs}ms</strong>)</div>
+              <div>Razões: {task.intakeClassification.reasons.join("; ")}</div>
+            </div>
+          </div>
+        )}
+
         <div className="detail-flow">
           <span className="is-done">01 <strong>Capturada</strong></span>
           <span className={task.status !== "queued" ? "is-done" : "is-current"}>02 <strong>Preparada</strong></span>
