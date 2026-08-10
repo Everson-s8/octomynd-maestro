@@ -18,6 +18,24 @@ import {
   migrateProviderPolicyPersistence
 } from "./agents/policy-persistence.js";
 import {
+  createWorkIntakePersistence,
+  migrateWorkIntakePersistence
+} from "./intake/persistence.js";
+import { classifyWorkIntake } from "./intake/policy.js";
+export { classifyWorkIntake } from "./intake/policy.js";
+export { WORK_INTAKE_POLICY_VERSION } from "./intake/types.js";
+export type {
+  WorkIntakeClassification,
+  WorkIntakeCoordinationSignal,
+  WorkIntakeCostEstimate,
+  WorkIntakeDecision,
+  WorkIntakeEvidenceFact,
+  WorkIntakeEvidencePack,
+  WorkIntakeInput,
+  WorkIntakeReasonCode
+} from "./intake/types.js";
+export { createWorkIntakePersistence, migrateWorkIntakePersistence } from "./intake/persistence.js";
+import {
   FeatureTaskContract,
   FeatureTaskContractInput,
   legacyFeatureTaskContract,
@@ -566,9 +584,11 @@ export function createDatabase(databasePath: string) {
   db.pragma("foreign_keys = ON");
   migrate(db);
   migrateProviderPolicyPersistence(db);
+  migrateWorkIntakePersistence(db);
   const skillPersistence = createSkillPersistence(db);
   const workGraphPersistence = createWorkGraphPersistence(db);
   const providerPolicyPersistence = createProviderPolicyPersistence(db);
+  const workIntakePersistence = createWorkIntakePersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -902,6 +922,7 @@ export function createDatabase(databasePath: string) {
     ...skillPersistence,
     ...workGraphPersistence,
     ...providerPolicyPersistence,
+    ...workIntakePersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
@@ -2861,6 +2882,7 @@ function migrate(db: Database.Database) {
 
   migrateSkillPersistence(db);
   migrateWorkGraphPersistence(db);
+  migrateWorkIntakePersistence(db);
 
   addColumnIfMissing(db, "tasks", "project_id", "INTEGER REFERENCES projects(id)");
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
