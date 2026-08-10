@@ -873,3 +873,76 @@ export async function decideHumanReview(
   }
   return payload.item;
 }
+
+export type GovernedChatAction = {
+  id: string;
+  type: string;
+  label: string;
+  description: string;
+  targetId: string | number;
+  payload?: Record<string, any>;
+};
+
+export type OperationalChatMessage = {
+  id: number;
+  projectKey: string;
+  surface: "dashboard" | "telegram";
+  senderRole: "user" | "orchestrator" | "system";
+  messageText: string;
+  evidenceJson?: string | null;
+  actionTaken?: string | null;
+  createdAt: string;
+};
+
+export type OperationalChatResponse = {
+  messageId: number;
+  projectKey: string;
+  surface: "dashboard" | "telegram";
+  explanation: string;
+  evidence: any;
+  actions: GovernedChatAction[];
+  providerId?: string;
+  createdAt: string;
+};
+
+export type OperationalChatActionResult = {
+  success: boolean;
+  actionTaken: string;
+  resultSummary: string;
+  updatedEvidence?: any;
+};
+
+export async function fetchChatMessages(projectKey: string, limit = 50): Promise<OperationalChatMessage[]> {
+  const response = await fetch(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}`);
+  const payload = await response.json() as { messages?: OperationalChatMessage[]; error?: string };
+  if (!response.ok || !payload.messages) {
+    throw new Error(payload.error || "Nao foi possivel carregar o historico de chat.");
+  }
+  return payload.messages;
+}
+
+export async function sendChatMessage(projectKey: string, message: string): Promise<OperationalChatResponse> {
+  const response = await fetch("/api/chat/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, message, surface: "dashboard" })
+  });
+  const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
+  if (!response.ok || !payload.explanation) {
+    throw new Error(payload.details || payload.error || "Falha no envio da mensagem.");
+  }
+  return payload;
+}
+
+export async function executeChatAction(projectKey: string, action: GovernedChatAction): Promise<OperationalChatActionResult> {
+  const response = await fetch("/api/chat/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, action, surface: "dashboard" })
+  });
+  const payload = await response.json() as OperationalChatActionResult & { error?: string; details?: string };
+  if (!response.ok || payload.success === undefined) {
+    throw new Error(payload.details || payload.error || "Falha na execucao da acao governada.");
+  }
+  return payload;
+}
