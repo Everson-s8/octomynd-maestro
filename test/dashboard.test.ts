@@ -572,15 +572,39 @@ describe("dashboard", () => {
       expect(previewData.decision.classification).toBe("direct_task");
       expect(previewData.explanation).toContain("Tarefa Direta");
 
-      const intakeResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
+      const intakeDirectResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectKey: "boo", objective: "Refatorar componente de busca" })
       });
-      expect([200, 201]).toContain(intakeResponse.status);
-      const intakeData = await intakeResponse.json() as { status: string; createdType: string; explanation: string };
-      expect(intakeData.explanation).toBeDefined();
-      expect(database.getTask(taskPayload.task.id).source).toBe("dashboard");
+      expect(intakeDirectResponse.status).toBe(201);
+      const intakeDirectData = await intakeDirectResponse.json() as { status: string; createdType: string; explanation: string; task?: { id: number } };
+      expect(intakeDirectData.createdType).toBe("task");
+      expect(intakeDirectData.task).toBeDefined();
+
+      const intakeClarifyResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", objective: "..." })
+      });
+      expect(intakeClarifyResponse.status).toBe(200);
+      const intakeClarifyData = await intakeClarifyResponse.json() as { status: string; createdType: string; explanation: string };
+      expect(intakeClarifyData.status).toBe("needs_clarification");
+      expect(intakeClarifyData.createdType).toBe("none");
+
+      const intakeFeatureResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectKey: "boo",
+          objective: "Implementar auth distribuida",
+          coordination: { dependsOnCount: 1 }
+        })
+      });
+      expect(intakeFeatureResponse.status).toBe(201);
+      const intakeFeatureData = await intakeFeatureResponse.json() as { status: string; createdType: string; featurePlan?: { plan: { id: number } } };
+      expect(intakeFeatureData.createdType).toBe("feature_plan");
+      expect(intakeFeatureData.featurePlan).toBeDefined();
 
       const disposableResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
         method: "POST",

@@ -321,6 +321,73 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(preview.explanation).toContain("Tarefa Direta");
   });
 
+  it("routes bounded maintenance request to exactly one direct task without feature plan", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Fix typo in README header"
+      }
+    );
+
+    expect(res.status).toBe("created");
+    expect(res.createdType).toBe("task");
+    expect(res.task).toBeDefined();
+    expect(res.featurePlan).toBeUndefined();
+    expect(res.decision.reasonCode).toBe("single_bounded_objective");
+
+    const tasks = database.listTasksByProject("boo");
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe(res.task!.id);
+    expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
+  });
+
+  it("routes ambiguous request to ask for clarification without creating tasks or plans", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "telegram", userId: "100" },
+      {
+        projectKey: "boo",
+        objective: "..."
+      }
+    );
+
+    expect(res.status).toBe("needs_clarification");
+    expect(res.createdType).toBe("none");
+    expect(res.task).toBeUndefined();
+    expect(res.featurePlan).toBeUndefined();
+    expect(res.explanation).toContain("clarificação");
+
+    expect(database.listTasksByProject("boo")).toHaveLength(0);
+    expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
+    const persistedDecision = database.getWorkIntakeDecision(res.decision.id);
+    expect(persistedDecision?.classification).toBe("needs_clarification");
+  });
+
+  it("routes genuinely dependent work to create a feature plan with attached task", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "dashboard" },
+      {
+        projectKey: "boo",
+        objective: "Implement multi-service auth flow",
+        coordination: { dependsOnCount: 1 }
+      }
+    );
+
+    expect(res.status).toBe("created");
+    expect(res.createdType).toBe("feature_plan");
+    expect(res.featurePlan).toBeDefined();
+    expect(res.task).toBeDefined();
+    expect(res.decision.reasonCode).toBe("coordination_required");
+
+    const featurePlans = database.listFeaturePlansByProject("boo");
+    expect(featurePlans).toHaveLength(1);
+    expect(featurePlans[0].id).toBe(res.featurePlan!.plan.id);
+
+    const tasks = database.listTasksByProject("boo");
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe(res.task!.id);
+  });
+
   it("submits request idempotently yielding exactly one Task or Feature Plan", () => {
     const res1 = commands.submitWorkIntake(
       { channel: "telegram", userId: "100" },
