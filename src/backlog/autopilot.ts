@@ -81,6 +81,12 @@ export class BacklogAutopilot {
     this.lastTickAt = new Date().toISOString();
 
     try {
+      const latestUpdate = this.database.getLatestRuntimeUpdate();
+      if (latestUpdate && (latestUpdate.status === "pending" || latestUpdate.status === "in_progress")) {
+        this.lastAction = "update_pending";
+        return this.snapshot();
+      }
+
       const goals = this.database.listActiveGoalRuns();
       const runningGoals = goals.filter((goal) => goal.status === "running");
       if (runningGoals.length >= this.maxConcurrentGoals) {

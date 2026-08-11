@@ -35,6 +35,11 @@ export function HeroConsole({ data }: { data: DashboardData }) {
           <span>{data.summary.projects} projetos locais</span>
           <span>acesso {data.daemon.access === "restricted" ? "restrito" : "aberto"}</span>
           <span>autopilot {data.autopilot.enabled ? data.autopilot.state : "desligado"}</span>
+          {data.runtimeUpdate && (
+            <span className={`runtime-update-chip status-${data.runtimeUpdate.status}`} title={data.runtimeUpdate.error ?? undefined}>
+              self-update: {data.runtimeUpdate.status} ({data.runtimeUpdate.targetCommit.slice(0, 7)})
+            </span>
+          )}
         </div>
       </div>
       <div className="hero-visual">

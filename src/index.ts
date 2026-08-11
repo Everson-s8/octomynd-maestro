@@ -152,15 +152,10 @@ const selfUpdateManager = new SelfUpdateManager(
   database,
   config.execution.rootPath,
   path.join(config.execution.rootPath, "scripts", "maestro-runtime.ps1"),
-  selfUpdateNotifier
+  selfUpdateNotifier,
+  undefined,
+  { pollIntervalMs: config.runtime.selfUpdatePollIntervalMs }
 );
-void selfUpdateManager.reconcileLatestUpdate().catch((error) => {
-  database.addEvent({
-    source: "maestro",
-    type: "self_update.reconciliation_failed",
-    text: error instanceof Error ? error.message : "Unable to reconcile the latest runtime update."
-  });
-});
 const featureCoordinator = new FeatureCoordinator(
   database,
   agentRegistry,
@@ -179,7 +174,8 @@ const bot = createTelegramBot(config, database, {
   environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey),
   providerStatus: () => agentRegistry.snapshot(),
   workGraphRuntime: workGraphCoordinator,
-  featureCoordinator
+  featureCoordinator,
+  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate()
 });
 const featurePlanLifecycleNotifier = createTelegramFeaturePlanLifecycleNotifier(
   config,
@@ -270,6 +266,7 @@ featureCoordinator.start();
 featureAssemblyCoordinator.start();
 improvementReviewWorker.start();
 featurePlanLifecycleWorker.start();
+selfUpdateManager.start();
 const recoveredWorkGraphs = workGraphCoordinator.recoverActiveGraphs();
 const recoveredGoals = goalCoordinator.recoverWaitingRuns((run) => workGraphCoordinator.isRunActive(run.id));
 const dashboardServer = config.dashboard.enabled
@@ -341,6 +338,7 @@ async function shutdown() {
   featureAssemblyCoordinator.shutdown();
   improvementReviewWorker.shutdown();
   featurePlanLifecycleWorker.shutdown();
+  selfUpdateManager.shutdown();
   skillCuratorWorker?.shutdown();
   await workGraphCoordinator.shutdown();
   goalCoordinator.shutdown();

@@ -42,6 +42,7 @@ export type MaestroConfig = {
     claudeInactivityTimeoutMs?: number;
     providerMaxRuntimeMs?: number;
     goalDeadlineMs?: number;
+    selfUpdatePollIntervalMs?: number;
   };
   workGraph: {
     adoptionMode: WorkGraphAdoptionMode;
@@ -87,6 +88,11 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     },
     runtime: {
       tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true),
+      selfUpdatePollIntervalMs: normalizePositiveInteger(
+        env.MAESTRO_SELF_UPDATE_POLL_MS,
+        5 * 60_000,
+        1_000
+      ),
       antigravityEnabled: normalizeBoolean(env.MAESTRO_ANTIGRAVITY_ENABLED, true),
       antigravityModel: normalizeOptional(env.MAESTRO_ANTIGRAVITY_MODEL),
       antigravityEffort: normalizeEffort(env.MAESTRO_ANTIGRAVITY_EFFORT),

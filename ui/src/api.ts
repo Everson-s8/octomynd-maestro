@@ -280,6 +280,17 @@ export type EnvironmentDoctorReport = {
   }>;
 };
 
+export type DashboardRuntimeUpdate = {
+  id: number;
+  featureId: number | null;
+  targetCommit: string;
+  previousCommit: string;
+  status: "pending" | "in_progress" | "completed" | "failed" | "rolled_back";
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DashboardData = {
   generatedAt: string;
   daemon: {
@@ -336,6 +347,7 @@ export type DashboardData = {
   workGraphs: DashboardWorkGraph[];
   environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
+  runtimeUpdate?: DashboardRuntimeUpdate | null;
   agents: Array<{
     id: "codex" | "claude" | "antigravity" | "telegram";
     label: string;
