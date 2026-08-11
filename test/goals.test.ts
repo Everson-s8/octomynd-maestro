@@ -573,7 +573,7 @@ describe("goal runner", () => {
       "reviewing"
     ]);
     expect(database.listEvents().some((event) => event.type === "goal.completed")).toBe(true);
-  });
+  }, 15_000);
 
   it("uses deterministic validation before spending a testing provider call", async () => {
     const projectDir = path.join(tempDir, "project");

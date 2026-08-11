@@ -11,6 +11,7 @@ import { FeatureGitHubGateway, featureChecksPassed } from "../features/github.js
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
+import { OperationalChatService } from "../chat/service.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
@@ -20,6 +21,7 @@ export type TelegramBotOptions = {
   providerStatus?: () => Promise<AgentProviderSnapshot[]>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   featureCoordinator?: FeatureCoordinator;
+  chatService?: OperationalChatService;
 };
 
 export function createTelegramBot(
@@ -35,6 +37,10 @@ export function createTelegramBot(
     undefined,
     options.featureCoordinator
   );
+  const chatService = options.chatService ?? new OperationalChatService({
+    database,
+    commands
+  });
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -658,6 +664,97 @@ export function createTelegramBot(
     }
   });
 
+  bot.command("chat", async (ctx) => {
+    const { projectKey: inputProjectKey, message } = parseChatText(ctx.message?.text ?? "");
+    if (!message) {
+      await ctx.reply("Use: /chat [@projeto] sua mensagem aqui");
+      return;
+    }
+
+    if (!inputProjectKey) {
+      await ctx.reply("Por favor, informe o projeto: /chat @projeto sua mensagem");
+      return;
+    }
+
+    if (!database.findProjectByKey(inputProjectKey)) {
+      await ctx.reply(`Projeto @${inputProjectKey} nao encontrado.`);
+      return;
+    }
+
+    database.addEvent({
+      source: "telegram",
+      type: "command.chat",
+      text: ctx.message?.text ?? "/chat",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey: inputProjectKey, message }
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey: inputProjectKey,
+        surface: "telegram",
+        message,
+        userId: String(ctx.from?.id ?? ""),
+        username: ctx.from?.username ?? null
+      });
+
+      const replyLines = [response.explanation];
+      if (response.actions.length > 0) {
+        replyLines.push("");
+        replyLines.push("Acoes governadas disponiveis:");
+        for (const action of response.actions) {
+          replyLines.push(`- /chat_action @${inputProjectKey} ${action.id} (${action.label})`);
+        }
+      }
+      await ctx.reply(replyLines.join("\n"));
+    } catch (error) {
+      await ctx.reply(`Erro no chat operacional: ${error instanceof Error ? error.message : "Erro desconhecido."}`);
+    }
+  });
+
+  bot.command("chat_action", async (ctx) => {
+    const { projectKey, actionId, confirmed } = parseChatActionText(ctx.message?.text ?? "");
+    if (!projectKey || !actionId) {
+      await ctx.reply("Use: /chat_action @projeto <action_id>");
+      return;
+    }
+
+    if (!database.findProjectByKey(projectKey)) {
+      await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
+      return;
+    }
+
+    const evidence = await chatService.gatherEvidenceContext(projectKey);
+    const actions = chatService.identifyGovernedActions(evidence);
+    const action = actions.find((a) => a.id === actionId);
+
+    if (!action) {
+      await ctx.reply(`Acao '${actionId}' nao encontrada ou nao aplicavel para @${projectKey}.`);
+      return;
+    }
+
+    if (chatService.isHighImpactAction(action)) {
+      if (!confirmed) {
+        await ctx.reply(`Acao de alto impacto: ${action.label}.\nPara confirmar pelo Telegram, use: /chat_action @${projectKey} ${actionId} confirm`);
+        return;
+      }
+    }
+
+    try {
+      const result = await chatService.executeAction({
+        projectKey,
+        surface: "telegram",
+        action,
+        userId: String(ctx.from?.id ?? ""),
+        username: ctx.from?.username ?? null
+      });
+      await ctx.reply(result.resultSummary);
+    } catch (error) {
+      await ctx.reply(`Falha ao executar acao governada: ${error instanceof Error ? error.message : "Erro desconhecido."}`);
+    }
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
 
@@ -681,7 +778,7 @@ export function createTelegramBot(
       username: ctx.from?.username ?? null
     });
 
-    await ctx.reply("Feedback recebido e registrado.");
+    await ctx.reply("Feedback recebido e registrado. Use /chat @projeto mensagem para conversar com o orquestrador.");
   });
 
   return bot;
@@ -726,6 +823,23 @@ export function parseQueueProjectKey(messageText: string): string | null {
   const text = messageText.replace(/^\/queue(?:@\w+)?\s*/i, "").trim();
   const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})$/i);
   return match ? match[1].toLowerCase() : null;
+}
+
+export function parseChatText(messageText: string): { projectKey: string | null; message: string } {
+  const text = messageText.replace(/^\/chat(?:@\w+)?\s*/i, "").trim();
+  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(.+)$/s);
+  if (match) {
+    return { projectKey: match[1].toLowerCase(), message: match[2].trim() };
+  }
+  return { projectKey: null, message: text };
+}
+
+export function parseChatActionText(messageText: string): { projectKey: string | null; actionId: string | null; confirmed: boolean } {
+  const text = messageText.replace(/^\/chat_action(?:@\w+)?\s*/i, "").trim();
+  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(\S+)(?:\s+(confirm|yes))?$/i);
+  return match
+    ? { projectKey: match[1].toLowerCase(), actionId: match[2], confirmed: Boolean(match[3]) }
+    : { projectKey: null, actionId: null, confirmed: false };
 }
 
 export function parseStatusProjectKey(messageText: string): string | null {

@@ -27,6 +27,7 @@ import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
+import { OperationalChatService } from "../chat/service.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -42,10 +43,11 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
     AgentRegistry,
-    "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
+  chatService?: OperationalChatService;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -57,10 +59,31 @@ export function createDashboardServer(options: DashboardServerOptions) {
     options.workGraphRuntime,
     options.skillLifecycle
   );
+  const chatService = options.chatService ?? new OperationalChatService({
+    database: options.database,
+    agentRegistry: options.agentRegistry,
+    commands,
+    worktreesRoot: options.config.worktreesPath,
+    actionExecutor: options.goalCoordinator
+      ? {
+          retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
+          resumeGoal: (taskId) => {
+            const run = options.database.listActiveGoalRuns().find((r) => r.taskId === taskId);
+            if (run?.status === "waiting_provider") {
+              options.goalCoordinator!.resume(run.id);
+            } else {
+              options.goalCoordinator!.start(taskId);
+            }
+          },
+          cancelTask: (taskId) => { options.goalCoordinator!.cancel(taskId); },
+          rerunReview: () => { /* reviews are re-attempted by goal runner when task status moves to reviewing */ }
+        }
+      : undefined
+  });
 
   return http.createServer(async (request, response) => {
     try {
-      await routeRequest(request, response, options, staticRoot, commands);
+      await routeRequest(request, response, options, staticRoot, commands, chatService);
     } catch (error) {
       console.error("Dashboard request failed:", error instanceof Error ? error.message : "unknown error");
       sendJson(response, 500, { error: "dashboard_request_failed" });
@@ -82,7 +105,8 @@ async function routeRequest(
   response: ServerResponse,
   options: DashboardServerOptions,
   staticRoot: string,
-  commands: ApplicationCommands
+  commands: ApplicationCommands,
+  chatService: OperationalChatService
 ) {
   const url = new URL(request.url ?? "/", "http://localhost");
 
@@ -794,6 +818,70 @@ async function routeRequest(
         error: "task_cancel_failed",
         details: message
       });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/chat/messages") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || "";
+    const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
+
+    if (!projectKey) {
+      sendJson(response, 400, { error: "projectKey_is_required" });
+      return;
+    }
+
+    try {
+      const messages = await chatService.getHistory(projectKey, limit);
+      sendJson(response, 200, { projectKey, messages });
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_history_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/chat/ask") {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+
+    if (!projectKey || !message) {
+      sendJson(response, 400, { error: "projectKey_and_message_are_required" });
+      return;
+    }
+
+    try {
+      const chatResponse = await chatService.ask({
+        projectKey,
+        surface: "dashboard",
+        message
+      });
+      sendJson(response, 200, chatResponse);
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_ask_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/chat/action") {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
+    const action = body.action as import("../chat/types.js").GovernedChatAction;
+
+    if (!projectKey || !action || !(action as any).type || (action as any).targetId === undefined) {
+      sendJson(response, 400, { error: "projectKey_and_valid_action_are_required" });
+      return;
+    }
+
+    try {
+      const actionResult = await chatService.executeAction({
+        projectKey,
+        surface: "dashboard",
+        action
+      });
+      sendJson(response, 200, actionResult);
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_action_failed", details: error instanceof Error ? error.message : "unknown" });
     }
     return;
   }

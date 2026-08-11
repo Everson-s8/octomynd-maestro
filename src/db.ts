@@ -23,6 +23,23 @@ import {
 } from "./intake/persistence.js";
 import { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
 import { explainWorkIntakeDecision } from "./intake/explanation.js";
+import {
+  createOperationalChatPersistence,
+  migrateOperationalChatPersistence
+} from "./chat/persistence.js";
+export type {
+  OperationalChatMessageInput,
+  OperationalChatMessageRecord,
+  OperationalChatSenderRole,
+  OperationalChatSurface,
+  ChatEvidenceContext,
+  GovernedChatAction,
+  OperationalChatRequest,
+  OperationalChatResponse,
+  OperationalChatActionRequest,
+  OperationalChatActionResponse
+} from "./chat/types.js";
+export { createOperationalChatPersistence, migrateOperationalChatPersistence } from "./chat/persistence.js";
 export { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
 export { explainWorkIntakeDecision } from "./intake/explanation.js";
 export { WORK_INTAKE_POLICY_VERSION } from "./intake/types.js";
@@ -587,10 +604,12 @@ export function createDatabase(databasePath: string) {
   migrate(db);
   migrateProviderPolicyPersistence(db);
   migrateWorkIntakePersistence(db);
+  migrateOperationalChatPersistence(db);
   const skillPersistence = createSkillPersistence(db);
   const workGraphPersistence = createWorkGraphPersistence(db);
   const providerPolicyPersistence = createProviderPolicyPersistence(db);
   const workIntakePersistence = createWorkIntakePersistence(db);
+  const chatPersistence = createOperationalChatPersistence(db);
 
   const createTaskStatement = db.prepare(`
     INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
@@ -925,6 +944,7 @@ export function createDatabase(databasePath: string) {
     ...workGraphPersistence,
     ...providerPolicyPersistence,
     ...workIntakePersistence,
+    ...chatPersistence,
 
     withTransaction<T>(fn: () => T): T {
       return db.transaction(fn)();
