@@ -328,7 +328,13 @@ export class FeatureCoordinator {
 
   private async reconcileFeatures(): Promise<number> {
     let changes = new CompletionReviewOutbox(this.database).reconcileCompletedFeatures(100);
-    const features = this.database.listFeatures(100).filter((feature) => (
+    const allFeatures = this.database.listFeatures(100);
+    for (const feature of allFeatures) {
+      if (feature.status === "completed" && feature.featurePlanId !== null) {
+        this.database.reconcileFeaturePlanStatus(feature.featurePlanId);
+      }
+    }
+    const features = allFeatures.filter((feature) => (
       !["completed", "failed", "cancelled"].includes(feature.status)
     ));
     for (const feature of features) {

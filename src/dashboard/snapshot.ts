@@ -244,14 +244,15 @@ export function buildDashboardSnapshot(
       };
     })(),
     featurePlans: featurePlans.map((plan) => {
+      const reconciledPlan = database.reconcileFeaturePlanStatus(plan.id);
       const tasks = database.listFeaturePlanTasks(plan.id);
       const integration = database.getFeaturePlanIntegrationDetailsByFeaturePlan(plan.id);
       const associatedFeature = database.findFeatureByFeaturePlanId(plan.id);
       const dependencies = database.listFeaturePlanDependencies(plan.id);
       const eligibility = database.evaluateFeaturePlanEligibility(plan.id);
-      const lifecycleStatus = plan.status === "cancelled"
+      const lifecycleStatus = reconciledPlan.status === "cancelled"
         ? "cancelled"
-        : associatedFeature?.status === "completed" || plan.status === "completed"
+        : reconciledPlan.status === "completed"
           ? "completed"
           : "active";
       const blockers = tasks
