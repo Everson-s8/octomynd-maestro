@@ -453,6 +453,35 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/skills/curator/candidates") {
+    const statusParam = url.searchParams.get("status") as import("../db.js").SkillCuratorCandidateStatus | null;
+    const candidates = commands.listSkillCuratorCandidates(statusParam ?? undefined);
+    sendJson(response, 200, { candidates });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/skills/curator/candidates/process") {
+    try {
+      const candidates = commands.processSkillCuratorIncidents({ channel: "dashboard" });
+      sendJson(response, 200, { candidates });
+    } catch (error) {
+      sendCommandError(response, error, "skill_curator_candidates_process_failed");
+    }
+    return;
+  }
+
+  const candidateEvalMatch = url.pathname.match(/^\/api\/skills\/curator\/candidates\/(\d+)\/evaluate$/);
+  if (request.method === "POST" && candidateEvalMatch) {
+    const candidateId = Number(candidateEvalMatch[1]);
+    try {
+      const candidate = commands.evaluateSkillCuratorCandidate({ channel: "dashboard" }, candidateId);
+      sendJson(response, 200, { candidate });
+    } catch (error) {
+      sendCommandError(response, error, "skill_curator_candidate_evaluate_failed");
+    }
+    return;
+  }
+
   const skillVersionActionMatch = url.pathname.match(
     /^\/api\/skills\/versions\/(\d+)\/(evaluate|approve|activate|rollback|restore|archive)$/
   );

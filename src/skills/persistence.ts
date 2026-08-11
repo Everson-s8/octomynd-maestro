@@ -3,7 +3,7 @@ import path from "node:path";
 import { redactSensitiveText } from "../security/redaction.js";
 import type { AgentOutcome, AgentProviderId } from "../agents/types.js";
 import type { GoalPhase } from "../db.js";
-import type { SkillPolicy, SkillRisk, SkillScope } from "./types.js";
+import type { SkillOwner, SkillPolicy, SkillRisk, SkillScope } from "./types.js";
 
 export type SkillVersionLifecycleStatus =
   | "candidate"
@@ -23,6 +23,10 @@ export type SkillRecord = {
   owner: SkillPolicy["owner"];
   risk: SkillRisk;
   activeVersionId: string | null;
+  monitoringActiveUntil: string | null;
+  postActivationExecutions: number;
+  postActivationFailures: number;
+  previousActiveVersionId: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -158,6 +162,72 @@ export type SkillProposalInput = {
 
 export type SkillArchiveActor = "human" | "curator";
 
+export type SkillIncidentType =
+  | "classified_failure"
+  | "successful_recovery"
+  | "user_correction"
+  | "provider_routing_incident";
+
+export type SkillIncidentRecord = {
+  id: number;
+  runId: number;
+  stepId: number | null;
+  skillVersionRecordId: number;
+  qualifiedName: string;
+  versionId: string;
+  type: SkillIncidentType;
+  evidence: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type SkillIncidentInput = {
+  runId: number;
+  stepId?: number | null;
+  skillVersionRecordId: number;
+  type: SkillIncidentType;
+  evidence: Record<string, unknown>;
+};
+
+export type SkillCuratorCandidateStatus =
+  | "proposed"
+  | "evaluating"
+  | "promoted"
+  | "rejected"
+  | "rolled_back";
+
+export type SkillCuratorCandidateRecord = {
+  id: number;
+  skillId: number;
+  skillVersionRecordId: number;
+  qualifiedName: string;
+  versionId: string;
+  fingerprint: string;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  risk: SkillRisk;
+  owner: SkillOwner;
+  status: SkillCuratorCandidateStatus;
+  evidence: Record<string, unknown>[];
+  reproducibleTestCase: Record<string, unknown>;
+  evalResults: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillCuratorCandidateInput = {
+  skillId: number;
+  skillVersionRecordId: number;
+  fingerprint: string;
+  title: string;
+  rationale: string;
+  proposedChange: string;
+  risk: SkillRisk;
+  owner: SkillOwner;
+  evidence: Record<string, unknown>[];
+  reproducibleTestCase: Record<string, unknown>;
+};
+
 export function createSkillPersistence(db: Database.Database) {
   const upsertSkill = db.prepare(`
     INSERT INTO skills (
@@ -242,6 +312,50 @@ export function createSkillPersistence(db: Database.Database) {
     UPDATE skill_proposals
     SET status = 'rejected', decision_note = @decisionNote, updated_at = @now
     WHERE id = @id AND status = 'requested'
+  `);
+  const insertIncident = db.prepare(`
+    INSERT INTO skill_curator_incidents (
+      run_id, step_id, skill_version_id, type, evidence_json, created_at
+    ) VALUES (
+      @runId, @stepId, @skillVersionRecordId, @type, @evidenceJson, @now
+    )
+  `);
+  const insertCuratorCandidate = db.prepare(`
+    INSERT INTO skill_curator_candidates (
+      skill_id, skill_version_id, fingerprint, title, rationale, proposed_change,
+      risk, owner, status, evidence_json, reproducible_test_case_json, eval_results_json,
+      created_at, updated_at
+    ) VALUES (
+      @skillId, @skillVersionRecordId, @fingerprint, @title, @rationale, @proposedChange,
+      @risk, @owner, @status, @evidenceJson, @reproducibleTestCaseJson, @evalResultsJson,
+      @now, @now
+    )
+  `);
+  const updateCandidateStatusStmt = db.prepare(`
+    UPDATE skill_curator_candidates
+    SET status = @status, eval_results_json = @evalResultsJson, updated_at = @now
+    WHERE id = @id
+  `);
+  const updateCandidateEvidenceStmt = db.prepare(`
+    UPDATE skill_curator_candidates
+    SET evidence_json = @evidenceJson, updated_at = @now
+    WHERE id = @id
+  `);
+  const setMonitoringStmt = db.prepare(`
+    UPDATE skills
+    SET monitoring_active_until = @monitoringActiveUntil,
+        post_activation_executions = 0,
+        post_activation_failures = 0,
+        previous_active_version_id = @previousActiveVersionId,
+        updated_at = @now
+    WHERE id = @skillId
+  `);
+  const recordPostExecutionStmt = db.prepare(`
+    UPDATE skills
+    SET post_activation_executions = post_activation_executions + 1,
+        post_activation_failures = post_activation_failures + @failed,
+        updated_at = @now
+    WHERE id = @skillId
   `);
 
   function promoteVersion(id: number): SkillVersionRecord {
@@ -555,6 +669,143 @@ export function createSkillPersistence(db: Database.Database) {
         : db.prepare(`${USAGE_SELECT} WHERE skill_usage.run_id = ? ORDER BY skill_usage.id ASC LIMIT ?`)
           .all(runId, limit);
       return (rows as SkillUsageRow[]).map(mapUsage);
+    },
+
+    recordSkillIncident(input: SkillIncidentInput): SkillIncidentRecord {
+      assertGoalExists(db, input.runId);
+      if (input.stepId !== undefined && input.stepId !== null) {
+        assertGoalStepBelongsToRun(db, input.stepId, input.runId);
+      }
+      getVersionRow(db, input.skillVersionRecordId);
+      const now = new Date().toISOString();
+      const result = insertIncident.run({
+        runId: input.runId,
+        stepId: input.stepId ?? null,
+        skillVersionRecordId: input.skillVersionRecordId,
+        type: input.type,
+        evidenceJson: JSON.stringify(input.evidence ?? {}),
+        now
+      });
+      return getSkillIncidentRecord(db, Number(result.lastInsertRowid));
+    },
+
+    listSkillIncidents(qualifiedName?: string, limit = 100): SkillIncidentRecord[] {
+      const sql = qualifiedName
+        ? `${INCIDENT_SELECT} WHERE skills.qualified_name = ? ORDER BY skill_curator_incidents.id DESC LIMIT ?`
+        : `${INCIDENT_SELECT} ORDER BY skill_curator_incidents.id DESC LIMIT ?`;
+      const rows = qualifiedName
+        ? db.prepare(sql).all(qualifiedName, limit)
+        : db.prepare(sql).all(limit);
+      return (rows as SkillIncidentRow[]).map(mapSkillIncident);
+    },
+
+    createSkillCuratorCandidate(input: SkillCuratorCandidateInput): SkillCuratorCandidateRecord {
+      const skillRow = db.prepare("SELECT id FROM skills WHERE id = ?").get(input.skillId);
+      if (!skillRow) throw new Error(`Skill not found: ${input.skillId}`);
+      getVersionRow(db, input.skillVersionRecordId);
+      const now = new Date().toISOString();
+      const result = insertCuratorCandidate.run({
+        skillId: input.skillId,
+        skillVersionRecordId: input.skillVersionRecordId,
+        fingerprint: input.fingerprint.trim(),
+        title: redactSensitiveText(input.title.trim()).slice(0, 200),
+        rationale: redactSensitiveText(input.rationale.trim()).slice(0, 1000),
+        proposedChange: redactSensitiveText(input.proposedChange.trim()).slice(0, 4000),
+        risk: input.risk,
+        owner: input.owner,
+        status: "proposed",
+        evidenceJson: JSON.stringify(input.evidence ?? []),
+        reproducibleTestCaseJson: JSON.stringify(input.reproducibleTestCase ?? {}),
+        evalResultsJson: null,
+        now
+      });
+      return getSkillCuratorCandidateRecord(db, Number(result.lastInsertRowid));
+    },
+
+    getSkillCuratorCandidate(id: number): SkillCuratorCandidateRecord {
+      return getSkillCuratorCandidateRecord(db, id);
+    },
+
+    findCandidateByFingerprint(fingerprint: string): SkillCuratorCandidateRecord | null {
+      const row = db.prepare(`${CANDIDATE_SELECT} WHERE skill_curator_candidates.fingerprint = ?`)
+        .get(fingerprint.trim()) as SkillCuratorCandidateRow | undefined;
+      return row ? mapSkillCuratorCandidate(row) : null;
+    },
+
+    listSkillCuratorCandidates(status?: SkillCuratorCandidateStatus): SkillCuratorCandidateRecord[] {
+      const rows = status
+        ? db.prepare(`${CANDIDATE_SELECT} WHERE skill_curator_candidates.status = ? ORDER BY skill_curator_candidates.id DESC`).all(status)
+        : db.prepare(`${CANDIDATE_SELECT} ORDER BY skill_curator_candidates.id DESC`).all();
+      return (rows as SkillCuratorCandidateRow[]).map(mapSkillCuratorCandidate);
+    },
+
+    updateSkillCuratorCandidateStatus(
+      id: number,
+      status: SkillCuratorCandidateStatus,
+      evalResults?: Record<string, unknown>
+    ): SkillCuratorCandidateRecord {
+      const current = getSkillCuratorCandidateRecord(db, id);
+      const now = new Date().toISOString();
+      const evalResultsJson = evalResults ? JSON.stringify(evalResults) : (current.evalResults ? JSON.stringify(current.evalResults) : null);
+      updateCandidateStatusStmt.run({ id, status, evalResultsJson, now });
+      return getSkillCuratorCandidateRecord(db, id);
+    },
+
+    deduplicateCandidateEvidence(candidateId: number, additionalEvidence: Record<string, unknown>[]): SkillCuratorCandidateRecord {
+      const candidate = getSkillCuratorCandidateRecord(db, candidateId);
+      const merged = [...candidate.evidence, ...additionalEvidence];
+      const now = new Date().toISOString();
+      updateCandidateEvidenceStmt.run({ id: candidateId, evidenceJson: JSON.stringify(merged), now });
+      return getSkillCuratorCandidateRecord(db, candidateId);
+    },
+
+    activateLowRiskSkillVersion(versionId: number, monitoringDurationMs = 24 * 60 * 60_000): SkillVersionRecord {
+      const targetVersion = getVersionRow(db, versionId);
+      const skill = getSkillRow(db, targetVersion.qualified_name);
+      if (skill.owner !== "agent") {
+        throw new Error(`Automatic activation is restricted to agent-owned Skills: ${targetVersion.qualified_name}.`);
+      }
+      if (skill.risk !== "low") {
+        throw new Error(`Automatic activation is restricted to low-risk Skills: ${targetVersion.qualified_name} has risk ${skill.risk}.`);
+      }
+      const previousActiveVersionId = skill.active_skill_version_id;
+      const promoted = promoteVersion(versionId);
+      const now = new Date();
+      const monitoringActiveUntil = new Date(now.getTime() + monitoringDurationMs).toISOString();
+      setMonitoringStmt.run({
+        skillId: skill.id,
+        monitoringActiveUntil,
+        previousActiveVersionId,
+        now: now.toISOString()
+      });
+      return promoted;
+    },
+
+    recordPostActivationExecution(skillId: number, failed: boolean): { rolledBack: boolean; previousVersionId: number | null } {
+      recordPostExecutionStmt.run({ skillId, failed: failed ? 1 : 0, now: new Date().toISOString() });
+      const skillRow = db.prepare("SELECT * FROM skills WHERE id = ?").get(skillId) as SkillRow | undefined;
+      if (skillRow && skillRow.monitoring_active_until) {
+        const until = new Date(skillRow.monitoring_active_until).getTime();
+        const now = Date.now();
+        if (now <= until) {
+          const failures = skillRow.post_activation_failures ?? 0;
+          const total = skillRow.post_activation_executions ?? 0;
+          if ((total >= 2 && failures / total > 0.25) || failures >= 2) {
+            if (skillRow.previous_active_version_id) {
+              const previousVersionId = skillRow.previous_active_version_id;
+              promoteVersion(previousVersionId);
+              setMonitoringStmt.run({
+                skillId,
+                monitoringActiveUntil: null,
+                previousActiveVersionId: null,
+                now: new Date().toISOString()
+              });
+              return { rolledBack: true, previousVersionId };
+            }
+          }
+        }
+      }
+      return { rolledBack: false, previousVersionId: null };
     }
   };
 }
@@ -647,6 +898,36 @@ export function migrateSkillPersistence(db: Database.Database): void {
       FOREIGN KEY (improvement_proposal_id) REFERENCES improvement_proposals(id),
       FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
     );
+    CREATE TABLE IF NOT EXISTS skill_curator_incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      step_id INTEGER,
+      skill_version_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id),
+      FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
+    CREATE TABLE IF NOT EXISTS skill_curator_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      skill_id INTEGER NOT NULL,
+      skill_version_id INTEGER NOT NULL,
+      fingerprint TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      proposed_change TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'proposed',
+      evidence_json TEXT NOT NULL,
+      reproducible_test_case_json TEXT NOT NULL,
+      eval_results_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (skill_id) REFERENCES skills(id),
+      FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
     CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, id);
     CREATE INDEX IF NOT EXISTS idx_goal_skill_pins_run_id ON goal_skill_pins(run_id, id);
     CREATE INDEX IF NOT EXISTS idx_skill_evaluations_version_id ON skill_evaluations(skill_version_id, id);
@@ -654,7 +935,24 @@ export function migrateSkillPersistence(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_skill_proposals_status ON skill_proposals(status, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_proposals_skill_version
       ON skill_proposals(skill_version_id) WHERE skill_version_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_skill_incidents_version ON skill_curator_incidents(skill_version_id, id);
+    CREATE INDEX IF NOT EXISTS idx_skill_curator_candidates_status ON skill_curator_candidates(status, id);
   `);
+
+  const skillColumns = db.prepare("PRAGMA table_info(skills)").all() as { name: string }[];
+  const columnNames = new Set(skillColumns.map((c) => c.name));
+  if (!columnNames.has("monitoring_active_until")) {
+    db.exec("ALTER TABLE skills ADD COLUMN monitoring_active_until TEXT;");
+  }
+  if (!columnNames.has("post_activation_executions")) {
+    db.exec("ALTER TABLE skills ADD COLUMN post_activation_executions INTEGER DEFAULT 0;");
+  }
+  if (!columnNames.has("post_activation_failures")) {
+    db.exec("ALTER TABLE skills ADD COLUMN post_activation_failures INTEGER DEFAULT 0;");
+  }
+  if (!columnNames.has("previous_active_version_id")) {
+    db.exec("ALTER TABLE skills ADD COLUMN previous_active_version_id INTEGER;");
+  }
 }
 
 const VERSION_SELECT = `
@@ -689,6 +987,20 @@ const SKILL_PROPOSAL_SELECT = `
   LEFT JOIN skills ON skills.id = skill_versions.skill_id
 `;
 
+const INCIDENT_SELECT = `
+  SELECT skill_curator_incidents.*, skill_versions.version_id, skills.qualified_name
+  FROM skill_curator_incidents
+  JOIN skill_versions ON skill_versions.id = skill_curator_incidents.skill_version_id
+  JOIN skills ON skills.id = skill_versions.skill_id
+`;
+
+const CANDIDATE_SELECT = `
+  SELECT skill_curator_candidates.*, skill_versions.version_id, skills.qualified_name
+  FROM skill_curator_candidates
+  JOIN skill_versions ON skill_versions.id = skill_curator_candidates.skill_version_id
+  JOIN skills ON skills.id = skill_versions.skill_id
+`;
+
 type SkillRow = {
   id: number;
   qualified_name: string;
@@ -700,6 +1012,42 @@ type SkillRow = {
   risk: SkillRisk;
   active_skill_version_id: number | null;
   active_version_id: string | null;
+  monitoring_active_until?: string | null;
+  post_activation_executions?: number;
+  post_activation_failures?: number;
+  previous_active_version_id?: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type SkillIncidentRow = {
+  id: number;
+  run_id: number;
+  step_id: number | null;
+  skill_version_id: number;
+  qualified_name: string;
+  version_id: string;
+  type: SkillIncidentType;
+  evidence_json: string;
+  created_at: string;
+};
+
+type SkillCuratorCandidateRow = {
+  id: number;
+  skill_id: number;
+  skill_version_id: number;
+  qualified_name: string;
+  version_id: string;
+  fingerprint: string;
+  title: string;
+  rationale: string;
+  proposed_change: string;
+  risk: SkillRisk;
+  owner: SkillOwner;
+  status: SkillCuratorCandidateStatus;
+  evidence_json: string;
+  reproducible_test_case_json: string;
+  eval_results_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -946,6 +1294,20 @@ function getUsage(db: Database.Database, id: number): SkillUsageRecord {
   return mapUsage(row);
 }
 
+function getSkillIncidentRecord(db: Database.Database, id: number): SkillIncidentRecord {
+  const row = db.prepare(`${INCIDENT_SELECT} WHERE skill_curator_incidents.id = ?`)
+    .get(id) as SkillIncidentRow | undefined;
+  if (!row) throw new Error(`Skill incident not found: ${id}`);
+  return mapSkillIncident(row);
+}
+
+function getSkillCuratorCandidateRecord(db: Database.Database, id: number): SkillCuratorCandidateRecord {
+  const row = db.prepare(`${CANDIDATE_SELECT} WHERE skill_curator_candidates.id = ?`)
+    .get(id) as SkillCuratorCandidateRow | undefined;
+  if (!row) throw new Error(`Skill curator candidate not found: ${id}`);
+  return mapSkillCuratorCandidate(row);
+}
+
 function mapSkill(row: SkillRow): SkillRecord {
   return {
     id: row.id,
@@ -957,6 +1319,10 @@ function mapSkill(row: SkillRow): SkillRecord {
     owner: row.owner,
     risk: row.risk,
     activeVersionId: row.active_version_id,
+    monitoringActiveUntil: row.monitoring_active_until ?? null,
+    postActivationExecutions: row.post_activation_executions ?? 0,
+    postActivationFailures: row.post_activation_failures ?? 0,
+    previousActiveVersionId: row.previous_active_version_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1044,6 +1410,42 @@ function mapSkillProposal(row: SkillProposalRow): SkillProposalRecord {
     evidence: JSON.parse(row.evidence_json) as string[],
     provenance: JSON.parse(row.provenance_json) as Record<string, unknown>,
     decisionNote: row.decision_note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapSkillIncident(row: SkillIncidentRow): SkillIncidentRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    skillVersionRecordId: row.skill_version_id,
+    qualifiedName: row.qualified_name,
+    versionId: row.version_id,
+    type: row.type,
+    evidence: JSON.parse(row.evidence_json) as Record<string, unknown>,
+    createdAt: row.created_at
+  };
+}
+
+function mapSkillCuratorCandidate(row: SkillCuratorCandidateRow): SkillCuratorCandidateRecord {
+  return {
+    id: row.id,
+    skillId: row.skill_id,
+    skillVersionRecordId: row.skill_version_id,
+    qualifiedName: row.qualified_name,
+    versionId: row.version_id,
+    fingerprint: row.fingerprint,
+    title: row.title,
+    rationale: row.rationale,
+    proposedChange: row.proposed_change,
+    risk: row.risk,
+    owner: row.owner,
+    status: row.status,
+    evidence: JSON.parse(row.evidence_json) as Record<string, unknown>[],
+    reproducibleTestCase: JSON.parse(row.reproducible_test_case_json) as Record<string, unknown>,
+    evalResults: row.eval_results_json ? (JSON.parse(row.eval_results_json) as Record<string, unknown>) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

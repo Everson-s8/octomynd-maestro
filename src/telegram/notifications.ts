@@ -74,6 +74,40 @@ export function createTelegramImprovementCandidateNotifier(
   };
 }
 
+export function createTelegramSkillCuratorCandidateNotifier(
+  config: MaestroConfig,
+  database: MaestroDatabase,
+  sendMessage: TelegramMessageSender
+): ((candidate: import("../db.js").SkillCuratorCandidateRecord, eventType: string, detail?: string) => Promise<void>) | undefined {
+  const chatId = config.telegram.allowedUserId;
+  if (!chatId) return undefined;
+  return async (candidate, eventType, detail) => {
+    const actionLabels: Record<string, string> = {
+      candidate_created: "💡 Nova proposta de self-correction",
+      candidate_evaluated: "🧪 Candidato avaliado",
+      candidate_promoted: "🚀 Candidato ativado (Low-risk)",
+      candidate_rejected: "❌ Candidato rejeitado",
+      candidate_rolled_back: "⏪ Skill revertida por regressao"
+    };
+
+    const text = truncate([
+      `${actionLabels[eventType] ?? eventType}: Candidate #${candidate.id}`,
+      `Skill: ${candidate.qualifiedName}`,
+      `Risk: ${candidate.risk} | Owner: ${candidate.owner} | Status: ${candidate.status}`,
+      `Rationale: ${redactSensitiveText(candidate.rationale)}`,
+      detail ? `Detail: ${redactSensitiveText(detail)}` : null
+    ].filter(Boolean).join("\n"), 4_000);
+
+    await sendMessage(chatId, text);
+    database.addEvent({
+      source: "telegram",
+      type: "skill.curator_notification_sent",
+      text: `Skill curator ${eventType} notification sent for candidate #${candidate.id}.`,
+      metadata: { candidateId: candidate.id, eventType, status: candidate.status }
+    });
+  };
+}
+
 export function createTelegramGoalNotifier(
   config: MaestroConfig,
   database: MaestroDatabase,

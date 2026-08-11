@@ -1,6 +1,7 @@
 import type {
   MaestroDatabase,
   SkillArchiveActor,
+  SkillCuratorCandidateRecord,
   SkillEvaluationRecord,
   SkillProposalRecord,
   SkillVersionRecord
@@ -51,6 +52,18 @@ export class SkillLifecycleService {
 
   curatorApplyAutomaticArchival(now?: Date): { archived: string[]; report: SkillCuratorReport } {
     return this.runtime.curator.applyAutomaticArchival(now);
+  }
+
+  processCuratorIncidents(): SkillCuratorCandidateRecord[] {
+    return this.runtime.curator.processIncidentsIntoCandidates();
+  }
+
+  evaluateCuratorCandidate(candidateId: number): SkillCuratorCandidateRecord {
+    return this.runtime.curator.evaluateCandidate(candidateId);
+  }
+
+  recordPostActivationExecution(skillId: number, failed: boolean): { rolledBack: boolean; previousVersionId: number | null } {
+    return this.runtime.curator.recordExecutionResult(skillId, failed);
   }
 
   reconcileSkillProposalDrafts(): SkillProposalRecord[] {
