@@ -44,7 +44,7 @@ export function buildAgentGoalPrompt(request: AgentExecutionRequest): string {
 }
 
 export function parseFinalReviewDecision(content: string): "approved" | "changes_requested" | null {
-  const matches = [...content.matchAll(/FINAL_REVIEW_DECISION:\s*(approved|changes_requested)\b/gi)];
+  const matches = [...content.matchAll(/FINAL_REVIEW_DECISION:\s*[`"*]*\s*(approved|changes_requested)\b/gi)];
   if (matches.length !== 1) return null;
   return matches[0][1].toLowerCase() as "approved" | "changes_requested";
 }

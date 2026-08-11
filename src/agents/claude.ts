@@ -131,6 +131,8 @@ export class ClaudeProvider implements AgentProvider {
       return {
         outcome: "cancelled",
         summary: "Claude execution cancelled by user.",
+        structuredPayload: null,
+        artifactsProduced: [],
         output: "",
         error: null,
         durationMs: result.durationMs,
@@ -177,12 +179,14 @@ export class ClaudeProvider implements AgentProvider {
       return {
         outcome: "failed",
         summary,
+        structuredPayload: null,
+        failureCategory: category,
+        retryable,
+        retryAfterMs: retryAfterMsForFailure(category),
+        artifactsProduced: [],
         output: errorText,
         error: errorText || summary,
         durationMs: result.durationMs,
-        retryable,
-        retryAfterMs: retryAfterMsForFailure(category),
-        failureCategory: category,
         processRuntime: processRuntime(result)
       };
     }
@@ -202,6 +206,8 @@ export class ClaudeProvider implements AgentProvider {
           ? "Claude solicitou ajustes concretos."
           : "Claude nao aprovou explicitamente a revisao final."
         : `Claude concluiu a fase ${request.phase}.`,
+      structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
+      artifactsProduced: [],
       output: content,
       error: null,
       durationMs: result.durationMs,

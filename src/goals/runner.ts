@@ -472,11 +472,13 @@ export async function runTaskGoal(
         result = {
           outcome: options.signal?.aborted ? "cancelled" : "failed",
           summary: error instanceof Error ? error.message : "Unknown provider execution error.",
+          structuredPayload: null,
+          failureCategory: "unknown",
+          retryable: false,
+          artifactsProduced: [],
           output: "",
           error: error instanceof Error ? error.message : "Unknown provider execution error.",
-          durationMs: Date.now() - startedAt,
-          retryable: false,
-          failureCategory: "unknown"
+          durationMs: Date.now() - startedAt
         };
       } finally {
         routed.release(result!);
@@ -551,6 +553,9 @@ export async function runTaskGoal(
             phase,
             durationMs: result.durationMs,
             processRuntime: result.processRuntime ?? null,
+            structuredPayload: result.structuredPayload ?? null,
+            failureCategory: result.failureCategory ?? null,
+            artifactsProduced: result.artifactsProduced ?? [],
             workspaceProgress: {
               known: workspaceBefore !== null && workspaceAfter !== null,
               changed: workspaceBefore !== null

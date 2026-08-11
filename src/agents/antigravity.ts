@@ -5,7 +5,8 @@ import {
   buildFailureSummary,
   classifyFailure,
   isRetryableFailureCategory,
-  retryAfterMsForFailure
+  retryAfterMsForFailure,
+  type FailureCategory
 } from "./failure.js";
 import { isWritableExecution } from "./execution-policy.js";
 import {
@@ -139,6 +140,8 @@ export class AntigravityProvider implements AgentProvider {
       return {
         outcome: "cancelled",
         summary: "Antigravity execution cancelled by user.",
+        structuredPayload: null,
+        artifactsProduced: [],
         output: "",
         error: null,
         durationMs: processResult.durationMs,
@@ -164,16 +167,20 @@ export class AntigravityProvider implements AgentProvider {
       const summary = buildFailureSummary(this.label, request.phase, category);
       if (category === "quota" || category === "auth_required") {
         this.cacheHealth({ state: category, detail: summary, checkedAt: new Date().toISOString() }, 10 * 60_000);
+      } else if (category === "offline" || category === "capacity") {
+        this.cacheHealth({ state: "offline", detail: summary, checkedAt: new Date().toISOString() }, 30_000);
       }
       return {
         outcome: "failed",
         summary,
+        structuredPayload: null,
+        failureCategory: category,
+        retryable: isRetryableFailureCategory(category),
+        retryAfterMs: retryAfterMsForFailure(category),
+        artifactsProduced: [],
         output: diagnostics,
         error: diagnostics || summary,
         durationMs: processResult.durationMs,
-        retryable: isRetryableFailureCategory(category),
-        retryAfterMs: retryAfterMsForFailure(category),
-        failureCategory: category,
         processRuntime: processRuntime(processResult)
       };
     }
@@ -191,8 +198,12 @@ export class AntigravityProvider implements AgentProvider {
     return {
       outcome: changesRequested ? "changes_requested" : "completed",
       summary: changesRequested
-        ? "Antigravity nao aprovou explicitamente a revisao final."
+        ? reviewDecision === "changes_requested"
+          ? "Antigravity solicitou ajustes concretos."
+          : "Antigravity nao aprovou explicitamente a revisao final."
         : `Antigravity concluiu a fase ${request.phase}.`,
+      structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
+      artifactsProduced: [],
       output,
       error: null,
       durationMs: processResult.durationMs,
@@ -300,22 +311,27 @@ export function buildAntigravityArgs(
 }
 
 export function resolveAntigravityExecutable(explicitPath?: string): string | null {
+  if (explicitPath) {
+    return fs.existsSync(explicitPath) ? explicitPath : null;
+  }
   const candidates = [
-    explicitPath,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : null,
     process.env.HOME ? path.join(process.env.HOME, ".local", "bin", "agy") : null
   ].filter((candidate): candidate is string => Boolean(candidate));
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
-function failure(detail: string): AgentExecutionResult {
+function failure(detail: string, category: FailureCategory = "offline"): AgentExecutionResult {
   return {
     outcome: "failed",
     summary: detail,
+    structuredPayload: null,
+    failureCategory: category,
+    retryable: false,
+    artifactsProduced: [],
     output: "",
     error: detail,
-    durationMs: 0,
-    retryable: false
+    durationMs: 0
   };
 }
 
