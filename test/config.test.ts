@@ -21,6 +21,7 @@ describe("config", () => {
     });
     expect(config.runtime).toEqual({
       tokenEfficient: true,
+      selfUpdatePollIntervalMs: 300_000,
       antigravityEnabled: true,
       antigravityModel: null,
       antigravityEffort: "medium",

@@ -1,6 +1,6 @@
 import { Bot, Context } from "grammy";
 import { MaestroConfig } from "../config.js";
-import { FeaturePlanDetails, FeatureRecord, MaestroDatabase, ProjectRecord, TaskRecord } from "../db.js";
+import { FeaturePlanDetails, FeatureRecord, MaestroDatabase, ProjectRecord, RuntimeUpdateRecord, TaskRecord } from "../db.js";
 import { parseProjectTaskInput } from "../orchestrator.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import type { WorkGraphRuntimeCommands, WorkGraphView } from "../commands/application-commands.js";
@@ -22,6 +22,7 @@ export type TelegramBotOptions = {
   workGraphRuntime?: WorkGraphRuntimeCommands;
   featureCoordinator?: FeatureCoordinator;
   chatService?: OperationalChatService;
+  triggerSelfUpdate?: () => Promise<RuntimeUpdateRecord>;
 };
 
 export function createTelegramBot(
@@ -144,6 +145,35 @@ export function createTelegramBot(
     }
     const report = await options.environmentDoctor(project.key);
     await ctx.reply(formatEnvironmentReport(report));
+  });
+
+  bot.command("update", async (ctx) => {
+    database.addEvent({
+      source: "telegram",
+      type: "command.update",
+      text: "/update",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null
+    });
+
+    if (!options.triggerSelfUpdate) {
+      await ctx.reply("Self-update nao disponivel neste runtime.");
+      return;
+    }
+
+    try {
+      await ctx.reply("Verificando e disparando self-update...");
+      const record = await options.triggerSelfUpdate();
+      if (record.status === "failed") {
+        await ctx.reply(`Self-update falhou: ${record.error}`);
+      } else if (record.status === "completed") {
+        await ctx.reply(`Runtime ja esta atualizado no commit ${record.targetCommit}.`);
+      } else {
+        await ctx.reply(`Self-update iniciado. Alvo: ${record.targetCommit.slice(0, 7)}. Reiniciando runtime...`);
+      }
+    } catch (error) {
+      await ctx.reply(`Falha ao disparar self-update: ${error instanceof Error ? error.message : "Erro desconhecido."}`);
+    }
   });
 
   bot.command("project_add", async (ctx) => {
@@ -1095,7 +1125,8 @@ function formatHelp(): string {
     "/feature_cancel id [motivo] - cancelar Feature PR consolidado antes do merge",
     "/review id-ou-url - solicitar revisao final manual de Feature PR",
     "/review_status id-ou-url - verificar estado da revisao final de Feature PR",
-    "/review_retry id-ou-url - tentar novamente a revisao final de Feature PR"
+    "/review_retry id-ou-url - tentar novamente a revisao final de Feature PR",
+    "/update - verificar e disparar self-update manual"
   ].join("\n");
 }
 

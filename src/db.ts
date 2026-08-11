@@ -2701,6 +2701,10 @@ export function createDatabase(databasePath: string) {
           .get(input.featureId) as RuntimeUpdateRow | undefined;
         if (existingRow) return mapRuntimeUpdate(existingRow);
       }
+      const existingActive = db
+        .prepare("SELECT * FROM runtime_updates WHERE target_commit = ? AND status IN ('pending', 'in_progress') ORDER BY id DESC LIMIT 1")
+        .get(input.targetCommit) as RuntimeUpdateRow | undefined;
+      if (existingActive) return mapRuntimeUpdate(existingActive);
       const now = new Date().toISOString();
       const result = enqueueRuntimeUpdateStatement.run({
         featureId: input.featureId ?? null,

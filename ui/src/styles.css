@@ -150,6 +150,9 @@ a { color: inherit; text-decoration: none; }
 .hero-copy > p { max-width: 580px; margin: 0; color: rgba(255,255,255,.58); font-size: .96rem; line-height: 1.65; }
 .hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 25px; }
 .hero-chips span { padding: 8px 11px; color: rgba(255,255,255,.68); background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.09); border-radius: 999px; font-family: var(--mono); font-size: .56rem; }
+.hero-chips span.runtime-update-chip.status-completed { color: #50fa7b; border-color: rgba(80,250,123,.3); background: rgba(80,250,123,.08); }
+.hero-chips span.runtime-update-chip.status-in_progress, .hero-chips span.runtime-update-chip.status-pending { color: #8be9fd; border-color: rgba(139,233,253,.3); background: rgba(139,233,253,.08); }
+.hero-chips span.runtime-update-chip.status-failed, .hero-chips span.runtime-update-chip.status-rolled_back { color: #ff5555; border-color: rgba(255,85,85,.3); background: rgba(255,85,85,.08); }
 .hero-visual { position: relative; display: grid; place-items: center; min-height: 360px; }
 .mascot-core { position: relative; z-index: 3; display: grid; place-items: center; width: 166px; height: 166px; background: radial-gradient(circle, rgba(255,255,255,.1), rgba(255,255,255,.02)); border: 1px solid rgba(255,255,255,.12); border-radius: 50%; box-shadow: 0 0 90px rgba(255,47,200,.21); animation: breathe 4s ease-in-out infinite; }
 .octo-mark.is-large { width: 126px; height: 126px; filter: drop-shadow(0 22px 38px rgba(255,47,200,.32)); }
