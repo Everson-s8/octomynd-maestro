@@ -78,10 +78,10 @@ export function createTelegramSkillCuratorCandidateNotifier(
   config: MaestroConfig,
   database: MaestroDatabase,
   sendMessage: TelegramMessageSender
-): ((candidate: import("../db.js").SkillCuratorCandidateRecord, eventType: string, detail?: string) => Promise<void>) | undefined {
+): ((eventType: string, candidate: import("../db.js").SkillCuratorCandidateRecord, detail?: string) => Promise<void>) | undefined {
   const chatId = config.telegram.allowedUserId;
   if (!chatId) return undefined;
-  return async (candidate, eventType, detail) => {
+  return async (eventType, candidate, detail) => {
     const actionLabels: Record<string, string> = {
       candidate_created: "💡 Nova proposta de self-correction",
       candidate_evaluated: "🧪 Candidato avaliado",

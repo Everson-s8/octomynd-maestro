@@ -218,7 +218,7 @@ describe("Operational Skill Curator with evidence-driven self-correction", () =>
       database,
       {},
       undefined,
-      (eventType, candidate, detail) => notifier!(candidate, eventType, detail)
+      (eventType, candidate, detail) => notifier!(eventType, candidate, detail)
     );
 
     const candidates = curator.processIncidentsIntoCandidates();
