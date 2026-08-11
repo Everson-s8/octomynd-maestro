@@ -2067,6 +2067,19 @@ export function createDatabase(databasePath: string) {
       return this.getFeaturePlanDetails(id);
     },
 
+    reconcileFeaturePlanStatus(id: number): FeaturePlanRecord {
+      const plan = this.getFeaturePlan(id);
+      if (plan.status === "completed" || plan.status === "cancelled") {
+        return plan;
+      }
+      const associatedFeature = this.findFeatureByFeaturePlanId(id);
+      if (associatedFeature?.status === "completed") {
+        this.completeFeaturePlanAfterMerge(id);
+        return this.getFeaturePlan(id);
+      }
+      return plan;
+    },
+
     admitFeaturePlan(id: number, actorUserId?: string | null, actorUsername?: string | null): FeaturePlanDetails {
       const plan = this.getFeaturePlan(id);
       if (["admitted", "active", "waiting_review", "waiting_merge", "completed"].includes(plan.status)) {
@@ -2086,7 +2099,7 @@ export function createDatabase(databasePath: string) {
     },
 
     evaluateFeaturePlanEligibility(featurePlanId: number): FeaturePlanEligibilityResult {
-      const plan = this.getFeaturePlan(featurePlanId);
+      const plan = this.reconcileFeaturePlanStatus(featurePlanId);
       if (plan.status !== "queued") {
         return {
           featurePlanId,
@@ -2116,7 +2129,7 @@ export function createDatabase(databasePath: string) {
       const deps = this.listFeaturePlanDependencies(featurePlanId);
       const blockedDependencies: Array<{ id: number; status: FeaturePlanQueueStatus }> = [];
       for (const dep of deps) {
-        const depPlan = this.getFeaturePlan(dep.dependsOnFeaturePlanId);
+        const depPlan = this.reconcileFeaturePlanStatus(dep.dependsOnFeaturePlanId);
         if (depPlan.status !== "completed") {
           blockedDependencies.push({ id: depPlan.id, status: depPlan.status });
         }
@@ -2134,22 +2147,25 @@ export function createDatabase(databasePath: string) {
         };
       }
 
-      const activeProjectRow = db.prepare(`
-        SELECT id, status FROM feature_plans
+      const activeProjectRows = db.prepare(`
+        SELECT id FROM feature_plans
         WHERE project_id = ? AND id <> ? AND status IN ('admitted', 'active', 'waiting_review', 'waiting_merge')
-        LIMIT 1
-      `).get(plan.projectId, plan.id) as { id: number; status: FeaturePlanQueueStatus } | undefined;
+      `).all(plan.projectId, plan.id) as Array<{ id: number }>;
 
-      if (activeProjectRow) {
+      for (const row of activeProjectRows) {
+        const activePlan = this.reconcileFeaturePlanStatus(row.id);
+        if (activePlan.status === "completed" || activePlan.status === "cancelled") {
+          continue;
+        }
         return {
           featurePlanId,
           projectKey: plan.projectKey,
           eligible: false,
-          reason: `Project '${plan.projectKey}' already has an active Feature Plan #${activeProjectRow.id} (status: ${activeProjectRow.status})`,
+          reason: `Project '${plan.projectKey}' already has an active Feature Plan #${activePlan.id} (status: ${activePlan.status})`,
           blockedByPaused: false,
           blockedByStatus: false,
           blockedDependencies: [],
-          blockedByActiveProjectPlan: { id: activeProjectRow.id, status: activeProjectRow.status }
+          blockedByActiveProjectPlan: { id: activePlan.id, status: activePlan.status }
         };
       }
 
@@ -2172,7 +2188,14 @@ export function createDatabase(databasePath: string) {
       const rows = projectKey?.trim()
         ? (db.prepare(featurePlanSelectSql(suffix)).all(projectKey.trim().toLowerCase()) as FeaturePlanRow[])
         : (db.prepare(featurePlanSelectSql(suffix)).all() as FeaturePlanRow[]);
-      return rows.map((row) => this.getFeaturePlanDetails(row.id));
+      const results: FeaturePlanDetails[] = [];
+      for (const row of rows) {
+        const details = this.getFeaturePlanDetails(row.id);
+        if (details.plan.status !== "completed" && details.plan.status !== "cancelled") {
+          results.push(details);
+        }
+      }
+      return results;
     },
 
     getFeaturePlan(id: number): FeaturePlanRecord {
@@ -2182,7 +2205,7 @@ export function createDatabase(databasePath: string) {
     },
 
     getFeaturePlanDetails(id: number): FeaturePlanDetails {
-      const plan = this.getFeaturePlan(id);
+      const plan = this.reconcileFeaturePlanStatus(id);
       return { plan, tasks: this.listFeaturePlanTasks(plan.id) };
     },
 

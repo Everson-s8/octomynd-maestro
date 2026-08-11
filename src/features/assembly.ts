@@ -100,9 +100,11 @@ export class FeatureAssemblyCoordinator {
 
   private async reconcilePlans(): Promise<number> {
     let changes = 0;
-    const plans = this.database.listFeaturePlans(100).filter((plan) => !["completed", "cancelled"].includes(plan.status));
+    const plans = this.database.listFeaturePlans(100);
     for (const plan of plans) {
-      if (this.active.has(plan.id)) continue;
+      const reconciled = this.database.reconcileFeaturePlanStatus(plan.id);
+      if (["completed", "cancelled"].includes(reconciled.status)) continue;
+      if (this.active.has(reconciled.id)) continue;
       this.active.add(plan.id);
       try {
         if (await this.reconcilePlan(plan.id)) changes += 1;

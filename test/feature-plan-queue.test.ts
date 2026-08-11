@@ -1142,6 +1142,120 @@ describe("Feature Plan Queue Scheduler Block 3", () => {
       expect(postRestartActions).toContain("admitted");
     });
   });
+
+  describe("Feature Plan lifecycle completed non-blocking (Task #53)", () => {
+    it("a completed plan does not block a new plan", () => {
+      const task1 = database.createTask("task 1", "dashboard", "boo");
+      const plan1 = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: "boo",
+        objective: "Feature plan 1",
+        acceptanceCriteria: ["Pass"],
+        taskIds: [task1.id]
+      }).plan;
+      database.admitFeaturePlan(plan1.id);
+
+      const feature1 = database.createFeature({
+        projectKey: "boo",
+        featurePlanId: plan1.id,
+        name: "feature-1",
+        objective: "Feature 1 objective",
+        branchName: "feature-1-branch",
+        worktreePath: tempDir,
+        pullRequestUrl: "https://github.com/org/repo/pull/1"
+      });
+      database.updateFeature({ id: feature1.id, status: "completed" });
+
+      const task2 = database.createTask("task 2", "dashboard", "boo");
+      const plan2 = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: "boo",
+        objective: "Feature plan 2",
+        acceptanceCriteria: ["Pass"],
+        taskIds: [task2.id]
+      }).plan;
+
+      const eligibility = database.evaluateFeaturePlanEligibility(plan2.id);
+      expect(eligibility.eligible).toBe(true);
+      expect(database.getFeaturePlan(plan1.id).status).toBe("completed");
+
+      const admitted = database.admitFeaturePlan(plan2.id);
+      expect(admitted.plan.status).toBe("admitted");
+    });
+
+    it("a plan transitions to completed correctly after merge", () => {
+      const task1 = database.createTask("task 1 for merge", "dashboard", "boo");
+      const plan1 = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: "boo",
+        objective: "Feature plan to merge",
+        acceptanceCriteria: ["Pass"],
+        taskIds: [task1.id]
+      }).plan;
+      database.admitFeaturePlan(plan1.id);
+
+      const feature1 = database.createFeature({
+        projectKey: "boo",
+        featurePlanId: plan1.id,
+        name: "feature-to-merge",
+        objective: "Merge objective",
+        branchName: "feature-merge-branch",
+        worktreePath: tempDir,
+        pullRequestUrl: "https://github.com/org/repo/pull/2"
+      });
+
+      expect(database.getFeaturePlan(plan1.id).status).toBe("admitted");
+
+      database.updateFeature({ id: feature1.id, status: "completed" });
+      const reconciled = database.reconcileFeaturePlanStatus(plan1.id);
+      expect(reconciled.status).toBe("completed");
+
+      const history = database.getFeaturePlanHistory(plan1.id);
+      expect(history.some((h) => h.action === "reconciled_after_feature_merge" && h.toStatus === "completed")).toBe(true);
+    });
+
+    it("restart does not resurrect completed plans as active", () => {
+      const dbPath = path.join(tempDir, "maestro.db");
+      const task1 = database.createTask("task 1 restart", "dashboard", "boo");
+      const plan1 = commands.createFeaturePlan({ channel: "dashboard" }, {
+        projectKey: "boo",
+        objective: "Feature plan before restart",
+        acceptanceCriteria: ["Pass"],
+        taskIds: [task1.id]
+      }).plan;
+      database.admitFeaturePlan(plan1.id);
+
+      const feature1 = database.createFeature({
+        projectKey: "boo",
+        featurePlanId: plan1.id,
+        name: "feature-restart",
+        objective: "Restart objective",
+        branchName: "feature-restart-branch",
+        worktreePath: tempDir,
+        pullRequestUrl: "https://github.com/org/repo/pull/3"
+      });
+      database.updateFeature({ id: feature1.id, status: "completed" });
+      database.reconcileFeaturePlanStatus(plan1.id);
+      expect(database.getFeaturePlan(plan1.id).status).toBe("completed");
+
+      // Simulate app restart by re-opening the database
+      const reopenedDb = createDatabase(dbPath);
+      try {
+        expect(reopenedDb.getFeaturePlan(plan1.id).status).toBe("completed");
+
+        const task2 = reopenedDb.createTask("task 2 restart", "dashboard", "boo");
+        const plan2Cmd = new ApplicationCommands(reopenedDb);
+        const plan2 = plan2Cmd.createFeaturePlan({ channel: "dashboard" }, {
+          projectKey: "boo",
+          objective: "Feature plan after restart",
+          acceptanceCriteria: ["Pass"],
+          taskIds: [task2.id]
+        }).plan;
+
+        const eligibility = reopenedDb.evaluateFeaturePlanEligibility(plan2.id);
+        expect(eligibility.eligible).toBe(true);
+      } finally {
+        reopenedDb.close();
+      }
+    });
+  });
 });
 
 function testConfig(): MaestroConfig {
