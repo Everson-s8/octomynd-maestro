@@ -319,6 +319,7 @@ export async function runTaskGoal(
           });
         });
         const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
+        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
         const checkpoint = database.createGoalCheckpoint(captureGoalCheckpoint({
           runId: run.id,
           stepId: goalStep.id,
@@ -326,6 +327,9 @@ export async function runTaskGoal(
           provider: "work-graph",
           interrupted: false,
           summary: safeSummary,
+          objective: task.text,
+          output: safeOutput,
+          previousCheckpoint,
           workspacePath: task.worktreePath,
           workspaceFingerprint,
           artifactKeys: Object.values(artifactKeys)
@@ -565,6 +569,7 @@ export async function runTaskGoal(
         });
       });
       if (tracksWorkspaceProgress) {
+        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
         const checkpoint = database.createGoalCheckpoint(captureGoalCheckpoint({
           runId: run.id,
           stepId: goalStep.id,
@@ -572,6 +577,10 @@ export async function runTaskGoal(
           provider: routed.provider.id,
           interrupted: result.outcome !== "completed" && result.outcome !== "changes_requested",
           summary: safeSummary,
+          objective: task.text,
+          output: safeOutput,
+          error: safeError,
+          previousCheckpoint,
           workspacePath: task.worktreePath,
           workspaceFingerprint: workspaceAfter,
           artifactKeys: Object.values(artifactKeys)

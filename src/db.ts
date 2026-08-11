@@ -254,6 +254,11 @@ export type GoalRunRecord = {
 
 export type GoalCheckpointStatus = "completed" | "interrupted";
 
+export type GoalTestRun = {
+  command: string;
+  result: string;
+};
+
 export type GoalCheckpointRecord = {
   id: number;
   runId: number;
@@ -262,6 +267,12 @@ export type GoalCheckpointRecord = {
   provider: string;
   status: GoalCheckpointStatus;
   summary: string;
+  objective?: string;
+  done?: string[];
+  decisions?: string[];
+  testsRun?: GoalTestRun[];
+  knownFailures?: string[];
+  remaining?: string[];
   workspaceFingerprint: string | null;
   changedFiles: string[];
   artifactKeys: string[];
@@ -715,12 +726,14 @@ export function createDatabase(databasePath: string) {
   `);
   const createGoalCheckpointStatement = db.prepare(`
     INSERT INTO goal_checkpoints (
-      run_id, step_id, phase, provider, status, summary, workspace_fingerprint,
-      changed_files_json, artifact_keys_json, created_at
+      run_id, step_id, phase, provider, status, summary, objective,
+      done_json, decisions_json, tests_run_json, known_failures_json, remaining_json,
+      workspace_fingerprint, changed_files_json, artifact_keys_json, created_at
     )
     VALUES (
-      @runId, @stepId, @phase, @provider, @status, @summary, @workspaceFingerprint,
-      @changedFilesJson, @artifactKeysJson, @now
+      @runId, @stepId, @phase, @provider, @status, @summary, @objective,
+      @doneJson, @decisionsJson, @testsRunJson, @knownFailuresJson, @remainingJson,
+      @workspaceFingerprint, @changedFilesJson, @artifactKeysJson, @now
     )
   `);
   const addHumanReviewStatement = db.prepare(`
@@ -1310,6 +1323,12 @@ export function createDatabase(databasePath: string) {
       const result = createGoalCheckpointStatement.run({
         ...input,
         summary: redactSensitiveText(input.summary).slice(0, 2_000),
+        objective: redactSensitiveText(input.objective ?? "").slice(0, 2_000),
+        doneJson: JSON.stringify(input.done ?? []),
+        decisionsJson: JSON.stringify(input.decisions ?? []),
+        testsRunJson: JSON.stringify(input.testsRun ?? []),
+        knownFailuresJson: JSON.stringify(input.knownFailures ?? []),
+        remainingJson: JSON.stringify(input.remaining ?? []),
         changedFilesJson: JSON.stringify(input.changedFiles),
         artifactKeysJson: JSON.stringify(input.artifactKeys),
         now: new Date().toISOString()
@@ -2678,6 +2697,12 @@ function migrate(db: Database.Database) {
       provider TEXT NOT NULL,
       status TEXT NOT NULL,
       summary TEXT NOT NULL,
+      objective TEXT NOT NULL DEFAULT '',
+      done_json TEXT NOT NULL DEFAULT '[]',
+      decisions_json TEXT NOT NULL DEFAULT '[]',
+      tests_run_json TEXT NOT NULL DEFAULT '[]',
+      known_failures_json TEXT NOT NULL DEFAULT '[]',
+      remaining_json TEXT NOT NULL DEFAULT '[]',
       workspace_fingerprint TEXT,
       changed_files_json TEXT NOT NULL DEFAULT '[]',
       artifact_keys_json TEXT NOT NULL DEFAULT '[]',
@@ -2941,6 +2966,12 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "improvement_proposals", "provenance_json", "TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, "improvement_proposals", "task_id", "INTEGER");
   addColumnIfMissing(db, "improvement_proposals", "feature_plan_id", "INTEGER");
+  addColumnIfMissing(db, "goal_checkpoints", "objective", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "goal_checkpoints", "done_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "goal_checkpoints", "decisions_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "goal_checkpoints", "tests_run_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "goal_checkpoints", "known_failures_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "goal_checkpoints", "remaining_json", "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_features_feature_plan_id
       ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
@@ -3044,6 +3075,12 @@ type GoalCheckpointRow = {
   provider: string;
   status: GoalCheckpointStatus;
   summary: string;
+  objective?: string | null;
+  done_json?: string | null;
+  decisions_json?: string | null;
+  tests_run_json?: string | null;
+  known_failures_json?: string | null;
+  remaining_json?: string | null;
   workspace_fingerprint: string | null;
   changed_files_json: string;
   artifact_keys_json: string;
@@ -3667,11 +3704,27 @@ function mapGoalCheckpoint(row: GoalCheckpointRow): GoalCheckpointRecord {
     provider: row.provider,
     status: row.status,
     summary: row.summary,
+    objective: row.objective || "",
+    done: parseJsonArray<string>(row.done_json),
+    decisions: parseJsonArray<string>(row.decisions_json),
+    testsRun: parseJsonArray<GoalTestRun>(row.tests_run_json),
+    knownFailures: parseJsonArray<string>(row.known_failures_json),
+    remaining: parseJsonArray<string>(row.remaining_json),
     workspaceFingerprint: row.workspace_fingerprint,
-    changedFiles: JSON.parse(row.changed_files_json || "[]") as string[],
-    artifactKeys: JSON.parse(row.artifact_keys_json || "[]") as string[],
+    changedFiles: parseJsonArray<string>(row.changed_files_json),
+    artifactKeys: parseJsonArray<string>(row.artifact_keys_json),
     createdAt: row.created_at
   };
+}
+
+function parseJsonArray<T>(jsonStr?: string | null): T[] {
+  if (!jsonStr) return [];
+  try {
+    const val = JSON.parse(jsonStr);
+    return Array.isArray(val) ? val : [];
+  } catch {
+    return [];
+  }
 }
 
 function mapGoalStep(row: GoalStepRow): GoalStepRecord {

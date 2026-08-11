@@ -339,6 +339,7 @@ export class GoalCoordinator {
 
     let checkpointId: number | null = null;
     if (runningStep && (runningStep.phase === "implementing" || runningStep.phase === "testing")) {
+      const previousCheckpoint = this.database.getLatestGoalCheckpoint(run.id);
       const checkpoint = this.database.createGoalCheckpoint(captureGoalCheckpoint({
         runId: run.id,
         stepId: runningStep.id,
@@ -346,6 +347,8 @@ export class GoalCoordinator {
         provider: runningStep.provider,
         interrupted: true,
         summary: interruptionSummary,
+        objective: task.text,
+        previousCheckpoint,
         workspacePath: task.worktreePath,
         workspaceFingerprint: captureWorkspaceProgress(task.worktreePath),
         artifactKeys: []

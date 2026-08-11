@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { createDatabase, MaestroDatabase, GoalCheckpointRecord } from "../src/db.js";
 import { captureGoalCheckpoint, formatCheckpointForResume } from "../src/goals/checkpoint.js";
 
 let database: MaestroDatabase;
@@ -46,6 +46,7 @@ describe("Goal checkpoint", () => {
       provider: "codex",
       interrupted: true,
       summary: "Provider stopped after producing a valid partial patch.",
+      objective: "Implement resumable execution",
       workspacePath: tempDir,
       workspaceFingerprint: "fingerprint",
       artifactKeys: ["goal-1/provider-output.raw.txt"]
@@ -54,5 +55,126 @@ describe("Goal checkpoint", () => {
     expect(checkpoint.changedFiles).toContain("partial.ts");
     expect(database.getLatestGoalCheckpoint(run.id)?.id).toBe(checkpoint.id);
     expect(formatCheckpointForResume(checkpoint)).toContain("Nao reverta nem refaca trabalho valido");
+  });
+
+  it("checkpoint round-trip preserves all enriched semantic context fields", () => {
+    const task = database.createTask("Enrich goal checkpoints with semantic context", "test", "maestro");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "implementing",
+      branchName: "task-56",
+      worktreePath: tempDir
+    });
+    const run = database.createGoalRun(task.id);
+    const step = database.createGoalStep(run.id, "implementing", "codex");
+    fs.writeFileSync(path.join(tempDir, "feature.ts"), "export const feature = true;\n");
+
+    const checkpointInput = captureGoalCheckpoint({
+      runId: run.id,
+      stepId: step.id,
+      phase: "implementing",
+      provider: "codex",
+      interrupted: true,
+      summary: "Partial implementation of semantic checkpoint enrichment",
+      objective: "Enrich goal checkpoints with semantic context",
+      done: ["Created DB schema migration", "Updated captureGoalCheckpoint"],
+      decisions: ["Use JSON arrays for semantic arrays in SQLite"],
+      testsRun: [{ command: "npx vitest run test/goal-checkpoint.test.ts", result: "passed" }],
+      knownFailures: ["Timeout on slow integration test"],
+      remaining: ["Add round-trip tests", "Validate backward compatibility"],
+      workspacePath: tempDir,
+      workspaceFingerprint: "fingerprint-123",
+      artifactKeys: ["goal-1/step-1.txt"]
+    });
+
+    const saved = database.createGoalCheckpoint(checkpointInput);
+    const retrieved = database.getGoalCheckpoint(saved.id);
+
+    expect(retrieved.objective).toBe("Enrich goal checkpoints with semantic context");
+    expect(retrieved.done).toEqual(["Created DB schema migration", "Updated captureGoalCheckpoint"]);
+    expect(retrieved.decisions).toEqual(["Use JSON arrays for semantic arrays in SQLite"]);
+    expect(retrieved.testsRun).toEqual([{ command: "npx vitest run test/goal-checkpoint.test.ts", result: "passed" }]);
+    expect(retrieved.knownFailures).toEqual(["Timeout on slow integration test"]);
+    expect(retrieved.remaining).toEqual(["Add round-trip tests", "Validate backward compatibility"]);
+    expect(retrieved.changedFiles).toContain("feature.ts");
+    expect(retrieved.artifactKeys).toEqual(["goal-1/step-1.txt"]);
+  });
+
+  it("formatCheckpointForResume includes semantic context in structured handoff prompt", () => {
+    const checkpoint: GoalCheckpointRecord = {
+      id: 42,
+      runId: 10,
+      stepId: 2,
+      phase: "testing",
+      provider: "claude",
+      status: "interrupted",
+      summary: "Interrupted during testing phase execution",
+      objective: "Enrich goal checkpoints with semantic context",
+      done: ["Implemented checkpoint schema", "Updated resume prompt formatter"],
+      decisions: ["Preserve backward compatibility for missing columns"],
+      testsRun: [
+        { command: "npm test", result: "429 passed" }
+      ],
+      knownFailures: ["Network error when fetching external schema"],
+      remaining: ["Verify round-trip persistence"],
+      workspaceFingerprint: "fp",
+      changedFiles: ["src/goals/checkpoint.ts", "src/db.ts"],
+      artifactKeys: ["artifact-1.txt"],
+      createdAt: new Date().toISOString()
+    };
+
+    const prompt = formatCheckpointForResume(checkpoint);
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain("Checkpoint persistente #42 (interrupted)");
+    expect(prompt).toContain("Provider anterior: claude");
+    expect(prompt).toContain("Fase anterior: testing");
+    expect(prompt).toContain("Objetivo: Enrich goal checkpoints with semantic context");
+    expect(prompt).toContain("Resumo: Interrupted during testing phase execution");
+    expect(prompt).toContain("O que foi realizado (concluido):");
+    expect(prompt).toContain("- Implemented checkpoint schema");
+    expect(prompt).toContain("Decisoes tomadas:");
+    expect(prompt).toContain("- Preserve backward compatibility for missing columns");
+    expect(prompt).toContain("Testes executados:");
+    expect(prompt).toContain("- [npm test]: 429 passed");
+    expect(prompt).toContain("Falhas conhecidas:");
+    expect(prompt).toContain("- Network error when fetching external schema");
+    expect(prompt).toContain("Trabalho restante:");
+    expect(prompt).toContain("- Verify round-trip persistence");
+    expect(prompt).toContain("Arquivos presentes no workspace:");
+    expect(prompt).toContain("- src/goals/checkpoint.ts");
+    expect(prompt).toContain("Evidencias persistidas:");
+    expect(prompt).toContain("- artifact:artifact-1.txt");
+    expect(prompt).toContain("Continue a partir do workspace atual. Nao reverta nem refaca trabalho valido");
+  });
+
+  it("maintains backward compatibility with old checkpoints lacking semantic fields", () => {
+    const legacyCheckpoint: GoalCheckpointRecord = {
+      id: 1,
+      runId: 1,
+      stepId: 1,
+      phase: "implementing",
+      provider: "codex",
+      status: "completed",
+      summary: "Legacy checkpoint summary",
+      workspaceFingerprint: null,
+      changedFiles: [],
+      artifactKeys: [],
+      createdAt: new Date().toISOString()
+    };
+
+    const prompt = formatCheckpointForResume(legacyCheckpoint);
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain("Checkpoint persistente #1 (completed)");
+    expect(prompt).toContain("Resumo: Legacy checkpoint summary");
+    expect(prompt).toContain("O que foi realizado (concluido):");
+    expect(prompt).toContain("- nenhum item registrado");
+    expect(prompt).toContain("Decisoes tomadas:");
+    expect(prompt).toContain("- nenhuma decisao registrada");
+    expect(prompt).toContain("Testes executados:");
+    expect(prompt).toContain("- nenhum teste registrado");
+    expect(prompt).toContain("Falhas conhecidas:");
+    expect(prompt).toContain("- nenhuma falha registrada");
+    expect(prompt).toContain("Trabalho restante:");
+    expect(prompt).toContain("- nenhum trabalho pendente registrado");
   });
 });
