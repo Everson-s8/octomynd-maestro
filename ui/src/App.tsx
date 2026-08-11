@@ -20,6 +20,7 @@ import {
   DashboardProject,
   DashboardTask,
   DashboardWorkGraph,
+  EnvironmentDoctorReport,
   FeatureStatus,
   fetchProviderPolicy,
   fetchTaskReviews,
@@ -121,6 +122,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeView, setActiveView] = useState("overview");
+  const [globalFilter, setGlobalFilter] = useState<"all" | "active" | "attention">("active");
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
 
@@ -148,9 +150,24 @@ export default function App() {
   const activeTasks = useMemo(() => {
     if (!data) return [];
     return [...data.tasks]
-      .filter((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status))
+      .filter((task) => {
+        if (globalFilter === "all") return true;
+        if (globalFilter === "attention") {
+          return [
+            "awaiting_human",
+            "changes_requested",
+            "blocked",
+            "waiting_quota",
+            "waiting_provider",
+            "waiting_dependency",
+            "failed"
+          ].includes(task.status);
+        }
+        return !["done", "failed", "rejected", "cancelled"].includes(task.status);
+      })
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
-  }, [data]);
+  }, [data, globalFilter]);
+
   const selectedTask = data?.tasks.find((task) => task.id === selectedTaskId) ?? null;
   const selectedGoal = data?.goals.find((goal) => goal.taskId === selectedTaskId) ?? null;
 
@@ -167,24 +184,48 @@ export default function App() {
           isRefreshing={isRefreshing}
           onRefresh={() => void refresh(true)}
           onCreateTask={() => setTaskPanelOpen(true)}
+          globalFilter={globalFilter}
+          onFilterChange={setGlobalFilter}
         />
 
         {error ? <ErrorBanner message={error} onRetry={() => void refresh(true)} /> : null}
 
         {data ? (
-          <div className="dashboard-grid" id="overview">
-            <HeroConsole data={data} />
-            <SummaryStrip data={data} />
-            <OperationalChatConsole projects={data.projects} onChanged={() => refresh(true)} />
-            <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
-            <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={() => refresh(true)} />
-            <FeatureBoard features={data.features} onChanged={() => refresh(true)} />
-            <WorkGraphBoard workGraphs={data.workGraphs} onChanged={() => refresh(true)} />
-            <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} />
-            <AgentDock agents={data.agents} environments={data.environments} />
-            <ProjectDeck projects={data.projects} />
-            <ImprovementLab improvements={data.improvements} onChanged={() => refresh(true)} />
-            <EventStream events={data.events} />
+          <div className="dashboard-grid" id={activeView}>
+            {activeView === "tasks" ? (
+              <BacklogPage
+                tasks={data.tasks}
+                onOpenTask={setSelectedTaskId}
+                globalFilter={globalFilter}
+              />
+            ) : activeView === "chat" ? (
+              <OperationalChatConsole projects={data.projects} onChanged={() => refresh(true)} />
+            ) : activeView === "reviews" ? (
+              <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
+            ) : activeView === "projects" ? (
+              <ProjectDeck projects={data.projects} environments={data.environments} tasks={data.tasks} />
+            ) : activeView === "providers" ? (
+              <AgentDock agents={data.agents} environments={data.environments} hideInactive={globalFilter === "active"} />
+            ) : activeView === "learning" ? (
+              <ImprovementLab improvements={data.improvements} onChanged={() => refresh(true)} />
+            ) : activeView === "events" ? (
+              <EventStream events={data.events} />
+            ) : (
+              /* Overview / DashboardPage */
+              <>
+                <HeroConsole data={data} />
+                <SummaryStrip data={data} />
+                <AgentDock agents={data.agents} environments={data.environments} hideInactive={globalFilter === "active"} />
+                <TaskBoard tasks={activeTasks} onOpenTask={setSelectedTaskId} title="Tasks ativas" eyebrow="Visão Geral" />
+                <FeatureBoard features={data.features} featurePlans={data.featurePlans} onChanged={() => refresh(true)} globalFilter={globalFilter} />
+                <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={() => refresh(true)} globalFilter={globalFilter} />
+                <HumanReviewQueue reviews={data.reviewQueue} onChanged={() => refresh(true)} />
+                <WorkGraphBoard workGraphs={data.workGraphs} onChanged={() => refresh(true)} />
+                <ProjectDeck projects={data.projects} environments={data.environments} tasks={data.tasks} />
+                <ImprovementLab improvements={data.improvements} onChanged={() => refresh(true)} />
+                <EventStream events={data.events} />
+              </>
+            )}
           </div>
         ) : null}
       </main>
@@ -480,12 +521,16 @@ function Topbar({
   data,
   isRefreshing,
   onRefresh,
-  onCreateTask
+  onCreateTask,
+  globalFilter,
+  onFilterChange
 }: {
   data: DashboardData | null;
   isRefreshing: boolean;
   onRefresh: () => void;
   onCreateTask: () => void;
+  globalFilter: "all" | "active" | "attention";
+  onFilterChange: (filter: "all" | "active" | "attention") => void;
 }) {
   return (
     <header className="topbar">
@@ -494,6 +539,32 @@ function Topbar({
         <h1>Bom dia, Everson.</h1>
       </div>
       <div className="topbar-actions">
+        <div className="global-filter-strip" role="group" aria-label="Filtro global de visualização">
+          <button
+            type="button"
+            className={`filter-btn ${globalFilter === "active" ? "is-active" : ""}`}
+            onClick={() => onFilterChange("active")}
+            aria-pressed={globalFilter === "active"}
+          >
+            Apenas ativas
+          </button>
+          <button
+            type="button"
+            className={`filter-btn ${globalFilter === "all" ? "is-active" : ""}`}
+            onClick={() => onFilterChange("all")}
+            aria-pressed={globalFilter === "all"}
+          >
+            Todas
+          </button>
+          <button
+            type="button"
+            className={`filter-btn filter-btn-attention ${globalFilter === "attention" ? "is-active" : ""}`}
+            onClick={() => onFilterChange("attention")}
+            aria-pressed={globalFilter === "attention"}
+          >
+            Requer atenção
+          </button>
+        </div>
         <span className="sync-stamp">
           <span className={data ? "sync-dot" : "sync-dot is-offline"} />
           {data ? `sincronizado ${formatRelative(data.generatedAt)}` : "sem conexão"}
@@ -699,15 +770,160 @@ function HumanReviewQueue({
   );
 }
 
-function TaskBoard({ tasks, onOpenTask }: { tasks: DashboardTask[]; onOpenTask: (taskId: number) => void }) {
+function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) {
+  return (
+    <article
+      className={`task-card status-${task.status}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`Abrir detalhes da task ${task.id}`}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <span className={`status-rail status-${task.status}`} />
+      <div className="task-card-content">
+        <div className="task-card-header">
+          <StatusPill status={task.status} />
+          <span className="project-tag">@{task.projectKey ?? task.projectName ?? "geral"}</span>
+          <span className="task-id">#{task.id}</span>
+          <span className="task-age">{formatRelative(task.createdAt)}</span>
+        </div>
+        <div className="task-card-title" title={task.text}>
+          {task.text}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function TaskBoard({
+  tasks,
+  onOpenTask,
+  title = "Fluxo de tasks",
+  eyebrow = "Execução"
+}: {
+  tasks: DashboardTask[];
+  onOpenTask: (taskId: number) => void;
+  title?: string;
+  eyebrow?: string;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
   return (
     <section className="panel task-board" id="tasks" aria-labelledby="tasks-title">
-      <SectionHeader eyebrow="Execução" title="Fluxo de tasks" meta={`${tasks.length} visíveis`} />
-      <div className="task-list">
-        {tasks.length === 0 ? (
-          <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
-        ) : tasks.slice(0, 8).map((task) => <TaskRow task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)}
-      </div>
+      <SectionHeader
+        eyebrow={eyebrow}
+        title={title}
+        meta={`${tasks.length} visíveis`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <div className="task-list">
+          {tasks.length === 0 ? (
+            <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
+          ) : (
+            tasks.slice(0, 8).map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function BacklogPage({
+  tasks,
+  onOpenTask,
+  globalFilter
+}: {
+  tasks: DashboardTask[];
+  onOpenTask: (taskId: number) => void;
+  globalFilter: "all" | "active" | "attention";
+}) {
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [hideOlderThan7Days, setHideOlderThan7Days] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      // Hide completed/cancelled/rejected by default unless globalFilter === 'all'
+      if (globalFilter !== "all" && ["done", "cancelled", "rejected", "failed"].includes(task.status)) {
+        return false;
+      }
+      if (globalFilter === "attention") {
+        const needsAttention = [
+          "awaiting_human",
+          "changes_requested",
+          "blocked",
+          "waiting_quota",
+          "waiting_provider",
+          "waiting_dependency",
+          "failed"
+        ].includes(task.status);
+        if (!needsAttention) return false;
+      }
+      if (statusFilter !== "all" && task.status !== statusFilter) {
+        return false;
+      }
+      if (hideOlderThan7Days) {
+        const ageMs = Date.now() - new Date(task.createdAt).getTime();
+        const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+        if (ageMs > sevenDaysMs) return false;
+      }
+      return true;
+    });
+  }, [tasks, globalFilter, statusFilter, hideOlderThan7Days]);
+
+  return (
+    <section className="panel task-board" id="backlog" aria-labelledby="backlog-title">
+      <SectionHeader
+        eyebrow="Backlog & Fila"
+        title="Fluxo de tasks"
+        meta={`${filteredTasks.length} visíveis`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <>
+          <div className="backlog-controls">
+            <div className="backlog-filter-group">
+              <label htmlFor="status-filter-select" className="task-id">Filtrar status:</label>
+              <select
+                id="status-filter-select"
+                className="backlog-status-select"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">Todos os status ativos</option>
+                {statusOrder.map((status) => (
+                  <option key={status} value={status}>
+                    {taskStatusLabels[status]} ({tasks.filter((t) => t.status === status).length})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              className={`age-toggle-btn ${hideOlderThan7Days ? "is-active" : ""}`}
+              onClick={() => setHideOlderThan7Days((prev) => !prev)}
+              title="Alternar visibilidade de tasks criadas há mais de 7 dias"
+            >
+              {hideOlderThan7Days ? "Ocultando >7 dias" : "Mostrando todas (incl. >7d)"}
+            </button>
+          </div>
+          <div className="task-list">
+            {filteredTasks.length === 0 ? (
+              <EmptyState icon="spark" title="Sem tasks no backlog" text="Nenhuma task corresponde aos filtros selecionados." />
+            ) : (
+              filteredTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
+            )}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -722,6 +938,7 @@ function WorkGraphBoard({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const active = workGraphs.filter((graph) => !["completed", "cancelled"].includes(graph.status));
+  const [collapsed, setCollapsed] = useState(workGraphs.length === 0 || active.length === 0);
 
   async function handleCancel(graph: DashboardWorkGraph) {
     if (!window.confirm(`Cancelar o Work Graph #${graph.id}? Artefatos e historico serao preservados.`)) return;
@@ -739,78 +956,130 @@ function WorkGraphBoard({
 
   return (
     <section className="panel work-graph-board" id="work-graphs" aria-labelledby="work-graphs-title">
-      <SectionHeader eyebrow="Multi-agent" title="Work Graphs" meta={`${active.length} ativo(s)`} />
-      {error ? <p className="detail-error">{error}</p> : null}
-      <div className="work-graph-list">
-        {workGraphs.length === 0 ? (
-          <EmptyState icon="spark" title="Nenhum Work Graph" text="Tasks complexas poderao aparecer aqui como DAGs governados." />
-        ) : workGraphs.slice(0, 6).map((graph) => (
-          <article className={`work-graph-card status-${graph.status}`} key={graph.id}>
-            <header>
-              <div>
-                <span>@{graph.projectKey ?? "inbox"} · task #{graph.taskId}</span>
-                <strong>Graph #{graph.id} · {graph.status}</strong>
-              </div>
-              <small>{graph.artifactCount} artefatos · {Math.ceil(graph.artifactBytes / 1024)} KB</small>
-            </header>
-            <p>{graph.objective}</p>
-            <div className="work-graph-evidence">
-              <span>
-                Adocao <strong>{graph.adoption?.decision ?? "sem evento"}</strong>
-                {graph.adoption ? ` - ${graph.adoption.reason}` : ""}
-              </span>
-              <span>
-                Canario <strong>{graph.canary.quality}</strong> - {formatWorkGraphDuration(graph.canary.durationMs)} -
-                {` ${graph.canary.attempts} attempts - ${graph.canary.fallbacks} fallbacks - ${graph.canary.conflicts} conflitos - ~${graph.canary.estimatedTokens} tokens`}
-              </span>
-            </div>
-            <div className="worker-node-strip">
-              {graph.nodes.map((node) => (
-                <div className={`worker-node status-${node.status}`} key={node.id} title={node.lastError ?? node.key}>
-                  <span>{node.role}</span>
-                  <strong>{node.key}</strong>
-                  <small>{node.mode === "writer" ? "WRITE" : "READ"} · {node.attemptCount}/{node.maxAttempts}</small>
-                  {node.fallbackCount ? <small>{node.fallbackCount} fallback(s)</small> : null}
-                  {node.attempts.map((attempt) => (
-                    <small className="worker-attempt" key={attempt.attemptNumber} title={attempt.error ?? attempt.summary}>
-                      #{attempt.attemptNumber} {attempt.provider} - {attempt.status} - {formatWorkGraphDuration(attempt.durationMs)}
-                    </small>
+      <SectionHeader
+        eyebrow="Multi-agent"
+        title="Work Graphs"
+        meta={`${active.length} ativo(s)`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <>
+          {error ? <p className="detail-error">{error}</p> : null}
+          <div className="work-graph-list">
+            {workGraphs.length === 0 ? (
+              <EmptyState icon="spark" title="Nenhum Work Graph" text="Tasks complexas poderao aparecer aqui como DAGs governados." />
+            ) : workGraphs.slice(0, 6).map((graph) => (
+              <article className={`work-graph-card status-${graph.status}`} key={graph.id}>
+                <header>
+                  <div>
+                    <span>@{graph.projectKey ?? "inbox"} · task #{graph.taskId}</span>
+                    <strong>Graph #{graph.id} · {graph.status}</strong>
+                  </div>
+                  <small>{graph.artifactCount} artefatos · {Math.ceil(graph.artifactBytes / 1024)} KB</small>
+                </header>
+                <p>{graph.objective}</p>
+                <div className="work-graph-evidence">
+                  <span>
+                    Adocao <strong>{graph.adoption?.decision ?? "sem evento"}</strong>
+                    {graph.adoption ? ` - ${graph.adoption.reason}` : ""}
+                  </span>
+                  <span>
+                    Canario <strong>{graph.canary.quality}</strong> - {formatWorkGraphDuration(graph.canary.durationMs)} -
+                    {` ${graph.canary.attempts} attempts - ${graph.canary.fallbacks} fallbacks - ${graph.canary.conflicts} conflitos - ~${graph.canary.estimatedTokens} tokens`}
+                  </span>
+                </div>
+                <div className="worker-node-strip">
+                  {graph.nodes.map((node) => (
+                    <div className={`worker-node status-${node.status}`} key={node.id} title={node.lastError ?? node.key}>
+                      <span>{node.role}</span>
+                      <strong>{node.key}</strong>
+                      <small>{node.mode === "writer" ? "WRITE" : "READ"} · {node.attemptCount}/{node.maxAttempts}</small>
+                      {node.fallbackCount ? <small>{node.fallbackCount} fallback(s)</small> : null}
+                      {node.attempts.map((attempt) => (
+                        <small className="worker-attempt" key={attempt.attemptNumber} title={attempt.error ?? attempt.summary}>
+                          #{attempt.attemptNumber} {attempt.provider} - {attempt.status} - {formatWorkGraphDuration(attempt.durationMs)}
+                        </small>
+                      ))}
+                    </div>
                   ))}
                 </div>
-              ))}
-            </div>
-            {graph.artifacts.length ? (
-              <div className="work-graph-artifacts">
-                {graph.artifacts.slice(0, 5).map((artifact) => (
-                  <span key={`${artifact.nodeId}-${artifact.key}`} title={artifact.summary}>
-                    {artifact.kind} - {artifact.key} - {artifact.bytes} bytes
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <footer>
-              <span>Paralelo: {graph.maxParallelReaders} readers</span>
-              {isWorkGraphCancellable(graph) ? (
-                <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
-                  {busyId === graph.id ? "Cancelando..." : "Cancelar graph"}
-                </button>
-              ) : <small>Historico preservado</small>}
-            </footer>
-          </article>
-        ))}
-      </div>
+                {graph.artifacts.length ? (
+                  <div className="work-graph-artifacts">
+                    {graph.artifacts.slice(0, 5).map((artifact) => (
+                      <span key={`${artifact.nodeId}-${artifact.key}`} title={artifact.summary}>
+                        {artifact.kind} - {artifact.key} - {artifact.bytes} bytes
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <footer>
+                  <span>Paralelo: {graph.maxParallelReaders} readers</span>
+                  {isWorkGraphCancellable(graph) ? (
+                    <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
+                      {busyId === graph.id ? "Cancelando..." : "Cancelar graph"}
+                    </button>
+                  ) : <small>Historico preservado</small>}
+                </footer>
+              </article>
+            ))}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
 
-function FeatureBoard({ features, onChanged }: { features: DashboardFeature[]; onChanged: () => Promise<unknown> }) {
+function FeatureBoard({
+  features,
+  featurePlans = [],
+  onChanged,
+  globalFilter = "active"
+}: {
+  features: DashboardFeature[];
+  featurePlans?: DashboardFeaturePlan[];
+  onChanged: () => Promise<unknown>;
+  globalFilter?: "all" | "active" | "attention";
+}) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const sortedFeatures = [...features].sort((left, right) => {
+  const [showHistory, setShowHistory] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
+  const featuresWithLifecycle = useMemo(() => {
+    return features.map((feature) => {
+      let lifecycleStatus: "active" | "completed" | "cancelled" = "active";
+      if (feature.featurePlanId) {
+        const plan = featurePlans.find((p) => p.id === feature.featurePlanId);
+        if (plan) {
+          lifecycleStatus = plan.lifecycleStatus;
+        }
+      }
+      if (feature.status === "completed") {
+        lifecycleStatus = "completed";
+      } else if (feature.status === "cancelled" || feature.status === "failed") {
+        lifecycleStatus = "cancelled";
+      }
+      return { ...feature, lifecycleStatus };
+    });
+  }, [features, featurePlans]);
+
+  const visibleFeatures = useMemo(() => {
+    return featuresWithLifecycle.filter((f) => {
+      if (globalFilter === "all" || showHistory) return true;
+      if (globalFilter === "attention") {
+        return ["changes_requested", "waiting_provider", "failed"].includes(f.status);
+      }
+      return f.lifecycleStatus === "active";
+    });
+  }, [featuresWithLifecycle, globalFilter, showHistory]);
+
+  const sortedFeatures = [...visibleFeatures].sort((left, right) => {
     const statusDelta = featureStatusOrder.indexOf(left.status) - featureStatusOrder.indexOf(right.status);
     if (statusDelta !== 0) return statusDelta;
     return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
   });
+
   const counts = features.reduce<Record<FeatureStatus, number>>((accumulator, feature) => {
     accumulator[feature.status] += 1;
     return accumulator;
@@ -842,65 +1111,106 @@ function FeatureBoard({ features, onChanged }: { features: DashboardFeature[]; o
 
   return (
     <section className="panel feature-board" id="features" aria-labelledby="features-title">
-      <SectionHeader eyebrow="Feature PRs" title="Runtime de features" meta={`${features.length} registradas`} />
-      <div className="feature-status-strip" aria-label="Estados de feature">
-        {featureStatusOrder.map((status) => (
-          <span className={`feature-status-count status-${status}`} key={status}>
-            <strong>{counts[status]}</strong>{featureStatusLabels[status]}
-          </span>
-        ))}
-      </div>
-      {error ? <p className="detail-error">{error}</p> : null}
-      <div className="feature-list">
-        {sortedFeatures.length === 0 ? (
-          <EmptyState icon="folder" title="Nenhuma Feature PR" text="Features registradas aparecem aqui durante checks, review final e merge." />
-        ) : sortedFeatures.slice(0, 6).map((feature) => (
-          <article className={`feature-row status-${feature.status}`} key={feature.id}>
-            <span className={`status-rail status-${feature.status}`} />
-            <div className="feature-copy">
-              <div><span className="project-tag">@{feature.projectKey}</span><FeatureStatusPill status={feature.status} /></div>
-              <strong>{feature.name}</strong>
-              <p>{feature.lastError ?? feature.reviewSummary ?? feature.objective}</p>
-              <small>{feature.itemCount} Work PR(s) - {feature.branchName}</small>
-              {feature.status === "cancelled" && feature.cancelReason ? <small>Cancelada: {feature.cancelReason}</small> : null}
+      <SectionHeader
+        eyebrow="Feature PRs"
+        title="Runtime de features"
+        meta={`${visibleFeatures.length} visíveis`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div className="feature-status-strip" aria-label="Estados de feature" style={{ margin: 0, flex: 1 }}>
+              {featureStatusOrder.map((status) => (
+                <span className={`feature-status-count status-${status}`} key={status}>
+                  <strong>{counts[status]}</strong>{featureStatusLabels[status]}
+                </span>
+              ))}
             </div>
-            <div className="feature-progress" aria-label={`Status: ${featureStatusLabels[feature.status]}`}>
-              <span><i style={{ width: `${featureProgress(feature.status)}%` }} /></span>
-              <small>{featureProgress(feature.status)}%</small>
-            </div>
-            <div className="feature-row-actions">
-              {feature.cancellable ? (
-                <button
-                  className="row-action row-action-danger"
-                  aria-label={`Cancelar Feature ${feature.id}`}
-                  disabled={busyId !== null}
-                  onClick={() => void handleCancel(feature)}
-                >
-                  {busyId === feature.id ? "..." : "Cancelar"}
-                </button>
-              ) : null}
-              <a className="row-action" href={feature.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Abrir Feature PR ${feature.id}`}>
-                <Icon name="arrow" />
-              </a>
-            </div>
-          </article>
-        ))}
-      </div>
+            {featuresWithLifecycle.some((f) => f.lifecycleStatus !== "active") ? (
+              <button
+                type="button"
+                className="row-action"
+                style={{ width: "auto", padding: "0 10px", marginLeft: 12 }}
+                onClick={() => setShowHistory((prev) => !prev)}
+              >
+                {showHistory ? "Ocultar histórico" : "Ver histórico"}
+              </button>
+            ) : null}
+          </div>
+          {error ? <p className="detail-error">{error}</p> : null}
+          <div className="feature-list">
+            {sortedFeatures.length === 0 ? (
+              <EmptyState icon="folder" title="Nenhuma Feature PR" text="Features registradas aparecem aqui durante checks, review final e merge." />
+            ) : (
+              sortedFeatures.slice(0, 5).map((feature) => (
+                <article className={`feature-row status-${feature.status}`} key={feature.id}>
+                  <span className={`status-rail status-${feature.status}`} />
+                  <div className="feature-copy">
+                    <div>
+                      <span className="project-tag">@{feature.projectKey}</span>
+                      <FeatureStatusPill status={feature.status} />
+                      <span className={`lifecycle-badge lifecycle-${feature.lifecycleStatus}`}>
+                        {feature.lifecycleStatus}
+                      </span>
+                    </div>
+                    <strong>{feature.name}</strong>
+                    <p>{feature.lastError ?? feature.reviewSummary ?? feature.objective}</p>
+                    <small>{feature.itemCount} Work PR(s) - {feature.branchName}</small>
+                    {feature.status === "cancelled" && feature.cancelReason ? <small>Cancelada: {feature.cancelReason}</small> : null}
+                  </div>
+                  <div className="feature-progress" aria-label={`Status: ${featureStatusLabels[feature.status]}`}>
+                    <span><i style={{ width: `${featureProgress(feature.status)}%` }} /></span>
+                    <small>{featureProgress(feature.status)}%</small>
+                  </div>
+                  <div className="feature-row-actions">
+                    {feature.cancellable ? (
+                      <button
+                        className="row-action row-action-danger"
+                        aria-label={`Cancelar Feature ${feature.id}`}
+                        disabled={busyId !== null}
+                        onClick={() => void handleCancel(feature)}
+                      >
+                        {busyId === feature.id ? "..." : "Cancelar"}
+                      </button>
+                    ) : null}
+                    <a className="row-action" href={feature.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Abrir Feature PR ${feature.id}`}>
+                      <Icon name="arrow" />
+                    </a>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
 
 function FeaturePlanBoard({
   featurePlans,
-  onChanged
+  onChanged,
+  globalFilter = "active"
 }: {
   featurePlans: DashboardFeaturePlan[];
   onChanged: () => Promise<unknown>;
+  globalFilter?: "all" | "active" | "attention";
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const visiblePlans = featurePlans.filter((plan) => showHistory || plan.lifecycleStatus === "active");
+  const [collapsed, setCollapsed] = useState(false);
+
+  const visiblePlans = featurePlans.filter((plan) => {
+    if (globalFilter === "all" || showHistory) return true;
+    if (globalFilter === "attention") {
+      return plan.status === "blocked" || plan.isPaused || plan.integration?.status === "failed";
+    }
+    return plan.lifecycleStatus === "active";
+  });
+
   const sortedPlans = [...visiblePlans].sort((left, right) => (
     new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
   ));
@@ -984,156 +1294,186 @@ function FeaturePlanBoard({
         eyebrow="Planejamento"
         title="Feature Plans"
         meta={`${featurePlans.filter((plan) => plan.lifecycleStatus === "active").length} ativo(s)`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
       />
-      {featurePlans.some((plan) => plan.lifecycleStatus !== "active") ? (
-        <button className="row-action" onClick={() => setShowHistory((current) => !current)}>
-          {showHistory ? "Ocultar historico" : "Ver historico"}
-        </button>
+      {!collapsed ? (
+        <>
+          {featurePlans.some((plan) => plan.lifecycleStatus !== "active") ? (
+            <button className="row-action" style={{ width: "auto", padding: "0 10px", marginBottom: 12 }} onClick={() => setShowHistory((current) => !current)}>
+              {showHistory ? "Ocultar histórico" : "Ver histórico"}
+            </button>
+          ) : null}
+          {error ? <p className="detail-error">{error}</p> : null}
+          <div className="feature-plan-list">
+            {sortedPlans.length === 0 ? (
+              <EmptyState icon="spark" title="Nenhum Feature Plan" text="Planos agrupando varias tasks em um unico PR consolidado aparecem aqui." />
+            ) : (
+              sortedPlans.slice(0, 6).map((plan) => {
+                const completedTasks = plan.tasks.filter((t) => ["done", "ready_to_merge", "reviewing"].includes(t.status)).length;
+                const progressPercent = plan.lifecycleStatus === "completed"
+                  ? 100
+                  : plan.lifecycleStatus === "cancelled"
+                  ? 0
+                  : plan.tasks.length > 0
+                  ? Math.round(plan.tasks.reduce((sum, t) => sum + statusProgress(t.status), 0) / plan.tasks.length)
+                  : 0;
+
+                return (
+                  <article className={`feature-plan-row plan-${plan.lifecycleStatus}`} key={plan.id}>
+                    <div className="feature-plan-copy">
+                      <div>
+                        <span className="project-tag">@{plan.projectKey}</span>
+                        <span className={`status-pill plan-status-${plan.status}`}>
+                          {plan.status}
+                        </span>
+                        <span className={`lifecycle-badge lifecycle-${plan.lifecycleStatus}`}>
+                          {plan.lifecycleStatus}
+                        </span>
+                        <span className="status-pill priority-pill">prio: {plan.priority ?? 0}</span>
+                        {plan.isPaused ? (
+                          <span className="status-pill paused-pill" title={plan.pauseReason || "Pausado"}>pausado</span>
+                        ) : null}
+                        {plan.lifecycleStatus === "active" ? (
+                          <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
+                            {plan.eligible ? "elegivel para integrar" : "aguardando"}
+                          </span>
+                        ) : null}
+                      </div>
+                      <strong>{plan.objective}</strong>
+
+                      <div className="plan-progress-container" aria-label={`Progresso do plano: ${progressPercent}%`}>
+                        <div className="plan-progress-bar">
+                          <div className="plan-progress-fill" style={{ width: `${progressPercent}%` }} />
+                        </div>
+                        <small className="plan-progress-text">{progressPercent}% concluído ({completedTasks}/{plan.taskCount || plan.tasks.length} tasks)</small>
+                      </div>
+
+                      <small>
+                        {plan.taskCount} task(s) no bloco - revisao {plan.revision}
+                        {plan.dependsOnFeaturePlanIds && plan.dependsOnFeaturePlanIds.length > 0 ? (
+                          ` · depende de: ${plan.dependsOnFeaturePlanIds.map((id) => `#${id}`).join(", ")}`
+                        ) : ""}
+                      </small>
+                      <div className="feature-plan-tasks">
+                        {plan.tasks.map((task) => (
+                          <span
+                            className={`status-pill status-${task.status}`}
+                            key={task.id}
+                            title={[
+                              task.objective,
+                              `Depende de: ${task.dependsOnTaskIds.length ? task.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
+                              `Escopo: ${task.mutationScope.length ? task.mutationScope.join(", ") : "somente leitura"}`,
+                              `Modo: ${task.parallelMode}`,
+                              `Aceite: ${task.acceptanceCriteria.join(" | ")}`,
+                              `Fora de escopo: ${task.excludedScope.join(", ") || "nao especificado"}`
+                            ].join("\n")}
+                          >
+                            #{task.id} {task.status}
+                          </span>
+                        ))}
+                      </div>
+                      {plan.blockers.length > 0 ? (
+                        <ul className="feature-plan-blockers">
+                          {plan.blockers.map((blocker, index) => <li key={index}>{blocker}</li>)}
+                        </ul>
+                      ) : null}
+                      {plan.blockedReason ? (
+                        <small className="feature-plan-integration-error">
+                          Bloqueio: {plan.blockedReason}
+                        </small>
+                      ) : null}
+                      <small className="feature-plan-next-action">
+                        Proxima acao: {
+                          plan.status === "blocked"
+                            ? "Resolva o motivo do bloqueio e clique em Tentar novamente."
+                            : plan.isPaused
+                            ? "Clique em Retomar para reenviar o plano para a fila."
+                            : plan.status === "queued" && plan.eligible
+                            ? "Plano elegivel, aguardando inicio das tasks."
+                            : plan.status === "queued"
+                            ? "Aguardando liberacao de dependencias ou do projeto."
+                            : "Tasks em andamento pelo agente."
+                        }
+                      </small>
+                      {plan.integration ? (
+                        <small className={plan.integration.status === "failed" ? "feature-plan-integration-error" : ""}>
+                          Integracao: {plan.integration.status} ({plan.integration.checkpoint})
+                          {plan.integration.lastError ? ` - ${plan.integration.lastError}` : ""}
+                        </small>
+                      ) : null}
+                      {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
+                    </div>
+                    <div className="feature-plan-actions">
+                      {plan.cancellable ? (
+                        <div className="priority-actions">
+                          <button
+                            className="row-action"
+                            disabled={busyId !== null}
+                            onClick={() => void handlePriority(plan, 5)}
+                            title="Aumentar prioridade (+5)"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            className="row-action"
+                            disabled={busyId !== null || (plan.priority ?? 0) <= 0}
+                            onClick={() => void handlePriority(plan, -5)}
+                            title="Reduzir prioridade (-5)"
+                          >
+                            ▼
+                          </button>
+                        </div>
+                      ) : null}
+                      {plan.status === "blocked" ? (
+                        <button
+                          className="row-action row-action-accent"
+                          disabled={busyId !== null}
+                          onClick={() => void handleRetry(plan)}
+                        >
+                          {busyId === plan.id ? "..." : "Tentar novamente"}
+                        </button>
+                      ) : null}
+                      {plan.cancellable && !plan.isPaused ? (
+                        <button
+                          className="row-action"
+                          disabled={busyId !== null}
+                          onClick={() => void handlePause(plan)}
+                        >
+                          {busyId === plan.id ? "..." : "Pausar"}
+                        </button>
+                      ) : null}
+                      {plan.cancellable && plan.isPaused ? (
+                        <button
+                          className="row-action"
+                          disabled={busyId !== null}
+                          onClick={() => void handleResume(plan)}
+                        >
+                          {busyId === plan.id ? "..." : "Retomar"}
+                        </button>
+                      ) : null}
+                      {plan.cancellable ? (
+                        <button
+                          className="row-action row-action-danger"
+                          disabled={busyId !== null}
+                          onClick={() => void handleCancel(plan)}
+                        >
+                          {busyId === plan.id ? "..." : "Cancelar plano"}
+                        </button>
+                      ) : null}
+                      {plan.feature ? (
+                        <a className="feature-plan-linked" href={plan.feature.pullRequestUrl} target="_blank" rel="noreferrer">
+                          Feature #{plan.feature.id} - {featureStatusLabels[plan.feature.status]}
+                        </a>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+        </>
       ) : null}
-      {error ? <p className="detail-error">{error}</p> : null}
-      <div className="feature-plan-list">
-        {sortedPlans.length === 0 ? (
-          <EmptyState icon="spark" title="Nenhum Feature Plan" text="Planos agrupando varias tasks em um unico PR consolidado aparecem aqui." />
-        ) : sortedPlans.slice(0, 6).map((plan) => (
-          <article className={`feature-plan-row plan-${plan.lifecycleStatus}`} key={plan.id}>
-            <div className="feature-plan-copy">
-              <div>
-                <span className="project-tag">@{plan.projectKey}</span>
-                <span className={`status-pill plan-status-${plan.status}`}>
-                  {plan.status}
-                </span>
-                <span className="status-pill priority-pill">prio: {plan.priority ?? 0}</span>
-                {plan.isPaused ? (
-                  <span className="status-pill paused-pill" title={plan.pauseReason || "Pausado"}>pausado</span>
-                ) : null}
-                {plan.lifecycleStatus === "active" ? (
-                  <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
-                    {plan.eligible ? "elegivel para integrar" : "aguardando"}
-                  </span>
-                ) : null}
-              </div>
-              <strong>{plan.objective}</strong>
-              <small>
-                {plan.taskCount} task(s) no bloco - revisao {plan.revision}
-                {plan.dependsOnFeaturePlanIds && plan.dependsOnFeaturePlanIds.length > 0 ? (
-                  ` · depende de: ${plan.dependsOnFeaturePlanIds.map((id) => `#${id}`).join(", ")}`
-                ) : ""}
-              </small>
-              <div className="feature-plan-tasks">
-                {plan.tasks.map((task) => (
-                  <span
-                    className={`status-pill status-${task.status}`}
-                    key={task.id}
-                    title={[
-                      task.objective,
-                      `Depende de: ${task.dependsOnTaskIds.length ? task.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
-                      `Escopo: ${task.mutationScope.length ? task.mutationScope.join(", ") : "somente leitura"}`,
-                      `Modo: ${task.parallelMode}`,
-                      `Aceite: ${task.acceptanceCriteria.join(" | ")}`,
-                      `Fora de escopo: ${task.excludedScope.join(", ") || "nao especificado"}`
-                    ].join("\n")}
-                  >
-                    #{task.id} {task.status}
-                  </span>
-                ))}
-              </div>
-              {plan.blockers.length > 0 ? (
-                <ul className="feature-plan-blockers">
-                  {plan.blockers.map((blocker, index) => <li key={index}>{blocker}</li>)}
-                </ul>
-              ) : null}
-              {plan.blockedReason ? (
-                <small className="feature-plan-integration-error">
-                  Bloqueio: {plan.blockedReason}
-                </small>
-              ) : null}
-              <small className="feature-plan-next-action">
-                Proxima acao: {
-                  plan.status === "blocked"
-                    ? "Resolva o motivo do bloqueio e clique em Tentar novamente."
-                    : plan.isPaused
-                    ? "Clique em Retomar para reenviar o plano para a fila."
-                    : plan.status === "queued" && plan.eligible
-                    ? "Plano elegivel, aguardando inicio das tasks."
-                    : plan.status === "queued"
-                    ? "Aguardando liberacao de dependencias ou do projeto."
-                    : "Tasks em andamento pelo agente."
-                }
-              </small>
-              {plan.integration ? (
-                <small className={plan.integration.status === "failed" ? "feature-plan-integration-error" : ""}>
-                  Integracao: {plan.integration.status} ({plan.integration.checkpoint})
-                  {plan.integration.lastError ? ` - ${plan.integration.lastError}` : ""}
-                </small>
-              ) : null}
-              {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
-            </div>
-            <div className="feature-plan-actions">
-              {plan.cancellable ? (
-                <div className="priority-actions">
-                  <button
-                    className="row-action"
-                    disabled={busyId !== null}
-                    onClick={() => void handlePriority(plan, 5)}
-                    title="Aumentar prioridade (+5)"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    className="row-action"
-                    disabled={busyId !== null || (plan.priority ?? 0) <= 0}
-                    onClick={() => void handlePriority(plan, -5)}
-                    title="Reduzir prioridade (-5)"
-                  >
-                    ▼
-                  </button>
-                </div>
-              ) : null}
-              {plan.status === "blocked" ? (
-                <button
-                  className="row-action row-action-accent"
-                  disabled={busyId !== null}
-                  onClick={() => void handleRetry(plan)}
-                >
-                  {busyId === plan.id ? "..." : "Tentar novamente"}
-                </button>
-              ) : null}
-              {plan.cancellable && !plan.isPaused ? (
-                <button
-                  className="row-action"
-                  disabled={busyId !== null}
-                  onClick={() => void handlePause(plan)}
-                >
-                  {busyId === plan.id ? "..." : "Pausar"}
-                </button>
-              ) : null}
-              {plan.cancellable && plan.isPaused ? (
-                <button
-                  className="row-action"
-                  disabled={busyId !== null}
-                  onClick={() => void handleResume(plan)}
-                >
-                  {busyId === plan.id ? "..." : "Retomar"}
-                </button>
-              ) : null}
-              {plan.cancellable ? (
-                <button
-                  className="row-action row-action-danger"
-                  disabled={busyId !== null}
-                  onClick={() => void handleCancel(plan)}
-                >
-                  {busyId === plan.id ? "..." : "Cancelar plano"}
-                </button>
-              ) : null}
-              {plan.feature ? (
-                <a className="feature-plan-linked" href={plan.feature.pullRequestUrl} target="_blank" rel="noreferrer">
-                  Feature #{plan.feature.id} - {featureStatusLabels[plan.feature.status]}
-                </a>
-              ) : null}
-            </div>
-          </article>
-        ))}
-      </div>
     </section>
   );
 }
@@ -1171,15 +1511,28 @@ function TaskRow({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) 
 
 function AgentDock({
   agents,
-  environments
+  environments,
+  hideInactive = false
 }: {
   agents: DashboardData["agents"];
   environments: DashboardData["environments"];
+  hideInactive?: boolean;
 }) {
   const [policy, setPolicy] = useState<ProviderPolicySnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const providers = agents.filter((agent): agent is typeof agent & { id: AgentProviderId } => agent.id !== "telegram");
+  const [collapsed, setCollapsed] = useState(false);
+
+  const providers = agents.filter((agent): agent is typeof agent & { id: AgentProviderId } => {
+    if (agent.id === "telegram") return false;
+    if (hideInactive && agent.state === "offline") return false;
+    return true;
+  });
+
+  const visibleEnvironments = environments.filter((env) => {
+    if (hideInactive && env.status !== "ready") return false;
+    return true;
+  });
 
   const loadPolicy = useCallback(async () => {
     try {
@@ -1246,87 +1599,97 @@ function AgentDock({
 
   return (
     <section className="panel agent-dock" id="providers" aria-labelledby="agents-title">
-      <SectionHeader eyebrow="Control plane" title="Providers e roteamento" meta="controle persistente" />
-      {error ? <p className="provider-error">{error}</p> : null}
-      <div className="provider-layout">
-        <div className="agent-list">
-        {providers.map((agent) => {
-          const control = controlFor(agent.id);
-          return (
-          <article className={`agent-card agent-${agent.id}`} key={agent.id}>
-            <div className="agent-avatar">{agent.label.slice(0, 1)}</div>
-            <div><strong>{agent.label}</strong><small>{agent.detail}</small></div>
-            <span className={`agent-state state-${agent.state}`}>{agentStateLabel(agent.state)}</span>
-            <div className="provider-controls">
-              <label>Uso
-                <select
-                  value={control.mode}
-                  disabled={busy !== null}
-                  onChange={(event) => void changeControl(agent.id, event.target.value as ProviderMode, control.fallbackEnabled)}
-                >
-                  <option value="enabled">Ativo</option>
-                  <option value="paused">Pausado</option>
-                  <option value="disabled">Desativado</option>
-                </select>
-              </label>
-              <label className="provider-check">
-                <input
-                  type="checkbox"
-                  checked={control.fallbackEnabled}
-                  disabled={busy !== null}
-                  onChange={(event) => void changeControl(agent.id, control.mode, event.target.checked)}
-                /> fallback
-              </label>
-              <button disabled={busy !== null} onClick={() => void useOnly(agent.id)}>Usar somente este</button>
+      <SectionHeader
+        eyebrow="Control plane"
+        title="Providers e roteamento"
+        meta="controle persistente"
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <>
+          {error ? <p className="provider-error">{error}</p> : null}
+          <div className="provider-layout">
+            <div className="agent-list">
+              {providers.map((agent) => {
+                const control = controlFor(agent.id);
+                return (
+                  <article className={`agent-card agent-${agent.id}`} key={agent.id}>
+                    <div className="agent-avatar">{agent.label.slice(0, 1)}</div>
+                    <div><strong>{agent.label}</strong><small>{agent.detail}</small></div>
+                    <span className={`agent-state state-${agent.state}`}>{agentStateLabel(agent.state)}</span>
+                    <div className="provider-controls">
+                      <label>Uso
+                        <select
+                          value={control.mode}
+                          disabled={busy !== null}
+                          onChange={(event) => void changeControl(agent.id, event.target.value as ProviderMode, control.fallbackEnabled)}
+                        >
+                          <option value="enabled">Ativo</option>
+                          <option value="paused">Pausado</option>
+                          <option value="disabled">Desativado</option>
+                        </select>
+                      </label>
+                      <label className="provider-check">
+                        <input
+                          type="checkbox"
+                          checked={control.fallbackEnabled}
+                          disabled={busy !== null}
+                          onChange={(event) => void changeControl(agent.id, control.mode, event.target.checked)}
+                        /> fallback
+                      </label>
+                      <button disabled={busy !== null} onClick={() => void useOnly(agent.id)}>Usar somente este</button>
+                    </div>
+                  </article>
+                );
+              })}
+              {visibleEnvironments.map((environment) => (
+                <article className="agent-card agent-environment" key={`environment-${environment.projectKey}`}>
+                  <div className="agent-avatar"><Icon name="pulse" /></div>
+                  <div>
+                    <strong>Ambiente @{environment.projectKey}</strong>
+                    <small>{environment.status === "ready" ? environment.summary : environment.recommendedAction}</small>
+                  </div>
+                  <span className={`agent-state state-${environment.status === "ready" ? "ready" : "attention"}`}>
+                    {environment.status === "ready" ? "pronto" : "atencao"}
+                  </span>
+                </article>
+              ))}
             </div>
-          </article>
-          );
-        })}
-        {environments.map((environment) => (
-          <article className="agent-card agent-environment" key={`environment-${environment.projectKey}`}>
-            <div className="agent-avatar"><Icon name="pulse" /></div>
-            <div>
-              <strong>Ambiente @{environment.projectKey}</strong>
-              <small>{environment.status === "ready" ? environment.summary : environment.recommendedAction}</small>
+            <div className="routing-table">
+              <div className="routing-heading"><strong>Prioridade por funcao</strong><small>Escolha o primeiro provider e, quando preciso, torne-o obrigatorio.</small></div>
+              {policy?.capabilities.map((routing) => (
+                <div className="routing-row" key={routing.capability}>
+                  <strong>{capabilityLabel(routing.capability)}</strong>
+                  <label>Primeiro
+                    <select
+                      value={routing.order[0]}
+                      disabled={busy !== null}
+                      onChange={(event) => void changeRouting(routing.capability, event.target.value as AgentProviderId, routing.requiredProviderId)}
+                    >
+                      {providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.label}</option>)}
+                    </select>
+                  </label>
+                  <label>Regra
+                    <select
+                      value={routing.requiredProviderId ?? "auto"}
+                      disabled={busy !== null}
+                      onChange={(event) => void changeRouting(
+                        routing.capability,
+                        routing.order[0],
+                        event.target.value === "auto" ? null : event.target.value as AgentProviderId
+                      )}
+                    >
+                      <option value="auto">Fallback automatico</option>
+                      {providers.map((provider) => <option value={provider.id} key={provider.id}>Somente {provider.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+              ))}
             </div>
-            <span className={`agent-state state-${environment.status === "ready" ? "ready" : "attention"}`}>
-              {environment.status === "ready" ? "pronto" : "atencao"}
-            </span>
-          </article>
-        ))}
-        </div>
-        <div className="routing-table">
-          <div className="routing-heading"><strong>Prioridade por funcao</strong><small>Escolha o primeiro provider e, quando preciso, torne-o obrigatorio.</small></div>
-          {policy?.capabilities.map((routing) => (
-            <div className="routing-row" key={routing.capability}>
-              <strong>{capabilityLabel(routing.capability)}</strong>
-              <label>Primeiro
-                <select
-                  value={routing.order[0]}
-                  disabled={busy !== null}
-                  onChange={(event) => void changeRouting(routing.capability, event.target.value as AgentProviderId, routing.requiredProviderId)}
-                >
-                  {providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.label}</option>)}
-                </select>
-              </label>
-              <label>Regra
-                <select
-                  value={routing.requiredProviderId ?? "auto"}
-                  disabled={busy !== null}
-                  onChange={(event) => void changeRouting(
-                    routing.capability,
-                    routing.order[0],
-                    event.target.value === "auto" ? null : event.target.value as AgentProviderId
-                  )}
-                >
-                  <option value="auto">Fallback automatico</option>
-                  {providers.map((provider) => <option value={provider.id} key={provider.id}>Somente {provider.label}</option>)}
-                </select>
-              </label>
-            </div>
-          ))}
-        </div>
-      </div>
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -1343,29 +1706,70 @@ function capabilityLabel(capability: AgentCapability) {
   } as Record<AgentCapability, string>)[capability];
 }
 
-function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
+function getProjectHealth(
+  project: DashboardProject,
+  environments: EnvironmentDoctorReport[] = [],
+  tasks: DashboardTask[] = []
+): "ready" | "blocked" | "env_error" {
+  const envReport = environments.find((e) => e.projectKey === project.key);
+  if (envReport && ["environment_blocked", "auth_required", "offline"].includes(envReport.status)) {
+    return "env_error";
+  }
+  if (envReport?.checks.some((c: { status: string }) => c.status === "failed")) {
+    return "env_error";
+  }
+  const projTasks = tasks.filter((t) => t.projectKey === project.key || t.projectName === project.name);
+  const isBlocked = projTasks.some((t) =>
+    ["blocked", "waiting_dependency", "waiting_quota", "waiting_provider", "changes_requested"].includes(t.status)
+  );
+  if (isBlocked) return "blocked";
+  if (project.currentWork.some((w) => w.phase.includes("blocked") || w.phase.includes("error"))) {
+    return "blocked";
+  }
+  return "ready";
+}
+
+function ProjectDeck({
+  projects,
+  environments = [],
+  tasks = []
+}: {
+  projects: DashboardProject[];
+  environments?: EnvironmentDoctorReport[];
+  tasks?: DashboardTask[];
+}) {
+  const [collapsed, setCollapsed] = useState(false);
   return (
     <section className="panel project-deck" id="projects" aria-labelledby="projects-title">
-      <SectionHeader eyebrow="Workspace" title="Projetos locais" meta={`${projects.length} registrados`} />
-      <div className="project-grid">
-        {projects.map((project, index) => (
-          <article className={`project-card project-tone-${index % 3}`} key={project.key}>
-            <div className="project-icon"><Icon name={project.key === "boo" ? "ghost" : "folder"} /></div>
-            <div className="project-title"><span>@{project.key}</span><strong>{project.name}</strong></div>
-            <div className="project-stats">
-              <span><strong>{project.activeTaskCount}</strong> ativas</span>
-              <span><strong>{project.taskCount}</strong> total</span>
-              <span><strong>{project.defaultBranch}</strong> branch</span>
-            </div>
-            <div className="project-live-status">
-              {project.currentWork.length > 0
-                ? project.currentWork.map((work) => <span key={`${work.taskId}-${work.phase}`}>{work.provider ?? "Maestro"} · task #{work.taskId} · {work.phase}</span>)
-                : <span>Nenhum agente trabalhando agora</span>}
-            </div>
-            <small className="project-path">Repositório local protegido</small>
-          </article>
-        ))}
-      </div>
+      <SectionHeader
+        eyebrow="Workspace"
+        title="Projetos locais"
+        meta={`${projects.length} registrados`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <div className="project-grid-compact">
+          {projects.map((project) => {
+            const health = getProjectHealth(project, environments, tasks);
+            const healthLabel = health === "ready" ? "Pronto" : health === "blocked" ? "Bloqueado" : "Erro no ambiente";
+            return (
+              <article className="project-card-compact" key={project.key}>
+                <span className={`health-dot health-${health}`} title={`Status: ${healthLabel}`} />
+                <div className="project-card-compact-main">
+                  <div className="project-card-compact-header">
+                    <span className="project-tag">@{project.key}</span>
+                    <strong className="project-card-compact-title">{project.name}</strong>
+                  </div>
+                  <div className="project-card-compact-meta">
+                    {project.activeTaskCount} ativas / {project.taskCount} total · {project.defaultBranch}
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1425,58 +1829,68 @@ function ImprovementLab({
   }
 
   const candidates = improvements.filter((item) => item.status === "candidate");
+  const [collapsed, setCollapsed] = useState(candidates.length === 0);
+
   return (
     <section className="panel improvement-lab" id="learning" aria-labelledby="learning-title">
-      <SectionHeader eyebrow="Evolucao segura" title="Laboratorio de aprendizado" meta={`${candidates.length} aguardando decisao`} />
-      <div className="improvement-layout">
-        <form className="improvement-form" onSubmit={submit}>
-          <strong>Propor melhoria</strong>
-          <p>O Maestro registra a hipotese e a evidencia. Aprovar nao altera codigo, prompt ou skill automaticamente.</p>
-          <div className="improvement-fields two-columns">
-            <label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ImprovementCategory)}>
-              <option value="skill">skill</option><option value="memory">memoria</option>
-              <option value="routing">roteamento</option><option value="policy">politica</option>
-              <option value="integration">integracao</option>
-            </select></label>
-            <label>Risco<select value={risk} onChange={(event) => setRisk(event.target.value as ImprovementRisk)}>
-              <option value="low">baixo</option><option value="medium">medio</option><option value="high">alto</option>
-            </select></label>
+      <SectionHeader
+        eyebrow="Evolucao segura"
+        title="Laboratorio de aprendizado"
+        meta={`${candidates.length} aguardando decisao`}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((prev) => !prev)}
+      />
+      {!collapsed ? (
+        <div className="improvement-layout">
+          <form className="improvement-form" onSubmit={submit}>
+            <strong>Propor melhoria</strong>
+            <p>O Maestro registra a hipotese e a evidencia. Aprovar nao altera codigo, prompt ou skill automaticamente.</p>
+            <div className="improvement-fields two-columns">
+              <label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ImprovementCategory)}>
+                <option value="skill">skill</option><option value="memory">memoria</option>
+                <option value="routing">roteamento</option><option value="policy">politica</option>
+                <option value="integration">integracao</option>
+              </select></label>
+              <label>Risco<select value={risk} onChange={(event) => setRisk(event.target.value as ImprovementRisk)}>
+                <option value="low">baixo</option><option value="medium">medio</option><option value="high">alto</option>
+              </select></label>
+            </div>
+            <label>Titulo<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={4} required /></label>
+            <label>Por que mudar?<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} minLength={8} required /></label>
+            <label>Mudanca proposta<textarea value={proposedChange} onChange={(event) => setProposedChange(event.target.value)} minLength={8} required /></label>
+            <label>Evidencias, uma por linha<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} minLength={4} required /></label>
+            {error ? <p className="improvement-error">{error}</p> : null}
+            <button type="submit" disabled={busyId !== null}>Registrar candidata <Icon name="arrow" /></button>
+          </form>
+          <div className="improvement-queue">
+            {improvements.length === 0 ? (
+              <EmptyState icon="spark" title="Nenhuma proposta ainda" text="Aprendizados entram aqui antes de qualquer mutacao persistente." />
+            ) : improvements.slice(0, 8).map((item) => (
+              <article className={`improvement-card improvement-${item.status}`} key={item.id}>
+                <header><span>#{item.id} · {item.category}</span><span className={`risk-${item.risk}`}>risco {item.risk}</span></header>
+                <strong>{item.title}</strong>
+                <p>{item.rationale}</p>
+                <small>
+                  {item.evidence.length} evidencia(s) · origem {item.source}
+                  {item.confidence === null ? "" : ` · confiança ${Math.round(item.confidence * 100)}%`}
+                </small>
+                {item.status === "candidate" ? (
+                  <div className="improvement-actions">
+                    <button onClick={() => void decide(item.id, "rejected")} disabled={busyId !== null}>Rejeitar</button>
+                    <button onClick={() => void decide(item.id, "approved")} disabled={busyId !== null}>Aprovar para implementar</button>
+                  </div>
+                ) : (
+                  <span className={`improvement-decision decision-${item.status}`}>
+                    {item.status}
+                    {item.featurePlanId ? ` · Feature Plan #${item.featurePlanId}` : ""}
+                    {item.taskId ? ` · Task #${item.taskId}` : ""}
+                  </span>
+                )}
+              </article>
+            ))}
           </div>
-          <label>Titulo<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={4} required /></label>
-          <label>Por que mudar?<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} minLength={8} required /></label>
-          <label>Mudanca proposta<textarea value={proposedChange} onChange={(event) => setProposedChange(event.target.value)} minLength={8} required /></label>
-          <label>Evidencias, uma por linha<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} minLength={4} required /></label>
-          {error ? <p className="improvement-error">{error}</p> : null}
-          <button type="submit" disabled={busyId !== null}>Registrar candidata <Icon name="arrow" /></button>
-        </form>
-        <div className="improvement-queue">
-          {improvements.length === 0 ? (
-            <EmptyState icon="spark" title="Nenhuma proposta ainda" text="Aprendizados entram aqui antes de qualquer mutacao persistente." />
-          ) : improvements.slice(0, 8).map((item) => (
-            <article className={`improvement-card improvement-${item.status}`} key={item.id}>
-              <header><span>#{item.id} · {item.category}</span><span className={`risk-${item.risk}`}>risco {item.risk}</span></header>
-              <strong>{item.title}</strong>
-              <p>{item.rationale}</p>
-              <small>
-                {item.evidence.length} evidencia(s) · origem {item.source}
-                {item.confidence === null ? "" : ` · confiança ${Math.round(item.confidence * 100)}%`}
-              </small>
-              {item.status === "candidate" ? (
-                <div className="improvement-actions">
-                  <button onClick={() => void decide(item.id, "rejected")} disabled={busyId !== null}>Rejeitar</button>
-                  <button onClick={() => void decide(item.id, "approved")} disabled={busyId !== null}>Aprovar para implementar</button>
-                </div>
-              ) : (
-                <span className={`improvement-decision decision-${item.status}`}>
-                  {item.status}
-                  {item.featurePlanId ? ` · Feature Plan #${item.featurePlanId}` : ""}
-                  {item.taskId ? ` · Task #${item.taskId}` : ""}
-                </span>
-              )}
-            </article>
-          ))}
         </div>
-      </div>
+      ) : null}
     </section>
   );
 }
@@ -1880,8 +2294,42 @@ function TaskDetail({
   );
 }
 
-function SectionHeader({ eyebrow, title, meta }: { eyebrow: string; title: string; meta?: string }) {
-  return <header className="section-header"><div><span>{eyebrow}</span><h2>{title}</h2></div>{meta ? <small>{meta}</small> : null}</header>;
+function SectionHeader({
+  eyebrow,
+  title,
+  meta,
+  collapsed,
+  onToggleCollapse
+}: {
+  eyebrow: string;
+  title: string;
+  meta?: string;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
+  return (
+    <header className="section-header">
+      <div className="section-header-title-group">
+        <span>{eyebrow}</span>
+        <h2>{title}</h2>
+      </div>
+      <div className="section-header-actions">
+        {meta ? <small>{meta}</small> : null}
+        {onToggleCollapse ? (
+          <button
+            type="button"
+            className="collapse-toggle-btn"
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? `Expandir ${title}` : `Recolher ${title}`}
+            title={collapsed ? "Expandir seção" : "Recolher seção"}
+          >
+            <Icon name={collapsed ? "chevron-down" : "chevron-up"} />
+            <span>{collapsed ? "Expandir" : "Recolher"}</span>
+          </button>
+        ) : null}
+      </div>
+    </header>
+  );
 }
 
 function changeSafetyGateClass(status: ReviewQueueItem["changeSafetyGate"]["status"]): string {
@@ -1949,7 +2397,9 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
     chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />,
     shield: <path d="M12 22S20 18 20 10V5l-8-3-8 3v5c0 8 8 12 8 12Z" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
-    warning: <><path d="M12 3 2 21h20Z" /><path d="M12 9v5M12 18h.01" /></>
+    warning: <><path d="M12 3 2 21h20Z" /><path d="M12 9v5M12 18h.01" /></>,
+    "chevron-up": <path d="m18 15-6-6-6 6" />,
+    "chevron-down": <path d="m6 9 6 6 6-6" />
   };
   return <svg className={`icon ${className}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] ?? paths.spark}</svg>;
 }
