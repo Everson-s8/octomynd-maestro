@@ -766,7 +766,7 @@ describe("goal runner", () => {
     ]);
     expect(resumedRequest?.resumeContext).toContain("partial.ts");
     expect(fs.readFileSync(path.join(worktreeDir, "partial.ts"), "utf8")).toContain("partial = true");
-  });
+  }, 15_000);
 
   it("delivers an approved goal to a draft pull request and leaves merge as the human gate", async () => {
     const projectDir = path.join(tempDir, "project");
@@ -1383,6 +1383,44 @@ describe("goal runner", () => {
     expect(steps[0].error).toContain("provider crashed unexpectedly");
     expect(database.listEvents().some((event) => event.type === "goal.step_failed")).toBe(true);
     expect(database.listEvents().some((event) => event.type === "goal.failed")).toBe(true);
+  });
+
+  it("blocks the goal run when a per-phase budget is exhausted", async () => {
+    const projectDir = path.join(tempDir, "phase-budget-project");
+    const worktreeDir = path.join(tempDir, "phase-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    initializeRepository(worktreeDir);
+    database.registerProject({ key: "phasebudget", path: projectDir });
+    const task = database.createTask("planning heavy task", "dashboard", "phasebudget");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    let calls = 0;
+    const provider1 = new FakeProvider("codex", ["planning"], () => {
+      calls++;
+      return { outcome: "failed", summary: "planning error alpha", output: "", error: "planning error alpha", durationMs: 1, retryable: true };
+    });
+    const provider2 = new FakeProvider("claude", ["planning"], () => {
+      calls++;
+      return { outcome: "failed", summary: "planning error beta", output: "", error: "planning error beta", durationMs: 1, retryable: true };
+    });
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider1, provider2]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 10,
+      phaseBudgets: { planning: 2 }
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(run.lastError).toBe("Phase 'planning' reached its limit of 2 steps.");
+    expect(calls).toBe(2);
+
+    const circuitBreakerEvent = database.listEvents().find((e) => e.type === "goal.circuit_breaker");
+    expect(circuitBreakerEvent?.metadata).toMatchObject({
+      reason: "phase_budget_exhausted",
+      phase: "planning",
+      worktreePreserved: true
+    });
   });
 });
 

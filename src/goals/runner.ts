@@ -16,7 +16,8 @@ import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../runtime/com
 import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
-import { captureWorkspaceProgress, GoalCircuitBreaker } from "./circuit-breaker.js";
+import { captureWorkspaceProgress, GoalCircuitBreaker, DEFAULT_PHASE_BUDGETS } from "./circuit-breaker.js";
+export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
@@ -40,6 +41,7 @@ const CAPABILITIES: Record<GoalPhase, AgentCapability> = {
 export type GoalRunnerOptions = {
   artifactsRoot: string;
   maxSteps?: number;
+  phaseBudgets?: Partial<Record<GoalPhase, number>>;
   deadlineMs?: number;
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
@@ -76,7 +78,7 @@ export async function runTaskGoal(
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
-  const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id));
+  const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id), options.phaseBudgets);
   const persistedWorkGraphRequest = database.findFeaturePlanDetailsByTask(task.id)?.tasks
     .find((candidate) => candidate.taskId === task.id)?.contract.workGraphRequest ?? null;
   const explicitWorkGraphRequested = persistedWorkGraphRequest !== null
@@ -129,6 +131,18 @@ export async function runTaskGoal(
           task.id,
           "deadline",
           "Goal deadline reached before starting another provider step."
+        );
+      }
+      const phaseBudgetDecision = circuitBreaker.checkPhaseBudget(phase);
+      if (phaseBudgetDecision) {
+        return finishCircuitBreak(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          task.id,
+          phaseBudgetDecision.reason,
+          phaseBudgetDecision.summary
         );
       }
       currentRun = database.withTransaction(() => {
@@ -737,6 +751,17 @@ export async function runTaskGoal(
           });
           continue;
         }
+        if (circuitDecision) {
+          return finishCircuitBreak(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            task.id,
+            circuitDecision.reason,
+            circuitDecision.summary
+          );
+        }
         const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
         if (availability.provider) {
           return pauseRun(
@@ -751,17 +776,6 @@ export async function runTaskGoal(
               retryAfterMs: availability.retryAfterMs,
               provider: availability.provider ?? undefined
             }
-          );
-        }
-        if (circuitDecision) {
-          return finishCircuitBreak(
-            database,
-            currentRun,
-            phase,
-            stepCount,
-            task.id,
-            circuitDecision.reason,
-            circuitDecision.summary
           );
         }
         if (result.retryable) {
@@ -1005,7 +1019,8 @@ function finishCircuitBreak(
     taskId,
     metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
   });
-  return finishRun(database, run, "blocked", phase, stepCount, safeSummary, taskId);
+  const failureCategory = reason === "phase_budget_exhausted" ? "budget_exhausted" : undefined;
+  return finishRun(database, run, "blocked", phase, stepCount, safeSummary, taskId, failureCategory);
 }
 
 function latestChangeRequest(database: MaestroDatabase, runId: number): string | null {

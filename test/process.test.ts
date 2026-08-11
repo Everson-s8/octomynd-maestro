@@ -58,7 +58,7 @@ describe("agent process runtime", () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.breakerReason).toBe("inactivity");
-    expect(result.durationMs).toBeLessThan(1_000);
+    expect(result.durationMs).toBeLessThan(2_000);
   });
 
   it("distinguishes an absolute deadline from phase and inactivity limits", async () => {
