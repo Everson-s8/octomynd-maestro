@@ -24,6 +24,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [globalFilter, setGlobalFilter] = useState<"all" | "active" | "attention">("active");
 
   const refresh = useCallback(async (showActivity = false) => {
     const controller = new AbortController();
