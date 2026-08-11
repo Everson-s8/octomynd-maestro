@@ -78,7 +78,13 @@ export type {
   SkillUsageSummary,
   SkillVersionLifecycleStatus,
   SkillVersionRecord,
-  SkillVersionRegistrationInput
+  SkillVersionRegistrationInput,
+  SkillIncidentRecord,
+  SkillIncidentInput,
+  SkillIncidentType,
+  SkillCuratorCandidateRecord,
+  SkillCuratorCandidateInput,
+  SkillCuratorCandidateStatus
 } from "./skills/persistence.js";
 export type { SkillOwner, SkillRisk, SkillScope } from "./skills/types.js";
 

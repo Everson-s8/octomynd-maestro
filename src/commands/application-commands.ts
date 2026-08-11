@@ -13,6 +13,8 @@ import {
   SkillProposalRecord,
   SkillProposalStatus,
   SkillVersionRecord,
+  SkillCuratorCandidateRecord,
+  SkillCuratorCandidateStatus,
   TaskRecord
 } from "../db.js";
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
@@ -914,6 +916,18 @@ export class ApplicationCommands {
       });
     }
     return result;
+  }
+
+  listSkillCuratorCandidates(status?: SkillCuratorCandidateStatus): SkillCuratorCandidateRecord[] {
+    return this.database.listSkillCuratorCandidates(status);
+  }
+
+  processSkillCuratorIncidents(_origin: CommandOrigin): SkillCuratorCandidateRecord[] {
+    return this.requireSkillLifecycle().processCuratorIncidents();
+  }
+
+  evaluateSkillCuratorCandidate(_origin: CommandOrigin, candidateId: number): SkillCuratorCandidateRecord {
+    return this.requireSkillLifecycle().evaluateCuratorCandidate(candidateId);
   }
 
   private runSkillLifecycleTransition(
