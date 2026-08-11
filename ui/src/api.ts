@@ -309,6 +309,23 @@ export type DashboardData = {
     activeGoals: number;
     completedTasks: number;
   };
+  costSummary?: {
+    todayTotalUsd: number;
+    todayInputTokens: number;
+    todayOutputTokens: number;
+    byProvider: Array<{
+      provider: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+    }>;
+    byProject: Array<{
+      projectKey: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+    }>;
+  };
   projects: DashboardProject[];
   tasks: DashboardTask[];
   events: DashboardEvent[];

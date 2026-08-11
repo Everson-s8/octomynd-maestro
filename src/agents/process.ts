@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import type { AgentProviderId } from "./types.js";
+
 export type AgentProcessBreakerReason =
   | "inactivity"
   | "phase_timeout"
@@ -11,6 +13,7 @@ export type AgentProcessRequest = {
   command: string;
   args: string[];
   cwd: string;
+  provider?: AgentProviderId;
   stdin?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -37,6 +40,10 @@ export type AgentProcessResult = {
     truncatedChars: number;
   };
   durationMs: number;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+  };
 };
 
 export async function runAgentProcess(request: AgentProcessRequest): Promise<AgentProcessResult> {
@@ -79,6 +86,7 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
       if (deadlineTimer) clearTimeout(deadlineTimer);
       if (forceFinishTimer) clearTimeout(forceFinishTimer);
       request.signal?.removeEventListener("abort", onAbort);
+      const tokenUsage = parseTokenUsageFromOutput(stdout, stderr, request.provider);
       resolve({
         exitCode,
         spawnErrorCode,
@@ -93,7 +101,8 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
           duplicateChunks,
           truncatedChars: Math.max(0, receivedChars - stdout.length - stderr.length)
         },
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
+        tokenUsage
       });
     };
     const stop = () => {
@@ -185,4 +194,140 @@ function isSensitiveEnvironmentKey(key: string): boolean {
 function appendBounded(current: string, chunk: string, maxChars: number): string {
   const next = current + chunk;
   return next.length <= maxChars ? next : next.slice(-maxChars);
+}
+
+export function parseTokenUsageFromOutput(
+  stdout: string,
+  stderr: string,
+  provider?: AgentProviderId
+): { inputTokens: number; outputTokens: number } {
+  try {
+    const combined = `${stdout}\n${stderr}`;
+
+    // 1. Try parsing JSON objects with balanced braces
+    const jsonObjects = findJsonObjects(combined);
+    for (const parsed of jsonObjects) {
+      const usageObj = (parsed.usage && typeof parsed.usage === "object") ? parsed.usage as Record<string, unknown> : parsed;
+      const input = extractNumber(usageObj, [
+        "input_tokens", "inputTokens", "prompt_tokens", "promptTokens",
+        "prompt_eval_count", "input_tokens_used"
+      ]);
+      const output = extractNumber(usageObj, [
+        "output_tokens", "outputTokens", "completion_tokens", "completionTokens",
+        "eval_count", "output_tokens_used"
+      ]);
+      if (input !== null || output !== null) {
+        return {
+          inputTokens: Math.max(0, input ?? 0),
+          outputTokens: Math.max(0, output ?? 0)
+        };
+      }
+    }
+
+    // 2. Try Regex patterns for CLI outputs
+    const p1 = /(\d[\d,]*)\s*input[s]?[\s,]+(\d[\d,]*)\s*output[s]?/i.exec(combined);
+    if (p1) {
+      return { inputTokens: parseNum(p1[1]), outputTokens: parseNum(p1[2]) };
+    }
+
+    const p2 = /(\d[\d,]*)\s*in\s*[\/\,]\s*(\d[\d,]*)\s*out/i.exec(combined);
+    if (p2) {
+      return { inputTokens: parseNum(p2[1]), outputTokens: parseNum(p2[2]) };
+    }
+
+    const p3 = /prompt\s*tokens?:\s*(\d[\d,]*)[,\s]+completion\s*tokens?:\s*(\d[\d,]*)/i.exec(combined);
+    if (p3) {
+      return { inputTokens: parseNum(p3[1]), outputTokens: parseNum(p3[2]) };
+    }
+
+    const p4 = /input\s*tokens?:\s*(\d[\d,]*)[,\s]+output\s*tokens?:\s*(\d[\d,]*)/i.exec(combined);
+    if (p4) {
+      return { inputTokens: parseNum(p4[1]), outputTokens: parseNum(p4[2]) };
+    }
+
+    const p5 = /(\d[\d,]*)\s*prompt[s]?[,\s]+(\d[\d,]*)\s*completion/i.exec(combined);
+    if (p5) {
+      return { inputTokens: parseNum(p5[1]), outputTokens: parseNum(p5[2]) };
+    }
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    const inMatch = /(?:input_tokens|input\s*tokens?|prompt_tokens|prompt\s*tokens?|prompt|in):\s*(\d[\d,]*)/i.exec(combined)
+      || /(\d[\d,]*)\s*(?:input|prompt)\s*tokens?/i.exec(combined);
+    if (inMatch) inputTokens = parseNum(inMatch[1]);
+
+    const outMatch = /(?:output_tokens|output\s*tokens?|completion_tokens|completion\s*tokens?|completion|out):\s*(\d[\d,]*)/i.exec(combined)
+      || /(\d[\d,]*)\s*(?:output|completion)\s*tokens?/i.exec(combined);
+    if (outMatch) outputTokens = parseNum(outMatch[1]);
+
+    return { inputTokens, outputTokens };
+  } catch {
+    return { inputTokens: 0, outputTokens: 0 };
+  }
+}
+
+function findJsonObjects(text: string): Record<string, unknown>[] {
+  const objects: Record<string, unknown>[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (char === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          const candidate = text.slice(start, i + 1);
+          try {
+            const parsed = JSON.parse(candidate);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              objects.push(parsed as Record<string, unknown>);
+            }
+          } catch {
+            // ignore invalid JSON candidate
+          }
+          start = -1;
+        }
+      }
+    }
+  }
+  return objects;
+}
+
+function extractNumber(obj: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    if (k in obj) {
+      const val = obj[k];
+      if (typeof val === "number") return val;
+      if (typeof val === "string") {
+        const num = Number(val.replace(/,/g, ""));
+        if (!isNaN(num)) return num;
+      }
+    }
+  }
+  return null;
+}
+
+function parseNum(str: string): number {
+  const num = parseInt(str.replace(/,/g, ""), 10);
+  return isNaN(num) ? 0 : num;
 }

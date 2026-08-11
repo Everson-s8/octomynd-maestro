@@ -130,6 +130,7 @@ export class AntigravityProvider implements AgentProvider {
         this.executionLimits.maxRuntimeMs ?? 8 * 60 * 60_000
       ),
       cwd,
+      provider: this.id,
       timeoutMs: this.executionLimits.maxRuntimeMs,
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
@@ -146,7 +147,9 @@ export class AntigravityProvider implements AgentProvider {
         error: null,
         durationMs: processResult.durationMs,
         retryable: false,
-        processRuntime: processRuntime(processResult)
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: this.model ?? "antigravity"
       };
     }
 
@@ -181,7 +184,9 @@ export class AntigravityProvider implements AgentProvider {
         output: diagnostics,
         error: diagnostics || summary,
         durationMs: processResult.durationMs,
-        processRuntime: processRuntime(processResult)
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: this.model ?? "antigravity"
       };
     }
 
@@ -208,7 +213,9 @@ export class AntigravityProvider implements AgentProvider {
       error: null,
       durationMs: processResult.durationMs,
       retryable: false,
-      processRuntime: processRuntime(processResult)
+      processRuntime: processRuntime(processResult),
+      tokenUsage: processResult.tokenUsage,
+      model: this.model ?? "antigravity"
     };
   }
 

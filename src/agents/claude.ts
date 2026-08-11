@@ -187,7 +187,9 @@ export class ClaudeProvider implements AgentProvider {
         output: errorText,
         error: errorText || summary,
         durationMs: result.durationMs,
-        processRuntime: processRuntime(result)
+        processRuntime: processRuntime(result),
+        tokenUsage: result.tokenUsage,
+        model: "claude"
       };
     }
 
@@ -212,7 +214,9 @@ export class ClaudeProvider implements AgentProvider {
       error: null,
       durationMs: result.durationMs,
       retryable: false,
-      processRuntime: processRuntime(result)
+      processRuntime: processRuntime(result),
+      tokenUsage: result.tokenUsage,
+      model: "claude"
     };
   }
 
@@ -451,13 +455,15 @@ async function executeClaudeGoal(request: AgentExecutionRequest, limits: Provide
       timedOut: false,
       breakerReason: null,
       outputStats: { receivedChars: 0, retainedChars: 0, duplicateChunks: 0, truncatedChars: 0 },
-      durationMs: 0
+      durationMs: 0,
+      tokenUsage: { inputTokens: 0, outputTokens: 0 }
     };
   }
   return runAgentProcess({
     command: cli.command,
     args: buildClaudeGoalArgs(cli, request, cwd),
     cwd,
+    provider: "claude",
     timeoutMs: limits.maxRuntimeMs,
     // Claude --print commonly buffers the response until completion, so its
     // inactivity window is intentionally longer than Codex's streaming window.

@@ -113,6 +113,7 @@ export function buildDashboardSnapshot(
       activeGoals: goals.filter((goal) => ["running", "waiting_provider"].includes(goal.status)).length,
       completedTasks: counts.done ?? 0
     },
+    costSummary: database.getCostSummary(),
     skills: skills.map((skill) => {
       const active = skill.activeVersionId
         ? database.getSkillVersionByCoordinates(skill.qualifiedName, skill.activeVersionId)
