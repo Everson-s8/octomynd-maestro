@@ -61,6 +61,25 @@ describe("Antigravity provider", () => {
       state: "ready"
     });
   });
+
+  it("returns NormalizedResult structure with proper failure classification when offline", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-req-"));
+    tempPaths.push(tempDir);
+    const req = request("planning", "planning");
+    req.task.worktreePath = tempDir;
+    req.project.path = tempDir;
+
+    const provider = new AntigravityProvider({ executablePath: path.join(tempDir, "nonexistent-agy.exe") });
+    const res = await provider.execute(req);
+    expect(res).toMatchObject({
+      outcome: "failed",
+      summary: expect.stringMatching(/Antigravity CLI nao encontrado|Workspace nao existe/),
+      structuredPayload: null,
+      failureCategory: "offline",
+      retryable: false,
+      artifactsProduced: []
+    });
+  });
 });
 
 function request(

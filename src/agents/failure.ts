@@ -2,6 +2,7 @@ export type FailureCategory = "quota" | "auth_required" | "timeout" | "offline" 
 
 const QUOTA_PATTERN = /usage limit|session limit|rate limit|quota|credits exhausted|no credits|429\b|too many requests|resets?\s+\d/i;
 const AUTH_PATTERN = /\b401\b|unauthorized|authentication|not logged in|please run \/login|sign in|invalid credentials|login required/i;
+const CAPACITY_PATTERN = /capacity|overloaded|resource_exhausted|high demand|service unavailable|server is busy|try again later|\b503\b|\b502\b/i;
 const OFFLINE_PATTERN = /not found|cannot find module|connection refused|network is unreachable|offline|enoent/i;
 
 const CATEGORY_LABELS: Record<FailureCategory, string> = {
@@ -19,6 +20,7 @@ export function classifyFailure(text: string, timedOut = false): FailureCategory
   if (timedOut) return "timeout";
   if (QUOTA_PATTERN.test(text)) return "quota";
   if (AUTH_PATTERN.test(text)) return "auth_required";
+  if (CAPACITY_PATTERN.test(text)) return "capacity";
   if (OFFLINE_PATTERN.test(text)) return "offline";
   return "unknown";
 }

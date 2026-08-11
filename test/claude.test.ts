@@ -251,12 +251,28 @@ describe("claude provider telemetry", () => {
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Claude (reviewing): erro desconhecido.");
     expect(result.retryable).toBe(false);
+    expect(result.structuredPayload).toBeNull();
+    expect(result.artifactsProduced).toEqual([]);
+  });
+
+  it("returns NormalizedResult structure on successful execution and review decision", async () => {
+    process.env.FAKE_CLAUDE_MODE = "success";
+    const provider = new ClaudeProvider(5_000);
+
+    const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
+
+    expect(result.outcome).toBe("completed");
+    expect(result.structuredPayload).toEqual({ reviewDecision: "approved" });
+    expect(result.artifactsProduced).toEqual([]);
   });
 });
 
 const FAKE_CLAUDE_CLI_SOURCE = `
 const mode = process.env.FAKE_CLAUDE_MODE || "unknown";
-if (mode === "timeout") {
+if (mode === "success") {
+  process.stdout.write("Analise concluida com sucesso.\\nFINAL_REVIEW_DECISION: approved\\n");
+  process.exit(0);
+} else if (mode === "timeout") {
   setInterval(() => {}, 1000);
 } else if (mode === "quota") {
   process.stderr.write("Error: rate limit exceeded, please retry later\\n");

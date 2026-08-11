@@ -6,7 +6,8 @@ import {
   buildFailureSummary,
   classifyFailure,
   isRetryableFailureCategory,
-  retryAfterMsForFailure
+  retryAfterMsForFailure,
+  type FailureCategory
 } from "./failure.js";
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import {
@@ -135,6 +136,8 @@ export class CodexProvider implements AgentProvider {
       return {
         outcome: "cancelled",
         summary: "Codex execution cancelled by user.",
+        structuredPayload: null,
+        artifactsProduced: [],
         output: "",
         error: null,
         durationMs: Date.now() - startedAt,
@@ -158,12 +161,14 @@ export class CodexProvider implements AgentProvider {
       return {
         outcome: "failed",
         summary,
+        structuredPayload: null,
+        failureCategory: category,
+        retryable,
+        retryAfterMs: retryAfterMsForFailure(category),
+        artifactsProduced: [],
         output: combined,
         error: combined || summary,
         durationMs: processResult.durationMs,
-        retryable,
-        retryAfterMs: retryAfterMsForFailure(category),
-        failureCategory: category,
         processRuntime: processRuntime(processResult)
       };
     }
@@ -178,6 +183,8 @@ export class CodexProvider implements AgentProvider {
       return {
         outcome: parsed.outcome,
         summary: parsed.summary.trim(),
+        structuredPayload: parsed as unknown as Record<string, unknown>,
+        artifactsProduced: [outputPath],
         output: parsed.details.trim(),
         error: parsed.outcome === "failed" ? parsed.details.trim() : null,
         durationMs: Date.now() - startedAt,
@@ -192,7 +199,8 @@ export class CodexProvider implements AgentProvider {
         false,
         combined || detail,
         detail,
-        processRuntime(processResult)
+        processRuntime(processResult),
+        "unknown"
       );
     }
   }
@@ -398,15 +406,19 @@ function failure(
   retryable: boolean,
   output = "",
   error = summary,
-  runtime?: NonNullable<AgentExecutionResult["processRuntime"]>
+  runtime?: NonNullable<AgentExecutionResult["processRuntime"]>,
+  failureCategory: FailureCategory = "unknown"
 ): AgentExecutionResult {
   return {
     outcome: "failed",
     summary,
+    structuredPayload: null,
+    failureCategory,
+    retryable,
+    artifactsProduced: [],
     output,
     error,
     durationMs: Date.now() - startedAt,
-    retryable,
     processRuntime: runtime
   };
 }

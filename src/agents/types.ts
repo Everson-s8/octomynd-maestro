@@ -52,22 +52,27 @@ export type AgentExecutionRequest = {
   signal?: AbortSignal;
 };
 
-export type AgentExecutionResult = {
+export type NormalizedResult = {
   outcome: AgentOutcome;
   summary: string;
+  structuredPayload?: Record<string, unknown> | null;
+  failureCategory?: FailureCategory;
+  retryable: boolean;
+  retryAfterMs?: number;
+  artifactsProduced?: string[];
+};
+
+export type AgentExecutionResult = NormalizedResult & {
   output: string;
   error: string | null;
   durationMs: number;
-  retryable: boolean;
-  retryAfterMs?: number;
-  failureCategory?: FailureCategory;
   processRuntime?: {
     breakerReason: AgentProcessBreakerReason | null;
     outputStats: AgentProcessResult["outputStats"];
   };
 };
 
-export interface AgentProvider {
+export interface ProviderAdapter {
   id: AgentProviderId;
   label: string;
   capabilities: ReadonlySet<AgentCapability>;
@@ -75,3 +80,5 @@ export interface AgentProvider {
   execute(request: AgentExecutionRequest): Promise<AgentExecutionResult>;
   reviewImprovements?(request: ImprovementReviewExecutionRequest): Promise<ImprovementReviewExecutionResult>;
 }
+
+export type AgentProvider = ProviderAdapter;
