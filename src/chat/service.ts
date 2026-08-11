@@ -1,9 +1,12 @@
 import {
+  ChatActionExecutor,
   ChatEvidenceContext,
   ChatEvidenceFeaturePlanFact,
   ChatEvidenceGoalFact,
+  ChatEvidenceOutboxFact,
   ChatEvidenceReviewFact,
   ChatEvidenceTaskFact,
+  ChatEvidenceWorkGraphFact,
   GovernedChatAction,
   OperationalChatActionRequest,
   OperationalChatActionResponse,
@@ -11,30 +14,46 @@ import {
   OperationalChatRequest,
   OperationalChatResponse
 } from "./types.js";
-import { MaestroDatabase, TaskRecord } from "../db.js";
+import { MaestroDatabase } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
+const CHAT_PROVIDER_TIMEOUT_MS = 25_000;
+const HIGH_IMPACT_ACTIONS = new Set<GovernedChatAction["type"]>([
+  "cancel_task",
+  "cancel_feature_plan",
+  "resume_goal",
+  "unblock_provider"
+]);
+
+export type OperationalChatAgentRegistry = Pick<AgentRegistry, "snapshot"> & Partial<Pick<
+  AgentRegistry,
+  "route" | "acquire" | "updateProviderControl"
+>>;
+
 export type OperationalChatServiceOptions = {
   database: MaestroDatabase;
-  agentRegistry?: AgentRegistry;
+  agentRegistry?: OperationalChatAgentRegistry;
   commands?: ApplicationCommands;
   worktreesRoot?: string;
+  actionExecutor?: ChatActionExecutor;
 };
 
 export class OperationalChatService {
   private readonly database: MaestroDatabase;
-  private readonly agentRegistry?: AgentRegistry;
+  private readonly agentRegistry?: OperationalChatAgentRegistry;
   private readonly commands: ApplicationCommands;
   private readonly worktreesRoot: string;
+  private readonly actionExecutor?: ChatActionExecutor;
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
     this.agentRegistry = options.agentRegistry;
     this.commands = options.commands ?? new ApplicationCommands(options.database);
     this.worktreesRoot = options.worktreesRoot ?? process.cwd();
+    this.actionExecutor = options.actionExecutor;
   }
 
   async ask(request: OperationalChatRequest): Promise<OperationalChatResponse> {
@@ -47,7 +66,6 @@ export class OperationalChatService {
     const evidence = await this.gatherEvidenceContext(projectKey);
     const actions = this.identifyGovernedActions(evidence);
 
-    // Save user message to compact chat history
     this.database.saveOperationalChatMessage({
       projectKey,
       surface: request.surface,
@@ -65,17 +83,15 @@ export class OperationalChatService {
 
     const explanation = redactSensitiveText(routingResult.explanation);
 
-    // Save orchestrator response to compact chat history
     const savedOrchestratorMessage = this.database.saveOperationalChatMessage({
       projectKey,
       surface: request.surface,
       senderRole: "orchestrator",
       messageText: explanation,
-      evidenceJson: JSON.stringify(evidence),
+      evidenceJson: JSON.stringify(this.sanitizeEvidenceForStorage(evidence)),
       actionTaken: actions.length > 0 ? JSON.stringify(actions) : null
     });
 
-    // Prune history to keep context compact per project
     this.database.pruneOperationalChatMessages(projectKey, 100);
 
     return {
@@ -97,7 +113,18 @@ export class OperationalChatService {
       throw new Error(`Projeto @${projectKey} nao encontrado.`);
     }
 
-    const action = request.action;
+    const evidence = await this.gatherEvidenceContext(projectKey);
+    const validActions = this.identifyGovernedActions(evidence);
+    const action = validActions.find((a) => a.id === request.action.id && a.type === request.action.type);
+
+    if (!action) {
+      return {
+        success: false,
+        actionTaken: request.action.label,
+        resultSummary: `Acao '${request.action.id}' nao e mais aplicavel ao estado atual do projeto.`
+      };
+    }
+
     const origin = {
       channel: request.surface,
       userId: request.userId ?? null,
@@ -111,7 +138,7 @@ export class OperationalChatService {
       switch (action.type) {
         case "unblock_provider": {
           const providerId = (action.payload?.providerId ?? action.targetId) as AgentProviderId;
-          if (this.agentRegistry && typeof this.agentRegistry.updateProviderControl === "function") {
+          if (this.agentRegistry?.updateProviderControl) {
             this.agentRegistry.updateProviderControl({
               providerId,
               mode: "enabled",
@@ -136,6 +163,7 @@ export class OperationalChatService {
             username: request.username ?? null,
             taskId
           });
+          this.actionExecutor?.retryTask?.(taskId);
           resultSummary = `Task #${taskId} reiniciada e movida para a fila (queued).`;
           break;
         }
@@ -151,18 +179,15 @@ export class OperationalChatService {
             username: request.username ?? null,
             taskId
           });
+          this.actionExecutor?.cancelTask?.(taskId);
           resultSummary = `Task #${taskId} cancelada com sucesso.`;
           break;
         }
 
         case "resume_goal": {
           const taskId = Number(action.targetId);
-          const latestRun = this.database.findLatestCompletedGoalRunForTask(taskId)
-            ?? this.database.listActiveGoalRuns().find((r) => r.taskId === taskId);
-          if (latestRun && ["blocked", "failed"].includes(latestRun.status)) {
-            this.database.reopenGoalRun(latestRun.id);
-          }
           this.database.updateTaskStatus(taskId, "queued");
+          this.actionExecutor?.resumeGoal?.(taskId);
           resultSummary = `Goal da Task #${taskId} retomado e adicionado a fila.`;
           break;
         }
@@ -191,12 +216,13 @@ export class OperationalChatService {
         case "rerun_review": {
           const taskId = Number(action.targetId);
           this.database.updateTaskStatus(taskId, "reviewing");
+          this.actionExecutor?.rerunReview?.(taskId);
           resultSummary = `Revisao para Task #${taskId} reexecutada.`;
           break;
         }
 
         default:
-          throw new Error(`Acao governada desconhecida: ${(action as any).type}`);
+          throw new Error(`Acao governada desconhecida: ${(action as { type?: string }).type}`);
       }
     } catch (error) {
       success = false;
@@ -222,6 +248,10 @@ export class OperationalChatService {
     };
   }
 
+  isHighImpactAction(action: GovernedChatAction): boolean {
+    return HIGH_IMPACT_ACTIONS.has(action.type);
+  }
+
   async getHistory(projectKey: string, limit = 50): Promise<OperationalChatMessageRecord[]> {
     const normalizedKey = projectKey.trim().toLowerCase();
     return this.database.listOperationalChatMessages(normalizedKey, limit);
@@ -240,7 +270,7 @@ export class OperationalChatService {
       status: t.status,
       source: t.source,
       branchName: t.branchName,
-      worktreePath: t.worktreePath,
+      worktreePrepared: Boolean(t.worktreePath),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt
     }));
@@ -312,7 +342,7 @@ export class OperationalChatService {
 
     const providers = this.agentRegistry ? await this.agentRegistry.snapshot() : [];
     const events = typeof this.database.listEvents === "function" ? this.database.listEvents(20) : [];
-    const outbox = events.map((e: any) => ({
+    const outbox: ChatEvidenceOutboxFact[] = events.map((e) => ({
       id: e.id,
       channel: e.source,
       status: "recorded",
@@ -322,16 +352,16 @@ export class OperationalChatService {
       createdAt: e.createdAt
     }));
 
-    const workGraphs: ChatEvidenceContext["workGraphs"] = [];
+    const workGraphs: ChatEvidenceWorkGraphFact[] = [];
     if (typeof this.database.listWorkGraphs === "function") {
       try {
         const graphs = this.database.listWorkGraphs(30);
         for (const g of graphs) {
-          const activeNodes = g.nodes.filter((n: any) => ["running", "pending"].includes(n.status)).length;
-          const failedNodes = g.nodes.filter((n: any) => ["failed", "blocked"].includes(n.status)).length;
+          const activeNodes = g.nodes.filter((n) => ["running", "pending"].includes(n.status)).length;
+          const failedNodes = g.nodes.filter((n) => ["failed", "blocked"].includes(n.status)).length;
           workGraphs.push({
             id: g.id,
-            taskId: g.runId,
+            runId: g.runId,
             status: g.status,
             phase: "execution",
             activeNodes,
@@ -361,10 +391,9 @@ export class OperationalChatService {
     };
   }
 
-  private identifyGovernedActions(evidence: ChatEvidenceContext): GovernedChatAction[] {
+  identifyGovernedActions(evidence: ChatEvidenceContext): GovernedChatAction[] {
     const actions: GovernedChatAction[] = [];
 
-    // 1. Paused / Disabled providers
     for (const provider of evidence.providers) {
       if (provider.control.mode === "paused" || provider.control.mode === "disabled") {
         actions.push({
@@ -378,7 +407,6 @@ export class OperationalChatService {
       }
     }
 
-    // 2. Blocked / Failed tasks
     for (const task of evidence.tasks) {
       if (["blocked", "failed", "waiting_quota", "waiting_provider", "waiting_dependency"].includes(task.status)) {
         actions.push({
@@ -398,7 +426,6 @@ export class OperationalChatService {
       }
     }
 
-    // 3. Blocked / Failed goals
     for (const goal of evidence.goals) {
       if (["blocked", "failed"].includes(goal.status)) {
         actions.push({
@@ -412,7 +439,6 @@ export class OperationalChatService {
       }
     }
 
-    // 4. Blocked / Paused / Ineligible Feature Plans
     for (const plan of evidence.featurePlans) {
       if (["blocked", "paused"].includes(plan.status) || (plan.eligibility && !plan.eligibility.eligible)) {
         actions.push({
@@ -439,7 +465,6 @@ export class OperationalChatService {
       }
     }
 
-    // 5. Failed / Rejected reviews
     for (const review of evidence.reviews) {
       if (["failed", "rejected", "changes_requested"].includes(review.status)) {
         actions.push({
@@ -461,30 +486,33 @@ export class OperationalChatService {
     actions: GovernedChatAction[],
     history: OperationalChatMessageRecord[]
   ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine" }> {
-    // Attempt provider control plane routing
-    if (this.agentRegistry) {
+    if (this.agentRegistry?.route && this.agentRegistry.acquire) {
       try {
         const routed = await this.agentRegistry.route("conversation");
         if (routed && routed.health.state === "ready") {
           const lease = await this.agentRegistry.acquire("conversation");
           if (lease) {
+            const timeoutController = new AbortController();
+            const timeoutId = setTimeout(() => timeoutController.abort(), CHAT_PROVIDER_TIMEOUT_MS);
             try {
+              const promptEvidence = this.sanitizeEvidenceForPrompt(evidence);
               const systemPrompt = [
                 "Voce e o assistente de conversacao operacional do Octomynd Maestro.",
                 "Sua funcao e explicar de forma clara, concisa, precisa e fundamentada exclusivamente em evidencias o estado do projeto, tasks, goals, feature plans, revisoes e provedores.",
                 "NUNCA invente estado de runtime que nao esteja presente nas evidencias fornecidas.",
+                "NUNCA exponha caminhos locais de worktree, tokens, senhas ou chaves.",
                 "",
                 "EVIDENCIAS EMPIRICAS DE RUNTIME:",
-                evidence.summaryText,
+                promptEvidence.summaryText,
                 "",
                 "DETALHES DAS TASKS:",
-                JSON.stringify(evidence.tasks, null, 2),
+                JSON.stringify(promptEvidence.tasks, null, 2),
                 "",
                 "DETALHES DOS FEATURE PLANS:",
-                JSON.stringify(evidence.featurePlans, null, 2),
+                JSON.stringify(promptEvidence.featurePlans, null, 2),
                 "",
                 "DETALHES DOS PROVEDORES:",
-                JSON.stringify(evidence.providers, null, 2),
+                JSON.stringify(promptEvidence.providers, null, 2),
                 "",
                 "ACOES GOVERNADAS DISPONIVEIS:",
                 JSON.stringify(actions, null, 2)
@@ -516,7 +544,8 @@ export class OperationalChatService {
                 project: evidence.project,
                 previousSteps: [],
                 artifactsRoot: this.worktreesRoot,
-                humanFeedback: `${systemPrompt}\n\nHISTORICO DE CONVERSA:\n${historyText}\n\nPERGUNTA DO USUARIO:\n${userMessage}`
+                humanFeedback: `${systemPrompt}\n\nHISTORICO DE CONVERSA:\n${historyText}\n\nPERGUNTA DO USUARIO:\n${userMessage}`,
+                signal: timeoutController.signal
               });
 
               lease.release();
@@ -526,8 +555,14 @@ export class OperationalChatService {
                   providerId: lease.provider.id
                 };
               }
-            } catch (_) {
-              lease.release({ retryable: true, summary: "Falha na chamada de conversacao." });
+            } catch (error) {
+              const isTimeout = error instanceof Error && error.name === "AbortError";
+              lease.release({
+                retryable: !isTimeout,
+                summary: isTimeout ? "Timeout na chamada de conversacao." : "Falha na chamada de conversacao."
+              });
+            } finally {
+              clearTimeout(timeoutId);
             }
           }
         }
@@ -536,7 +571,6 @@ export class OperationalChatService {
       }
     }
 
-    // Deterministic evidence-grounded engine
     return {
       explanation: this.generateDeterministicExplanation(userMessage, evidence, actions),
       providerId: "deterministic_engine"
@@ -616,5 +650,29 @@ export class OperationalChatService {
     }
 
     return lines.join("\n");
+  }
+
+  private sanitizeEvidenceForPrompt(evidence: ChatEvidenceContext): ChatEvidenceContext {
+    return {
+      ...evidence,
+      tasks: evidence.tasks.map((t) => ({
+        ...t,
+        branchName: t.branchName ? redactSensitiveText(t.branchName) : null
+      })),
+      providers: evidence.providers.map((p) => ({
+        ...p,
+        detail: redactSensitiveText(p.detail)
+      }))
+    };
+  }
+
+  private sanitizeEvidenceForStorage(evidence: ChatEvidenceContext): ChatEvidenceContext {
+    return {
+      ...evidence,
+      providers: evidence.providers.map((p) => ({
+        ...p,
+        detail: redactSensitiveText(p.detail)
+      }))
+    };
   }
 }

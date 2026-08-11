@@ -117,6 +117,14 @@ describe("Unified Operational Chat (Task #52)", () => {
     const systemMsg = history.find((m) => m.senderRole === "system");
     expect(systemMsg).toBeDefined();
     expect(systemMsg?.messageText).toContain("Task #");
+
+    const staleActionResult = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      action: retryAction!
+    });
+    expect(staleActionResult.success).toBe(false);
+    expect(staleActionResult.resultSummary).toContain("nao e mais aplicavel");
   });
 
   it("honors paused or disabled providers and excludes Codex when Codex is paused or disabled", async () => {

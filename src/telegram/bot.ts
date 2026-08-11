@@ -671,8 +671,15 @@ export function createTelegramBot(
       return;
     }
 
-    const projects = database.listProjects ? database.listProjects() : [];
-    const projectKey = inputProjectKey || (projects.length > 0 ? projects[0].key : config.projectName.toLowerCase());
+    if (!inputProjectKey) {
+      await ctx.reply("Por favor, informe o projeto: /chat @projeto sua mensagem");
+      return;
+    }
+
+    if (!database.findProjectByKey(inputProjectKey)) {
+      await ctx.reply(`Projeto @${inputProjectKey} nao encontrado.`);
+      return;
+    }
 
     database.addEvent({
       source: "telegram",
@@ -680,12 +687,12 @@ export function createTelegramBot(
       text: ctx.message?.text ?? "/chat",
       userId: String(ctx.from?.id ?? ""),
       username: ctx.from?.username ?? null,
-      metadata: { projectKey, message }
+      metadata: { projectKey: inputProjectKey, message }
     });
 
     try {
       const response = await chatService.ask({
-        projectKey,
+        projectKey: inputProjectKey,
         surface: "telegram",
         message,
         userId: String(ctx.from?.id ?? ""),
@@ -697,7 +704,7 @@ export function createTelegramBot(
         replyLines.push("");
         replyLines.push("Acoes governadas disponiveis:");
         for (const action of response.actions) {
-          replyLines.push(`- /chat_action ${action.id} (${action.label})`);
+          replyLines.push(`- /chat_action @${inputProjectKey} ${action.id} (${action.label})`);
         }
       }
       await ctx.reply(replyLines.join("\n"));
@@ -707,22 +714,31 @@ export function createTelegramBot(
   });
 
   bot.command("chat_action", async (ctx) => {
-    const text = (ctx.message?.text ?? "").replace(/^\/chat_action(?:@\w+)?\s*/i, "").trim();
-    if (!text) {
-      await ctx.reply("Use: /chat_action <action_id>");
+    const { projectKey, actionId, confirmed } = parseChatActionText(ctx.message?.text ?? "");
+    if (!projectKey || !actionId) {
+      await ctx.reply("Use: /chat_action @projeto <action_id>");
       return;
     }
 
-    const projects = database.listProjects ? database.listProjects() : [];
-    const projectKey = projects.length > 0 ? projects[0].key : config.projectName.toLowerCase();
+    if (!database.findProjectByKey(projectKey)) {
+      await ctx.reply(`Projeto @${projectKey} nao encontrado.`);
+      return;
+    }
 
     const evidence = await chatService.gatherEvidenceContext(projectKey);
-    const actions = (chatService as any).identifyGovernedActions ? (chatService as any).identifyGovernedActions(evidence) : [];
-    const action = actions.find((a: any) => a.id === text);
+    const actions = chatService.identifyGovernedActions(evidence);
+    const action = actions.find((a) => a.id === actionId);
 
     if (!action) {
-      await ctx.reply(`Acao '${text}' nao encontrada ou nao aplicavel.`);
+      await ctx.reply(`Acao '${actionId}' nao encontrada ou nao aplicavel para @${projectKey}.`);
       return;
+    }
+
+    if (chatService.isHighImpactAction(action)) {
+      if (!confirmed) {
+        await ctx.reply(`Acao de alto impacto: ${action.label}.\nPara confirmar pelo Telegram, use: /chat_action @${projectKey} ${actionId} confirm`);
+        return;
+      }
     }
 
     try {
@@ -754,38 +770,15 @@ export function createTelegramBot(
       return;
     }
 
-    const projects = database.listProjects ? database.listProjects() : [];
-    const projectKey = projects.length > 0 ? projects[0].key : config.projectName.toLowerCase();
-
     database.addEvent({
       source: "telegram",
-      type: "chat.message_received",
+      type: "feedback.received",
       text,
       userId: String(ctx.from?.id ?? ""),
       username: ctx.from?.username ?? null
     });
 
-    try {
-      const response = await chatService.ask({
-        projectKey,
-        surface: "telegram",
-        message: text,
-        userId: String(ctx.from?.id ?? ""),
-        username: ctx.from?.username ?? null
-      });
-
-      const replyLines = [response.explanation];
-      if (response.actions.length > 0) {
-        replyLines.push("");
-        replyLines.push("Acoes governadas disponiveis:");
-        for (const action of response.actions) {
-          replyLines.push(`- /chat_action ${action.id} (${action.label})`);
-        }
-      }
-      await ctx.reply(replyLines.join("\n"));
-    } catch (_) {
-      await ctx.reply("Feedback recebido e registrado.");
-    }
+    await ctx.reply("Feedback recebido e registrado. Use /chat @projeto mensagem para conversar com o orquestrador.");
   });
 
   return bot;
@@ -834,11 +827,19 @@ export function parseQueueProjectKey(messageText: string): string | null {
 
 export function parseChatText(messageText: string): { projectKey: string | null; message: string } {
   const text = messageText.replace(/^\/chat(?:@\w+)?\s*/i, "").trim();
-  const match = text.match(/^@?([a-z0-9][a-z0-9_-]{1,48})\s+(.+)$/s);
+  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(.+)$/s);
   if (match) {
     return { projectKey: match[1].toLowerCase(), message: match[2].trim() };
   }
   return { projectKey: null, message: text };
+}
+
+export function parseChatActionText(messageText: string): { projectKey: string | null; actionId: string | null; confirmed: boolean } {
+  const text = messageText.replace(/^\/chat_action(?:@\w+)?\s*/i, "").trim();
+  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(\S+)(?:\s+(confirm|yes))?$/i);
+  return match
+    ? { projectKey: match[1].toLowerCase(), actionId: match[2], confirmed: Boolean(match[3]) }
+    : { projectKey: null, actionId: null, confirmed: false };
 }
 
 export function parseStatusProjectKey(messageText: string): string | null {

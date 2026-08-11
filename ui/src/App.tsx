@@ -279,6 +279,20 @@ function OperationalChatConsole({
 
   const handleAction = async (action: GovernedChatAction) => {
     if (!selectedProjectKey || actionExecuting) return;
+
+    const requiresConfirmation = [
+      "cancel_task",
+      "cancel_feature_plan",
+      "resume_goal",
+      "unblock_provider"
+    ].includes(action.type);
+    if (requiresConfirmation) {
+      const confirmed = window.confirm(
+        `${action.label}\n\n${action.description}\n\nDeseja realmente executar esta ação?`
+      );
+      if (!confirmed) return;
+    }
+
     setActionExecuting(action.id);
     setError(null);
 

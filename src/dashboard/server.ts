@@ -43,7 +43,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
     AgentRegistry,
-    "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -61,9 +61,24 @@ export function createDashboardServer(options: DashboardServerOptions) {
   );
   const chatService = options.chatService ?? new OperationalChatService({
     database: options.database,
-    agentRegistry: options.agentRegistry as AgentRegistry,
+    agentRegistry: options.agentRegistry,
     commands,
-    worktreesRoot: options.config.worktreesPath
+    worktreesRoot: options.config.worktreesPath,
+    actionExecutor: options.goalCoordinator
+      ? {
+          retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
+          resumeGoal: (taskId) => {
+            const run = options.database.listActiveGoalRuns().find((r) => r.taskId === taskId);
+            if (run?.status === "waiting_provider") {
+              options.goalCoordinator!.resume(run.id);
+            } else {
+              options.goalCoordinator!.start(taskId);
+            }
+          },
+          cancelTask: (taskId) => { options.goalCoordinator!.cancel(taskId); },
+          rerunReview: () => { /* reviews are re-attempted by goal runner when task status moves to reviewing */ }
+        }
+      : undefined
   });
 
   return http.createServer(async (request, response) => {

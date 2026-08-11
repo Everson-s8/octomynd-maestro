@@ -1,7 +1,6 @@
 import type { ProjectRecord } from "../db.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { AgentProviderId } from "../agents/types.js";
-import type { WorkGraphView } from "../commands/application-commands.js";
 
 export type OperationalChatSurface = "dashboard" | "telegram";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
@@ -12,7 +11,7 @@ export type ChatEvidenceTaskFact = {
   status: string;
   source: string;
   branchName: string | null;
-  worktreePath: string | null;
+  worktreePrepared: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,6 +66,15 @@ export type ChatEvidenceOutboxFact = {
   createdAt: string;
 };
 
+export type ChatEvidenceWorkGraphFact = {
+  id: number;
+  runId: number;
+  status: string;
+  phase: string;
+  activeNodes: number;
+  failedNodes: number;
+};
+
 export type ChatEvidenceContext = {
   project: ProjectRecord;
   tasks: ChatEvidenceTaskFact[];
@@ -75,14 +83,7 @@ export type ChatEvidenceContext = {
   reviews: ChatEvidenceReviewFact[];
   providers: AgentProviderSnapshot[];
   outbox: ChatEvidenceOutboxFact[];
-  workGraphs: Array<{
-    id: number;
-    taskId: number;
-    status: string;
-    phase: string;
-    activeNodes: number;
-    failedNodes: number;
-  }>;
+  workGraphs: ChatEvidenceWorkGraphFact[];
   summaryText: string;
 };
 
@@ -102,7 +103,7 @@ export type GovernedChatAction = {
   label: string;
   description: string;
   targetId: string | number;
-  payload?: Record<string, any>;
+  payload?: Record<string, unknown>;
 };
 
 export type OperationalChatMessageRecord = {
@@ -158,4 +159,11 @@ export type OperationalChatActionResponse = {
   actionTaken: string;
   resultSummary: string;
   updatedEvidence?: Partial<ChatEvidenceContext>;
+};
+
+export type ChatActionExecutor = {
+  retryTask?(taskId: number): void;
+  resumeGoal?(taskId: number): void;
+  cancelTask?(taskId: number): void;
+  rerunReview?(taskId: number): void;
 };

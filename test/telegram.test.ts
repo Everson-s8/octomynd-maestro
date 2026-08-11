@@ -17,6 +17,8 @@ import {
   parseFeaturesProjectKey,
   parseDoctorProjectKey,
   parseQueueProjectKey,
+  parseChatActionText,
+  parseChatText,
   parseStatusProjectKey,
   parseTaskId,
   parseTaskText,
@@ -163,6 +165,32 @@ describe("telegram helpers", () => {
   it("parses status project key", () => {
     expect(parseStatusProjectKey("/status @boo")).toBe("boo");
     expect(parseStatusProjectKey("/status")).toBeNull();
+  });
+
+  it("requires an explicit project for operational chat commands", () => {
+    expect(parseChatText("/chat @maestro por que a task esta parada?")).toEqual({
+      projectKey: "maestro",
+      message: "por que a task esta parada?"
+    });
+    expect(parseChatText("/chat por que a task esta parada?")).toEqual({
+      projectKey: null,
+      message: "por que a task esta parada?"
+    });
+    expect(parseChatActionText("/chat_action @maestro retry_task_12")).toEqual({
+      projectKey: "maestro",
+      actionId: "retry_task_12",
+      confirmed: false
+    });
+    expect(parseChatActionText("/chat_action @maestro cancel_task_12 confirm")).toEqual({
+      projectKey: "maestro",
+      actionId: "cancel_task_12",
+      confirmed: true
+    });
+    expect(parseChatActionText("/chat_action retry_task_12")).toEqual({
+      projectKey: null,
+      actionId: null,
+      confirmed: false
+    });
   });
 
   it("parses Feature operation commands", () => {
