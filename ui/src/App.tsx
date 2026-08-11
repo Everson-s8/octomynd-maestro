@@ -49,7 +49,21 @@ export default function App() {
   const activeTasks = useMemo(() => {
     if (!data) return [];
     return [...data.tasks]
-      .filter((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status))
+      .filter((task) => {
+        if (globalFilter === "all") return true;
+        if (globalFilter === "attention") {
+          return [
+            "awaiting_human",
+            "changes_requested",
+            "blocked",
+            "waiting_quota",
+            "waiting_provider",
+            "waiting_dependency",
+            "failed"
+          ].includes(task.status);
+        }
+        return !["done", "failed", "rejected", "cancelled"].includes(task.status);
+      })
       .sort((left, right) => statusOrder.indexOf(left.status) - statusOrder.indexOf(right.status));
   }, [data]);
 
