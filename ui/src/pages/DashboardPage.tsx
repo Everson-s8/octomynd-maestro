@@ -100,7 +100,7 @@ export interface DashboardPageProps {
 }
 
 export function DashboardPage({ data, activeTasks, onOpenTask, onRefresh }: DashboardPageProps) {
-  const { costToday, totalTokens } = calculateDashboardCost(data.workGraphs);
+  const { costToday, totalTokens } = calculateDashboardCost(data);
 
   return (
     <div className="dashboard-grid" id="overview">

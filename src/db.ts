@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { calculateCostUsd, resolveModelForProvider } from "./agents/economics.js";
 import { buildFeatureCompletionEvidencePack } from "./improvements/evidence.js";
 import { redactSensitiveText, sanitizePublicMetadata } from "./security/redaction.js";
 import {
@@ -286,6 +287,46 @@ export type GoalStepRecord = {
   durationMs: number | null;
   createdAt: string;
   finishedAt: string | null;
+};
+
+export type TokenUsageRecord = {
+  id: number;
+  runId: number;
+  stepId: number;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  createdAt: string;
+};
+
+export type RecordTokenUsageInput = {
+  runId: number;
+  stepId: number;
+  provider: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+};
+
+export type DashboardCostSummary = {
+  todayTotalUsd: number;
+  todayInputTokens: number;
+  todayOutputTokens: number;
+  byProvider: Array<{
+    provider: string;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
+  byProject: Array<{
+    projectKey: string;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
 };
 
 export type HumanReviewDecision = "approved" | "changes_requested" | "rejected";
@@ -716,6 +757,12 @@ export function createDatabase(databasePath: string) {
         duration_ms = @durationMs,
         finished_at = @now
     WHERE id = @id
+  `);
+  const recordTokenUsageStatement = db.prepare(`
+    INSERT INTO token_usage (
+      run_id, step_id, provider, model, input_tokens, output_tokens, cost_usd, created_at
+    )
+    VALUES (@runId, @stepId, @provider, @model, @inputTokens, @outputTokens, @costUsd, @createdAt)
   `);
   const createGoalCheckpointStatement = db.prepare(`
     INSERT INTO goal_checkpoints (
@@ -1413,6 +1460,101 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM goal_steps WHERE run_id = ? ORDER BY id ASC")
         .all(runId) as GoalStepRow[];
       return rows.map(mapGoalStep);
+    },
+
+    recordTokenUsage(input: RecordTokenUsageInput): TokenUsageRecord {
+      const model = resolveModelForProvider(input.provider, input.model);
+      const inputTokens = Math.max(0, input.inputTokens ?? 0);
+      const outputTokens = Math.max(0, input.outputTokens ?? 0);
+      const costUsd = input.costUsd !== undefined
+        ? input.costUsd
+        : calculateCostUsd(input.provider, model, inputTokens, outputTokens);
+      const now = new Date().toISOString();
+
+      const result = recordTokenUsageStatement.run({
+        runId: input.runId,
+        stepId: input.stepId,
+        provider: input.provider,
+        model,
+        inputTokens,
+        outputTokens,
+        costUsd,
+        createdAt: now
+      });
+
+      const row = db.prepare("SELECT * FROM token_usage WHERE id = ?").get(result.lastInsertRowid) as TokenUsageRow;
+      return mapTokenUsage(row);
+    },
+
+    getTokenUsageByRun(runId: number): TokenUsageRecord[] {
+      const rows = db.prepare("SELECT * FROM token_usage WHERE run_id = ? ORDER BY id ASC").all(runId) as TokenUsageRow[];
+      return rows.map(mapTokenUsage);
+    },
+
+    getTokenUsageByStep(stepId: number): TokenUsageRecord | null {
+      const row = db.prepare("SELECT * FROM token_usage WHERE step_id = ? ORDER BY id DESC LIMIT 1").get(stepId) as TokenUsageRow | undefined;
+      return row ? mapTokenUsage(row) : null;
+    },
+
+    listTokenUsage(limit = 100): TokenUsageRecord[] {
+      const rows = db.prepare("SELECT * FROM token_usage ORDER BY id DESC LIMIT ?").all(limit) as TokenUsageRow[];
+      return rows.map(mapTokenUsage);
+    },
+
+    getCostSummary(sinceIsoString?: string): DashboardCostSummary {
+      const since = sinceIsoString ?? `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+
+      const totalRow = db.prepare(`
+        SELECT
+          COALESCE(SUM(cost_usd), 0.0) as totalCostUsd,
+          COALESCE(SUM(input_tokens), 0) as totalInputTokens,
+          COALESCE(SUM(output_tokens), 0) as totalOutputTokens
+        FROM token_usage
+        WHERE created_at >= ?
+      `).get(since) as { totalCostUsd: number; totalInputTokens: number; totalOutputTokens: number };
+
+      const providerRows = db.prepare(`
+        SELECT
+          provider,
+          COALESCE(SUM(cost_usd), 0.0) as costUsd,
+          COALESCE(SUM(input_tokens), 0) as inputTokens,
+          COALESCE(SUM(output_tokens), 0) as outputTokens
+        FROM token_usage
+        WHERE created_at >= ?
+        GROUP BY provider
+      `).all(since) as Array<{ provider: string; costUsd: number; inputTokens: number; outputTokens: number }>;
+
+      const projectRows = db.prepare(`
+        SELECT
+          COALESCE(p.key, 'inbox') as projectKey,
+          COALESCE(SUM(tu.cost_usd), 0.0) as costUsd,
+          COALESCE(SUM(tu.input_tokens), 0) as inputTokens,
+          COALESCE(SUM(tu.output_tokens), 0) as outputTokens
+        FROM token_usage tu
+        JOIN goal_runs gr ON tu.run_id = gr.id
+        JOIN tasks t ON gr.task_id = t.id
+        LEFT JOIN projects p ON t.project_id = p.id
+        WHERE tu.created_at >= ?
+        GROUP BY COALESCE(p.key, 'inbox')
+      `).all(since) as Array<{ projectKey: string; costUsd: number; inputTokens: number; outputTokens: number }>;
+
+      return {
+        todayTotalUsd: Math.round((totalRow.totalCostUsd || 0) * 1_000_000) / 1_000_000,
+        todayInputTokens: totalRow.totalInputTokens || 0,
+        todayOutputTokens: totalRow.totalOutputTokens || 0,
+        byProvider: providerRows.map((r) => ({
+          provider: r.provider,
+          costUsd: Math.round((r.costUsd || 0) * 1_000_000) / 1_000_000,
+          inputTokens: r.inputTokens || 0,
+          outputTokens: r.outputTokens || 0
+        })),
+        byProject: projectRows.map((r) => ({
+          projectKey: r.projectKey,
+          costUsd: Math.round((r.costUsd || 0) * 1_000_000) / 1_000_000,
+          inputTokens: r.inputTokens || 0,
+          outputTokens: r.outputTokens || 0
+        }))
+      };
     },
 
     addHumanReview(input: {
@@ -2705,6 +2847,24 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (run_id) REFERENCES goal_runs(id)
     );
 
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      step_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0.0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES goal_runs(id),
+      FOREIGN KEY (step_id) REFERENCES goal_steps(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_token_usage_run_id ON token_usage(run_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_step_id ON token_usage(step_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);
+
     CREATE TABLE IF NOT EXISTS goal_checkpoints (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id INTEGER NOT NULL,
@@ -3082,6 +3242,32 @@ type GoalRunRow = {
   updated_at: string;
   finished_at: string | null;
 };
+
+type TokenUsageRow = {
+  id: number;
+  run_id: number;
+  step_id: number;
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  created_at: string;
+};
+
+function mapTokenUsage(row: TokenUsageRow): TokenUsageRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    costUsd: row.cost_usd,
+    createdAt: row.created_at
+  };
+}
 
 type GoalCheckpointRow = {
   id: number;

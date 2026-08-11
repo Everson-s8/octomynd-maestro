@@ -125,6 +125,7 @@ export class CodexProvider implements AgentProvider {
       command: process.execPath,
       args,
       cwd,
+      provider: this.id,
       stdin: buildPrompt(request),
       timeoutMs: this.executionLimits.maxRuntimeMs,
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
@@ -142,7 +143,9 @@ export class CodexProvider implements AgentProvider {
         error: null,
         durationMs: Date.now() - startedAt,
         retryable: false,
-        processRuntime: processRuntime(processResult)
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: "codex"
       };
     }
     const combined = [
@@ -177,7 +180,9 @@ export class CodexProvider implements AgentProvider {
         output: combined,
         error: combined || summary,
         durationMs: processResult.durationMs,
-        processRuntime: processRuntime(processResult)
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: "codex"
       };
     }
 
@@ -197,7 +202,9 @@ export class CodexProvider implements AgentProvider {
         error: parsed.outcome === "failed" ? parsed.details.trim() : null,
         durationMs: Date.now() - startedAt,
         retryable: false,
-        processRuntime: processRuntime(processResult)
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: "codex"
       };
     } catch (error) {
       const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;

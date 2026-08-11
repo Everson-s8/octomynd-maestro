@@ -70,6 +70,11 @@ export type AgentExecutionResult = NormalizedResult & {
     breakerReason: AgentProcessBreakerReason | null;
     outputStats: AgentProcessResult["outputStats"];
   };
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  model?: string;
 };
 
 export interface ProviderAdapter {

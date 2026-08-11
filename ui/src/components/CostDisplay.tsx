@@ -1,4 +1,4 @@
-import { DashboardWorkGraph } from "../api";
+import { DashboardData, DashboardWorkGraph } from "../api";
 import { Icon } from "./Icon";
 
 export function CostDisplay({
@@ -32,12 +32,32 @@ export function CostDisplay({
   );
 }
 
-export function calculateDashboardCost(workGraphs: DashboardWorkGraph[]): { costToday: number; totalTokens: number } {
-  let totalTokens = 0;
-  for (const graph of workGraphs) {
-    totalTokens += graph.canary?.estimatedTokens ?? 0;
+export function calculateDashboardCost(
+  data?: Partial<DashboardData> | DashboardWorkGraph[]
+): { costToday: number; totalTokens: number } {
+  if (Array.isArray(data)) {
+    let totalTokens = 0;
+    for (const graph of data) {
+      totalTokens += graph.canary?.estimatedTokens ?? 0;
+    }
+    const costToday = (totalTokens / 1000) * 0.002;
+    return { costToday, totalTokens };
   }
-  // Estimated $0.002 per 1k tokens standard rate
+
+  if (data?.costSummary) {
+    const costToday = data.costSummary.todayTotalUsd ?? 0;
+    const totalTokens = (data.costSummary.todayInputTokens ?? 0) + (data.costSummary.todayOutputTokens ?? 0);
+    if (costToday > 0 || totalTokens > 0) {
+      return { costToday, totalTokens };
+    }
+  }
+
+  let totalTokens = 0;
+  if (data?.workGraphs) {
+    for (const graph of data.workGraphs) {
+      totalTokens += graph.canary?.estimatedTokens ?? 0;
+    }
+  }
   const costToday = (totalTokens / 1000) * 0.002;
   return { costToday, totalTokens };
 }

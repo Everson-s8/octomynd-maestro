@@ -144,6 +144,7 @@ function completedProcess(output: string, exitCode = 0): AgentProcessResult {
       duplicateChunks: 0,
       truncatedChars: 0
     },
-    durationMs: 1
+    durationMs: 10,
+    tokenUsage: { inputTokens: 0, outputTokens: 0 }
   };
 }

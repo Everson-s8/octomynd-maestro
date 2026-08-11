@@ -106,6 +106,19 @@ export function createTelegramBot(
     ));
   });
 
+  bot.command("cost", async (ctx) => {
+    database.addEvent({
+      source: "telegram",
+      type: "command.cost",
+      text: "/cost",
+      userId: String(ctx.from?.id ?? ""),
+      username: ctx.from?.username ?? null
+    });
+
+    const costSummary = database.getCostSummary();
+    await ctx.reply(formatCostSummary(costSummary));
+  });
+
   bot.command("projects", async (ctx) => {
     database.addEvent({
       source: "telegram",
@@ -1021,6 +1034,34 @@ export function formatQueue(tasks: TaskRecord[]): string {
     .join("\n");
 }
 
+function formatCostSummary(summary: ReturnType<MaestroDatabase["getCostSummary"]>): string {
+  const totalTokens = summary.todayInputTokens + summary.todayOutputTokens;
+  const lines: string[] = [
+    "💰 Provider Economics & Cost Summary",
+    "",
+    `Custo Hoje: $${summary.todayTotalUsd.toFixed(4)} USD`,
+    `Tokens Hoje: ${totalTokens.toLocaleString()} (${summary.todayInputTokens.toLocaleString()} in / ${summary.todayOutputTokens.toLocaleString()} out)`
+  ];
+
+  if (summary.byProvider.length > 0) {
+    lines.push("", "Por Provider:");
+    for (const p of summary.byProvider) {
+      const pTokens = p.inputTokens + p.outputTokens;
+      lines.push(`• ${p.provider}: $${p.costUsd.toFixed(4)} (${pTokens.toLocaleString()} tokens)`);
+    }
+  }
+
+  if (summary.byProject.length > 0) {
+    lines.push("", "Por Projeto:");
+    for (const proj of summary.byProject) {
+      const projTokens = proj.inputTokens + proj.outputTokens;
+      lines.push(`• @${proj.projectKey}: $${proj.costUsd.toFixed(4)} (${projTokens.toLocaleString()} tokens)`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function formatHelp(): string {
   return [
     "Octomynd Maestro esta online.",
@@ -1028,6 +1069,7 @@ function formatHelp(): string {
     "Comandos:",
     "/status - ver estado geral e agentes trabalhando",
     "/status @projeto - ver estado de um projeto",
+    "/cost - ver consumo de tokens e custos estimados por provider e projeto",
     "/projects - listar projetos",
     "/project_add chave caminho-do-repo - cadastrar projeto",
     "/intake @projeto texto - classificar e submeter demanda",

@@ -546,6 +546,18 @@ export async function runTaskGoal(
           error: safeError,
           durationMs: result.durationMs
         });
+        try {
+          database.recordTokenUsage({
+            runId: run.id,
+            stepId: goalStep.id,
+            provider: routed.provider.id,
+            model: result.model,
+            inputTokens: result.tokenUsage?.inputTokens ?? 0,
+            outputTokens: result.tokenUsage?.outputTokens ?? 0
+          });
+        } catch {
+          // Requirement #8: Never fail task on token recording issue
+        }
         database.addEvent({
           source: routed.provider.id,
           type: `goal.step_${result.outcome}`,

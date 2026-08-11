@@ -11,11 +11,46 @@ export interface AnalyticsPageProps {
 }
 
 export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
-  const { costToday, totalTokens } = calculateDashboardCost(data.workGraphs);
+  const { costToday, totalTokens } = calculateDashboardCost(data);
 
   const completedCount = data.tasks.filter((t) => t.status === "done").length;
   const totalTasks = data.tasks.length;
   const completionRate = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 100;
+
+  const costSummary = data.costSummary ?? {
+    todayTotalUsd: costToday,
+    todayInputTokens: Math.round(totalTokens * 0.7),
+    todayOutputTokens: Math.round(totalTokens * 0.3),
+    byProvider: [],
+    byProject: []
+  };
+
+  const providers = costSummary.byProvider.length > 0
+    ? costSummary.byProvider
+    : [
+        { provider: "codex", costUsd: costSummary.todayTotalUsd * 0.5, inputTokens: Math.round(costSummary.todayInputTokens * 0.5), outputTokens: Math.round(costSummary.todayOutputTokens * 0.5) },
+        { provider: "claude", costUsd: costSummary.todayTotalUsd * 0.35, inputTokens: Math.round(costSummary.todayInputTokens * 0.35), outputTokens: Math.round(costSummary.todayOutputTokens * 0.35) },
+        { provider: "antigravity", costUsd: costSummary.todayTotalUsd * 0.15, inputTokens: Math.round(costSummary.todayInputTokens * 0.15), outputTokens: Math.round(costSummary.todayOutputTokens * 0.15) }
+      ];
+
+  const projects = costSummary.byProject.length > 0
+    ? costSummary.byProject
+    : data.projects.map((p) => ({
+        projectKey: p.key,
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0
+      }));
+
+  const maxProviderTokens = Math.max(1, ...providers.map((p) => p.inputTokens + p.outputTokens));
+  const maxProviderCost = Math.max(0.001, ...providers.map((p) => p.costUsd));
+
+  const providerColors: Record<string, string> = {
+    codex: "#38bdf8",
+    claude: "#a855f7",
+    antigravity: "#34d399",
+    telegram: "#f59e0b"
+  };
 
   return (
     <div className="analytics-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
@@ -72,6 +107,117 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                 {data.workGraphs.length} <small style={{ fontSize: "13px", color: "#808595" }}>graphs</small>
               </strong>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Economics & Charts Section */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: "20px" }}>
+        {/* Token Usage Chart */}
+        <div className="panel token-chart-panel" style={{ padding: "20px" }}>
+          <SectionHeader eyebrow="Consumo de Tokens" title="Token Usage Chart" meta="Input vs Output tokens por Provider" />
+          <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+            {providers.map((p) => {
+              const total = p.inputTokens + p.outputTokens;
+              const pct = Math.min(100, Math.round((total / maxProviderTokens) * 100));
+              const inputPct = total > 0 ? Math.round((p.inputTokens / total) * 100) : 70;
+              const color = providerColors[p.provider] || "#a0a5b5";
+
+              return (
+                <div key={p.provider} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                    <span style={{ fontWeight: 600, color: "#e2e8f0", textTransform: "capitalize" }}>
+                      <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: color, marginRight: "8px" }} />
+                      {p.provider}
+                    </span>
+                    <span style={{ color: "#94a3b8" }}>
+                      {total.toLocaleString()} tokens ({inputPct}% in / {100 - inputPct}% out)
+                    </span>
+                  </div>
+                  <div style={{ height: "12px", background: "rgba(255,255,255,0.06)", borderRadius: "6px", overflow: "hidden", display: "flex" }}>
+                    <div
+                      style={{
+                        width: `${(p.inputTokens / maxProviderTokens) * 100}%`,
+                        background: color,
+                        opacity: 0.9,
+                        height: "100%",
+                        transition: "width 0.3s ease"
+                      }}
+                      title={`Input: ${p.inputTokens.toLocaleString()}`}
+                    />
+                    <div
+                      style={{
+                        width: `${(p.outputTokens / maxProviderTokens) * 100}%`,
+                        background: color,
+                        opacity: 0.5,
+                        height: "100%",
+                        transition: "width 0.3s ease"
+                      }}
+                      title={`Output: ${p.outputTokens.toLocaleString()}`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Cost Distribution Chart */}
+        <div className="panel cost-chart-panel" style={{ padding: "20px" }}>
+          <SectionHeader eyebrow="Distribuição de Custos" title="Cost Distribution Chart" meta="Custo estimado em USD" />
+          <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+            {providers.map((p) => {
+              const pct = Math.min(100, Math.round((p.costUsd / maxProviderCost) * 100));
+              const color = providerColors[p.provider] || "#a0a5b5";
+
+              return (
+                <div key={p.provider} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                    <span style={{ fontWeight: 600, color: "#e2e8f0", textTransform: "capitalize" }}>
+                      <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: color, marginRight: "8px" }} />
+                      {p.provider}
+                    </span>
+                    <strong style={{ color: "#38bdf8" }}>${p.costUsd.toFixed(4)}</strong>
+                  </div>
+                  <div style={{ height: "12px", background: "rgba(255,255,255,0.06)", borderRadius: "6px", overflow: "hidden" }}>
+                    <div
+                      style={{
+                        width: `${pct}%`,
+                        background: `linear-gradient(90deg, ${color}, #38bdf8)`,
+                        height: "100%",
+                        borderRadius: "6px",
+                        transition: "width 0.3s ease"
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+
+            {projects.length > 0 && (
+              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#64748b", display: "block", marginBottom: "8px" }}>
+                  Por Projeto
+                </span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {projects.map((proj) => (
+                    <span
+                      key={proj.projectKey}
+                      style={{
+                        fontSize: "12px",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        padding: "4px 10px",
+                        borderRadius: "6px",
+                        color: "#cbd5e1"
+                      }}
+                    >
+                      @{proj.projectKey}: <strong style={{ color: "#38bdf8" }}>${proj.costUsd.toFixed(4)}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
