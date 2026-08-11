@@ -171,12 +171,40 @@ describe("codex provider telemetry", () => {
     expect(result.outcome).toBe("failed");
     expect(result.summary).toBe("Codex (reviewing): erro desconhecido.");
     expect(result.retryable).toBe(false);
+    expect(result.structuredPayload).toBeNull();
+    expect(result.artifactsProduced).toEqual([]);
+  });
+
+  it("returns NormalizedResult structure on successful execution", async () => {
+    process.env.FAKE_CODEX_MODE = "success";
+    const result = await new CodexProvider(5_000).execute(executionRequest(cwd, "planning"));
+
+    expect(result.outcome).toBe("completed");
+    expect(result.summary).toBe("Plano gerado com sucesso.");
+    expect(result.structuredPayload).toEqual({
+      outcome: "completed",
+      summary: "Plano gerado com sucesso.",
+      details: "Detalhes do plano."
+    });
+    expect(result.artifactsProduced).toHaveLength(1);
+    expect(result.artifactsProduced?.[0]).toContain("result.json");
   });
 });
 
 const FAKE_CODEX_CLI_SOURCE = `
+const fs = require("node:fs");
 const mode = process.env.FAKE_CODEX_MODE || "unknown";
-if (mode === "timeout") {
+if (mode === "success") {
+  const outputIdx = process.argv.indexOf("--output-last-message");
+  if (outputIdx !== -1 && process.argv[outputIdx + 1]) {
+    fs.writeFileSync(process.argv[outputIdx + 1], JSON.stringify({
+      outcome: "completed",
+      summary: "Plano gerado com sucesso.",
+      details: "Detalhes do plano."
+    }));
+  }
+  process.exit(0);
+} else if (mode === "timeout") {
   setInterval(() => {}, 1000);
 } else if (mode === "quota") {
   process.stderr.write("Error: usage limit reached for this account\\n");
