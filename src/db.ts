@@ -23,6 +23,7 @@ import {
 } from "./intake/persistence.js";
 import { classifyWorkIntake, computeWorkIntakeId } from "./intake/policy.js";
 import { explainWorkIntakeDecision } from "./intake/explanation.js";
+import type { FailureCategory } from "./agents/failure.js";
 import {
   createOperationalChatPersistence,
   migrateOperationalChatPersistence
@@ -224,15 +225,7 @@ export type ImprovementProposalInput = {
 export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
 export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
 export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
-export type GoalWaitReason =
-  | "quota"
-  | "auth_required"
-  | "timeout"
-  | "output_limit"
-  | "offline"
-  | "capacity"
-  | "runtime_restart"
-  | "unknown";
+export type GoalWaitReason = FailureCategory | "runtime_restart";
 
 export type GoalRunRecord = {
   id: number;

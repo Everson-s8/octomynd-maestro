@@ -148,7 +148,15 @@ export class CodexProvider implements AgentProvider {
       processResult.breakerReason ? `process breaker: ${processResult.breakerReason}` : ""
     ].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0) {
-      const category = classifyFailure(combined, processResult.timedOut);
+      const category = classifyFailure(combined, {
+        provider: this.id,
+        phase: request.phase,
+        exitCode: processResult.exitCode,
+        timedOut: processResult.timedOut,
+        aborted: processResult.aborted,
+        breakerReason: processResult.breakerReason,
+        spawnErrorCode: processResult.spawnErrorCode
+      });
       const retryable = isRetryableFailureCategory(category);
       const summary = buildFailureSummary(this.label, request.phase, category);
       if (category === "quota") this.cacheHealth("quota", withRemediation("codex", "quota", summary), 10 * 60_000);
@@ -186,10 +194,15 @@ export class CodexProvider implements AgentProvider {
       };
     } catch (error) {
       const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
+      const category = classifyFailure(detail, {
+        provider: this.id,
+        phase: request.phase,
+        jsonError: { code: "invalid_output", message: detail }
+      });
       return failure(
-        buildFailureSummary(this.label, request.phase, "unknown"),
+        buildFailureSummary(this.label, request.phase, category),
         startedAt,
-        false,
+        isRetryableFailureCategory(category),
         combined || detail,
         detail,
         processRuntime(processResult)
@@ -234,7 +247,15 @@ export class CodexProvider implements AgentProvider {
       }
       const diagnostics = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
       if (processResult.exitCode !== 0) {
-        const category = classifyFailure(diagnostics, processResult.timedOut);
+        const category = classifyFailure(diagnostics, {
+          provider: this.id,
+          phase: "reviewing",
+          exitCode: processResult.exitCode,
+          timedOut: processResult.timedOut,
+          aborted: processResult.aborted,
+          breakerReason: processResult.breakerReason,
+          spawnErrorCode: processResult.spawnErrorCode
+        });
         return improvementFailure(
           diagnostics || buildFailureSummary(this.label, "reviewing", category),
           startedAt,

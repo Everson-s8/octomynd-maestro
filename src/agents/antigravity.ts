@@ -91,7 +91,15 @@ export class AntigravityProvider implements AgentProvider {
         env: buildRestrictedAgentEnvironment()
       });
       const diagnostics = [probe.stderr, probe.stdout].filter(Boolean).join("\n").trim();
-      const category = probe.exitCode === 0 ? null : classifyFailure(diagnostics, probe.timedOut);
+      const category = probe.exitCode === 0 ? null : classifyFailure(diagnostics, {
+        provider: this.id,
+        phase: "probe",
+        exitCode: probe.exitCode,
+        timedOut: probe.timedOut,
+        aborted: probe.aborted,
+        breakerReason: probe.breakerReason,
+        spawnErrorCode: probe.spawnErrorCode
+      });
       health = category === "auth_required"
         ? { state: "auth_required", detail: "Antigravity precisa de login.", checkedAt: new Date().toISOString() }
         : probe.exitCode === 0
@@ -144,7 +152,15 @@ export class AntigravityProvider implements AgentProvider {
       .join("\n")
       .trim();
     if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
-      const category = classifyFailure(diagnostics, processResult.timedOut);
+      const category = classifyFailure(diagnostics, {
+        provider: this.id,
+        phase: request.phase,
+        exitCode: processResult.exitCode,
+        timedOut: processResult.timedOut,
+        aborted: processResult.aborted,
+        breakerReason: processResult.breakerReason,
+        spawnErrorCode: processResult.spawnErrorCode
+      });
       const summary = buildFailureSummary(this.label, request.phase, category);
       if (category === "quota" || category === "auth_required") {
         this.cacheHealth({ state: category, detail: summary, checkedAt: new Date().toISOString() }, 10 * 60_000);
@@ -226,7 +242,15 @@ export class AntigravityProvider implements AgentProvider {
     }
     const diagnostics = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
     if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
-      const category = classifyFailure(diagnostics, processResult.timedOut);
+      const category = classifyFailure(diagnostics, {
+        provider: this.id,
+        phase: "reviewing",
+        exitCode: processResult.exitCode,
+        timedOut: processResult.timedOut,
+        aborted: processResult.aborted,
+        breakerReason: processResult.breakerReason,
+        spawnErrorCode: processResult.spawnErrorCode
+      });
       return improvementFailure(
         diagnostics || buildFailureSummary(this.label, "reviewing", category),
         isRetryableFailureCategory(category),

@@ -144,7 +144,15 @@ export class ClaudeProvider implements AgentProvider {
         result.stdout,
         result.breakerReason ? `process breaker: ${result.breakerReason}` : ""
       ].filter(Boolean).join("\n").trim();
-      const category = classifyFailure(errorText, result.timedOut);
+      const category = classifyFailure(errorText, {
+        provider: this.id,
+        phase: request.phase,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        aborted: result.aborted,
+        breakerReason: result.breakerReason,
+        spawnErrorCode: result.spawnErrorCode
+      });
       const retryable = isRetryableFailureCategory(category);
       const summary = buildFailureSummary(this.label, request.phase, category);
       if (category === "auth_required" || category === "quota") {
@@ -232,7 +240,15 @@ export class ClaudeProvider implements AgentProvider {
     }
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       const diagnostics = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      const category = classifyFailure(diagnostics, result.timedOut);
+      const category = classifyFailure(diagnostics, {
+        provider: this.id,
+        phase: "reviewing",
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        aborted: result.aborted,
+        breakerReason: result.breakerReason,
+        spawnErrorCode: result.spawnErrorCode
+      });
       return improvementFailure(
         diagnostics || buildFailureSummary(this.label, "reviewing", category),
         startedAt,

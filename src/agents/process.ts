@@ -24,6 +24,7 @@ export type AgentProcessRequest = {
 
 export type AgentProcessResult = {
   exitCode: number | null;
+  spawnErrorCode?: string | null;
   stdout: string;
   stderr: string;
   aborted: boolean;
@@ -58,6 +59,7 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
     let aborted = false;
     let timedOut = false;
     let breakerReason: AgentProcessBreakerReason | null = null;
+    let spawnErrorCode: string | null = null;
     let settled = false;
     let stopRequested = false;
     let receivedChars = 0;
@@ -79,6 +81,7 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
       request.signal?.removeEventListener("abort", onAbort);
       resolve({
         exitCode,
+        spawnErrorCode,
         stdout,
         stderr,
         aborted,
@@ -159,7 +162,8 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
     };
     child.stdout!.on("data", (chunk: string) => consume("stdout", chunk));
     child.stderr!.on("data", (chunk: string) => consume("stderr", chunk));
-    child.on("error", (error) => {
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      spawnErrorCode = error.code ?? null;
       stderr = appendBounded(stderr, `\n${error.message}`, maxOutputChars).trim();
       finish(null);
     });
