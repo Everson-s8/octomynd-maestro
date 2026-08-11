@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentExecutionResult } from "../src/agents/types.js";
-import { captureWorkspaceProgress, GoalCircuitBreaker } from "../src/goals/circuit-breaker.js";
+import { captureWorkspaceProgress, GoalCircuitBreaker, DEFAULT_PHASE_BUDGETS } from "../src/goals/circuit-breaker.js";
 
 describe("GoalCircuitBreaker", () => {
   it("blocks a repeated provider failure after the second occurrence", () => {
@@ -88,6 +88,54 @@ describe("GoalCircuitBreaker", () => {
     } finally {
       fs.rmSync(worktree, { recursive: true, force: true });
     }
+  });
+
+  it("exports default phase budgets and enforces them", () => {
+    expect(DEFAULT_PHASE_BUDGETS).toEqual({
+      planning: 3,
+      implementing: 6,
+      testing: 4,
+      reviewing: 3
+    });
+
+    const breaker = new GoalCircuitBreaker({ planning: 2 });
+    const observation = {
+      phase: "planning" as const,
+      result: completed(),
+      workspaceBefore: "a",
+      workspaceAfter: "b"
+    };
+
+    expect(breaker.observe(observation)).toBeNull();
+    expect(breaker.observe(observation)).toMatchObject({
+      reason: "phase_budget_exhausted",
+      summary: "Phase 'planning' reached its limit of 2 steps."
+    });
+  });
+
+  it("restores phase step counts from steps and checks phase budget before execution", () => {
+    const dummyStep = (phase: "planning" | "implementing", status: "completed" | "failed" = "completed") => ({
+      id: 1,
+      runId: 1,
+      phase,
+      provider: "fake",
+      status,
+      summary: "step",
+      output: "",
+      error: null,
+      durationMs: 10,
+      createdAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString()
+    });
+
+    const steps = [dummyStep("planning"), dummyStep("planning"), dummyStep("planning")];
+    const breaker = GoalCircuitBreaker.fromSteps(steps, { planning: 3 });
+
+    expect(breaker.checkPhaseBudget("planning")).toMatchObject({
+      reason: "phase_budget_exhausted",
+      summary: "Phase 'planning' reached its limit of 3 steps."
+    });
+    expect(breaker.checkPhaseBudget("implementing")).toBeNull();
   });
 });
 

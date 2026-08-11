@@ -11,7 +11,8 @@ export type GoalCircuitBreakerReason =
   | "duplicate_output"
   | "output_limit"
   | "repeated_failure"
-  | "no_progress";
+  | "no_progress"
+  | "phase_budget_exhausted";
 
 export type GoalCircuitBreakerDecision = {
   reason: GoalCircuitBreakerReason;
@@ -30,20 +31,58 @@ const NO_PROGRESS_LIMIT = 2;
 const SUMMARY_MAX_LENGTH = 300;
 const MAX_UNTRACKED_HASH_BYTES = 8_000_000;
 
+export const DEFAULT_PHASE_BUDGETS: Record<GoalPhase, number> = {
+  planning: 3,
+  implementing: 6,
+  testing: 4,
+  reviewing: 3
+};
+
 export class GoalCircuitBreaker {
   private readonly repeatedFailures = new Map<string, number>();
   private readonly noProgress = new Map<GoalPhase, number>();
+  private readonly phaseStepCounts = new Map<GoalPhase, number>();
+  private readonly phaseBudgets: Record<GoalPhase, number>;
 
-  static fromSteps(steps: GoalStepRecord[]): GoalCircuitBreaker {
-    const breaker = new GoalCircuitBreaker();
+  constructor(phaseBudgets?: Partial<Record<GoalPhase, number>>) {
+    this.phaseBudgets = {
+      ...DEFAULT_PHASE_BUDGETS,
+      ...phaseBudgets
+    };
+  }
+
+  static fromSteps(
+    steps: GoalStepRecord[],
+    phaseBudgets?: Partial<Record<GoalPhase, number>>
+  ): GoalCircuitBreaker {
+    const breaker = new GoalCircuitBreaker(phaseBudgets);
     for (const step of steps) {
-      if (step.status !== "failed") continue;
-      breaker.incrementFailure(failureFingerprint(step.phase, step.summary, step.error));
+      const count = (breaker.phaseStepCounts.get(step.phase) ?? 0) + 1;
+      breaker.phaseStepCounts.set(step.phase, count);
+
+      if (step.status === "failed") {
+        breaker.incrementFailure(failureFingerprint(step.phase, step.summary, step.error));
+      }
     }
     return breaker;
   }
 
+  checkPhaseBudget(phase: GoalPhase): GoalCircuitBreakerDecision | null {
+    const count = this.phaseStepCounts.get(phase) ?? 0;
+    const limit = this.phaseBudgets[phase];
+    if (limit !== undefined && count >= limit) {
+      return decision(
+        "phase_budget_exhausted",
+        `Phase '${phase}' reached its limit of ${limit} steps.`
+      );
+    }
+    return null;
+  }
+
   observe(observation: GoalCircuitBreakerObservation): GoalCircuitBreakerDecision | null {
+    const count = (this.phaseStepCounts.get(observation.phase) ?? 0) + 1;
+    this.phaseStepCounts.set(observation.phase, count);
+
     const processReason = observation.result.processRuntime?.breakerReason;
     if (processReason === "deadline") {
       return decision("deadline", "Goal deadline reached during provider execution.");
@@ -53,13 +92,20 @@ export class GoalCircuitBreaker {
     }
 
     if (observation.result.outcome === "failed") {
-      const count = this.incrementFailure(failureFingerprint(
+      const failureCount = this.incrementFailure(failureFingerprint(
         observation.phase,
         observation.result.summary,
         observation.result.error
       ));
-      if (count >= REPEATED_FAILURE_LIMIT) {
+      if (failureCount >= REPEATED_FAILURE_LIMIT) {
         return decision("repeated_failure", "The same provider failure repeated without useful recovery.");
+      }
+      const limit = this.phaseBudgets[observation.phase];
+      if (limit !== undefined && count >= limit) {
+        return decision(
+          "phase_budget_exhausted",
+          `Phase '${observation.phase}' reached its limit of ${limit} steps.`
+        );
       }
       return null;
     }
@@ -70,14 +116,23 @@ export class GoalCircuitBreaker {
       && observation.workspaceBefore !== null
       && observation.workspaceBefore === observation.workspaceAfter
     ) {
-      const count = (this.noProgress.get(observation.phase) ?? 0) + 1;
-      this.noProgress.set(observation.phase, count);
-      if (count >= NO_PROGRESS_LIMIT) {
+      const noProgressCount = (this.noProgress.get(observation.phase) ?? 0) + 1;
+      this.noProgress.set(observation.phase, noProgressCount);
+      if (noProgressCount >= NO_PROGRESS_LIMIT) {
         return decision("no_progress", `${observation.phase} completed repeatedly without changing the worktree.`);
       }
     } else if (observation.workspaceBefore !== observation.workspaceAfter) {
       this.noProgress.set(observation.phase, 0);
     }
+
+    const limit = this.phaseBudgets[observation.phase];
+    if (limit !== undefined && count >= limit) {
+      return decision(
+        "phase_budget_exhausted",
+        `Phase '${observation.phase}' reached its limit of ${limit} steps.`
+      );
+    }
+
     return null;
   }
 
