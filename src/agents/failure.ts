@@ -54,7 +54,7 @@ const AUTH_PATTERN = /\b401\b|unauthorized|authentication|not logged in|please r
 const PERMISSION_PATTERN = /\b403\b|permission denied|access denied|\beacces\b|\beperm\b/i;
 const ENVIRONMENT_PATTERN = /cannot find module|command not found|\benoent\b|module_not_found|node_module/i;
 const OFFLINE_PATTERN = /connection refused|network is unreachable|\boffline\b|dns lookup failed|getaddrinfo\b|econnrefused|etimedout|socket hang up/i;
-const CAPACITY_PATTERN = /no provider available|all providers busy|overloaded|capacity/i;
+const CAPACITY_PATTERN = /resource_exhausted|no provider available|all providers busy|overloaded|capacity|high demand|server is busy/i;
 
 export function classifyFailure(text: string, contextOrTimedOut?: boolean | FailureContext): FailureCategory {
   const context: FailureContext = typeof contextOrTimedOut === "boolean"

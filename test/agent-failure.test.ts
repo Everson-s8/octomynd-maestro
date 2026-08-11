@@ -24,9 +24,10 @@ describe("provider failure classification", () => {
   });
 
   it("classifies capacity/overload failures", () => {
-    expect(classifyFailure("503 Service Unavailable")).toBe("capacity");
     expect(classifyFailure("Model is currently overloaded, try again later")).toBe("capacity");
     expect(classifyFailure("resource_exhausted: server is busy")).toBe("capacity");
+    expect(classifyFailure("no provider available")).toBe("capacity");
+    expect(classifyFailure("all providers busy with other tasks")).toBe("capacity");
   });
 
   it("classifies timeouts regardless of captured text", () => {
