@@ -904,6 +904,36 @@ export async function runTaskGoal(
       const nextPhase = nextPhaseAfter(phase, dnaPhases);
       if (!nextPhase) {
         let deliveredRun = currentRun;
+
+        // ── DNA: skip delivery for trivial tasks with no changes ──
+        const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
+        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
+        const hasChanges = workspaceFingerprint !== null
+          && previousCheckpoint !== null
+          && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
+
+        if (dna?.complexity === "trivial" && !hasChanges) {
+          // Trivial task with no file changes — complete without PR
+          database.updateTaskStatus(task.id, "done");
+          const completed = database.withTransaction(() => {
+            const updated = database.updateGoalRun({
+              id: run.id,
+              status: "completed",
+              currentPhase: phase,
+              stepCount
+            });
+            database.addEvent({
+              source: "maestro",
+              type: "goal.completed",
+              text: `Goal #${run.id} completed (trivial, no changes needed).`,
+              taskId: task.id,
+              metadata: { runId: run.id, stepCount, trivial: true }
+            });
+            return updated;
+          });
+          return completed;
+        }
+
         if (options.delivery) {
           database.withTransaction(() => {
             database.updateTaskStatus(task.id, "awaiting_human");
