@@ -1,4 +1,23 @@
 export function OctoMark({ large = false }: { large?: boolean }) {
+  if (!large) {
+    return (
+      <svg className="octo-mark octo-mark-brand" viewBox="0 0 200 200" role="img" aria-label="Octomynd">
+        <ellipse cx="100" cy="82" rx="54" ry="48" fill="#c4622d" />
+        <path d="M56 116 C40 138,32 158,38 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
+        <path d="M144 116 C160 138,168 158,162 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
+        <path d="M80 126 C75 148,75 164,80 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+        <path d="M120 126 C125 148,125 164,120 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+        <path d="M100 128 L100 182" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+        <g className="octo-eye-look">
+          <circle cx="120" cy="76" r="17" fill="#f3ece1" />
+          <circle cx="120" cy="76" r="9" fill="#14110f" />
+          <circle cx="124" cy="72" r="3" fill="#f3ece1" />
+        </g>
+        <path className="octo-eye-lid" d="M103 76 C106 60,134 58,137 76 C131 66,109 66,103 76Z" fill="#c4622d" />
+      </svg>
+    );
+  }
+
   return (
     <svg className={large ? "octo-mark is-large" : "octo-mark"} viewBox="0 0 96 96" role="img" aria-label="Octomynd">
       <defs>
