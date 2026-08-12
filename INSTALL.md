@@ -11,19 +11,36 @@ Octomynd Maestro is designed for plug-and-play onboarding. You can run Maestro o
 
 ---
 
-## 2. Provider Options (Choose ANY ONE)
+## 2. Provider Setup & Authentication (Choose ANY ONE)
 
-You do **not** need all AI providers installed. Maestro automatically detects available providers and routes all capabilities to whatever provider is available on your machine.
+You do **not** need all AI providers installed. Maestro automatically detects available providers and routes all capabilities to whatever provider is active on your machine.
 
-| Provider | CLI Option | ENV Override Option |
-| :--- | :--- | :--- |
-| **Codex** | `@openai/codex` CLI | `CODEX_API_KEY` or `OPENAI_API_KEY` |
-| **Claude** | `@anthropic-ai/claude-code` CLI | `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` |
-| **Gemini Antigravity** | `agy` CLI | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+### Option A: OpenAI Codex
+- **CLI Installation**: `npm install -g @openai/codex`
+- **CLI Authentication**: `codex login`
+- **ENV API Key Override**: Set `CODEX_API_KEY` (or `OPENAI_API_KEY`) in `.env`
+
+### Option B: Anthropic Claude Code
+- **CLI Installation**: `npm install -g @anthropic-ai/claude-code`
+- **CLI Authentication**: `claude login`
+- **ENV API Key Override**: Set `CLAUDE_API_KEY` (or `ANTHROPIC_API_KEY`) in `.env`
+
+### Option C: Gemini Antigravity
+- **CLI Installation**: Install `agy` executable in PATH
+- **CLI Authentication**: `agy login`
+- **ENV API Key Override**: Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env`
 
 ---
 
-## 3. Quick Start Setup
+## 3. GitHub CLI Integration (Optional)
+
+- **Installation**: [cli.github.com](https://cli.github.com/)
+- **Authentication**: `gh auth login`
+- **Note**: GitHub CLI (`gh`) is **optional**. If `gh` is not installed or not authenticated, Maestro automatically operates in local git delivery mode for pull requests and branch creation without failing setup or goals.
+
+---
+
+## 4. Quick Start Setup
 
 ### Step 1: Clone Repository & Install Dependencies
 
@@ -67,20 +84,20 @@ npm run dev:platform
 
 ---
 
-## 4. Features & Single-Provider Routing
+## 5. Features & Single-Provider Routing
 
 - **Plug-and-Play Capability Routing**: When only one provider exists on your machine, Maestro routes 100% of capabilities (planning, coding, testing, reviewing, improvement reviewing, research, conversation) using that provider.
 - **Environment API Keys**: You can supply provider API keys (`CODEX_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`) via `.env` or standard shell variables without needing global CLI binaries.
-- **Graceful GitHub Fallback**: Setup and goal execution do **NOT** fail if the GitHub CLI (`gh`) is missing. Maestro falls back to local branch delivery mode seamlessly.
+- **Graceful GitHub Fallback**: Setup and goal execution do **NOT** fail if the GitHub CLI (`gh`) is missing or unauthenticated. Maestro falls back to local branch delivery mode seamlessly.
 
 ---
 
-## 5. Troubleshooting & Diagnostics
+## 6. Troubleshooting & Diagnostics
 
 Run the Environment Doctor check anytime to inspect system readiness:
 
 ```bash
-npx tsx src/wizard.ts
+npm run setup
 ```
 
 For full test suite execution:
