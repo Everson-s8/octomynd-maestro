@@ -83,7 +83,7 @@ O controlador considera o startup concluido somente quando
 parar o processo tambem interrompe Dashboard, Telegram e coordenadores.
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
-além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
+alem de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
 isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,
 implementacao, testes e revisao. Antigravity, Codex e Claude sao roteados por capacidade; quando
 todos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
@@ -143,7 +143,7 @@ Esta fila de decisao manual e diferente do protocolo de Feature PR descrito acim
 Marcar somente o Feature PR consolidado como Ready for review autoriza o Final Review
 e o merge automatico governado; Work PRs individuais devem permanecer Draft.
 
-A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
+A direcao visual esta documentada em `docs/VISUAL_IDENTITY.md`.
 
 ## Aprendizado seguro
 
@@ -294,4 +294,4 @@ The local SQLite database is stored at `.maestro/maestro.db` by default. The fol
 - Local database and logs are ignored.
 - If `TELEGRAM_ALLOWED_USER_ID` is set, other users are blocked.
 - O dashboard valida o host e aceita apenas `127.0.0.1` ou `localhost`.
-- Tokens e IDs privados do Telegram não entram no payload da interface.
+- Tokens e IDs privados do Telegram nao entram no payload da interface.
