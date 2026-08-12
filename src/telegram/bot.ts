@@ -12,6 +12,7 @@ import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
 import { OperationalChatService } from "../chat/service.js";
+import { formatCurrencyUsd } from "../agents/economics.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
@@ -1069,7 +1070,7 @@ function formatCostSummary(summary: ReturnType<MaestroDatabase["getCostSummary"]
   const lines: string[] = [
     "💰 Provider Economics & Cost Summary",
     "",
-    `Custo Hoje: $${summary.todayTotalUsd.toFixed(4)} USD`,
+    `Custo Hoje: ${formatCurrencyUsd(summary.todayTotalUsd, { decimals: 4 })} USD`,
     `Tokens Hoje: ${totalTokens.toLocaleString()} (${summary.todayInputTokens.toLocaleString()} in / ${summary.todayOutputTokens.toLocaleString()} out)`
   ];
 
@@ -1077,7 +1078,7 @@ function formatCostSummary(summary: ReturnType<MaestroDatabase["getCostSummary"]
     lines.push("", "Por Provider:");
     for (const p of summary.byProvider) {
       const pTokens = p.inputTokens + p.outputTokens;
-      lines.push(`• ${p.provider}: $${p.costUsd.toFixed(4)} (${pTokens.toLocaleString()} tokens)`);
+      lines.push(`• ${p.provider}: ${formatCurrencyUsd(p.costUsd, { decimals: 4 })} (${pTokens.toLocaleString()} tokens)`);
     }
   }
 
@@ -1085,7 +1086,7 @@ function formatCostSummary(summary: ReturnType<MaestroDatabase["getCostSummary"]
     lines.push("", "Por Projeto:");
     for (const proj of summary.byProject) {
       const projTokens = proj.inputTokens + proj.outputTokens;
-      lines.push(`• @${proj.projectKey}: $${proj.costUsd.toFixed(4)} (${projTokens.toLocaleString()} tokens)`);
+      lines.push(`• @${proj.projectKey}: ${formatCurrencyUsd(proj.costUsd, { decimals: 4 })} (${projTokens.toLocaleString()} tokens)`);
     }
   }
 
