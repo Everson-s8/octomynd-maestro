@@ -888,6 +888,24 @@ export async function runTaskGoal(
         }
         // DNA: if this is the last required phase and no review needed, deliver
         if (dna && !dna.requireReview && phase === (dna.phases[dna.phases.length - 1])) {
+          // For trivial tasks with no changes, complete without PR
+          const wf = captureWorkspaceProgress(task.worktreePath);
+          const prevCp = database.getLatestGoalCheckpoint(run.id);
+          const hasFileChanges = wf !== null && prevCp !== null && wf !== prevCp.workspaceFingerprint;
+          if (dna.complexity === "trivial" && !hasFileChanges) {
+            database.updateTaskStatus(task.id, "done");
+            return database.withTransaction(() => {
+              const updated = database.updateGoalRun({
+                id: run.id, status: "completed", currentPhase: phase, stepCount
+              });
+              database.addEvent({
+                source: "maestro", type: "goal.completed",
+                text: `Goal #${run.id} completed (trivial, no changes needed).`,
+                taskId: task.id, metadata: { runId: run.id, stepCount, trivial: true }
+              });
+              return updated;
+            });
+          }
           break;
         }
         // DNA: if tests passed and no review needed, deliver
