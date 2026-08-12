@@ -76,9 +76,12 @@ export class AntigravityProvider implements AgentProvider {
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const executable = resolveAntigravityExecutable(this.executablePath);
+    const envKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     let health: AgentHealth;
     if (!executable) {
-      health = { state: "offline", detail: "Antigravity CLI nao encontrado", checkedAt: new Date().toISOString() };
+      health = envKey
+        ? { state: "ready", detail: "Gemini API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+        : { state: "offline", detail: "Antigravity CLI nao encontrado", checkedAt: new Date().toISOString() };
     } else if (!this.healthProbe) {
       health = { state: "ready", detail: "Antigravity CLI disponivel", checkedAt: new Date().toISOString() };
     } else {
@@ -89,7 +92,7 @@ export class AntigravityProvider implements AgentProvider {
         timeoutMs: 15_000,
         inactivityTimeoutMs: 15_000,
         maxOutputChars: 20_000,
-        env: buildRestrictedAgentEnvironment()
+        env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
       });
       const diagnostics = [probe.stderr, probe.stdout].filter(Boolean).join("\n").trim();
       const category = probe.exitCode === 0 ? null : classifyFailure(diagnostics, {
@@ -135,7 +138,7 @@ export class AntigravityProvider implements AgentProvider {
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
       signal: request.signal,
-      env: buildRestrictedAgentEnvironment()
+      env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
     });
     if (processResult.aborted || request.signal?.aborted) {
       return {
@@ -253,7 +256,7 @@ export class AntigravityProvider implements AgentProvider {
       signal: request.signal,
       maxOutputChars: request.maxOutputChars,
       maxReceivedChars: request.maxOutputChars * 2,
-      env: buildRestrictedAgentEnvironment()
+      env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
     });
     if (processResult.aborted || request.signal?.aborted) {
       return { status: "cancelled", output: "", error: null, durationMs: processResult.durationMs, retryable: false };
