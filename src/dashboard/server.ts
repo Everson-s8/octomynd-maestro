@@ -851,6 +851,25 @@ async function routeRequest(
     return;
   }
 
+  const retryTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/retry$/);
+  if (request.method === "POST" && retryTaskMatch) {
+    if (!options.goalCoordinator) {
+      sendJson(response, 503, { error: "goal_runner_unavailable" });
+      return;
+    }
+    try {
+      const goal = options.goalCoordinator.retryTask(Number(retryTaskMatch[1]));
+      sendJson(response, 200, { goal });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown retry error";
+      sendJson(response, /not found/i.test(message) ? 404 : 409, {
+        error: "task_retry_failed",
+        details: message
+      });
+    }
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/chat/messages") {
     const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || "";
     const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
