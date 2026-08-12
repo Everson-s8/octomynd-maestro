@@ -87,6 +87,10 @@ export async function runTaskGoal(
     : options.maxSteps ?? 20;
 
   const run = options.existingRun ?? database.createGoalRun(task.id, effectiveMaxSteps);
+  // ── DNA: override maxSteps for existing runs too ─────────
+  if (dna && options.existingRun) {
+    run.maxSteps = effectiveMaxSteps;
+  }
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
   // ── DNA: start at first DNA phase, not default "planning" ──
