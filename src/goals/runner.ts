@@ -906,7 +906,8 @@ export async function runTaskGoal(
               return updated;
             });
           }
-          break;
+          // Has changes or not trivial — continue to delivery (don't break here,
+          // the !nextPhase check below handles delivery)
         }
         // DNA: if tests passed and no review needed, deliver
         if (dna && !dna.requireReview && phase === "testing" && result.structuredPayload?.testsPassed) {
