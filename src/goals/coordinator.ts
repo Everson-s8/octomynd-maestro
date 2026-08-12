@@ -102,6 +102,61 @@ export class GoalCoordinator {
     return run;
   }
 
+  /**
+   * Retry the latest budget-blocked goal for a task, preserving the already-prepared
+   * worktree so the work is resumed in place instead of starting a fresh planning
+   * cycle from zero. This is the API consumers call by task id.
+   */
+  retryTask(taskId: number): GoalRunRecord {
+    const run = this.database.getLatestBlockedGoalRun(taskId);
+    if (!run) {
+      throw new Error(`Task #${taskId} has no blocked goal to retry.`);
+    }
+    return this.retryRun(run.id);
+  }
+
+  /**
+   * Retry a goal that was hard-blocked by the circuit breaker (budget_exhausted /
+   * phase_budget_exhausted), preserving the already-prepared worktree so the
+   * work is resumed in place instead of starting a fresh planning cycle from zero.
+   */
+  retryRun(runId: number): GoalRunRecord {
+    const run = this.database.getGoalRun(runId);
+    if (run.status !== "blocked") {
+      throw new Error(`Goal #${runId} is not blocked and cannot be retried.`);
+    }
+    const blockedByBudget = (run.lastError ?? "").toLowerCase().includes("budget")
+      || (run.lastError ?? "").toLowerCase().includes("without measurable progress")
+      || (run.lastError ?? "").toLowerCase().includes("reached its limit");
+    if (!blockedByBudget) {
+      throw new Error(`Goal #${runId} is not blocked by budget-exhausted; refusing to auto-retry other failures.`);
+    }
+    if (this.active.has(run.taskId)) {
+      throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
+    }
+    const reopened = this.database.withTransaction(() => {
+      const updated = this.database.updateGoalRun({
+        id: runId,
+        status: "waiting_provider",
+        currentPhase: run.currentPhase,
+        stepCount: run.stepCount,
+        lastError: null,
+        nextRetryAt: null
+      });
+      this.database.updateTaskStatus(run.taskId, "planning");
+      this.database.addEvent({
+        source: "human",
+        type: "goal.retry_requested",
+        text: `Goal #${runId} retried from checkpoint (budget-exhausted); preserved worktree will resume.`,
+        taskId: run.taskId,
+        metadata: { runId, phase: run.currentPhase, stepCount: run.stepCount }
+      });
+      return updated;
+    });
+    this.execute(reopened);
+    return reopened;
+  }
+
   requestChanges(runId: number): GoalRunRecord {
     const run = this.database.getGoalRun(runId);
     if (this.active.has(run.taskId)) {

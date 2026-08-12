@@ -99,17 +99,30 @@ describe("GoalCircuitBreaker", () => {
     });
 
     const breaker = new GoalCircuitBreaker({ planning: 2 });
-    const observation = {
+    const progressObservation = {
       phase: "planning" as const,
       result: completed(),
       workspaceBefore: "a",
       workspaceAfter: "b"
     };
 
-    expect(breaker.observe(observation)).toBeNull();
-    expect(breaker.observe(observation)).toMatchObject({
+    // With measurable worktree progress, the phase-budget check must NOT block:
+    // a task making forward progress is legitimately iterating, not looping.
+    expect(breaker.observe(progressObservation)).toBeNull();
+    expect(breaker.observe(progressObservation)).toBeNull();
+
+    // Without progress (unchanged worktree), the ceiling is still enforced.
+    const stuckObservation = {
+      phase: "planning" as const,
+      result: completed(),
+      workspaceBefore: "same",
+      workspaceAfter: "same"
+    };
+    const stuck = new GoalCircuitBreaker({ planning: 2 });
+    stuck.observe(stuckObservation);
+    expect(stuck.observe(stuckObservation)).toMatchObject({
       reason: "phase_budget_exhausted",
-      summary: "Phase 'planning' reached its limit of 2 steps."
+      summary: "Phase 'planning' reached its limit of 2 steps without measurable progress."
     });
   });
 
@@ -128,14 +141,21 @@ describe("GoalCircuitBreaker", () => {
       finishedAt: new Date().toISOString()
     });
 
-    const steps = [dummyStep("planning"), dummyStep("planning"), dummyStep("planning")];
-    const breaker = GoalCircuitBreaker.fromSteps(steps, { planning: 3 });
+    // checkPhaseBudget is now a generous safety ceiling (3x the phase budget),
+    // not the primary loop guard — precise loop detection is progress-aware in
+    // observe(). At the normal budget (3 here) it must NOT block.
+    const normalSteps = [dummyStep("planning"), dummyStep("planning"), dummyStep("planning")];
+    const normalBreaker = GoalCircuitBreaker.fromSteps(normalSteps, { planning: 3 });
+    expect(normalBreaker.checkPhaseBudget("planning")).toBeNull();
 
-    expect(breaker.checkPhaseBudget("planning")).toMatchObject({
+    // It only trips once the count blows past 3x the phase budget (a runaway net).
+    const runaway = Array.from({ length: 9 }, () => dummyStep("planning"));
+    const runawayBreaker = GoalCircuitBreaker.fromSteps(runaway, { planning: 3 });
+    expect(runawayBreaker.checkPhaseBudget("planning")).toMatchObject({
       reason: "phase_budget_exhausted",
-      summary: "Phase 'planning' reached its limit of 3 steps."
+      summary: "Phase 'planning' exceeded safety ceiling (9 steps)."
     });
-    expect(breaker.checkPhaseBudget("implementing")).toBeNull();
+    expect(runawayBreaker.checkPhaseBudget("implementing")).toBeNull();
   });
 });
 

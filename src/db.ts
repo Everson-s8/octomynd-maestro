@@ -1326,6 +1326,14 @@ export function createDatabase(databasePath: string) {
       return mapGoalRun(row);
     },
 
+    getLatestBlockedGoalRun(taskId: number): GoalRunRecord | null {
+      const row = db
+        .prepare("SELECT * FROM goal_runs WHERE task_id = ? AND status = 'blocked' ORDER BY id DESC LIMIT 1")
+        .get(taskId) as GoalRunRow | undefined;
+      if (!row) return null;
+      return mapGoalRun(row);
+    },
+
     listGoalRuns(limit = 30): GoalRunRecord[] {
       const rows = db.prepare("SELECT * FROM goal_runs ORDER BY id DESC LIMIT ?").all(limit) as GoalRunRow[];
       return rows.map(mapGoalRun);

@@ -63,7 +63,31 @@ The wizard will:
 - Check runtime dependencies.
 - Generate `.env` with optimal defaults based on detected tools.
 
-### Step 3: Run Smoke Verification
+### Step 3: Connect Telegram Bot (No Manual .env Editing)
+
+You can connect your Telegram bot using the interactive CLI wizard or directly through the Maestro Dashboard UI without manually editing `.env`.
+
+**Via CLI Wizard:**
+```bash
+npm run telegram:connect
+```
+*or:*
+```bash
+npx tsx src/index.ts telegram connect
+```
+
+The wizard will:
+1. Prompt for your Telegram Bot HTTP API Token from `@BotFather`.
+2. Prompt for your optional numeric Telegram User ID (obtained by messaging `@userinfobot`) to restrict access to authorized users.
+3. Validate credentials with the Telegram API and automatically write them to `.env`.
+4. Hot-restart the Telegram bot subsystem without restarting the entire Maestro process.
+
+**Via Dashboard UI:**
+1. Launch Maestro platform with `npm run dev:platform`.
+2. Open `http://127.0.0.1:4788` and navigate to **Settings**.
+3. Fill in the **Conexão do Telegram Bot** section with your Bot Token and Telegram User ID, then click **Conectar Bot Telegram**.
+
+### Step 4: Run Smoke Verification
 
 Verify that your single-provider (or multi-provider) machine is fully operational:
 
@@ -71,7 +95,7 @@ Verify that your single-provider (or multi-provider) machine is fully operationa
 npm run smoke
 ```
 
-### Step 4: Launch Maestro
+### Step 5: Launch Maestro
 
 Start the Maestro orchestrator and local web platform:
 

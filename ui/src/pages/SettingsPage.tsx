@@ -1,8 +1,9 @@
 import { DashboardData } from "../api";
+import { Icon } from "../components/Icon";
 import { ImprovementLab } from "../components/ImprovementLab";
 import { OperationalChatConsole } from "../components/OperationalChatConsole";
 import { SectionHeader } from "../components/SectionHeader";
-import { Icon } from "../components/Icon";
+import { TelegramConnectCard } from "../components/TelegramConnectCard";
 
 export interface SettingsPageProps {
   data: DashboardData;
@@ -12,6 +13,8 @@ export interface SettingsPageProps {
 export function SettingsPage({ data, onRefresh }: SettingsPageProps) {
   return (
     <div className="settings-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+      <TelegramConnectCard agents={data.agents} onChanged={onRefresh} />
+
       <div className="panel settings-autopilot-card" style={{ padding: "20px" }}>
         <SectionHeader eyebrow="Autonomia" title="Configuração do Autopilot" meta={`Estado: ${data.autopilot.state}`} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", marginTop: "16px" }}>

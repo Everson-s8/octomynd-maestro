@@ -764,6 +764,52 @@ describe("dashboard", () => {
     }
   });
 
+  it("retries a budget-blocked goal via the dashboard API without creating a new task", async () => {
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([successfulGoalProvider]),
+      path.join(tempDir, "runs")
+    );
+    const server = createDashboardServer({ config, database, staticRoot: tempDir, goalCoordinator: coordinator });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const createTaskResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", text: "task retornavel" })
+      });
+      const taskPayload = await createTaskResponse.json() as { task: { id: number } };
+      const taskId = taskPayload.task.id;
+
+      // Force a blocked goal with a budget-exhausted lastError, mimicking a
+      // circuit-breaker stop. A brand-new task should NOT be created by retry.
+      const run = database.createGoalRun(taskId);
+      database.updateGoalRun({
+        id: run.id,
+        status: "blocked",
+        currentPhase: "reviewing",
+        stepCount: 4,
+        lastError: "Phase 'reviewing' reached its limit of 3 steps without measurable progress.",
+        waitReason: null
+      });
+
+      const retryResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${taskId}/retry`, { method: "POST" });
+      expect(retryResponse.status).toBe(200);
+      const retryPayload = await retryResponse.json() as { goal: { id: number; status: string } };
+      // Reopened in place — same goal id, now running/waiting, NOT a brand-new id.
+      expect(retryPayload.goal.id).toBe(run.id);
+      expect(["waiting_provider", "running"].includes(retryPayload.goal.status)).toBe(true);
+
+      const events = database.listEvents(100);
+      const retryEvent = events.find((e) => e.type === "goal.retry_requested");
+      expect(retryEvent).toBeTruthy();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("cancels a pre-merge Feature through the dashboard and closes its consolidated PR", async () => {
     const github = new FakeFeatureGitHubGateway();
     const feature = database.createFeature({

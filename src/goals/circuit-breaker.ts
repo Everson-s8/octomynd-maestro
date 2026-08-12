@@ -91,12 +91,17 @@ export class GoalCircuitBreaker {
   }
 
   checkPhaseBudget(phase: GoalPhase): GoalCircuitBreakerDecision | null {
+    // This pre-step check is a SAFETY CEILING only, not the primary loop guard.
+    // Precise loop detection happens in observe() below, which is progress-aware
+    // (no_progress / repeated_failure / provider-switch) and tolerates legitimate
+    // iteration while real work happens. Here we only stop a goal that has blown
+    // past a generous multiple of its expected phase budget — a runaway safety net.
     const count = this.phaseStepCounts.get(phase) ?? 0;
     const limit = this.phaseBudgets[phase];
-    if (limit !== undefined && count >= limit) {
+    if (limit !== undefined && count >= limit * 3) {
       return decision(
         "phase_budget_exhausted",
-        `Phase '${phase}' reached its limit of ${limit} steps.`
+        `Phase '${phase}' exceeded safety ceiling (${limit * 3} steps).`
       );
     }
     return null;
@@ -181,9 +186,23 @@ export class GoalCircuitBreaker {
 
     const limit = this.phaseBudgets[observation.phase];
     if (limit !== undefined && count >= limit) {
+      // Progress-aware: a task that is demonstrably making forward progress
+      // (worktree bytes changed between steps, or the provider switched) is NOT
+      // stuck in a loop. Blocking it on a raw step count would kill legitimate
+      // medium/large tasks whose review/test cycles legitimately iterate.
+      // Only the no_progress / repeated_failure detectors (which compare real
+      // output) should hard-stop a goal. So exceeding the per-phase ceiling is
+      // tolerated while there is measurable forward progress.
+      const worktreeChanged =
+        observation.workspaceBefore !== null &&
+        observation.workspaceAfter !== null &&
+        observation.workspaceBefore !== observation.workspaceAfter;
+      if (worktreeChanged) {
+        return null; // progress is real; let the goal continue
+      }
       return decision(
         "phase_budget_exhausted",
-        `Phase '${observation.phase}' reached its limit of ${limit} steps.`
+        `Phase '${observation.phase}' reached its limit of ${limit} steps without measurable progress.`
       );
     }
 

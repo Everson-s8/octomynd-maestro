@@ -429,9 +429,49 @@ export async function updateCapabilityRouting(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  const payload = await response.json() as { routing?: CapabilityRoutingPolicy; error?: string };
-  if (!response.ok || !payload.routing) throw new Error(payload.error || "Nao foi possivel atualizar o roteamento.");
-  return payload.routing;
+  const payload = await response.json() as { policy?: CapabilityRoutingPolicy; error?: string };
+  if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel atualizar a regra de roteamento.");
+  return payload.policy;
+}
+
+export type ConnectTelegramInput = {
+  botToken: string;
+  allowedUserId?: string;
+};
+
+export type ConnectTelegramResult = {
+  ok: boolean;
+  botInfo?: { id: number; username: string; first_name: string };
+  allowedUserId?: string | null;
+  envPath?: string;
+  botRestarted?: boolean;
+};
+
+export async function connectTelegram(input: ConnectTelegramInput): Promise<ConnectTelegramResult> {
+  const response = await fetch("/api/telegram/connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    botInfo?: { id: number; username: string; first_name: string };
+    allowedUserId?: string | null;
+    envPath?: string;
+    botRestarted?: boolean;
+    error?: string;
+    message?: string;
+  };
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.message || payload.error || "Falha ao conectar Telegram bot.");
+  }
+  return {
+    ok: true,
+    botInfo: payload.botInfo,
+    allowedUserId: payload.allowedUserId,
+    envPath: payload.envPath,
+    botRestarted: payload.botRestarted
+  };
 }
 
 export type GoalObservability = {

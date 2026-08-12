@@ -9,6 +9,7 @@
   },
   "scripts": {
     "setup": "tsx src/wizard.ts",
+    "telegram:connect": "tsx src/telegram/connect.ts",
     "dev": "tsx src/index.ts",
     "dev:api": "tsx watch src/dashboard/server-entry.ts",
     "dev:ui": "vite --config ui/vite.config.ts",

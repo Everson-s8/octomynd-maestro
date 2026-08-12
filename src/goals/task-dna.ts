@@ -109,7 +109,7 @@ export function computeTaskDNA(input: WorkIntakeDecision): TaskDNA {
     return {
       complexity: "medium",
       phases: ["planning", "implementing", "testing", "reviewing"],
-      phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 2 },
+      phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 4 },
       requireReview: true,
       requireTests: true,
       allowIteration: true,
@@ -124,7 +124,7 @@ export function computeTaskDNA(input: WorkIntakeDecision): TaskDNA {
   return {
     complexity: "large",
     phases: ["planning", "implementing", "testing", "reviewing"],
-    phaseBudgets: { planning: 3, implementing: 8, testing: 5, reviewing: 3 },
+    phaseBudgets: { planning: 3, implementing: 8, testing: 5, reviewing: 6 },
     requireReview: true,
     requireTests: true,
     allowIteration: true,
@@ -168,7 +168,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
     return {
       complexity: "large",
       phases: ["planning", "implementing", "testing", "reviewing"],
-      phaseBudgets: { planning: 3, implementing: 8, testing: 5, reviewing: 3 },
+      phaseBudgets: { planning: 3, implementing: 8, testing: 5, reviewing: 6 },
       requireReview: true,
       requireTests: true,
       allowIteration: true,
@@ -194,7 +194,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
     return {
       complexity: "medium",
       phases: ["planning", "implementing", "testing", "reviewing"],
-      phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 2 },
+      phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 4 },
       requireReview: true,
       requireTests: true,
       allowIteration: true,
@@ -206,7 +206,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
   return {
     complexity: "medium",
     phases: ["planning", "implementing", "testing", "reviewing"],
-    phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 2 },
+    phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 4 },
     requireReview: true,
     requireTests: true,
     allowIteration: true,

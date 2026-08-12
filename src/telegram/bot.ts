@@ -26,6 +26,93 @@ export type TelegramBotOptions = {
   triggerSelfUpdate?: () => Promise<RuntimeUpdateRecord>;
 };
 
+export type TelegramSubsystemInfo = {
+  id: number;
+  username: string;
+  first_name: string;
+};
+
+export class TelegramSubsystemManager {
+  private currentBot: Bot | null = null;
+  private isRunning = false;
+  private botInfo: TelegramSubsystemInfo | null = null;
+
+  constructor(
+    private config: MaestroConfig,
+    private database: MaestroDatabase,
+    private options: TelegramBotOptions = {}
+  ) {}
+
+  public getBotInfo(): TelegramSubsystemInfo | null {
+    return this.botInfo;
+  }
+
+  public isBotRunning(): boolean {
+    return this.isRunning;
+  }
+
+  public async start(): Promise<boolean> {
+    if (!this.config.telegram.botToken || this.config.telegram.botToken === "dummy_token_for_local_setup") {
+      return false;
+    }
+    try {
+      const bot = createTelegramBot(this.config, this.database, this.options);
+      const info = await bot.api.getMe();
+      this.botInfo = { id: info.id, username: info.username ?? "", first_name: info.first_name };
+      this.currentBot = bot;
+      this.isRunning = true;
+      void bot.start({
+        onStart: (botInfo) => {
+          console.log(`Telegram bot started as @${botInfo.username}.`);
+        }
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to start Telegram bot:", error instanceof Error ? error.message : error);
+      this.isRunning = false;
+      this.currentBot = null;
+      this.botInfo = null;
+      return false;
+    }
+  }
+
+  public async stop(): Promise<void> {
+    if (this.currentBot && this.isRunning) {
+      try {
+        await this.currentBot.stop();
+      } catch {
+        // Ignore if already stopped
+      }
+      this.isRunning = false;
+      this.currentBot = null;
+    }
+  }
+
+  public async restart(newToken: string, newAllowedUserId?: string): Promise<{
+    success: boolean;
+    botInfo?: TelegramSubsystemInfo;
+    error?: string;
+  }> {
+    await this.stop();
+    this.config.telegram.botToken = newToken.trim();
+    if (newAllowedUserId !== undefined) {
+      this.config.telegram.allowedUserId = newAllowedUserId.trim() || null;
+    }
+
+    try {
+      const started = await this.start();
+      if (!started || !this.botInfo) {
+        return { success: false, error: "Bot token is valid, but failed to start long-polling runtime." };
+      }
+
+      return { success: true, botInfo: this.botInfo };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Invalid bot token or network error: ${errMsg}` };
+    }
+  }
+}
+
 export function createTelegramBot(
   config: MaestroConfig,
   database: MaestroDatabase,

@@ -404,11 +404,18 @@ function providerLabel(provider: AgentProviderId): string {
 }
 
 function telegramPresence(config: MaestroConfig): AgentPresence {
+  const isConfigured = Boolean(
+    config.telegram.botToken && config.telegram.botToken !== "dummy_token_for_local_setup"
+  );
   return {
     id: "telegram",
     label: "Telegram",
-    state: config.telegram.botToken ? "ready" : "offline",
-    detail: config.telegram.allowedUserId ? "Bot restrito ao usuario autorizado" : "Restricao pendente"
+    state: isConfigured ? "ready" : "offline",
+    detail: isConfigured
+      ? config.telegram.allowedUserId
+        ? "Bot restrito ao usuario autorizado"
+        : "Bot ativo (restricao pendente)"
+      : "Bot desconectado (configure via UI/CLI)"
   };
 }
 
