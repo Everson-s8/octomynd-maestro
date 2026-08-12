@@ -3,11 +3,13 @@ export function OctoMark({ large = false }: { large?: boolean }) {
     return (
       <svg className="octo-mark octo-mark-brand" viewBox="0 0 200 200" role="img" aria-label="Octomynd">
         <ellipse cx="100" cy="82" rx="54" ry="48" fill="#c4622d" />
-        <path d="M56 116 C40 138,32 158,38 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
-        <path d="M144 116 C160 138,168 158,162 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
-        <path d="M80 126 C75 148,75 164,80 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
-        <path d="M120 126 C125 148,125 164,120 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
-        <path d="M100 128 L100 182" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+        <g className="octo-tentacles">
+          <path className="octo-tentacle octo-tentacle-left" d="M56 116 C40 138,32 158,38 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
+          <path className="octo-tentacle octo-tentacle-right" d="M144 116 C160 138,168 158,162 178" stroke="#c4622d" strokeWidth="11" strokeLinecap="round" />
+          <path className="octo-tentacle octo-tentacle-inner-left" d="M80 126 C75 148,75 164,80 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+          <path className="octo-tentacle octo-tentacle-inner-right" d="M120 126 C125 148,125 164,120 180" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+          <path className="octo-tentacle octo-tentacle-center" d="M100 128 L100 182" stroke="#9c4d24" strokeWidth="11" strokeLinecap="round" />
+        </g>
         <g className="octo-eye-look">
           <circle cx="120" cy="76" r="17" fill="#f3ece1" />
           <circle cx="120" cy="76" r="9" fill="#14110f" />

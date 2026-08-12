@@ -21,12 +21,19 @@
   /* ============ SIDEBAR ============ */
   aside{background:#100d0a;border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:24px 16px;overflow-y:auto}
   .brand{display:flex;align-items:center;gap:12px;padding:6px 8px 28px;cursor:pointer}
-  .brand svg{width:38px;height:38px;animation:brandFloat 4.5s ease-in-out infinite;filter:drop-shadow(0 7px 8px rgba(196,98,45,.18))}
-  .octo-eye-look{transform-box:fill-box;transform-origin:center;animation:octoLook 5.2s ease-in-out infinite}
-  .octo-eye-lid{transform-box:fill-box;transform-origin:center;animation:octoBlink 5.8s ease-in-out infinite}
-  @keyframes brandFloat{0%,100%{transform:translateY(0) rotate(-1deg)}50%{transform:translateY(-3px) rotate(2deg)}}
-  @keyframes octoLook{0%,22%,100%{transform:translate(0)}32%,48%{transform:translate(-2px,1px)}58%,78%{transform:translate(2px,-1px)}}
-  @keyframes octoBlink{0%,43%,47%,100%{transform:scaleY(0)}44%,46%{transform:scaleY(1)}}
+  .brand svg{width:42px;height:42px;animation:brandFloat 3.2s ease-in-out infinite;filter:drop-shadow(0 8px 9px rgba(196,98,45,.28))}
+  .octo-eye-look{transform-box:fill-box;transform-origin:center;animation:octoLook 4.2s ease-in-out infinite}
+  .octo-eye-lid{transform-box:fill-box;transform-origin:center;animation:octoBlink 4.2s ease-in-out infinite}
+  .octo-tentacle{transform-box:fill-box;transform-origin:top center}
+  .octo-tentacle-left,.octo-tentacle-inner-right{animation:tentacleLeft 2.8s ease-in-out infinite}
+  .octo-tentacle-right,.octo-tentacle-inner-left{animation:tentacleRight 3.1s ease-in-out infinite}
+  .octo-tentacle-center{animation:tentacleCenter 2.5s ease-in-out infinite}
+  @keyframes brandFloat{0%,100%{transform:translateY(1px) rotate(-2deg)}50%{transform:translateY(-5px) rotate(2deg)}}
+  @keyframes octoLook{0%,16%,100%{transform:translate(0)}27%,43%{transform:translate(6px,-1px)}55%,72%{transform:translate(-5px,2px)}}
+  @keyframes octoBlink{0%,41%,47%,100%{transform:scaleY(0)}43%,45%{transform:scaleY(1)}}
+  @keyframes tentacleLeft{0%,100%{transform:rotate(0deg) translateX(0)}50%{transform:rotate(8deg) translateX(-2px)}}
+  @keyframes tentacleRight{0%,100%{transform:rotate(0deg) translateX(0)}50%{transform:rotate(-8deg) translateX(2px)}}
+  @keyframes tentacleCenter{0%,100%{transform:scaleY(1)}50%{transform:scaleY(.88) translateY(4px)}}
   .brand-eye-look{transition:transform 110ms cubic-bezier(.22,.8,.24,1);transform-box:fill-box;transform-origin:center}
   .brand-eye-lid{transform-origin:120px 76px;animation:brandBlink 5.8s ease-in-out infinite}
   @keyframes brandBlink{0%,42%,46%,100%{transform:scaleY(0)}43%,45%{transform:scaleY(1)}}
