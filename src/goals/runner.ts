@@ -147,6 +147,7 @@ export async function runTaskGoal(
 
   try {
     while (stepCount < run.maxSteps) {
+      console.log(`[DNA-DEBUG] loop iter: stepCount=${stepCount} maxSteps=${run.maxSteps} phase=${phase} dna=${dna?.complexity ?? 'none'}`);
       if (options.signal?.aborted) {
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
@@ -1017,6 +1018,7 @@ export async function runTaskGoal(
       excluded = new Set();
     }
 
+    console.log(`[DNA-DEBUG] EXITED WHILE LOOP: stepCount=${stepCount} maxSteps=${run.maxSteps}`);
     return finishRun(
       database,
       currentRun,
