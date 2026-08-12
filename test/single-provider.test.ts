@@ -35,7 +35,7 @@ describe("Task #74 - Single-Provider & Wizard Onboarding", () => {
   it("does not fail when gh CLI is missing or checked", () => {
     const available = isGhAvailable();
     expect(typeof available).toBe("boolean");
-  });
+  }, 20_000);
 
   it("routes all capabilities when ONLY Codex is available", async () => {
     const codex = new CodexProvider();

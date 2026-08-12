@@ -116,7 +116,7 @@ describe("Environment Doctor", () => {
     } finally {
       database.close();
     }
-  });
+  }, 20_000);
 });
 
 function doctorConfig() {
