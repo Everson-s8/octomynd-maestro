@@ -69,7 +69,7 @@ export async function runTaskGoal(
   if (!task.projectKey) throw new Error(`Task #${task.id} has no project.`);
   if (!task.worktreePath) throw new Error(`Task #${task.id} must be prepared before starting a goal.`);
   const project = database.getProjectByKey(task.projectKey);
-  const run = options.existingRun ?? database.createGoalRun(task.id, options.maxSteps ?? 12);
+  const run = options.existingRun ?? database.createGoalRun(task.id, options.maxSteps ?? 20);
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
   let phase: GoalPhase = run.currentPhase;
