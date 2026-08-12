@@ -4,12 +4,20 @@
   "description": "Chat-first local orchestrator for Octomynd AI workflows.",
   "type": "module",
   "private": true,
+  "bin": {
+    "maestro": "./src/cli/bin.cjs"
+  },
   "engines": {
     "node": ">=20.17.0 <21"
   },
   "scripts": {
     "setup": "tsx src/wizard.ts",
     "telegram:connect": "tsx src/telegram/connect.ts",
+    "cli": "tsx src/cli/index.ts",
+    "cli:setup": "tsx src/cli/index.ts setup",
+    "cli:telegram": "tsx src/cli/index.ts telegram connect",
+    "cli:start": "tsx src/cli/index.ts start",
+    "cli:status": "tsx src/cli/index.ts status",
     "dev": "tsx src/index.ts",
     "dev:api": "tsx watch src/dashboard/server-entry.ts",
     "dev:ui": "vite --config ui/vite.config.ts",

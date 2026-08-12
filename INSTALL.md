@@ -42,6 +42,8 @@ You do **not** need all AI providers installed. Maestro automatically detects av
 
 ## 4. Quick Start Setup
 
+Maestro ships with a global-style CLI (`maestro`) so onboarding feels identical to other local tools: one binary, a few subcommands. Every `maestro` subcommand below also has an `npm run` equivalent.
+
 ### Step 1: Clone Repository & Install Dependencies
 
 ```bash
@@ -50,12 +52,23 @@ cd octomynd-maestro
 npm install
 ```
 
-### Step 2: Run Configuration Wizard
+### Step 2: (Optional) Link the global `maestro` CLI
+
+Installing the CLI globally lets you run `maestro setup`, `maestro start`, etc. from any directory:
+
+```bash
+npm link
+```
+
+> Note: the package is `private`, so `npm link` is the supported path for a local global command. If you prefer not to link, substitute `npx tsx src/cli/index.ts <command>` or the `npm run cli:*` scripts below.
+
+### Step 3: Run Configuration Wizard
 
 Run the automated configuration wizard to detect available providers and create your `.env` configuration file:
 
 ```bash
-npm run setup
+maestro setup
+# or: npm run setup  /  npm run cli:setup
 ```
 
 The wizard will:
@@ -63,17 +76,14 @@ The wizard will:
 - Check runtime dependencies.
 - Generate `.env` with optimal defaults based on detected tools.
 
-### Step 3: Connect Telegram Bot (No Manual .env Editing)
+### Step 4: Connect Telegram Bot (No Manual .env Editing)
 
-You can connect your Telegram bot using the interactive CLI wizard or directly through the Maestro Dashboard UI without manually editing `.env`.
+Connect your Telegram bot using the interactive CLI wizard or directly through the Maestro Dashboard UI without manually editing `.env`.
 
 **Via CLI Wizard:**
 ```bash
-npm run telegram:connect
-```
-*or:*
-```bash
-npx tsx src/index.ts telegram connect
+maestro telegram connect
+# or: npm run telegram:connect  /  npm run cli:telegram
 ```
 
 The wizard will:
@@ -83,24 +93,39 @@ The wizard will:
 4. Hot-restart the Telegram bot subsystem without restarting the entire Maestro process.
 
 **Via Dashboard UI:**
-1. Launch Maestro platform with `npm run dev:platform`.
+1. Launch Maestro platform with `maestro start`.
 2. Open `http://127.0.0.1:4788` and navigate to **Settings**.
 3. Fill in the **Conexão do Telegram Bot** section with your Bot Token and Telegram User ID, then click **Conectar Bot Telegram**.
 
-### Step 4: Run Smoke Verification
+### Step 5: Register a project (local path or GitHub URL)
+
+Attach a repository so Maestro can run goals against it. You can point to a local folder or paste a GitHub URL (Maestro clones it for you):
+
+```bash
+maestro project add <key> <path-or-github-url>
+# examples:
+#   maestro project add myapp ./my-app
+#   maestro project add myapp https://github.com/owner/my-app
+```
+
+### Step 6: Run Smoke Verification
 
 Verify that your single-provider (or multi-provider) machine is fully operational:
 
 ```bash
-npm run smoke
+maestro status
+# or: npm run smoke
 ```
 
-### Step 5: Launch Maestro
+`maestro status` prints a one-shot readiness report: runtime, detected provider CLIs, Telegram config, and database path.
+
+### Step 7: Launch Maestro
 
 Start the Maestro orchestrator and local web platform:
 
 ```bash
-npm run dev:platform
+maestro start
+# or: npm run dev:platform
 ```
 
 - **Dashboard UI**: `http://127.0.0.1:4788`
