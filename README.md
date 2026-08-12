@@ -191,7 +191,7 @@ MAESTRO_SKILLS_PROJECT_KEY=maestro
 - `implement-task-safely`: exige selecao explicita e limita escrita ao workspace
   preparado.
 
-No startup, apenas o allowlist de Skills do sistema pode passar automaticamente
+No startup, apenas a allowlist de Skills do sistema pode passar automaticamente
 por eval, aprovacao e ativacao. Pacotes adicionais ficam como `candidate`. Uma
 versao falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
 Dashboard e a evidencia do Goal mostram versoes, resultados, duracao e tokens
