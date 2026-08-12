@@ -10,7 +10,7 @@ This first version validates Telegram as the main control surface. It receives c
 
 Telegram belongs to the Maestro gateway, not to every managed project. Projects only need their own
 Telegram integration when that is an explicit product requirement. When a goal opens a draft pull
-request, the Maestro sends the restricted Telegram user a review notification with the public PR URL.
+request, Maestro sends the restricted Telegram user a review notification with the public PR URL.
 
 ## Requirements
 
@@ -82,7 +82,7 @@ O controlador considera o startup concluído somente quando
 `.maestro/runtime/`, fora do Git. Manutenções devem terminar com `status` verde;
 parar o processo também interrompe Dashboard, Telegram e coordenadores.
 
-A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
+A interface permite acompanhar o estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
 isolada. Uma task preparada pode iniciar um goal autônomo com planejamento,
 implementação, testes e revisão. Antigravity, Codex e Claude são roteados por capacidade; quando
