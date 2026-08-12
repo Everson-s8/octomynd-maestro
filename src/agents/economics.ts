@@ -81,3 +81,13 @@ export function calculateCostUsd(
   const total = inputCost + outputCost;
   return Math.round(total * 1_000_000) / 1_000_000;
 }
+
+export function formatCurrencyUsd(amount: number, options?: { decimals?: number }): string {
+  const decimals = options?.decimals ?? 2;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(amount);
+}

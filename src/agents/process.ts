@@ -183,11 +183,28 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
   });
 }
 
-export function buildRestrictedAgentEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([key]) => !isSensitiveEnvironmentKey(key)));
+const ALLOWED_PROVIDER_ENV_KEYS = new Set([
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY"
+]);
+
+export function buildRestrictedAgentEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  options?: { allowProviderKeys?: boolean }
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false))
+  );
 }
 
-function isSensitiveEnvironmentKey(key: string): boolean {
+function isSensitiveEnvironmentKey(key: string, allowProviderKeys: boolean): boolean {
+  if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(key.toUpperCase())) {
+    return false;
+  }
   return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
 }
 

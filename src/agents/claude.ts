@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
@@ -114,13 +115,17 @@ export class ClaudeProvider implements AgentProvider {
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
-    const health: AgentHealth = resolveClaudeCliCommand()
+    const cli = resolveClaudeCliCommand();
+    const envKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
+    const health: AgentHealth = cli
       ? { state: "ready", detail: "Claude CLI disponivel", checkedAt: new Date().toISOString() }
-      : {
-        state: "offline",
-        detail: withRemediation("claude", "offline", "Claude CLI nao encontrado."),
-        checkedAt: new Date().toISOString()
-      };
+      : envKey
+        ? { state: "ready", detail: "Claude API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+        : {
+          state: "offline",
+          detail: withRemediation("claude", "offline", "Claude CLI ou API Key nao encontrado."),
+          checkedAt: new Date().toISOString()
+        };
     this.cacheHealth(health, 30_000);
     return health;
   }
@@ -237,7 +242,7 @@ export class ClaudeProvider implements AgentProvider {
       signal: request.signal,
       maxOutputChars: request.maxOutputChars,
       maxReceivedChars: request.maxOutputChars * 2,
-      env: buildRestrictedAgentEnvironment()
+      env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
     });
     if (result.aborted || request.signal?.aborted) {
       return {
@@ -327,7 +332,7 @@ export const reviewTaskWithClaude = async (
     cwd,
     timeoutMs: 180_000,
     signal,
-    env: buildRestrictedAgentEnvironment()
+    env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
   });
   const errorText = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 
@@ -470,7 +475,7 @@ async function executeClaudeGoal(request: AgentExecutionRequest, limits: Provide
     inactivityTimeoutMs: limits.inactivityTimeoutMs,
     deadlineAt: request.deadlineAt,
     signal: request.signal,
-    env: buildRestrictedAgentEnvironment()
+    env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
   });
 }
 
@@ -478,7 +483,7 @@ function processRuntime(result: AgentProcessResult): NonNullable<AgentExecutionR
   return { breakerReason: result.breakerReason, outputStats: result.outputStats };
 }
 
-function resolveClaudeCliCommand(): ClaudeCliCommand | null {
+export function resolveClaudeCliCommand(): ClaudeCliCommand | null {
   const roots = [
     process.env.APPDATA
       ? path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code")
@@ -492,7 +497,14 @@ function resolveClaudeCliCommand(): ClaudeCliCommand | null {
     path.join(root, "cli.js")
   ]);
   const cliEntry = candidates.find((candidate) => fs.existsSync(candidate));
-  return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
+  if (cliEntry) return buildClaudeCliCommand(cliEntry);
+
+  try {
+    const cmd = process.platform === "win32" ? "claude.exe" : "claude";
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    if (res.status === 0) return buildClaudeCliCommand(cmd);
+  } catch {}
+  return null;
 }
 
 function improvementFailure(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateCostUsd, getPricingForModel, MODEL_PRICING_TABLE, resolveModelForProvider } from "../src/agents/economics.js";
+import { calculateCostUsd, formatCurrencyUsd, getPricingForModel, MODEL_PRICING_TABLE, resolveModelForProvider } from "../src/agents/economics.js";
 import { parseTokenUsageFromOutput } from "../src/agents/process.js";
 import { createDatabase } from "../src/db.js";
 import { buildDashboardSnapshot } from "../src/dashboard/snapshot.js";
@@ -31,6 +31,21 @@ describe("Provider Economics - Economics & Pricing Table", () => {
 
     // 0 tokens = $0.00
     expect(calculateCostUsd("antigravity", "gemini-2.0-flash", 0, 0)).toBe(0);
+  });
+});
+
+describe("Provider Economics - Currency Formatter", () => {
+  it("formats numbers to USD currency with default 2 decimals", () => {
+    expect(formatCurrencyUsd(0)).toBe("$0.00");
+    expect(formatCurrencyUsd(1.5)).toBe("$1.50");
+    expect(formatCurrencyUsd(1234.567)).toBe("$1,234.57");
+  });
+
+  it("formats numbers to USD currency with custom decimals", () => {
+    expect(formatCurrencyUsd(0, { decimals: 4 })).toBe("$0.0000");
+    expect(formatCurrencyUsd(0.75, { decimals: 4 })).toBe("$0.7500");
+    expect(formatCurrencyUsd(0.12345, { decimals: 4 })).toBe("$0.1235");
+    expect(formatCurrencyUsd(1.2, { decimals: 0 })).toBe("$1");
   });
 });
 

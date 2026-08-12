@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
   buildFailureSummary,
@@ -69,13 +70,16 @@ export class CodexProvider implements AgentProvider {
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const cliEntry = resolveCodexCliEntry();
+    const envKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
     const health: AgentHealth = cliEntry
       ? { state: "ready", detail: "Codex CLI disponivel", checkedAt: new Date().toISOString() }
-      : {
-        state: "offline",
-        detail: withRemediation("codex", "offline", "Codex CLI nao encontrado."),
-        checkedAt: new Date().toISOString()
-      };
+      : envKey
+        ? { state: "ready", detail: "Codex API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+        : {
+          state: "offline",
+          detail: withRemediation("codex", "offline", "Codex CLI ou API Key nao encontrado."),
+          checkedAt: new Date().toISOString()
+        };
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + 30_000;
     return health;
@@ -131,7 +135,7 @@ export class CodexProvider implements AgentProvider {
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
       signal: request.signal,
-      env: buildRestrictedAgentEnvironment()
+      env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
     });
     if (processResult.aborted) {
       return {
@@ -249,7 +253,7 @@ export class CodexProvider implements AgentProvider {
         signal: request.signal,
         maxOutputChars: request.maxOutputChars,
         maxReceivedChars: request.maxOutputChars * 2,
-        env: buildRestrictedAgentEnvironment()
+        env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
       });
       if (processResult.aborted || request.signal?.aborted) {
         return {
@@ -416,7 +420,7 @@ function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): s
   ];
 }
 
-function resolveCodexCliEntry(): string | null {
+export function resolveCodexCliEntry(): string | null {
   const candidates = [
     process.env.APPDATA
       ? path.join(process.env.APPDATA, "npm", "node_modules", "@openai", "codex", "bin", "codex.js")
@@ -425,7 +429,15 @@ function resolveCodexCliEntry(): string | null {
       ? path.join(process.env.NPM_CONFIG_PREFIX, "node_modules", "@openai", "codex", "bin", "codex.js")
       : ""
   ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) return found;
+
+  try {
+    const cmd = process.platform === "win32" ? "codex.cmd" : "codex";
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    if (res.status === 0) return cmd;
+  } catch {}
+  return null;
 }
 
 function failure(

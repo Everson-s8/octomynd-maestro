@@ -89,7 +89,16 @@ describe("provider failure classification", () => {
     expect(classifyFailure("401 unauthorized", { spawnErrorCode: "ENOENT" })).toBe("environment_error");
   });
 
-  it("enforces explicit retryability rules across all 11 categories", () => {
+  it("classifies prompt_too_large failures (ENAMETOOLONG, E2BIG, prompt-bloat)", () => {
+    expect(classifyFailure("", { spawnErrorCode: "ENAMETOOLONG" })).toBe("prompt_too_large");
+    expect(classifyFailure("", { spawnErrorCode: "E2BIG" })).toBe("prompt_too_large");
+    expect(classifyFailure("spawn ENAMETOOLONG")).toBe("prompt_too_large");
+    expect(classifyFailure("Error: argument list too long")).toBe("prompt_too_large");
+    expect(classifyFailure("prompt too large to process")).toBe("prompt_too_large");
+    expect(classifyFailure("context length exceeded")).toBe("prompt_too_large");
+  });
+
+  it("enforces explicit retryability rules across all 12 categories", () => {
     const retryableList: FailureCategory[] = ["quota", "auth_required", "timeout", "offline", "capacity"];
     const nonRetryableList: FailureCategory[] = [
       "output_limit",
@@ -97,6 +106,7 @@ describe("provider failure classification", () => {
       "environment_error",
       "invalid_output",
       "user_cancelled",
+      "prompt_too_large",
       "unknown"
     ];
 
