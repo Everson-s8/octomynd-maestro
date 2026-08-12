@@ -11,8 +11,8 @@ export function ProviderChip({
   providerId: string;
 }) {
   return (
-    <span className={`agent-satellite satellite-${providerId}`}>
-      {label}
+    <span className={`provider-chip provider-${providerId}`}>
+      <span className="provider-chip-name">{label}</span>
       <small>{agentStateLabel(state)}</small>
     </span>
   );

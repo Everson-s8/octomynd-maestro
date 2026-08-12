@@ -597,3 +597,87 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
 .sidebar.is-collapsed .sidebar-note {
   justify-content: center;
 }
+
+/* ===== Ink correction layer: keep every screen on the same visual system ===== */
+.provider-status-bar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.provider-chip {
+  position: static;
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 118px;
+  padding: 9px 12px;
+  color: var(--ivory);
+  background: var(--ink-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--provider-color, var(--rust));
+  border-radius: 10px;
+  box-shadow: none;
+  font-family: var(--mono);
+  font-size: .66rem;
+  font-weight: 600;
+}
+.provider-chip-name { color: var(--ivory); }
+.provider-chip small { color: var(--muted); font-size: .5rem; text-transform: uppercase; }
+.provider-codex { --provider-color: #7c634a; }
+.provider-claude { --provider-color: #c4622d; }
+.provider-antigravity { --provider-color: #6f8f6a; }
+.provider-telegram { --provider-color: #5c6f8f; }
+
+/* The old light-theme rules were still styling secondary screens. */
+.feature-status-count,
+.feature-row,
+.feature-plan-row,
+.work-graph-card,
+.review-inbox-item,
+.agent-card,
+.project-card,
+.improvement-card {
+  color: var(--ivory-dim);
+  background: var(--ink-2);
+  border-color: var(--line);
+}
+.feature-row:hover,
+.feature-plan-row:hover,
+.work-graph-card:hover,
+.review-inbox-item:hover,
+.agent-card:hover,
+.project-card:hover,
+.improvement-card:hover { background: var(--ink-3); border-color: #4a3f30; }
+.feature-status-count strong,
+.feature-copy strong,
+.feature-plan-copy strong,
+.work-graph-card strong,
+.review-inbox-item strong,
+.agent-card strong,
+.project-title strong,
+.project-stats strong,
+.improvement-card strong { color: var(--ivory); }
+.feature-plan-linked { color: var(--ivory-dim); background: var(--ink-3); }
+.feature-status-count { color: var(--coral); }
+.worker-node { background: var(--ink-3); border-color: var(--line); }
+.work-graph-evidence, .work-graph-artifacts { background: rgba(243,236,225,.04); }
+.review-inbox-item { color: var(--ivory-dim); }
+.review-inbox-item.is-selected { background: var(--ink-3); border-color: #4a3f30; }
+.review-inbox-item.is-selected strong { color: var(--ivory); }
+.routing-table { background: var(--ink-3); border-color: var(--line); }
+.provider-controls select, .routing-row select {
+  color: var(--ivory-dim);
+  background: var(--ink-3);
+  border-color: var(--line);
+}
+.provider-controls select option, .routing-row select option { color: var(--ivory); background: var(--ink-2); }
+.provider-controls button { color: var(--ivory); background: var(--rust); }
+.routing-heading { color: var(--ivory); background: var(--ink-3); }
+.project-icon { color: var(--ivory); background: color-mix(in srgb, var(--project-color) 34%, var(--ink-2)); }
+.project-live-status { color: var(--coral); background: rgba(232,150,122,.08); }
+.improvement-form { background: var(--ink-3); }
+.improvement-card > strong, .improvement-card > p { color: var(--ivory-dim); }
+.improvement-actions button { color: var(--ivory); background: var(--ink-3); }
+.improvement-actions button:last-child { background: var(--rust); }
+.row-action:hover { color: var(--ivory); background: var(--ink-3); }
+.empty-state strong { color: var(--ivory); }
+.sidebar-toggle-btn { color: var(--ivory); background: var(--ink-3); border-color: var(--line); }
+
+/* Accessible focus and restrained motion from the design spec. */
+:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }

@@ -1,5 +1,4 @@
 import { DashboardData } from "../api";
-import { agentStateLabel, heroAgentChip } from "../agentPresentation";
 import { Icon } from "../components/Icon";
 import { AgentProviderBar } from "../components/ProviderChip";
 import { TaskCard } from "../components/TaskCard";
@@ -12,8 +11,6 @@ import { taskStatusLabels } from "../helpers";
 
 export function HeroConsole({ data }: { data: DashboardData }) {
   const leadTask = data.tasks.find((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status));
-  const codexChip = heroAgentChip(data.agents, "codex", "Codex");
-  const claudeChip = heroAgentChip(data.agents, "claude", "Claude");
   return (
     <section className="hero-console panel" aria-labelledby="hero-title">
       <div className="hero-grid" aria-hidden="true" />
@@ -44,17 +41,6 @@ export function HeroConsole({ data }: { data: DashboardData }) {
       </div>
       <div className="hero-visual">
         <NervousSystem agents={data.agents} />
-        <span className="agent-satellite satellite-codex">
-          {codexChip.label}
-          <small>{agentStateLabel(codexChip.state)}</small>
-        </span>
-        <span className="agent-satellite satellite-claude">
-          {claudeChip.label}
-          <small>{agentStateLabel(claudeChip.state)}</small>
-        </span>
-        <span className="agent-satellite satellite-telegram">
-          Telegram<small>live</small>
-        </span>
       </div>
       <div className="hero-now">
         <span>Agora no Maestro</span>
