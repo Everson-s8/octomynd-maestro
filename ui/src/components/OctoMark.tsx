@@ -13,9 +13,12 @@ export function OctoMark({ large = false }: { large?: boolean }) {
       />
       <path fill="#e8967a" d="M28 26C21 19 25 10 33 13C39 15 38 23 32 29Z" />
       <circle cx="58" cy="35" r="15" fill="#14110f" />
-      <circle cx="60" cy="34" r="9" fill="#f3ece1" />
-      <circle cx="62" cy="33" r="5" fill="#1c1712" />
-      <circle cx="64" cy="32" r="2" fill="#f3ece1" />
+      <g className="octo-eye-look">
+        <circle cx="60" cy="34" r="9" fill="#f3ece1" />
+        <circle cx="62" cy="33" r="5" fill="#1c1712" />
+        <circle cx="64" cy="32" r="2" fill="#f3ece1" />
+      </g>
+      <path className="octo-eye-lid" d="M44 35C47 24 68 21 73 35C68 28 50 28 44 35Z" fill="#c4622d" />
       <path d="M35 49C42 55 51 55 57 49" fill="none" stroke="#9c4d24" strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
