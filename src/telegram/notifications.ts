@@ -12,6 +12,7 @@ import type {
 } from "../features/coordinator.js";
 import type { FeatureAssemblyEvent, FeatureAssemblyNotificationHandler } from "../features/assembly.js";
 import type { SelfUpdateNotificationEvent } from "../runtime/self-update.js";
+import type { SkillCuratorNotificationHandler } from "../skills/curator.js";
 
 import { buildGoalObservability } from "../goals/observability.js";
 
@@ -78,7 +79,7 @@ export function createTelegramSkillCuratorCandidateNotifier(
   config: MaestroConfig,
   database: MaestroDatabase,
   sendMessage: TelegramMessageSender
-): ((eventType: string, candidate: import("../db.js").SkillCuratorCandidateRecord, detail?: string) => Promise<void>) | undefined {
+): SkillCuratorNotificationHandler | undefined {
   const chatId = config.telegram.allowedUserId;
   if (!chatId) return undefined;
   return async (eventType, candidate, detail) => {
