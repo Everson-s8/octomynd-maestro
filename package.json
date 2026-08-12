@@ -8,6 +8,7 @@
     "node": ">=20.17.0 <21"
   },
   "scripts": {
+    "setup": "tsx src/wizard.ts",
     "dev": "tsx src/index.ts",
     "dev:api": "tsx watch src/dashboard/server-entry.ts",
     "dev:ui": "vite --config ui/vite.config.ts",

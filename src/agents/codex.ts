@@ -69,13 +69,16 @@ export class CodexProvider implements AgentProvider {
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const cliEntry = resolveCodexCliEntry();
+    const envKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
     const health: AgentHealth = cliEntry
       ? { state: "ready", detail: "Codex CLI disponivel", checkedAt: new Date().toISOString() }
-      : {
-        state: "offline",
-        detail: withRemediation("codex", "offline", "Codex CLI nao encontrado."),
-        checkedAt: new Date().toISOString()
-      };
+      : envKey
+        ? { state: "ready", detail: "Codex API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+        : {
+          state: "offline",
+          detail: withRemediation("codex", "offline", "Codex CLI ou API Key nao encontrado."),
+          checkedAt: new Date().toISOString()
+        };
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + 30_000;
     return health;
@@ -131,7 +134,7 @@ export class CodexProvider implements AgentProvider {
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
       signal: request.signal,
-      env: buildRestrictedAgentEnvironment()
+      env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
     });
     if (processResult.aborted) {
       return {
@@ -249,7 +252,7 @@ export class CodexProvider implements AgentProvider {
         signal: request.signal,
         maxOutputChars: request.maxOutputChars,
         maxReceivedChars: request.maxOutputChars * 2,
-        env: buildRestrictedAgentEnvironment()
+        env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
       });
       if (processResult.aborted || request.signal?.aborted) {
         return {
@@ -416,7 +419,7 @@ function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): s
   ];
 }
 
-function resolveCodexCliEntry(): string | null {
+export function resolveCodexCliEntry(): string | null {
   const candidates = [
     process.env.APPDATA
       ? path.join(process.env.APPDATA, "npm", "node_modules", "@openai", "codex", "bin", "codex.js")
