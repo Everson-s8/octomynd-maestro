@@ -9,6 +9,7 @@ export type FailureCategory =
   | "environment_error"
   | "invalid_output"
   | "user_cancelled"
+  | "prompt_too_large"
   | "unknown";
 
 export type FailureContext = {
@@ -40,6 +41,7 @@ const CATEGORY_LABELS: Record<FailureCategory, string> = {
   environment_error: "erro de ambiente",
   invalid_output: "saida invalida",
   user_cancelled: "cancelado pelo usuario",
+  prompt_too_large: "tamanho do prompt excedido",
   unknown: "erro desconhecido"
 };
 
@@ -55,6 +57,7 @@ const PERMISSION_PATTERN = /\b403\b|permission denied|access denied|\beacces\b|\
 const ENVIRONMENT_PATTERN = /cannot find module|command not found|\benoent\b|module_not_found|node_module/i;
 const OFFLINE_PATTERN = /connection refused|network is unreachable|\boffline\b|dns lookup failed|getaddrinfo\b|econnrefused|etimedout|socket hang up/i;
 const CAPACITY_PATTERN = /resource_exhausted|no provider available|all providers busy|overloaded|capacity|high demand|server is busy/i;
+const PROMPT_TOO_LARGE_PATTERN = /enametoolong|e2big|argument list too long|prompt too (large|long)|command line too long|request entity too large|context length exceeded|maximum context length/i;
 
 export function classifyFailure(text: string, contextOrTimedOut?: boolean | FailureContext): FailureCategory {
   const context: FailureContext = typeof contextOrTimedOut === "boolean"
@@ -84,6 +87,9 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
 
   if (context.spawnErrorCode) {
     const code = context.spawnErrorCode.toUpperCase();
+    if (code === "ENAMETOOLONG" || code === "E2BIG") {
+      return "prompt_too_large";
+    }
     if (code === "ENOENT" || code === "MODULE_NOT_FOUND" || code === "COMMAND_NOT_FOUND") {
       return "environment_error";
     }
@@ -102,6 +108,9 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
   if (context.jsonError) {
     const errCode = String(context.jsonError.code ?? context.jsonError.type ?? "").toLowerCase();
     const errStatus = context.jsonError.status;
+    if (errCode === "prompt_too_large" || errCode === "context_length_exceeded" || errCode === "enametoolong" || errCode === "e2big") {
+      return "prompt_too_large";
+    }
     if (errCode === "quota_exceeded" || errCode === "rate_limit_exceeded" || errStatus === 429) {
       return "quota";
     }
@@ -124,6 +133,9 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
 
   if (context.stderrPrefix) {
     const prefix = context.stderrPrefix.toUpperCase();
+    if (prefix.includes("ENAMETOOLONG") || prefix.includes("E2BIG") || prefix.includes("ERR_PROMPT_TOO_LARGE")) {
+      return "prompt_too_large";
+    }
     if (prefix.includes("ERR_ENVIRONMENT") || prefix.includes("ENOENT") || prefix.includes("MODULE_NOT_FOUND")) {
       return "environment_error";
     }
@@ -145,6 +157,9 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
   }
 
   // Check structured stderr line prefix signatures in text if any
+  if (text.startsWith("ERR_PROMPT_TOO_LARGE:") || text.startsWith("ENAMETOOLONG:") || text.startsWith("E2BIG:")) {
+    return "prompt_too_large";
+  }
   if (text.startsWith("ERR_ENVIRONMENT:") || text.startsWith("ENOENT:") || text.startsWith("MODULE_NOT_FOUND:")) {
     return "environment_error";
   }
@@ -165,6 +180,7 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
   }
 
   // --- Layer 2: Regex for unstructured text ---
+  if (PROMPT_TOO_LARGE_PATTERN.test(text)) return "prompt_too_large";
   if (USER_CANCELLED_PATTERN.test(text)) return "user_cancelled";
   if (OUTPUT_LIMIT_PATTERN.test(text)) return "output_limit";
   if (INVALID_OUTPUT_PATTERN.test(text)) return "invalid_output";

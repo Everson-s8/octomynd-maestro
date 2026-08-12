@@ -636,11 +636,21 @@ export async function runTaskGoal(
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
 
+      let taskMetadataParsed: Record<string, any> | null = null;
+      const rawMeta = (task as any).metadata;
+      if (rawMeta) {
+        try {
+          taskMetadataParsed = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
+        } catch {}
+      }
+
       const circuitDecision = circuitBreaker.observe({
         phase,
         result,
         workspaceBefore,
-        workspaceAfter
+        workspaceAfter,
+        taskText: task.text,
+        taskMetadata: taskMetadataParsed
       });
       if (circuitDecision?.reason === "output_limit") {
         database.addEvent({
@@ -727,6 +737,17 @@ export async function runTaskGoal(
         return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
       }
       if (result.outcome === "failed") {
+        if (circuitDecision) {
+          return finishCircuitBreak(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            task.id,
+            circuitDecision.reason,
+            circuitDecision.summary
+          );
+        }
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
         if (fallback) {
@@ -750,17 +771,6 @@ export async function runTaskGoal(
             }
           });
           continue;
-        }
-        if (circuitDecision) {
-          return finishCircuitBreak(
-            database,
-            currentRun,
-            phase,
-            stepCount,
-            task.id,
-            circuitDecision.reason,
-            circuitDecision.summary
-          );
         }
         const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
         if (availability.provider) {
