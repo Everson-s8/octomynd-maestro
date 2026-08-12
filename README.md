@@ -1,6 +1,6 @@
 # Octomynd Maestro
 
-Chat-first local orchestrator for Antigravity, Codex, Claude and GitHub workflows, com uma
+Orquestrador local chat-first para Antigravity, Codex, Claude e workflows do GitHub, com uma
 central visual local para acompanhar projetos, fila, agentes e eventos.
 
 O Maestro usa as autenticações dos CLIs Antigravity, Codex e Claude. Ele não requer
