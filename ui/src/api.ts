@@ -429,9 +429,9 @@ export async function updateCapabilityRouting(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  const payload = await response.json() as { policy?: CapabilityRoutingPolicy; error?: string };
-  if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel atualizar a regra de roteamento.");
-  return payload.policy;
+  const payload = await response.json() as { routing?: CapabilityRoutingPolicy; error?: string };
+  if (!response.ok || !payload.routing) throw new Error(payload.error || "Nao foi possivel atualizar a regra de roteamento.");
+  return payload.routing;
 }
 
 export type ConnectTelegramInput = {

@@ -1,6 +1,4 @@
 import { DashboardData } from "../api";
-import { agentStateLabel, heroAgentChip } from "../agentPresentation";
-import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { AgentProviderBar } from "../components/ProviderChip";
 import { TaskCard } from "../components/TaskCard";
@@ -8,12 +6,11 @@ import { CostDisplay, calculateDashboardCost } from "../components/CostDisplay";
 import { FeatureBoard } from "../components/FeatureBoard";
 import { SectionHeader } from "../components/SectionHeader";
 import { EmptyState } from "../components/EmptyState";
+import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels } from "../helpers";
 
 export function HeroConsole({ data }: { data: DashboardData }) {
   const leadTask = data.tasks.find((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status));
-  const codexChip = heroAgentChip(data.agents, "codex", "Codex");
-  const claudeChip = heroAgentChip(data.agents, "claude", "Claude");
   return (
     <section className="hero-console panel" aria-labelledby="hero-title">
       <div className="hero-grid" aria-hidden="true" />
@@ -22,13 +19,13 @@ export function HeroConsole({ data }: { data: DashboardData }) {
           <span /> sistema vivo
         </span>
         <h2 id="hero-title">
-          Seus agentes,
+          Um cérebro.
           <br />
-          <em>um só ritmo.</em>
+          <em>Braços que decidem.</em>
         </h2>
         <p>
-          Telegram recebe. Maestro organiza. Worktrees isolam cada missão — e você mantém a decisão final enquanto Codex e
-          Claude entram no fluxo.
+          Dois terços dos neurônios de um polvo vivem nos braços. Cada agente provou o próprio trabalho — e você mantém
+          a decisão final enquanto Claude e Codex entram no fluxo.
         </p>
         <div className="hero-chips">
           <span>{data.summary.activeTasks} tasks ativas</span>
@@ -43,22 +40,7 @@ export function HeroConsole({ data }: { data: DashboardData }) {
         </div>
       </div>
       <div className="hero-visual">
-        <div className="orbit orbit-a" />
-        <div className="orbit orbit-b" />
-        <div className="mascot-core">
-          <OctoMark large />
-        </div>
-        <span className="agent-satellite satellite-codex">
-          {codexChip.label}
-          <small>{agentStateLabel(codexChip.state)}</small>
-        </span>
-        <span className="agent-satellite satellite-claude">
-          {claudeChip.label}
-          <small>{agentStateLabel(claudeChip.state)}</small>
-        </span>
-        <span className="agent-satellite satellite-telegram">
-          Telegram<small>live</small>
-        </span>
+        <NervousSystem agents={data.agents} />
       </div>
       <div className="hero-now">
         <span>Agora no Maestro</span>
