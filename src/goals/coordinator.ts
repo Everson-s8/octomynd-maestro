@@ -57,6 +57,13 @@ export class GoalCoordinator {
     const task = this.database.getTask(taskId);
     if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
+
+    // ── Compute TaskDNA for maxSteps ──────────────────────
+    const taskDNA = computeTaskDNAFromText(task.text);
+    const dnaMaxSteps = taskDNA
+      ? Object.values(taskDNA.phaseBudgets).reduce((a, b) => a + b, 0) + 5
+      : maxSteps;
+
     const readiness = this.preflight?.(taskId);
     if (readiness?.status === "environment_blocked") {
       this.database.withTransaction(() => {
@@ -80,7 +87,7 @@ export class GoalCoordinator {
         metadata: { report: readiness }
       });
     }
-    const run = this.database.createGoalRun(taskId, maxSteps);
+    const run = this.database.createGoalRun(taskId, dnaMaxSteps);
     this.execute(run);
     return run;
   }
