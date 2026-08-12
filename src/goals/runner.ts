@@ -89,7 +89,10 @@ export async function runTaskGoal(
   const run = options.existingRun ?? database.createGoalRun(task.id, effectiveMaxSteps);
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
-  let phase: GoalPhase = run.currentPhase;
+  // ── DNA: start at first DNA phase, not default "planning" ──
+  let phase: GoalPhase = isResume
+    ? run.currentPhase
+    : (dna?.phases[0] as GoalPhase) ?? run.currentPhase;
   let stepCount = run.stepCount;
   let excluded = initialExcludedProviders(database, run, phase);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
