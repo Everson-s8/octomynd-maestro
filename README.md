@@ -1,12 +1,13 @@
 # Octomynd Maestro
 
-Orquestrador local chat-first para Antigravity, Codex, Claude e workflows do GitHub, com uma
-central visual local para acompanhar projetos, fila, agentes e eventos.
+A local, chat-first orchestrator for Antigravity, Codex, Claude, and GitHub workflows, with a
+local visual command center to track projects, backlog, agents, and events.
 
-O Maestro usa as autenticações dos CLIs Antigravity, Codex e Claude. Ele não requer
-`OPENAI_API_KEY` nem cria faturamento separado da OpenAI API.
+Maestro uses the authenticated CLIs of Antigravity, Codex, and Claude. It does not require
+`OPENAI_API_KEY` and does not create a separate OpenAI API billing surface.
 
-This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
+This first version validates Telegram as the main control surface. It receives commands, creates
+local tasks, stores events in SQLite, and keeps secrets out of Git.
 
 Telegram belongs to the Maestro gateway, not to every managed project. Projects only need their own
 Telegram integration when that is an explicit product requirement. When a goal opens a draft pull
@@ -14,7 +15,7 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 ## Requirements
 
-- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`
+- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`,
   and GitHub Actions share the same runtime contract.
 - A Telegram bot token from BotFather.
 
@@ -43,9 +44,9 @@ npm run dev:platform
 npm test
 ```
 
-## Plataforma visual
+## Visual platform
 
-O dashboard usa dados reais do SQLite e permanece restrito ao computador local.
+The dashboard reads real data from SQLite and stays restricted to the local machine.
 
 ### Provider control plane
 
@@ -64,11 +65,11 @@ npm run dev:platform
 ```
 
 - UI: `http://127.0.0.1:4788`
-- API local: `http://127.0.0.1:4787`
+- Local API: `http://127.0.0.1:4787`
 - Build: `npm run build:ui`
 - Typecheck: `npm run typecheck:ui`
 
-Para executar o runtime completo no Windows com PID, logs e health check:
+To run the full runtime on Windows with PID, logs, and health check:
 
 ```powershell
 .\scripts\maestro-runtime.ps1 start
@@ -77,105 +78,100 @@ Para executar o runtime completo no Windows com PID, logs e health check:
 .\scripts\maestro-runtime.ps1 stop
 ```
 
-O controlador considera o startup concluído somente quando
-`http://127.0.0.1:4787/api/dashboard` responde. Logs e PID ficam sob
-`.maestro/runtime/`, fora do Git. Manutenções devem terminar com `status` verde;
-parar o processo também interrompe Dashboard, Telegram e coordenadores.
+The controller only considers startup complete once
+`http://127.0.0.1:4787/api/dashboard` responds. Logs and PID live under
+`.maestro/runtime/`, outside Git. Maintenance should end with a green `status`;
+stopping the process also stops the Dashboard, Telegram, and coordinators.
 
-A interface permite acompanhar o estado do daemon, projetos, fila, agentes e eventos,
-além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
-isolada. Uma task preparada pode iniciar um goal autônomo com planejamento,
-implementação, testes e revisão. Antigravity, Codex e Claude são roteados por capacidade; quando
-todos ficam indisponíveis ou sem cota, o goal é persistido em `waiting_provider` e
-retomado automaticamente sem perder os passos concluídos.
-O `AgentRegistry` é a fonte única para capacidade, carga, saúde e cooldown dos
-providers. O Dashboard e `/status` no Telegram exibem o mesmo estado operacional,
-sem inferir autenticação ou disponibilidade por regras visuais separadas.
-O Antigravity usa a assinatura Google autenticada no CLI, sem API key no projeto. Por
-padrão ele recebe planejamento, implementação, testes, pesquisa e revisão de melhoria
-antes dos providers com cota mais escassa. O Claude continua como primeira opção de
-Final Review independente. Work Graphs podem usar providers diferentes em nodes
-independentes, mas nunca permitem dois writers concorrentes sobre a mesma Task.
-Depois da revisão, o Maestro verifica segredos, cria commit, envia a branch e abre um
-draft PR. Para uma Task avulsa, o merge continua sendo uma decisão humana. Em uma
-Feature, os Work PRs permanecem Draft como evidência e nunca são mergeados
-individualmente. O único candidato a merge é o Feature PR consolidado: quando o
-usuário o marca como Ready for review, o Maestro valida checks e mergeabilidade,
-executa um Final Review read-only sobre o SHA exato e, se aprovado, faz o merge,
-fecha os Work PRs e limpa branches integradas. Qualquer mudança no SHA ou falha de
-gate invalida a revisão e impede o merge.
+The interface lets you watch the daemon state, projects, backlog, agents, and events, as well as
+create local tasks as `queued`, open details, and prepare an isolated worktree. A prepared task can
+start an autonomous goal with planning, implementation, testing, and review. Antigravity, Codex, and
+Claude are routed by capability; when all are unavailable or out of quota, the goal is persisted in
+`waiting_provider` and resumed automatically without losing completed steps.
 
-## Work Graph multiagente
+The `AgentRegistry` is the single source for provider capacity, load, health, and cooldown. The
+Dashboard and the `/status` Telegram command show the same operational state, without inferring
+authentication or availability through separate visual rules.
 
-Tasks complexas podem ser representadas como um DAG governado de até quatro Worker
-Nodes. O Maestro continua como gerente: valida dependências e budgets, permite no
-máximo dois readers simultâneos e serializa um único writer com escopo de escrita
-declarado. Resultados grandes ficam em artefatos redigidos; os workers seguintes
-recebem apenas referências e resumos limitados.
+Antigravity uses the Google subscription authenticated in the CLI, with no API key in the project.
+By default it receives planning, implementation, testing, research, and improvement review before
+providers with scarcer quota. Claude remains the first choice for independent Final Review. Work
+Graphs may use different providers on independent nodes, but never allow two concurrent writers on
+the same Task.
 
-O Dashboard mostra graph, nodes, tentativas, budgets e evidências. No Telegram:
+After review, Maestro checks for secrets, creates a commit, pushes the branch, and opens a draft PR.
+For a standalone Task, merge remains a human decision. In a Feature, Work PRs stay Draft as evidence
+and are never merged individually. The only merge candidate is the consolidated Feature PR: when the
+user marks it Ready for review, Maestro validates checks and mergeability, runs a read-only Final
+Review on the exact SHA, and if approved merges it, closes the Work PRs, and cleans up integrated
+branches. Any change to the SHA or a gate failure invalidates the review and prevents the merge.
 
-- `/graphs [@projeto]` lista Work Graphs e seus nodes;
-- `/graph_cancel <id>` cancela graphs parados e preserva toda a auditoria;
-- `/status` inclui Work Graphs ativos.
+## Multi-agent Work Graph
 
-Cancelamento de um graph em execução falha fechado até que um coordenador residente
-possa propagar `AbortSignal` ao provider. A classificação de complexidade e o runtime
-estão prontos, mas a ativação automática para toda Task permanece desligada nesta
-primeira entrega para não multiplicar tokens em demandas simples.
+Complex tasks can be represented as a governed DAG of up to four Worker Nodes. Maestro remains the
+manager: it validates dependencies and budgets, allows at most two simultaneous readers, and
+serializes a single writer with a declared write scope. Large results live in redacted artifacts;
+downstream workers receive only references and bounded summaries.
 
-## Fila de revisão humana
+The Dashboard shows graphs, nodes, attempts, budgets, and evidence. On Telegram:
 
-Draft PRs entregues aparecem em **Aguardando revisão** com projeto, demanda, agentes,
-resumo do review, arquivos relativos, testes e o resultado do secret guard. A pessoa
-responsável registra uma justificativa e escolhe:
+- `/graphs [@project]` lists Work Graphs and their nodes;
+- `/graph_cancel <id>` cancels stuck graphs and preserves all audit;
+- `/status` includes active Work Graphs.
 
-- **Aprovar PR avulso para merge**: usa `gh pr ready`; não executa merge.
-- **Solicitar ajustes**: devolve o PR para draft e reabre o mesmo goal em implementação,
-  incluindo a justificativa no contexto do agente.
-- **Rejeitar**: fecha o PR sem merge e encerra a task como rejeitada.
+Canceling a running graph fails closed until a resident coordinator can propagate `AbortSignal` to
+the provider. The complexity classification and runtime are ready, but automatic activation for
+every Task remains off in this first release to avoid multiplying tokens on simple requests.
 
-Todas as decisões ficam no SQLite e geram eventos e notificações do Telegram. Segredos,
-IDs privados e caminhos locais são removidos do payload visual; justificativas contendo
-segredo ou caminho privado são bloqueadas antes de persistência ou envio.
+## Human review queue
 
-Esta fila de decisão manual é diferente do protocolo de Feature PR descrito acima.
-Marcar somente o Feature PR consolidado como Ready for review autoriza o Final Review
-e o merge automático governado; Work PRs individuais devem permanecer Draft.
+Delivered draft PRs appear under **Awaiting review** with project, request, agents, review summary,
+relative files, tests, and the secret-guard result. The responsible person records a justification
+and chooses:
 
-A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
+- **Approve standalone PR for merge**: runs `gh pr ready`; does not merge.
+- **Request changes**: returns the PR to draft and reopens the same goal into implementation,
+  including the justification in the agent context.
+- **Reject**: closes the PR without merging and ends the task as rejected.
 
-## Aprendizado seguro
+All decisions live in SQLite and generate events and Telegram notifications. Secrets, private IDs,
+and local paths are removed from the visual payload; justifications containing a secret or private
+path are blocked before persistence or delivery.
 
-O painel inclui um laboratório de propostas de melhoria inspirado no ciclo de
-aprendizado do Hermes Agent. Cada candidata registra categoria, justificativa,
-mudança proposta, evidências, risco e origem. O usuário pode aprovar ou rejeitar,
-mas **aprovar não aplica a mudança automaticamente**: cria uma nova Task e um
-Feature Plan, que passam pelo fluxo normal de worktree isolada, validação, Work PR
-Draft e Final Review somente no Feature PR consolidado.
+This manual decision queue differs from the Feature PR protocol described above. Marking only the
+consolidated Feature PR as Ready for review authorizes Final Review and the governed automatic merge;
+individual Work PRs must stay Draft.
 
-Quando uma Feature termina, um outbox SQLite idempotente registra um pacote de
-evidências limitado, sanitizado e com proveniência. Um reviewer em background usa
-Codex ou Claude em modo estritamente read-only e no máximo duas tentativas. Um
-evaluator determinístico rejeita evidências inventadas, duplicatas, baixa confiança,
-risco subestimado e qualquer tentativa de alterar Constituição, segredos, aprovações,
-auditoria, permissões ou rollback. O reviewer nunca escreve skills, memória ou código.
+The visual direction is documented in `docs/VISUAL_IDENTITY.md`.
 
-A governança está separada da persona:
+## Safe learning
 
-- `docs/MAESTRO_CONSTITUTION.md`: princípios protegidos que agentes não podem editar;
-- `docs/HERMES_APPLIED_STUDY.md`: conclusões do estudo e elementos priorizados;
-- uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar segurança.
+The panel includes a proposal lab inspired by the Hermes Agent learning loop. Each candidate records
+category, rationale, proposed change, evidence, risk, and origin. The user can approve or reject,
+but **approving does not apply the change automatically**: it creates a new Task and a Feature Plan,
+which then go through the normal flow of isolated worktree, validation, Draft Work PR, and Final
+Review only on the consolidated Feature PR.
 
-## Skills governadas
+When a Feature finishes, an idempotent SQLite outbox records a limited, sanitized evidence package
+with provenance. A background reviewer uses Codex or Claude in strictly read-only mode with at most
+two attempts. A deterministic evaluator rejects invented, duplicate, low-confidence, or understated
+evidence, and any attempt to alter the Constitution, secrets, approvals, audit, permissions, or
+rollback. The reviewer never writes skills, memory, or code.
 
-O runtime de Skills usa pacotes portáveis com `SKILL.md`, policy opcional em
-`maestro.yaml` e casos deterministas em `evals/cases.yaml`. A descoberta carrega
-somente metadados; instruções entram no prompt apenas depois da seleção e ficam
-limitadas por budget. Cada Goal fixa o hash exato da versão usada, o motivo do
-trigger e o modo de invocação.
+Governance is separated from persona:
 
-Ele permanece desligado por padrão. Para habilitar os três Skills iniciais:
+- `docs/MAESTRO_CONSTITUTION.md`: protected principles agents cannot edit;
+- `docs/HERMES_APPLIED_STUDY.md`: conclusions of the study and prioritized elements;
+- a future `SOUL.md`: tone and personality only, with no power to change security.
+
+## Governed Skills
+
+The Skills runtime uses portable packages with a `SKILL.md`, optional policy in `maestro.yaml`, and
+deterministic cases in `evals/cases.yaml`. Discovery loads only metadata; instructions enter the
+prompt only after selection and are bounded by budget. Each Goal pins the exact hash of the version
+used, the trigger reason, and the invocation mode.
+
+It is off by default. To enable the three initial Skills:
 
 ```text
 MAESTRO_SKILLS_ENABLED=true
@@ -184,32 +180,30 @@ MAESTRO_SKILL_VERSIONS_PATH=.maestro/skill-versions
 MAESTRO_SKILLS_PROJECT_KEY=maestro
 ```
 
-- `diagnose-goal-failure`: pode ser selecionado implicitamente, mas é read-only,
-  sem rede e sem escrita.
-- `final-feature-review`: pode ser selecionado implicitamente somente na revisão,
-  sem rede e sem escrita.
-- `implement-task-safely`: exige seleção explícita e limita escrita ao workspace
-  preparado.
+- `diagnose-goal-failure`: can be selected implicitly, but is read-only, off-network, and
+  write-free.
+- `final-feature-review`: can be selected implicitly only during review, off-network and write-free.
+- `implement-task-safely`: requires explicit selection and limits writes to the prepared workspace.
 
-No startup, apenas a allowlist de Skills do sistema pode passar automaticamente
-por eval, aprovação e ativação. Pacotes adicionais ficam como `candidate`. Uma
-versão falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
-Dashboard e a evidência do Goal mostram versões, resultados, duração e tokens
-estimados, mas nunca persistem ou exibem as instruções privadas do Skill.
+On startup, only the system Skills allowlist can pass eval, approval, and activation automatically.
+Additional packages stay as `candidate`. A version fails closed if triggers, guardrails, syntax, or
+policy regress. The Dashboard and Goal evidence show versions, results, duration, and estimated
+tokens, but never persist or expose the Skill's private instructions.
 
-## Goal autônomo
+## Autonomous goal
 
-Uma task preparada pode iniciar uma execução persistente pelo painel. O Maestro avança sozinho por
-planejamento, implementação, testes e revisão. Quando a revisão pede ajustes, o fluxo retorna para
-implementação sem exigir que o usuário atualize a task. O estado e cada etapa ficam no SQLite.
+A prepared task can start a persistent execution from the panel. Maestro advances alone through
+planning, implementation, testing, and review. When the review requests changes, the flow returns to
+implementation without requiring the user to update the task. The state and every step live in
+SQLite.
 
-O contrato, roteamento e limites estão em `docs/GOAL_RUNTIME.md`.
+The contract, routing, and limits are documented in `docs/GOAL_RUNTIME.md`.
 
 ## Telegram Commands
 
 - `/start` shows the bot introduction.
 - `/help` shows available commands.
-- `/status` shows daemon status, active goals and agents currently working.
+- `/status` shows daemon status, active goals, and agents currently working.
 - `/status @<key>` shows the active work for one project.
 - `/projects` lists registered projects.
 - `/project_add <key> <repo-path>` registers a local Git project.
@@ -229,15 +223,16 @@ keeps `waiting_provider` goals from consuming that global slot, and evaluates Fe
 dependencies before preparing a worktree. Same-project parallelism requires explicit disjoint
 mutation scopes; dependent Tasks inherit exact validated ancestor commits through a deterministic
 baseline branch. Exact duplicates of delivered/completed work are marked `blocked` for human review
-rather than silently discarded. Configure it with
-`MAESTRO_AUTOPILOT_ENABLED`, `MAESTRO_AUTOPILOT_POLL_MS`, and
-`MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
+rather than silently discarded. Configure it with `MAESTRO_AUTOPILOT_ENABLED`,
+`MAESTRO_AUTOPILOT_POLL_MS`, and `MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
+
 - Any plain text message is saved as feedback.
 
-Final goal notifications are proactive: completed goals with a draft PR send a concise review request.
-The notification excludes local worktree paths, credentials and private Telegram identifiers.
-Phase updates are also sent when an agent starts planning, implementation, testing or review,
-regardless of whether the task originated in Telegram, the dashboard or another local surface.
+Final goal notifications are proactive: completed goals with a draft PR send a concise review
+request. The notification excludes local worktree paths, credentials, and private Telegram
+identifiers. Phase updates are also sent when an agent starts planning, implementation, testing, or
+review, regardless of whether the task originated in Telegram, the dashboard, or another local
+surface.
 
 ## Task lifecycle controls
 
@@ -253,15 +248,15 @@ Example:
 
 ```text
 /project_add octomynd C:\Users\evers\OneDrive\Imagens\TCC\octomynd_publish
-/task @octomynd melhorar resposta fora de contexto
+/task @octomynd improve out-of-context response
 /queue @octomynd
 ```
 
 ## Continuous Integration
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`. It is
-fail-closed: any failing step blocks the workflow, and no step ignores errors or masks
-a non-zero exit code. The workflow does not deploy and does not merge pull requests.
+fail-closed: any failing step blocks the workflow, and no step ignores errors or masks a non-zero
+exit code. The workflow does not deploy and does not merge pull requests.
 
 Required checks (all must pass):
 
@@ -275,13 +270,13 @@ Required checks (all must pass):
    run if any match. Only filenames are reported; matched secret values are never
    printed to logs.
 
-The Goal runtime applies the same validation policy before review. Passing checks
-skip a separate LLM testing pass; failures are stored as sanitized artifacts and
-summarized into a compact correction handoff.
+The Goal runtime applies the same validation policy before review. Passing checks skip a separate
+LLM testing pass; failures are stored as sanitized artifacts and summarized into a compact
+correction handoff.
 
-The workflow uses `permissions: contents: read` (no write access), a `concurrency`
-group keyed on workflow and ref to cancel superseded runs, and `actions/setup-node`
-with `cache: npm` keyed on `package-lock.json` for safe, deterministic caching.
+The workflow uses `permissions: contents: read` (no write access), a `concurrency` group keyed on
+workflow and ref to cancel superseded runs, and `actions/setup-node` with `cache: npm` keyed on
+`package-lock.json` for safe, deterministic caching.
 
 ## Local Data
 
@@ -293,5 +288,5 @@ The local SQLite database is stored at `.maestro/maestro.db` by default. The fol
 - The bot does not print the Telegram token.
 - Local database and logs are ignored.
 - If `TELEGRAM_ALLOWED_USER_ID` is set, other users are blocked.
-- O dashboard valida o host e aceita apenas `127.0.0.1` ou `localhost`.
-- Tokens e IDs privados do Telegram não entram no payload da interface.
+- The dashboard validates the host and only accepts `127.0.0.1` or `localhost`.
+- Tokens and private Telegram IDs never enter the interface payload.
