@@ -16,7 +16,12 @@ import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../runtime/com
 import { detectLocalRtk } from "../runtime/rtk.js";
 import { rawOutputArtifactKey, writeGoalStepRuntimeArtifacts } from "../runtime/artifacts.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
-import { captureWorkspaceProgress, GoalCircuitBreaker, DEFAULT_PHASE_BUDGETS } from "./circuit-breaker.js";
+import {
+  captureWorkspaceProgress,
+  GoalCircuitBreaker,
+  DEFAULT_PHASE_BUDGETS,
+} from "./circuit-breaker.js";
+import type { TaskDNA, GoalPhase as DnaGoalPhase } from "./task-dna.js";
 export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import type { SkillRuntime } from "../skills/runtime.js";
@@ -42,6 +47,8 @@ export type GoalRunnerOptions = {
   artifactsRoot: string;
   maxSteps?: number;
   phaseBudgets?: Partial<Record<GoalPhase, number>>;
+  /** TaskDNA: self-dimensioning workflow config. When provided, overrides phases and budgets. */
+  taskDNA?: TaskDNA;
   deadlineMs?: number;
   existingRun?: GoalRunRecord;
   delivery?: GoalDeliveryHandler;
@@ -69,10 +76,27 @@ export async function runTaskGoal(
   if (!task.projectKey) throw new Error(`Task #${task.id} has no project.`);
   if (!task.worktreePath) throw new Error(`Task #${task.id} must be prepared before starting a goal.`);
   const project = database.getProjectByKey(task.projectKey);
-  const run = options.existingRun ?? database.createGoalRun(task.id, options.maxSteps ?? 12);
+
+  // ── TaskDNA: self-dimensioning workflow ──────────────────
+  const dna = options.taskDNA;
+  const dnaPhases: GoalPhase[] = dna?.phases ?? PHASES;
+  const dnaPhaseBudgets = dna?.phaseBudgets ?? {};
+  // When DNA is present, maxSteps is the sum of phase budgets (no global cap)
+  const effectiveMaxSteps = dna
+    ? Object.values(dna.phaseBudgets).reduce((a, b) => a + b, 0) + 5 // buffer
+    : options.maxSteps ?? 20;
+
+  const run = options.existingRun ?? database.createGoalRun(task.id, effectiveMaxSteps);
+  // ── DNA: override maxSteps for existing runs too ─────────
+  if (dna && options.existingRun) {
+    run.maxSteps = effectiveMaxSteps;
+  }
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
-  let phase: GoalPhase = run.currentPhase;
+  // ── DNA: start at first DNA phase, not default "planning" ──
+  let phase: GoalPhase = isResume
+    ? run.currentPhase
+    : (dna?.phases[0] as GoalPhase) ?? run.currentPhase;
   let stepCount = run.stepCount;
   let excluded = initialExcludedProviders(database, run, phase);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
@@ -89,7 +113,11 @@ export async function runTaskGoal(
     type: isResume ? "goal.resumed" : "goal.started",
     text: `Goal #${run.id} ${isResume ? "resumed" : "started"} for task #${task.id}`,
     taskId: task.id,
-    metadata: { runId: run.id, maxSteps: run.maxSteps }
+    metadata: {
+      runId: run.id,
+      maxSteps: run.maxSteps,
+      dna: dna ? { complexity: dna.complexity, phases: dna.phases, rationale: dna.rationale } : null,
+    }
   });
   const workGraphDecision = decideWorkGraphAdoption({
     mode: options.workGraphAdoption?.mode ?? "off",
@@ -133,6 +161,26 @@ export async function runTaskGoal(
           "Goal deadline reached before starting another provider step."
         );
       }
+      // ── Phase budget check: DNA-aware ────────────────────
+      // DNA phase budgets take precedence over circuit breaker defaults
+      const dnaBudgetLimit = dnaPhaseBudgets[phase as GoalPhase];
+      const phaseStepCount = database.listGoalSteps(run.id).filter((s) => s.phase === phase).length;
+      if (dnaBudgetLimit !== undefined && phaseStepCount >= dnaBudgetLimit) {
+        // Check if this is the last phase — if so, deliver
+        const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
+        if (phaseIndex === dnaPhases.length - 1) {
+          // Last phase budget exhausted — deliver
+          break; // Exit loop to delivery logic below
+        }
+        // Not last phase — move to next DNA phase
+        const nextDnaPhase = dnaPhases[phaseIndex + 1];
+        if (nextDnaPhase) {
+          phase = nextDnaPhase;
+          excluded = new Set();
+          continue;
+        }
+      }
+
       const phaseBudgetDecision = circuitBreaker.checkPhaseBudget(phase);
       if (phaseBudgetDecision) {
         return finishCircuitBreak(
@@ -636,11 +684,21 @@ export async function runTaskGoal(
         return cancelRun(database, currentRun, phase, stepCount, task.id);
       }
 
+      let taskMetadataParsed: Record<string, any> | null = null;
+      const rawMeta = (task as any).metadata;
+      if (rawMeta) {
+        try {
+          taskMetadataParsed = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
+        } catch {}
+      }
+
       const circuitDecision = circuitBreaker.observe({
         phase,
         result,
         workspaceBefore,
-        workspaceAfter
+        workspaceAfter,
+        taskText: task.text,
+        taskMetadata: taskMetadataParsed
       });
       if (circuitDecision?.reason === "output_limit") {
         database.addEvent({
@@ -727,6 +785,17 @@ export async function runTaskGoal(
         return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
       }
       if (result.outcome === "failed") {
+        if (circuitDecision) {
+          return finishCircuitBreak(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            task.id,
+            circuitDecision.reason,
+            circuitDecision.summary
+          );
+        }
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
         if (fallback) {
@@ -750,17 +819,6 @@ export async function runTaskGoal(
             }
           });
           continue;
-        }
-        if (circuitDecision) {
-          return finishCircuitBreak(
-            database,
-            currentRun,
-            phase,
-            stepCount,
-            task.id,
-            circuitDecision.reason,
-            circuitDecision.summary
-          );
         }
         const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
         if (availability.provider) {
@@ -809,9 +867,52 @@ export async function runTaskGoal(
             task.id
           );
         }
+        // DNA: check if iteration is allowed
+        if (dna && !dna.allowIteration) {
+          // No iteration allowed — deliver as-is
+          break;
+        }
         phase = "implementing";
         excluded = new Set();
         continue;
+      }
+
+      // ── DNA: approved = task complete ────────────────────
+      // If the reviewer approved (or tests passed and no review needed),
+      // treat this as completion regardless of remaining phases.
+      if (result.outcome === "completed") {
+        const reviewDecision = result.structuredPayload?.reviewDecision;
+        if (reviewDecision === "approved") {
+          // Reviewer approved — deliver immediately
+          break;
+        }
+        // DNA: if this is the last required phase and no review needed, deliver
+        if (dna && !dna.requireReview && phase === (dna.phases[dna.phases.length - 1])) {
+          // For trivial tasks with no changes, complete without PR
+          const wf = captureWorkspaceProgress(task.worktreePath);
+          const prevCp = database.getLatestGoalCheckpoint(run.id);
+          const hasFileChanges = wf !== null && prevCp !== null && wf !== prevCp.workspaceFingerprint;
+          if (dna.complexity === "trivial" && !hasFileChanges) {
+            database.updateTaskStatus(task.id, "done");
+            return database.withTransaction(() => {
+              const updated = database.updateGoalRun({
+                id: run.id, status: "completed", currentPhase: phase, stepCount
+              });
+              database.addEvent({
+                source: "maestro", type: "goal.completed",
+                text: `Goal #${run.id} completed (trivial, no changes needed).`,
+                taskId: task.id, metadata: { runId: run.id, stepCount, trivial: true }
+              });
+              return updated;
+            });
+          }
+          // Has changes or not trivial — continue to delivery (don't break here,
+          // the !nextPhase check below handles delivery)
+        }
+        // DNA: if tests passed and no review needed, deliver
+        if (dna && !dna.requireReview && phase === "testing" && result.structuredPayload?.testsPassed) {
+          break;
+        }
       }
 
       if (phase === "testing" && options.validationRunner) {
@@ -819,9 +920,39 @@ export async function runTaskGoal(
         continue;
       }
 
-      const nextPhase = nextPhaseAfter(phase);
+      const nextPhase = nextPhaseAfter(phase, dnaPhases);
       if (!nextPhase) {
         let deliveredRun = currentRun;
+
+        // ── DNA: skip delivery for trivial tasks with no changes ──
+        const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
+        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
+        const hasChanges = workspaceFingerprint !== null
+          && previousCheckpoint !== null
+          && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
+
+        if (dna?.complexity === "trivial" && !hasChanges) {
+          // Trivial task with no file changes — complete without PR
+          database.updateTaskStatus(task.id, "done");
+          const completed = database.withTransaction(() => {
+            const updated = database.updateGoalRun({
+              id: run.id,
+              status: "completed",
+              currentPhase: phase,
+              stepCount
+            });
+            database.addEvent({
+              source: "maestro",
+              type: "goal.completed",
+              text: `Goal #${run.id} completed (trivial, no changes needed).`,
+              taskId: task.id,
+              metadata: { runId: run.id, stepCount, trivial: true }
+            });
+            return updated;
+          });
+          return completed;
+        }
+
         if (options.delivery) {
           database.withTransaction(() => {
             database.updateTaskStatus(task.id, "awaiting_human");
@@ -1108,9 +1239,11 @@ function sanitizeForRunSummary(text: string): string {
   return truncateForDisplay(redactSensitiveText(text), LAST_ERROR_MAX_LENGTH);
 }
 
-function nextPhaseAfter(phase: GoalPhase): GoalPhase | null {
-  const index = PHASES.indexOf(phase);
-  return index >= 0 && index < PHASES.length - 1 ? PHASES[index + 1] : null;
+function nextPhaseAfter(phase: GoalPhase, dnaPhases?: GoalPhase[]): GoalPhase | null {
+  // Use DNA phases if available, otherwise fall back to hardcoded PHASES
+  const phases = dnaPhases ?? PHASES;
+  const index = phases.indexOf(phase);
+  return index >= 0 && index < phases.length - 1 ? phases[index + 1] : null;
 }
 
 function taskStatusForPhase(phase: GoalPhase): TaskStatus {

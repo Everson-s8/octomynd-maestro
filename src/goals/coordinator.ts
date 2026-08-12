@@ -3,6 +3,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
+import { computeTaskDNAFromText, type TaskDNA } from "./task-dna.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
@@ -56,6 +57,13 @@ export class GoalCoordinator {
     const task = this.database.getTask(taskId);
     if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
+
+    // ── Compute TaskDNA for maxSteps ──────────────────────
+    const taskDNA = computeTaskDNAFromText(task.text);
+    const dnaMaxSteps = taskDNA
+      ? Object.values(taskDNA.phaseBudgets).reduce((a, b) => a + b, 0) + 5
+      : maxSteps;
+
     const readiness = this.preflight?.(taskId);
     if (readiness?.status === "environment_blocked") {
       this.database.withTransaction(() => {
@@ -79,7 +87,7 @@ export class GoalCoordinator {
         metadata: { report: readiness }
       });
     }
-    const run = this.database.createGoalRun(taskId, maxSteps);
+    const run = this.database.createGoalRun(taskId, dnaMaxSteps);
     this.execute(run);
     return run;
   }
@@ -221,10 +229,16 @@ export class GoalCoordinator {
     if (existingTimer !== undefined) this.scheduler.cancel(existingTimer);
     this.retryTimers.delete(run.id);
     const controller = new AbortController();
+
+    // ── Compute TaskDNA from task text ──────────────────────
+    const task = this.database.getTask(run.taskId);
+    const taskDNA = computeTaskDNAFromText(task.text);
+
     const promise = runTaskGoal(this.database, this.registry, run.taskId, {
       artifactsRoot: this.artifactsRoot,
       maxSteps: run.maxSteps,
       existingRun: run,
+      taskDNA,
       delivery: this.delivery,
       tokenRuntime: this.tokenRuntime,
       validationRunner: this.validationRunner,

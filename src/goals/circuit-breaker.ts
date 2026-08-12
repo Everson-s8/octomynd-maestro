@@ -12,7 +12,10 @@ export type GoalCircuitBreakerReason =
   | "output_limit"
   | "repeated_failure"
   | "no_progress"
-  | "phase_budget_exhausted";
+  | "phase_budget_exhausted"
+  | "small_task_failure_limit"
+  | "task_split_required"
+  | "prompt_too_large";
 
 export type GoalCircuitBreakerDecision = {
   reason: GoalCircuitBreakerReason;
@@ -24,12 +27,26 @@ export type GoalCircuitBreakerObservation = {
   result: AgentExecutionResult;
   workspaceBefore: string | null;
   workspaceAfter: string | null;
+  taskText?: string;
+  taskMetadata?: Record<string, any> | null;
 };
 
 const REPEATED_FAILURE_LIMIT = 2;
 const NO_PROGRESS_LIMIT = 2;
 const SUMMARY_MAX_LENGTH = 300;
 const MAX_UNTRACKED_HASH_BYTES = 8_000_000;
+
+export function isSmallTask(taskText: string, metadata?: Record<string, any> | null): boolean {
+  if (metadata?.isSmallTask === true || metadata?.size === "small" || metadata?.complexity === "small") {
+    return true;
+  }
+  if (metadata?.isSmallTask === false || metadata?.size === "large" || metadata?.complexity === "large") {
+    return false;
+  }
+  const text = taskText.trim();
+  if (!text) return false;
+  return /\b(small task|task pequena|small change|pequena alteracao|small fix)\b/i.test(text);
+}
 
 export const DEFAULT_PHASE_BUDGETS: Record<GoalPhase, number> = {
   planning: 3,
@@ -43,6 +60,8 @@ export class GoalCircuitBreaker {
   private readonly noProgress = new Map<GoalPhase, number>();
   private readonly phaseStepCounts = new Map<GoalPhase, number>();
   private readonly phaseBudgets: Record<GoalPhase, number>;
+  private consecutiveFailures = 0;
+  private totalFailures = 0;
 
   constructor(phaseBudgets?: Partial<Record<GoalPhase, number>>) {
     this.phaseBudgets = {
@@ -61,7 +80,11 @@ export class GoalCircuitBreaker {
       breaker.phaseStepCounts.set(step.phase, count);
 
       if (step.status === "failed") {
+        breaker.totalFailures += 1;
+        breaker.consecutiveFailures += 1;
         breaker.incrementFailure(failureFingerprint(step.phase, step.summary, step.error));
+      } else if (step.status === "completed") {
+        breaker.consecutiveFailures = 0;
       }
     }
     return breaker;
@@ -91,7 +114,17 @@ export class GoalCircuitBreaker {
       return decision(processReason, `Provider stopped by ${processReason}; partial worktree preserved.`);
     }
 
+    if (observation.result.failureCategory === "prompt_too_large") {
+      return decision(
+        "prompt_too_large",
+        "Prompt size or argument list exceeded system limits (ENAMETOOLONG/E2BIG). Prompt-bloat detected."
+      );
+    }
+
     if (observation.result.outcome === "failed") {
+      this.totalFailures += 1;
+      this.consecutiveFailures += 1;
+
       const failureCount = this.incrementFailure(failureFingerprint(
         observation.phase,
         observation.result.summary,
@@ -100,6 +133,7 @@ export class GoalCircuitBreaker {
       if (failureCount >= REPEATED_FAILURE_LIMIT) {
         return decision("repeated_failure", "The same provider failure repeated without useful recovery.");
       }
+
       const limit = this.phaseBudgets[observation.phase];
       if (limit !== undefined && count >= limit) {
         return decision(
@@ -107,7 +141,27 @@ export class GoalCircuitBreaker {
           `Phase '${observation.phase}' reached its limit of ${limit} steps.`
         );
       }
+
+      const small = isSmallTask(observation.taskText ?? "", observation.taskMetadata);
+      if (small && this.consecutiveFailures >= 2) {
+        return decision(
+          "small_task_failure_limit",
+          "Small task failed 2 consecutive times. Escalating and stopping retries with reduced scope."
+        );
+      }
+
+      if (this.totalFailures >= 3) {
+        return decision(
+          "task_split_required",
+          "Task failed 3 times across execution steps. Goal must be split into smaller sub-tasks instead of growing prompt."
+        );
+      }
+
       return null;
+    }
+
+    if (observation.result.outcome === "completed") {
+      this.consecutiveFailures = 0;
     }
 
     if (

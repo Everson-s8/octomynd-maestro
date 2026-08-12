@@ -88,14 +88,17 @@ function listChangedFiles(worktreePath: string): string[] {
 }
 
 async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Promise<string> {
-  requireGit(
-    runGitSafe(["push", "-u", "origin", task.branchName!], task.worktreePath!),
-    "push goal branch"
-  );
+  const pushResult = runGitSafe(["push", "-u", "origin", task.branchName!], task.worktreePath!);
+  // If remote origin is not configured (or offline in local mode), push warning is ignored
   const existing = runGh([
     "pr", "list", "--head", task.branchName!, "--json", "url", "--jq", ".[0].url"
   ], task.worktreePath!);
-  if (!existing.ok) throw new Error(`Cannot inspect pull requests: ${existing.stderr || existing.stdout}`);
+  if (!existing.ok) {
+    if (isGhMissing(existing)) {
+      return `local://${task.branchName}`;
+    }
+    throw new Error(`Cannot inspect pull requests: ${existing.stderr || existing.stdout}`);
+  }
   const existingUrl = existing.stdout.trim();
   if (existingUrl) return existingUrl;
 
@@ -110,7 +113,12 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
     "pr", "create", "--draft", "--base", task.baseBranch || project.defaultBranch, "--head", task.branchName!,
     "--title", title, "--body", body
   ], task.worktreePath!);
-  if (!created.ok) throw new Error(`Cannot create draft pull request: ${created.stderr || created.stdout}`);
+  if (!created.ok) {
+    if (isGhMissing(created)) {
+      return `local://${task.branchName}`;
+    }
+    throw new Error(`Cannot create draft pull request: ${created.stderr || created.stdout}`);
+  }
   const url = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\/github\.com\//.test(line));
   if (!url) throw new Error("GitHub CLI did not return a pull request URL.");
   return url;
@@ -121,13 +129,18 @@ function runGitSafe(args: string[], cwd: string): GitCommandResult {
 }
 
 function runGh(args: string[], cwd: string): GitCommandResult {
-  const result = spawnSync("gh", args, { cwd, encoding: "utf8", windowsHide: true });
+  const executable = process.platform === "win32" ? "gh.exe" : "gh";
+  const result = spawnSync(executable, args, { cwd, encoding: "utf8", windowsHide: true });
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr: [result.stderr, result.error?.message].filter(Boolean).join("\n"),
     exitCode: result.status
   };
+}
+
+function isGhMissing(result: GitCommandResult): boolean {
+  return !result.ok && /ENOENT|not found|is not recognized|command not found/i.test(result.stderr + result.stdout);
 }
 
 function requireGit(result: GitCommandResult, operation: string): GitCommandResult {
