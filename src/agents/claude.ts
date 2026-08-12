@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
@@ -496,7 +497,14 @@ export function resolveClaudeCliCommand(): ClaudeCliCommand | null {
     path.join(root, "cli.js")
   ]);
   const cliEntry = candidates.find((candidate) => fs.existsSync(candidate));
-  return cliEntry ? buildClaudeCliCommand(cliEntry) : null;
+  if (cliEntry) return buildClaudeCliCommand(cliEntry);
+
+  try {
+    const cmd = process.platform === "win32" ? "claude.exe" : "claude";
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    if (res.status === 0) return buildClaudeCliCommand(cmd);
+  } catch {}
+  return null;
 }
 
 function improvementFailure(

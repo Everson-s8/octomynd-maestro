@@ -2,12 +2,12 @@ import { AgentHealthState, AgentProviderId } from "./types.js";
 
 type RemediableProviderId = "codex" | "claude";
 
-const INSTALL_COMMANDS: Record<RemediableProviderId, string> = {
+export const INSTALL_COMMANDS: Record<RemediableProviderId, string> = {
   codex: "npm install -g @openai/codex",
   claude: "npm install -g @anthropic-ai/claude-code"
 };
 
-const LOGIN_COMMANDS: Record<RemediableProviderId, string> = {
+export const LOGIN_COMMANDS: Record<RemediableProviderId, string> = {
   codex: "codex login",
   claude: "claude login"
 };

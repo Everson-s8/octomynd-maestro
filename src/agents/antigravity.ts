@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
 import {
   buildFailureSummary,
@@ -328,7 +329,15 @@ export function resolveAntigravityExecutable(explicitPath?: string): string | nu
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : null,
     process.env.HOME ? path.join(process.env.HOME, ".local", "bin", "agy") : null
   ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) return found;
+
+  try {
+    const cmd = process.platform === "win32" ? "agy.exe" : "agy";
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    if (res.status === 0) return cmd;
+  } catch {}
+  return null;
 }
 
 function failure(detail: string, category: FailureCategory = "offline"): AgentExecutionResult {

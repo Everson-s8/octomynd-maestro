@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { AgentProcessResult, buildRestrictedAgentEnvironment, runAgentProcess } from "./process.js";
 import {
   buildFailureSummary,
@@ -428,7 +429,15 @@ export function resolveCodexCliEntry(): string | null {
       ? path.join(process.env.NPM_CONFIG_PREFIX, "node_modules", "@openai", "codex", "bin", "codex.js")
       : ""
   ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) return found;
+
+  try {
+    const cmd = process.platform === "win32" ? "codex.cmd" : "codex";
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    if (res.status === 0) return cmd;
+  } catch {}
+  return null;
 }
 
 function failure(

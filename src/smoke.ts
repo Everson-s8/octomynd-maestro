@@ -1,11 +1,19 @@
+import fs from "node:fs";
+import path from "node:path";
 import { loadConfig, validateRuntimeConfig } from "./config.js";
 import { createDatabase } from "./db.js";
-import { detectProviders, isGhAvailable } from "./config/wizard.js";
+import { detectProviders, isGhAvailable, runConfigWizard } from "./config/wizard.js";
 import { CodexProvider } from "./agents/codex.js";
 import { ClaudeProvider } from "./agents/claude.js";
 import { AntigravityProvider } from "./agents/antigravity.js";
 import { AgentRegistry } from "./agents/registry.js";
 import type { AgentCapability, AgentProvider } from "./agents/types.js";
+
+const envPath = path.join(process.cwd(), ".env");
+const envLocalPath = path.join(process.cwd(), ".env.local");
+if (!fs.existsSync(envPath) && !fs.existsSync(envLocalPath)) {
+  runConfigWizard();
+}
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
