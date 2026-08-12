@@ -2,7 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { runConfigWizard } from "../config/wizard.js";
 import { runTelegramConnectWizard } from "../telegram/connect.js";
 import { createDatabase } from "../db.js";
@@ -11,6 +11,17 @@ import { CommandOrigin } from "../commands/types.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
+}
+
+/** Portable lookup for a command on PATH (works on Windows and POSIX). */
+function commandAvailable(command: string): boolean {
+  try {
+    const probe = process.platform === "win32" ? "where" : "which";
+    execSync(process.platform === "win32" ? `${probe} ${command}` : `${probe} ${command}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function envDbPath(): string {
@@ -43,13 +54,14 @@ async function projectAddCommand(argv: string[]): Promise<void> {
   }
 
   let projectPath = target;
-  const githubMatch = /^(?:https?:\/\/|git@)(?:www\.)?github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(target);
+  const githubMatch = /^(?:https?:\/\/|git@)(?:www\.)?github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(target);
   if (githubMatch) {
     const repo = githubMatch[1];
     const dest = path.resolve(process.cwd(), key);
     if (!fs.existsSync(dest)) {
       console.log(`[..] Clonando https://github.com/${repo} em ${dest}`);
-      execSync(`git clone https://github.com/${repo} "${dest}"`, { stdio: "inherit" });
+      const url = `https://github.com/${repo}`;
+      execFileSync("git", ["clone", url, dest], { stdio: "inherit" });
     }
     projectPath = dest;
   }
@@ -82,8 +94,17 @@ function command_path_dir(p: string): string {
 }
 
 async function startCommand(): Promise<void> {
-  const srcIndex = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../index.ts");
-  const tsxCli = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const srcIndex = path.resolve(cliDir, "../index.ts");
+  const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
+  if (!fs.existsSync(tsxCli)) {
+    console.error(`[!] tsx not found at ${tsxCli}. Run 'npm install' in the Maestro checkout first.`);
+    process.exit(1);
+  }
+  if (!fs.existsSync(srcIndex)) {
+    console.error(`[!] Orchestrator entry not found at ${srcIndex}`);
+    process.exit(1);
+  }
   const child = spawn(process.execPath, [tsxCli, srcIndex], {
     cwd: process.cwd(),
     stdio: "inherit"
@@ -102,9 +123,9 @@ function statusCommand(): void {
   console.log(`    Node       : ${process.version}${nodeMajor >= 20 ? " (ok)" : " (requer >= 20)"}`);
   console.log(`    TSX        : ${fs.existsSync(path.join(cwd, "node_modules", "tsx")) ? "presente" : "ausente (npm install)"}`);
 
-  const cliGithub = (() => { try { execSync("which gh", { stdio: "ignore" }); return "disponivel"; } catch { return "ausente (opcional)"; } })();
-  const cliClaude = (() => { try { execSync("which claude", { stdio: "ignore" }); return "disponivel"; } catch { return "ausente"; } })();
-  const cliCodex = (() => { try { execSync("which codex", { stdio: "ignore" }); return "disponivel"; } catch { return "ausente"; } })();
+  const cliGithub = commandAvailable("gh") ? "disponivel" : "ausente (opcional)";
+  const cliClaude = commandAvailable("claude") ? "disponivel" : "ausente";
+  const cliCodex = commandAvailable("codex") ? "disponivel" : "ausente";
 
   console.log("\n  Providers");
   console.log(`    GitHub     : ${cliGithub}`);

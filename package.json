@@ -5,7 +5,7 @@
   "type": "module",
   "private": true,
   "bin": {
-    "maestro": "./src/cli/index.ts"
+    "maestro": "./src/cli/bin.cjs"
   },
   "engines": {
     "node": ">=20.17.0 <21"
