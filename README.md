@@ -3,7 +3,7 @@
 Chat-first local orchestrator for Antigravity, Codex, Claude and GitHub workflows, com uma
 central visual local para acompanhar projetos, fila, agentes e eventos.
 
-O Maestro usa as autenticacoes dos CLIs Antigravity, Codex e Claude. Ele nao requer
+O Maestro usa as autenticações dos CLIs Antigravity, Codex e Claude. Ele não requer
 `OPENAI_API_KEY` nem cria faturamento separado da OpenAI API.
 
 This first version validates Telegram as the main control surface. It receives commands, creates local tasks, stores events in SQLite and keeps secrets out of Git.
@@ -77,105 +77,105 @@ Para executar o runtime completo no Windows com PID, logs e health check:
 .\scripts\maestro-runtime.ps1 stop
 ```
 
-O controlador considera o startup concluido somente quando
+O controlador considera o startup concluído somente quando
 `http://127.0.0.1:4787/api/dashboard` responde. Logs e PID ficam sob
-`.maestro/runtime/`, fora do Git. Manutencoes devem terminar com `status` verde;
-parar o processo tambem interrompe Dashboard, Telegram e coordenadores.
+`.maestro/runtime/`, fora do Git. Manutenções devem terminar com `status` verde;
+parar o processo também interrompe Dashboard, Telegram e coordenadores.
 
 A interface permite acompanhar estado do daemon, projetos, fila, agentes e eventos,
 além de criar tasks locais como `queued`, abrir detalhes e preparar uma worktree
-isolada. Uma task preparada pode iniciar um goal autonomo com planejamento,
-implementacao, testes e revisao. Antigravity, Codex e Claude sao roteados por capacidade; quando
-todos ficam indisponiveis ou sem cota, o goal e persistido em `waiting_provider` e
-retomado automaticamente sem perder os passos concluidos.
-O `AgentRegistry` e a fonte unica para capacidade, carga, saude e cooldown dos
+isolada. Uma task preparada pode iniciar um goal autônomo com planejamento,
+implementação, testes e revisão. Antigravity, Codex e Claude são roteados por capacidade; quando
+todos ficam indisponíveis ou sem cota, o goal é persistido em `waiting_provider` e
+retomado automaticamente sem perder os passos concluídos.
+O `AgentRegistry` é a fonte única para capacidade, carga, saúde e cooldown dos
 providers. O Dashboard e `/status` no Telegram exibem o mesmo estado operacional,
-sem inferir autenticacao ou disponibilidade por regras visuais separadas.
+sem inferir autenticação ou disponibilidade por regras visuais separadas.
 O Antigravity usa a assinatura Google autenticada no CLI, sem API key no projeto. Por
-padrao ele recebe planejamento, implementacao, testes, pesquisa e revisao de melhoria
-antes dos providers com cota mais escassa. O Claude continua como primeira opcao de
+padrão ele recebe planejamento, implementação, testes, pesquisa e revisão de melhoria
+antes dos providers com cota mais escassa. O Claude continua como primeira opção de
 Final Review independente. Work Graphs podem usar providers diferentes em nodes
 independentes, mas nunca permitem dois writers concorrentes sobre a mesma Task.
-Depois da revisao, o Maestro verifica segredos, cria commit, envia a branch e abre um
-draft PR. Para uma Task avulsa, o merge continua sendo uma decisao humana. Em uma
-Feature, os Work PRs permanecem Draft como evidencia e nunca sao mergeados
-individualmente. O unico candidato a merge e o Feature PR consolidado: quando o
-usuario o marca como Ready for review, o Maestro valida checks e mergeabilidade,
+Depois da revisão, o Maestro verifica segredos, cria commit, envia a branch e abre um
+draft PR. Para uma Task avulsa, o merge continua sendo uma decisão humana. Em uma
+Feature, os Work PRs permanecem Draft como evidência e nunca são mergeados
+individualmente. O único candidato a merge é o Feature PR consolidado: quando o
+usuário o marca como Ready for review, o Maestro valida checks e mergeabilidade,
 executa um Final Review read-only sobre o SHA exato e, se aprovado, faz o merge,
-fecha os Work PRs e limpa branches integradas. Qualquer mudanca no SHA ou falha de
-gate invalida a revisao e impede o merge.
+fecha os Work PRs e limpa branches integradas. Qualquer mudança no SHA ou falha de
+gate invalida a revisão e impede o merge.
 
 ## Work Graph multiagente
 
-Tasks complexas podem ser representadas como um DAG governado de ate quatro Worker
-Nodes. O Maestro continua como gerente: valida dependencias e budgets, permite no
-maximo dois readers simultaneos e serializa um unico writer com escopo de escrita
+Tasks complexas podem ser representadas como um DAG governado de até quatro Worker
+Nodes. O Maestro continua como gerente: valida dependências e budgets, permite no
+máximo dois readers simultâneos e serializa um único writer com escopo de escrita
 declarado. Resultados grandes ficam em artefatos redigidos; os workers seguintes
-recebem apenas referencias e resumos limitados.
+recebem apenas referências e resumos limitados.
 
-O Dashboard mostra graph, nodes, tentativas, budgets e evidencias. No Telegram:
+O Dashboard mostra graph, nodes, tentativas, budgets e evidências. No Telegram:
 
 - `/graphs [@projeto]` lista Work Graphs e seus nodes;
 - `/graph_cancel <id>` cancela graphs parados e preserva toda a auditoria;
 - `/status` inclui Work Graphs ativos.
 
-Cancelamento de um graph em execucao falha fechado ate que um coordenador residente
-possa propagar `AbortSignal` ao provider. A classificacao de complexidade e o runtime
-estao prontos, mas a ativacao automatica para toda Task permanece desligada nesta
-primeira entrega para nao multiplicar tokens em demandas simples.
+Cancelamento de um graph em execução falha fechado até que um coordenador residente
+possa propagar `AbortSignal` ao provider. A classificação de complexidade e o runtime
+estão prontos, mas a ativação automática para toda Task permanece desligada nesta
+primeira entrega para não multiplicar tokens em demandas simples.
 
-## Fila de revisao humana
+## Fila de revisão humana
 
-Draft PRs entregues aparecem em **Aguardando revisao** com projeto, demanda, agentes,
+Draft PRs entregues aparecem em **Aguardando revisão** com projeto, demanda, agentes,
 resumo do review, arquivos relativos, testes e o resultado do secret guard. A pessoa
-responsavel registra uma justificativa e escolhe:
+responsável registra uma justificativa e escolhe:
 
-- **Aprovar PR avulso para merge**: usa `gh pr ready`; nao executa merge.
-- **Solicitar ajustes**: devolve o PR para draft e reabre o mesmo goal em implementacao,
+- **Aprovar PR avulso para merge**: usa `gh pr ready`; não executa merge.
+- **Solicitar ajustes**: devolve o PR para draft e reabre o mesmo goal em implementação,
   incluindo a justificativa no contexto do agente.
 - **Rejeitar**: fecha o PR sem merge e encerra a task como rejeitada.
 
-Todas as decisoes ficam no SQLite e geram eventos e notificacoes do Telegram. Segredos,
-IDs privados e caminhos locais sao removidos do payload visual; justificativas contendo
-segredo ou caminho privado sao bloqueadas antes de persistencia ou envio.
+Todas as decisões ficam no SQLite e geram eventos e notificações do Telegram. Segredos,
+IDs privados e caminhos locais são removidos do payload visual; justificativas contendo
+segredo ou caminho privado são bloqueadas antes de persistência ou envio.
 
-Esta fila de decisao manual e diferente do protocolo de Feature PR descrito acima.
+Esta fila de decisão manual é diferente do protocolo de Feature PR descrito acima.
 Marcar somente o Feature PR consolidado como Ready for review autoriza o Final Review
-e o merge automatico governado; Work PRs individuais devem permanecer Draft.
+e o merge automático governado; Work PRs individuais devem permanecer Draft.
 
 A direção visual está documentada em `docs/VISUAL_IDENTITY.md`.
 
 ## Aprendizado seguro
 
-O painel inclui um laboratorio de propostas de melhoria inspirado no ciclo de
+O painel inclui um laboratório de propostas de melhoria inspirado no ciclo de
 aprendizado do Hermes Agent. Cada candidata registra categoria, justificativa,
-mudanca proposta, evidencias, risco e origem. O usuario pode aprovar ou rejeitar,
-mas **aprovar nao aplica a mudanca automaticamente**: cria uma nova Task e um
-Feature Plan, que passam pelo fluxo normal de worktree isolada, validacao, Work PR
+mudança proposta, evidências, risco e origem. O usuário pode aprovar ou rejeitar,
+mas **aprovar não aplica a mudança automaticamente**: cria uma nova Task e um
+Feature Plan, que passam pelo fluxo normal de worktree isolada, validação, Work PR
 Draft e Final Review somente no Feature PR consolidado.
 
 Quando uma Feature termina, um outbox SQLite idempotente registra um pacote de
-evidencias limitado, sanitizado e com proveniencia. Um reviewer em background usa
-Codex ou Claude em modo estritamente read-only e no maximo duas tentativas. Um
-evaluator deterministico rejeita evidencias inventadas, duplicatas, baixa confianca,
-risco subestimado e qualquer tentativa de alterar Constituicao, segredos, aprovacoes,
-auditoria, permissoes ou rollback. O reviewer nunca escreve skills, memoria ou codigo.
+evidências limitado, sanitizado e com proveniência. Um reviewer em background usa
+Codex ou Claude em modo estritamente read-only e no máximo duas tentativas. Um
+evaluator determinístico rejeita evidências inventadas, duplicatas, baixa confiança,
+risco subestimado e qualquer tentativa de alterar Constituição, segredos, aprovações,
+auditoria, permissões ou rollback. O reviewer nunca escreve skills, memória ou código.
 
-A governanca esta separada da persona:
+A governança está separada da persona:
 
-- `docs/MAESTRO_CONSTITUTION.md`: principios protegidos que agentes nao podem editar;
-- `docs/HERMES_APPLIED_STUDY.md`: conclusoes do estudo e elementos priorizados;
-- uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar seguranca.
+- `docs/MAESTRO_CONSTITUTION.md`: princípios protegidos que agentes não podem editar;
+- `docs/HERMES_APPLIED_STUDY.md`: conclusões do estudo e elementos priorizados;
+- uma futura `SOUL.md`: somente tom e personalidade, sem poder de alterar segurança.
 
 ## Skills governadas
 
-O runtime de Skills usa pacotes portaveis com `SKILL.md`, policy opcional em
+O runtime de Skills usa pacotes portáveis com `SKILL.md`, policy opcional em
 `maestro.yaml` e casos deterministas em `evals/cases.yaml`. A descoberta carrega
-somente metadados; instrucoes entram no prompt apenas depois da selecao e ficam
-limitadas por budget. Cada Goal fixa o hash exato da versao usada, o motivo do
-trigger e o modo de invocacao.
+somente metadados; instruções entram no prompt apenas depois da seleção e ficam
+limitadas por budget. Cada Goal fixa o hash exato da versão usada, o motivo do
+trigger e o modo de invocação.
 
-Ele permanece desligado por padrao. Para habilitar os tres Skills iniciais:
+Ele permanece desligado por padrão. Para habilitar os três Skills iniciais:
 
 ```text
 MAESTRO_SKILLS_ENABLED=true
@@ -184,26 +184,26 @@ MAESTRO_SKILL_VERSIONS_PATH=.maestro/skill-versions
 MAESTRO_SKILLS_PROJECT_KEY=maestro
 ```
 
-- `diagnose-goal-failure`: pode ser selecionado implicitamente, mas e read-only,
+- `diagnose-goal-failure`: pode ser selecionado implicitamente, mas é read-only,
   sem rede e sem escrita.
-- `final-feature-review`: pode ser selecionado implicitamente somente na revisao,
+- `final-feature-review`: pode ser selecionado implicitamente somente na revisão,
   sem rede e sem escrita.
-- `implement-task-safely`: exige selecao explicita e limita escrita ao workspace
+- `implement-task-safely`: exige seleção explícita e limita escrita ao workspace
   preparado.
 
 No startup, apenas a allowlist de Skills do sistema pode passar automaticamente
-por eval, aprovacao e ativacao. Pacotes adicionais ficam como `candidate`. Uma
-versao falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
-Dashboard e a evidencia do Goal mostram versoes, resultados, duracao e tokens
-estimados, mas nunca persistem ou exibem as instrucoes privadas do Skill.
+por eval, aprovação e ativação. Pacotes adicionais ficam como `candidate`. Uma
+versão falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
+Dashboard e a evidência do Goal mostram versões, resultados, duração e tokens
+estimados, mas nunca persistem ou exibem as instruções privadas do Skill.
 
-## Goal autonomo
+## Goal autônomo
 
-Uma task preparada pode iniciar uma execucao persistente pelo painel. O Maestro avanca sozinho por
-planejamento, implementacao, testes e revisao. Quando a revisao pede ajustes, o fluxo retorna para
-implementacao sem exigir que o usuario atualize a task. O estado e cada etapa ficam no SQLite.
+Uma task preparada pode iniciar uma execução persistente pelo painel. O Maestro avança sozinho por
+planejamento, implementação, testes e revisão. Quando a revisão pede ajustes, o fluxo retorna para
+implementação sem exigir que o usuário atualize a task. O estado e cada etapa ficam no SQLite.
 
-O contrato, roteamento e limites estao em `docs/GOAL_RUNTIME.md`.
+O contrato, roteamento e limites estão em `docs/GOAL_RUNTIME.md`.
 
 ## Telegram Commands
 
