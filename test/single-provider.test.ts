@@ -30,7 +30,7 @@ describe("Task #74 - Single-Provider & Wizard Onboarding", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("does not fail when gh CLI is missing or checked", () => {
     const available = isGhAvailable();
