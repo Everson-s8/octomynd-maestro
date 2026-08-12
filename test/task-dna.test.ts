@@ -109,9 +109,9 @@ describe("computeTaskDNA", () => {
         coordination: { dependsOnCount: 5, parallelWorkstreamCount: 10, requiresMultipleReviewGates: true },
       })
     );
-    // Even large tasks should have bounded budgets
+    // Even large tasks should have bounded budgets (large allows reviewing up to 6).
     const totalBudget = Object.values(dna.phaseBudgets).reduce((a, b) => a + b, 0);
-    expect(totalBudget).toBeLessThanOrEqual(20);
+    expect(totalBudget).toBeLessThanOrEqual(25);
   });
 });
 
