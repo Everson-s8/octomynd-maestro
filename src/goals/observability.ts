@@ -23,6 +23,9 @@ const WAIT_REASON_LABELS: Record<string, string> = {
   capacity: "nenhum provedor com capacidade disponivel",
   runtime_restart: "reinicio do runtime Maestro",
   budget_exhausted: "orcamento de etapas da Goal esgotado",
+  small_task_failure_limit: "falha repetida em task pequena; escopo deve ser reduzido",
+  task_split_required: "falhas consecutivas; task deve ser dividida em sub-tasks menores",
+  prompt_too_large: "tamanho do prompt excedido (ENAMETOOLONG/E2BIG)",
   unknown: "erro desconhecido do provedor"
 };
 
