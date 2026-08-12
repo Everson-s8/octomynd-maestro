@@ -197,7 +197,7 @@ versao falha fechada se os triggers, guardrails, sintaxe ou policy regredirem. O
 Dashboard e a evidencia do Goal mostram versoes, resultados, duracao e tokens
 estimados, mas nunca persistem ou exibem as instrucoes privadas do Skill.
 
-## Goal autonoma
+## Goal autonomo
 
 Uma task preparada pode iniciar uma execucao persistente pelo painel. O Maestro avanca sozinho por
 planejamento, implementacao, testes e revisao. Quando a revisao pede ajustes, o fluxo retorna para

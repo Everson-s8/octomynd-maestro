@@ -125,7 +125,7 @@ easy to miss in a chat transcript (`application-commands.ts:189-191`).
 **Current state**: Once a project exists, task creation, worktree preparation, and
 starting a goal are reasonably well supported from the dashboard ("Nova task"
 button, task detail panel, `Prepare worktree`, `Start goal`, phase-by-phase status
-per `README.md`'s "Goal autonoma" section). `EnvironmentDoctor` gives a real,
+per `README.md`'s "Goal autonomo" section). `EnvironmentDoctor` gives a real,
 per-project readiness report before execution starts.
 
 **Friction / risk**:
