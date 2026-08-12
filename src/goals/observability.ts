@@ -20,7 +20,7 @@ const WAIT_REASON_LABELS: Record<string, string> = {
   timeout: "tempo limite excedido",
   output_limit: "limite de output do provedor atingido",
   offline: "provedor indisponivel",
-  capacity: "nenhum provedor com capacity disponivel",
+  capacity: "nenhum provedor com capacidade disponivel",
   runtime_restart: "reinicio do runtime Maestro",
   budget_exhausted: "orcamento de etapas da Goal esgotado",
   small_task_failure_limit: "falha repetida em task pequena; escopo deve ser reduzido",
