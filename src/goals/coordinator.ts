@@ -3,6 +3,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
+import { computeTaskDNAFromText, type TaskDNA } from "./task-dna.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
@@ -221,10 +222,16 @@ export class GoalCoordinator {
     if (existingTimer !== undefined) this.scheduler.cancel(existingTimer);
     this.retryTimers.delete(run.id);
     const controller = new AbortController();
+
+    // ── Compute TaskDNA from task text ──────────────────────
+    const task = this.database.getTask(run.taskId);
+    const taskDNA = computeTaskDNAFromText(task.text);
+
     const promise = runTaskGoal(this.database, this.registry, run.taskId, {
       artifactsRoot: this.artifactsRoot,
       maxSteps: run.maxSteps,
       existingRun: run,
+      taskDNA,
       delivery: this.delivery,
       tokenRuntime: this.tokenRuntime,
       validationRunner: this.validationRunner,
