@@ -28,6 +28,13 @@ import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
+import {
+  testTelegramBotToken,
+  updateEnvTelegramConfig,
+  validateTelegramBotToken,
+  validateTelegramUserId
+} from "../telegram/connect.js";
+import type { TelegramSubsystemManager } from "../telegram/bot.js";
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -48,6 +55,7 @@ export type DashboardServerOptions = {
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
   chatService?: OperationalChatService;
+  telegramManager?: Pick<TelegramSubsystemManager, "restart" | "getBotInfo">;
 };
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -172,6 +180,66 @@ async function routeRequest(
       metadata: { controls: updated }
     });
     sendJson(response, 200, { controls: updated });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/telegram/connect") {
+    const body = await readJsonBody(request);
+    const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
+    const allowedUserId = typeof body.allowedUserId === "string" ? body.allowedUserId.trim() : "";
+
+    const tokenVal = validateTelegramBotToken(botToken);
+    if (!tokenVal.valid) {
+      sendJson(response, 400, { error: "validation_failed", message: tokenVal.error });
+      return;
+    }
+
+    const userVal = validateTelegramUserId(allowedUserId);
+    if (!userVal.valid) {
+      sendJson(response, 400, { error: "validation_failed", message: userVal.error });
+      return;
+    }
+
+    const testRes = await testTelegramBotToken(botToken);
+    if (!testRes.ok) {
+      sendJson(response, 400, { error: "telegram_api_error", message: testRes.error });
+      return;
+    }
+
+    const updateRes = updateEnvTelegramConfig({
+      botToken,
+      allowedUserId: allowedUserId || undefined,
+      cwd: options.config.execution.rootPath
+    });
+
+    let botRestarted = false;
+    if (options.telegramManager) {
+      const restartRes = await options.telegramManager.restart(botToken, allowedUserId || undefined);
+      botRestarted = restartRes.success;
+    } else {
+      options.config.telegram.botToken = botToken;
+      options.config.telegram.allowedUserId = allowedUserId || null;
+    }
+
+    options.database.addEvent({
+      source: "dashboard",
+      type: "telegram.connected",
+      text: `Telegram bot @${testRes.botInfo?.username ?? "desconhecido"} conectado via dashboard.`,
+      metadata: {
+        botInfo: testRes.botInfo,
+        allowedUserId: allowedUserId || null,
+        envPath: updateRes.envPath,
+        restarted: botRestarted
+      }
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      botInfo: testRes.botInfo,
+      allowedUserId: allowedUserId || null,
+      envPath: updateRes.envPath,
+      botRestarted
+    });
     return;
   }
 

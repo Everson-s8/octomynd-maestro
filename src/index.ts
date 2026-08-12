@@ -7,7 +7,7 @@ import { CodexProvider } from "./agents/codex.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { loadConfig, validateRuntimeConfig } from "./config.js";
 import { createDatabase } from "./db.js";
-import { createTelegramBot } from "./telegram/bot.js";
+import { createTelegramBot, TelegramSubsystemManager } from "./telegram/bot.js";
 import { startDashboardServer } from "./dashboard/server.js";
 import { GoalCoordinator } from "./goals/coordinator.js";
 import { deliverGoalToDraftPullRequest } from "./goals/delivery.js";
@@ -40,6 +40,12 @@ import { SkillEvaluationHarness } from "./skills/evaluation.js";
 import { SkillVersionStore } from "./skills/store.js";
 import type { SkillLifecycleRuntime } from "./skills/lifecycle.js";
 import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
+
+if (process.argv.includes("telegram") && process.argv.includes("connect")) {
+  const { runTelegramConnectWizard } = await import("./telegram/connect.js");
+  await runTelegramConnectWizard();
+  process.exit(0);
+}
 
 const config = loadConfig();
 const errors = validateRuntimeConfig(config);
@@ -168,10 +174,19 @@ const featureCoordinator = new FeatureCoordinator(
     await selfUpdateManager.triggerUpdate(feature, headSha);
   }
 );
-const bot = createTelegramBot(config, database, {
-  cancelTask: (taskId) => goalCoordinator.cancel(taskId),
+const telegramManager = new TelegramSubsystemManager(config, database, {
+  cancelTask: (taskId: number) => goalCoordinator.cancel(taskId),
   autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
-  environmentDoctor: (projectKey) => environmentDoctor.inspectProject(projectKey),
+  environmentDoctor: (projectKey: string) => environmentDoctor.inspectProject(projectKey),
+  providerStatus: () => agentRegistry.snapshot(),
+  workGraphRuntime: workGraphCoordinator,
+  featureCoordinator,
+  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate()
+});
+const bot = createTelegramBot(config, database, {
+  cancelTask: (taskId: number) => goalCoordinator.cancel(taskId),
+  autopilotStatus: () => backlogAutopilot?.snapshot() ?? null,
+  environmentDoctor: (projectKey: string) => environmentDoctor.inspectProject(projectKey),
   providerStatus: () => agentRegistry.snapshot(),
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator,
@@ -281,7 +296,8 @@ const dashboardServer = config.dashboard.enabled
     environmentDoctor,
     agentRegistry,
     workGraphRuntime: workGraphCoordinator,
-    skillLifecycle: skillLifecycleRuntime
+    skillLifecycle: skillLifecycleRuntime,
+    telegramManager
   })
   : null;
 backlogAutopilot.start();
@@ -319,11 +335,7 @@ console.log(`Token-efficient runtime: ${config.runtime.tokenEfficient ? "enabled
 console.log(`Work Graph adoption: ${config.workGraph.adoptionMode}.`);
 console.log(`Execution environment: ${environmentFingerprint.id}.`);
 
-void bot.start({
-  onStart: (botInfo) => {
-    console.log(`Telegram bot started as @${botInfo.username}.`);
-  }
-});
+void telegramManager.start();
 
 let shutdownStarted = false;
 
@@ -331,7 +343,7 @@ async function shutdown() {
   if (shutdownStarted) return;
   shutdownStarted = true;
   console.log("Stopping Maestro.");
-  bot.stop();
+  await telegramManager.stop();
   backlogAutopilot.shutdown();
   reviewCoordinator.shutdown();
   featureCoordinator.shutdown();
