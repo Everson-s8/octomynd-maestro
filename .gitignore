@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .maestro/
+.hermes/
 *.log
 *.sqlite
 *.sqlite3
