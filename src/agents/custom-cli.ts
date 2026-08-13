@@ -109,9 +109,15 @@ export class CustomCliProvider implements AgentProvider {
         health = { state: "offline", detail: `${this.label} CLI probe indisponivel.`, checkedAt: new Date().toISOString() };
       }
     } else {
+      // No health probe. We still need a resolvable executable to ever run,
+      // because execute() spawns config.command. An env key alone does not make
+      // the provider usable — without a CLI there is nothing to spawn. Reporting
+      // "ready" here (as the original code did when only an env key existed)
+      // misled routing into a guaranteed ENOENT. Only report ready when the
+      // executable is actually resolvable.
       health = executable
         ? { state: "ready", detail: `${this.label} CLI disponivel`, checkedAt: new Date().toISOString() }
-        : { state: "ready", detail: `${this.label} API Key disponivel via ENV`, checkedAt: new Date().toISOString() };
+        : { state: "offline", detail: `${this.label} CLI nao encontrado.`, checkedAt: new Date().toISOString() };
     }
 
     this.cacheHealth(health, 30_000);
@@ -122,10 +128,13 @@ export class CustomCliProvider implements AgentProvider {
     const executable = resolveCustomCliExecutable(this.config.command);
     const cwd = request.task.worktreePath || request.project.path;
 
-    if (!executable && !this.config.envKeys?.some((key) => Boolean(process.env[key]?.trim()))) {
-      return failure(`${this.label} CLI nao encontrado.`);
+    if (!executable) {
+      // Without a resolvable CLI there is nothing to spawn — execute() would
+      // hand an unresolvable command to the OS and get a raw ENOENT. Return a
+      // treated, non-retryable failure instead so routing/cooldown works.
+      return failure(`${this.label} CLI nao encontrado: ${this.config.command}`);
     }
-    const cmdToRun = executable || this.config.command;
+    const cmdToRun = executable;
 
     if (!fs.existsSync(cwd)) {
       return failure(`Workspace nao existe: ${cwd}`);

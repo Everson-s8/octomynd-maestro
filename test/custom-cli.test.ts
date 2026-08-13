@@ -59,7 +59,10 @@ describe("CustomCliProvider", () => {
     expect(health.detail).toContain("OpenCode Go CLI disponivel");
   });
 
-  it("returns health state ready when env key is present even if CLI missing", async () => {
+  it("returns health offline when env key is present but the CLI is missing", async () => {
+    // A custom provider can only execute by spawning command, so an env key
+    // alone (without a resolvable CLI) must NOT report ready — reporting ready
+    // here misled routing into a guaranteed ENOENT on the next execute().
     const provider = new CustomCliProvider({
       ...baseConfig,
       command: "nonexistent-custom-cmd-12345",
@@ -69,8 +72,8 @@ describe("CustomCliProvider", () => {
     process.env.CUSTOM_OPENCODE_TEST_KEY = "test-secret-value";
     try {
       const health = await provider.health();
-      expect(health.state).toBe("ready");
-      expect(health.detail).toContain("API Key disponivel via ENV");
+      expect(health.state).toBe("offline");
+      expect(health.detail).toContain("nao encontrado");
     } finally {
       delete process.env.CUSTOM_OPENCODE_TEST_KEY;
     }
@@ -156,9 +159,12 @@ describe("CustomCliProvider", () => {
     const detected = detectProviders(mockEnv);
     const opencode = detected.find((p) => p.id === "opencode-go");
 
+    // The custom provider is listed, but because it is CLI-only and the
+    // 'opencode-go' command cannot be resolved, it is NOT available — an env
+    // key alone is not enough to run a CLI provider.
     expect(opencode).toBeDefined();
     expect(opencode?.label).toBe("OpenCode Go CLI");
-    expect(opencode?.available).toBe(true);
+    expect(opencode?.available).toBe(false);
     expect(opencode?.source).toBe("env_key");
   });
 
@@ -166,17 +172,46 @@ describe("CustomCliProvider", () => {
     const mockEnv = {
       SECRET_KEY: "super-secret",
       OPENCODE_API_KEY: "opencode-token",
-      NORMAL_VAR: "hello"
+      OPENCODE_GO_KEY: "go-key",
+      GITHUB_TOKEN: "gh-token",
+      NORMAL_VAR: "hello",
+      OPENAI_API_KEY: "sk-openai"
     };
 
     const env = buildRestrictedAgentEnvironment(mockEnv, {
       allowProviderKeys: true,
-      extraAllowedKeys: ["OPENCODE_API_KEY"]
+      extraAllowedKeys: ["OPENCODE_API_KEY", "GITHUB_TOKEN", "NORMAL_VAR"]
     });
 
+    // Secret-shaped names are scrubbed even if listed in extraAllowedKeys,
+    // unless they are a known allow-listed provider key (allowProviderKeys).
     expect(env.SECRET_KEY).toBeUndefined();
-    expect(env.OPENCODE_API_KEY).toBe("opencode-token");
+    expect(env.OPENCODE_API_KEY).toBeUndefined(); // contains API_KEY, not allow-listed
+    expect(env.GITHUB_TOKEN).toBeUndefined();     // contains TOKEN, not allow-listed
+    // Non-secret names pass through even when listed in extraAllowedKeys.
     expect(env.NORMAL_VAR).toBe("hello");
+    // allow-listed provider keys pass when allowProviderKeys is true.
+    expect(env.OPENAI_API_KEY).toBe("sk-openai");
+  });
+
+  it("reports offline health and a treated execute failure when the CLI is unresolvable", async () => {
+    const provider = new CustomCliProvider({
+      id: "missing-cli",
+      label: "Missing CLI",
+      command: "definitely-not-a-real-cli-xyz",
+      envKeys: ["MISSING_API_KEY"],
+      capabilities: ["coding"]
+    });
+
+    const health = await provider.health();
+    expect(health.state).toBe("offline");
+    expect(health.detail.toLowerCase()).toContain("nao enco");
+
+    const result = await provider.execute(mockExecutionRequest("implementing", "coding", process.cwd()));
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toContain("definitely-not-a-real-cli-xyz");
+    expect(result.failureCategory).toBe("offline");
+    expect(result.retryable).toBe(false);
   });
 });
 

@@ -48,7 +48,11 @@ export function detectProviders(env: NodeJS.ProcessEnv = process.env): DetectedP
       const envKeyPresent = Boolean(
         custom.envKeys?.some((key) => Boolean(env[key]?.trim()))
       );
-      const available = Boolean(cli || envKeyPresent);
+      // A custom CLI provider only ever RUNS by spawning its command, so it is
+      // not usable without a resolvable executable even when an env key exists
+      // (execute() has no API-only path). envKeyPresent is surfaced for
+      // diagnostics, but availability requires the CLI to resolve.
+      const available = Boolean(cli);
       detectedCustom.push({
         id: custom.id,
         label: custom.label,
@@ -57,7 +61,7 @@ export function detectProviders(env: NodeJS.ProcessEnv = process.env): DetectedP
         detail: cli
           ? `${custom.label} CLI detected`
           : envKeyPresent
-            ? `${custom.label} API key detected in ENV`
+            ? `${custom.label} env key present but CLI not found`
             : `${custom.label} CLI or API key missing`
       });
     }

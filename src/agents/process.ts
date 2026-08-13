@@ -212,13 +212,23 @@ function isSensitiveEnvironmentKey(
   extraAllowed?: Set<string>
 ): boolean {
   const upperKey = key.toUpperCase();
-  if (extraAllowed?.has(upperKey)) {
-    return false;
-  }
+  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
+
+  // allowProviderKeys opts the known provider-key names through.
   if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(upperKey)) {
     return false;
   }
-  return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
+
+  // extraAllowedKeys lets an operator forward a handful of non-secret env vars
+  // to a custom CLI provider. It must NOT act as a bypass for arbitrary
+  // secret-shaped keys: a misconfigured source listing e.g. GITHUB_TOKEN or
+  // DATABASE_PASSWORD must not leak that secret into a spawned child. Only
+  // non-secret-shaped names pass through here.
+  if (extraAllowed?.has(upperKey) && !secretShaped) {
+    return false;
+  }
+
+  return secretShaped;
 }
 
 function appendBounded(current: string, chunk: string, maxChars: number): string {
