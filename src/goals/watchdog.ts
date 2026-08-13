@@ -136,9 +136,18 @@ export class GoalWatchdog {
     const s = (summary ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     if (!s) return true; // empty summary carries no loop evidence
     // A single terminal '.' (sentence end) is allowed after the phase name.
+    // All patterns are anchored on the WHOLE normalized summary so an
+    // informative sentence containing "completed the"/"phase" is never
+    // misclassified as a generic placeholder (which would hide a real loop).
     return (
-      /^[a-z0-9_-]+\s+(concluiu a fase|completed the|concluiu a)/i.test(s) ||
-      /^[a-z0-9_-]+\s+(completed|concluiu)\s+the?\s+\w+\s*(phase|fase)?\.?\s*$/i.test(s) ||
+      // "<name> completed the <phase> phase." / "<name> completed the <phase>."
+      /^[a-z0-9_-]+\s+(completed|concluiu)\s+the\s+\w+(\s+(phase|fase))?\.?\s*$/i.test(s) ||
+      // "<name> completed the <phase>."  (no trailing "phase" word, en/pt)
+      /^[a-z0-9_-]+\s+(completed|concluiu)\s+the\s+\w+\.\s*$/i.test(s) ||
+      // "<name> concluiu a fase <phase>." (the PT template the providers emit)
+      /^[a-z0-9_-]+\s+concluiu\s+a\s+fase\s+\w+\.?\s*$/i.test(s) ||
+      // "<name> completed the <phase> phase" alt / "<name> concluiu a fase <phase>"
+      /^[a-z0-9_-]+\s+(concluiu\s+a\s+fase|completed\s+the)\s+\w+\s*(phase|fase)?\.?\s*$/i.test(s) ||
       /^[\d\s]+\/[\d]+\s+(deterministic\s+)?checks?\s+passed\.?\s*$/i.test(s) ||
       /^\d+\s+checks?\s+passed\.?\s*$/i.test(s) ||
       /^6\/6\s+checks?\s+passed\.?\s*$/i.test(s)
