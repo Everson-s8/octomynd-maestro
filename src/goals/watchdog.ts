@@ -123,14 +123,23 @@ export class GoalWatchdog {
    * the goal is progressing. The watchdog must not treat placeholder summaries
    * as proof of a loop (a false positive would kill legitimate work).
    */
+  /**
+   * True when a step summary is EXACTLY a generic completion placeholder rather
+   * than real evidence about what the step did (e.g. "Claude completed the
+   * reviewing phase", "6/6 deterministic checks passed"). Such templates repeat
+   * at every step even when the goal is progressing, so they are NOT a no-
+   * progress signal. We anchor on the WHOLE normalized summary so an informative
+   * summary that merely mentions "phase" is never misclassified as generic (a
+   * false negative would hide a genuine loop).
+   */
   private isGenericSummary(summary: string | null): boolean {
-    const s = (summary ?? "").toLowerCase();
+    const s = (summary ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!s) return true; // empty summary carries no loop evidence
     return (
-      s.includes("concluiu a fase") || // PT: "completed the <phase> phase"
-      (s.includes("completed the") && s.includes("phase")) ||
-      s.includes("deterministic checks passed") ||
-      s.includes("completed the phase") ||
-      /^[\w-]+\s+\S+.*(fase|phase)\b/.test(s)
+      /^[a-z_-]+\s+(concluiu a fase|completed the)\s+\w+\s*(phase)?\s*$/i.test(s) ||
+      /^[\d\s]+\/\s*[\d]+\s+deterministic checks?\s+passed?\s*$/i.test(s) ||
+      /^6\/6\s+checks? passed\s*$/i.test(s) ||
+      /^\d+\s+checks?\s+passed\s*$/i.test(s)
     );
   }
 
