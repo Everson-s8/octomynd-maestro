@@ -193,12 +193,21 @@ export class GoalCircuitBreaker {
       // Only the no_progress / repeated_failure detectors (which compare real
       // output) should hard-stop a goal. So exceeding the per-phase ceiling is
       // tolerated while there is measurable forward progress.
+      //
+      // NOTE (reviewing): the reviewer phase never writes the worktree — it
+      // reads the diff and produces evidence. So `worktreeChanged` is expected
+      // to stay false during reviewing even when the goal is progressing well.
+      // Treat reviewing like the ceilings it uses: only hard-stop it if the
+      // goal actually failed repeatedly or produced no evidence, never simply
+      // because the worktree was stable. Otherwise every goal that legitimately
+      // iterates its review cycle gets killed.
       const worktreeChanged =
         observation.workspaceBefore !== null &&
         observation.workspaceAfter !== null &&
         observation.workspaceBefore !== observation.workspaceAfter;
-      if (worktreeChanged) {
-        return null; // progress is real; let the goal continue
+      const reviewingActive = observation.phase === "reviewing";
+      if (worktreeChanged || reviewingActive) {
+        return null; // real progress (or reviewer doing its job); let the goal continue
       }
       return decision(
         "phase_budget_exhausted",

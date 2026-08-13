@@ -126,6 +126,27 @@ describe("GoalCircuitBreaker", () => {
     });
   });
 
+  it("does not kill a reviewing goal when the worktree is stable", () => {
+    // Reviews read the diff and produce evidence; they never write the
+    // worktree. So the worktree hash stays identical across review steps even
+    // when the goal is legitimately iterating its review cycle (e.g. a review
+    // that requests changes, the changes are already applied, and the reviewer
+    // re-examines). Blocking on 'stable worktree' would kill every real review
+    // cycle — the bug that hard-blocked T101 at phase_budget_exhausted.
+    const breaker = new GoalCircuitBreaker({ reviewing: 2 });
+    const observation = {
+      phase: "reviewing" as const,
+      result: completed(),
+      workspaceBefore: "SAME",
+      workspaceAfter: "SAME"
+    };
+    expect(breaker.observe(observation)).toBeNull();
+    expect(breaker.observe(observation)).toBeNull();
+    // Even a third review pass with a stable worktree must not be hard-stopped:
+    // the reviewer is doing its job even though it doesn't touch files.
+    expect(breaker.observe(observation)).toBeNull();
+  });
+
   it("restores phase step counts from steps and checks phase budget before execution", () => {
     const dummyStep = (phase: "planning" | "implementing", status: "completed" | "failed" = "completed") => ({
       id: 1,
