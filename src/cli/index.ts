@@ -127,8 +127,12 @@ async function startCommand(): Promise<void> {
 }
 
 function parseRestartCliOptions(argv: string[]): { port: number; host: string } {
-  let port = 4787;
-  let host = "127.0.0.1";
+  // Defaults come from the same env the orchestrator reads, so a non-standard
+  // port is picked up without the user passing --port; 4787 is only the last
+  // resort when neither env nor flag is set.
+  const envPort = Number.parseInt(process.env.MAESTRO_DASHBOARD_PORT ?? "", 10);
+  let port = Number.isFinite(envPort) && envPort > 0 ? envPort : 4787;
+  let host = process.env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1";
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--port" && argv[i + 1]) {
       const p = parseInt(argv[i + 1], 10);
