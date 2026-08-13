@@ -194,15 +194,28 @@ const ALLOWED_PROVIDER_ENV_KEYS = new Set([
 
 export function buildRestrictedAgentEnvironment(
   env: NodeJS.ProcessEnv = process.env,
-  options?: { allowProviderKeys?: boolean }
+  options?: { allowProviderKeys?: boolean; extraAllowedKeys?: string[] }
 ): NodeJS.ProcessEnv {
+  const extraAllowed = options?.extraAllowedKeys
+    ? new Set(options.extraAllowedKeys.map((k) => k.toUpperCase()))
+    : undefined;
   return Object.fromEntries(
-    Object.entries(env).filter(([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false))
+    Object.entries(env).filter(
+      ([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false, extraAllowed)
+    )
   );
 }
 
-function isSensitiveEnvironmentKey(key: string, allowProviderKeys: boolean): boolean {
-  if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(key.toUpperCase())) {
+function isSensitiveEnvironmentKey(
+  key: string,
+  allowProviderKeys: boolean,
+  extraAllowed?: Set<string>
+): boolean {
+  const upperKey = key.toUpperCase();
+  if (extraAllowed?.has(upperKey)) {
+    return false;
+  }
+  if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(upperKey)) {
     return false;
   }
   return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);

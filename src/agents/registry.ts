@@ -230,7 +230,7 @@ export class AgentRegistry {
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {
-    return resolveProviderOrder(capability, this.policySnapshot());
+    return resolveProviderOrder(capability, this.policySnapshot(), [...this.providers.keys()]);
   }
 
   private activeCooldown(providerId: AgentProviderId): ProviderCooldown | null {
