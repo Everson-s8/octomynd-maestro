@@ -62,9 +62,14 @@ export async function killProcessGracefully(
   isAlive: (pid: string) => boolean = (p) => processIsAlive(p)
 ): Promise<void> {
   if (platform === "win32") {
-    await runner("taskkill", ["/PID", pid, "/T"]);
+    const first = await runner("taskkill", ["/PID", pid, "/T"]);
+    if (!first.ok) {
+      // If the process is already gone, that's not an error.
+      if (isAlive(pid)) return; // still alive but we couldn't signal -> give up gracefully
+    }
   } else {
-    await runner("kill", ["-TERM", pid]);
+    const first = await runner("kill", ["-TERM", pid]);
+    if (!first.ok && isAlive(pid)) return;
   }
 
   const pollIntervalMs = Math.min(100, graceMs);

@@ -125,4 +125,25 @@ describe("killProcessGracefully", () => {
     expect(calls[0]).toEqual(["kill", "-TERM", "456"]);
     expect(calls[1]).toEqual(["kill", "-KILL", "456"]);
   });
+
+  it("bails out when the first kill errors and the process is still alive (fail-fast)", async () => {
+    const calls: string[][] = [];
+    const runner = vi.fn(async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      return { ok: false, stdout: "", stderr: "permission denied" };
+    });
+    await killProcessGracefully("789", "linux", runner, 10, () => true);
+    // First kill failed AND process still alive -> return without force-killing.
+    expect(calls).toEqual([["kill", "-TERM", "789"]]);
+  });
+
+  it("treats a failed first kill as fine when the process is already gone", async () => {
+    const calls: string[][] = [];
+    const runner = vi.fn(async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      return { ok: false, stdout: "", stderr: "no such process" };
+    });
+    await killProcessGracefully("111", "linux", runner, 10, () => false);
+    expect(calls).toEqual([["kill", "-TERM", "111"]]);
+  });
 });

@@ -170,10 +170,20 @@ async function restartCommand(argv: string[]): Promise<void> {
   }
 
   console.log("[..] Relaunching Maestro on the current code...");
+  const relaunchEnv = { ...process.env };
+  // Propagate a non-default port/host so the relaunched process boots on the
+  // same endpoint the health check polls (the orchestrator reads these from env).
+  if (port !== 4787) relaunchEnv.MAESTRO_DASHBOARD_PORT = String(port);
+  if (host !== "127.0.0.1") relaunchEnv.MAESTRO_DASHBOARD_HOST = host;
   const child = spawn(process.execPath, [tsxCli, srcIndex], {
     cwd: process.cwd(),
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    env: relaunchEnv
+  });
+  child.on("error", (err) => {
+    console.error(`[!] Failed to spawn the Maestro process: ${err.message}`);
+    process.exit(1);
   });
   child.unref();
 
