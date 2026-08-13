@@ -116,13 +116,39 @@ export class GoalWatchdog {
   }
 
   /**
-   * A run of consecutive identical summaries with no completed/failed work that
-   * changed the picture. This catches "thinking about the design" forever. A
-   * goal that is changing summaries (real steps) is never stopped here.
+   * True when a step summary is a generic completion placeholder rather than
+   * real evidence about what the step did (e.g. "Claude completed the reviewing
+   * phase", "6/6 deterministic checks passed"). Such summaries are NOT a signal
+   * of no-forward-progress — the same template repeats at every step even when
+   * the goal is progressing. The watchdog must not treat placeholder summaries
+   * as proof of a loop (a false positive would kill legitimate work).
+   */
+  private isGenericSummary(summary: string | null): boolean {
+    const s = (summary ?? "").toLowerCase();
+    return (
+      s.includes("concluiu a fase") || // PT: "completed the <phase> phase"
+      (s.includes("completed the") && s.includes("phase")) ||
+      s.includes("deterministic checks passed") ||
+      s.includes("completed the phase") ||
+      /^[\w-]+\s+\S+.*(fase|phase)\b/.test(s)
+    );
+  }
+
+  /**
+   * A run of consecutive identical INFORMATIVE summaries with no completed/failed
+   * work that changed the picture. This catches "thinking about the design"
+   * forever. Generic completion placeholders are ignored so a goal that is
+   * progressing (with templated per-step summaries) is never stopped here.
    */
   private noProgress(steps: GoalStepRecord[]): boolean {
     let same = 0;
     for (let i = 1; i < steps.length; i++) {
+      const prevGeneric = this.isGenericSummary(steps[i - 1].summary);
+      const currGeneric = this.isGenericSummary(steps[i].summary);
+      if (prevGeneric || currGeneric) {
+        same = 0; // reset the run — placeholder summaries don't prove a loop
+        continue;
+      }
       if (steps[i].status === steps[i - 1].status
           && this.normalized(steps[i].summary) === this.normalized(steps[i - 1].summary)) {
         same++;

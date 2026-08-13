@@ -96,6 +96,18 @@ describe.sequential("GoalWatchdog", () => {
     expect(v.stop).toBe(false);
   });
 
+  it("does NOT stop a goal whose repeated summaries are generic phase-completion placeholders", () => {
+    const r = makeRun();
+    // Three identical completion templates (same status + summary) — but they
+    // are generic placeholders, not evidence of a loop. Regression: this killed
+    // a live reviewing goal in a real run.
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(false);
+  });
+
   it("does NOT treat errors sharing a long common prefix as identical", () => {
     const r = makeRun();
     pushStep(r, "implementing", "failed", "step", "SyntaxError: unexpected token X. Long stack trace line one that keeps going for the full length");
