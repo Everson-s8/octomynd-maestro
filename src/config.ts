@@ -16,6 +16,7 @@ import {
   WORK_GRAPH_ADOPTION_MODES,
   type WorkGraphAdoptionMode
 } from "./work-graphs/adoption.js";
+import type { AgentCapability, CustomCliProviderConfig } from "./agents/types.js";
 
 export type MaestroConfig = {
   projectName: string;
@@ -43,6 +44,7 @@ export type MaestroConfig = {
     providerMaxRuntimeMs?: number;
     goalDeadlineMs?: number;
     selfUpdatePollIntervalMs?: number;
+    customProviders?: CustomCliProviderConfig[];
   };
   workGraph: {
     adoptionMode: WorkGraphAdoptionMode;
@@ -118,7 +120,8 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
       goalDeadlineMs: normalizeOptionalPositiveInteger(
         env.MAESTRO_GOAL_DEADLINE_MS,
         60_000
-      )
+      ),
+      customProviders: parseCustomProviders(env.MAESTRO_CUSTOM_PROVIDERS)
     },
     workGraph: {
       adoptionMode: normalizeWorkGraphAdoptionMode(env.MAESTRO_WORK_GRAPH_MODE)
@@ -175,11 +178,49 @@ export function validateRuntimeConfig(
     }
   }
 
+  if (env.MAESTRO_CUSTOM_PROVIDERS?.trim()) {
+    try {
+      const parsed = JSON.parse(env.MAESTRO_CUSTOM_PROVIDERS.trim());
+      if (!Array.isArray(parsed)) {
+        errors.push("MAESTRO_CUSTOM_PROVIDERS must be a JSON array of provider objects.");
+      }
+    } catch {
+      errors.push("MAESTRO_CUSTOM_PROVIDERS contains invalid JSON.");
+    }
+  }
+
   if (process.platform === "win32") {
     errors.push(...assessExecutionPaths(config.execution, env).reasons);
   }
 
   return errors;
+}
+
+export function parseCustomProviders(raw?: string): CustomCliProviderConfig[] | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw.trim());
+    if (!Array.isArray(parsed)) return undefined;
+    const valid: CustomCliProviderConfig[] = [];
+    for (const item of parsed) {
+      if (item && typeof item === "object" && typeof item.id === "string" && typeof item.command === "string") {
+        valid.push({
+          id: item.id.trim(),
+          label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : item.id.trim(),
+          command: item.command.trim(),
+          args: Array.isArray(item.args) ? item.args.filter((a: unknown): a is string => typeof a === "string") : undefined,
+          envKeys: Array.isArray(item.envKeys) ? item.envKeys.filter((k: unknown): k is string => typeof k === "string") : undefined,
+          capabilities: Array.isArray(item.capabilities)
+            ? item.capabilities.filter((c: unknown): c is AgentCapability => typeof c === "string")
+            : ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"],
+          healthProbe: typeof item.healthProbe === "boolean" ? item.healthProbe : undefined
+        });
+      }
+    }
+    return valid.length > 0 ? valid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeOptional(value: string | undefined): string | null {

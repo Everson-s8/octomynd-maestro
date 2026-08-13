@@ -11,7 +11,7 @@ import type {
 import type { FailureCategory } from "./failure.js";
 import type { FeatureTaskContract } from "../features/task-graph.js";
 
-export type AgentProviderId = "codex" | "claude" | "antigravity";
+export type AgentProviderId = "codex" | "claude" | "antigravity" | (string & {});
 export type AgentCapability =
   | "planning"
   | "coding"
@@ -20,6 +20,16 @@ export type AgentCapability =
   | "improvement_reviewing"
   | "research"
   | "conversation";
+
+export type CustomCliProviderConfig = {
+  id: string;
+  label: string;
+  command: string;
+  args?: string[];
+  envKeys?: string[];
+  capabilities: AgentCapability[];
+  healthProbe?: boolean;
+};
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
 

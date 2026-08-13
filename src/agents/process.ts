@@ -194,18 +194,46 @@ const ALLOWED_PROVIDER_ENV_KEYS = new Set([
 
 export function buildRestrictedAgentEnvironment(
   env: NodeJS.ProcessEnv = process.env,
-  options?: { allowProviderKeys?: boolean }
+  options?: { allowProviderKeys?: boolean; extraAllowedKeys?: string[] }
 ): NodeJS.ProcessEnv {
+  const extraAllowed = options?.extraAllowedKeys
+    ? new Set(options.extraAllowedKeys.map((k) => k.toUpperCase()))
+    : undefined;
   return Object.fromEntries(
-    Object.entries(env).filter(([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false))
+    Object.entries(env).filter(
+      ([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false, extraAllowed)
+    )
   );
 }
 
-function isSensitiveEnvironmentKey(key: string, allowProviderKeys: boolean): boolean {
-  if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(key.toUpperCase())) {
+function isSensitiveEnvironmentKey(
+  key: string,
+  allowProviderKeys: boolean,
+  extraAllowed?: Set<string>
+): boolean {
+  const upperKey = key.toUpperCase();
+  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY|_?KEY)(?:_|$)/i.test(key);
+
+  // allowProviderKeys opts the known provider-key names through.
+  if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(upperKey)) {
     return false;
   }
-  return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
+
+  // extraAllowedKeys is an EXPLICIT, provider-scoped allow-list: the custom
+  // provider's config.environment author (operator) deliberately named the
+  // keys a given provider may receive (e.g. envKeys: ["OPENCODE_API_KEY"]).
+  // That explicit intent is authoritative — forwarding a provider's own auth
+  // key to its spawned CLI is the whole point of envKeys. Without this, a
+  // custom provider could never authenticate to the model it wraps.
+  //
+  // This is NOT a global bypass: it only affects the keys an operator
+  // explicitly opt-in per provider, and the restricted env build is invoked
+  // per provider, so operators can only forward keys scoped to that config.
+  if (extraAllowed?.has(upperKey)) {
+    return false;
+  }
+
+  return secretShaped;
 }
 
 function appendBounded(current: string, chunk: string, maxChars: number): string {

@@ -56,6 +56,12 @@ if (config.runtime.antigravityEnabled) {
     }
   }));
 }
+if (config.runtime.customProviders && config.runtime.customProviders.length > 0) {
+  const { CustomCliProvider } = await import("./agents/custom-cli.js");
+  for (const customConfig of config.runtime.customProviders) {
+    agentProviders.push(new CustomCliProvider(customConfig, { executionLimits: providerLimits }));
+  }
+}
 
 const registry = new AgentRegistry(agentProviders, undefined, Date.now);
 
