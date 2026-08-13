@@ -215,6 +215,27 @@ describe("CustomCliProvider", () => {
     expect(result.failureCategory).toBe("offline");
     expect(result.retryable).toBe(false);
   });
+
+  it("does not leak other providers' keys to a custom CLI unless listed in envKeys", async () => {
+    const mockEnv = {
+      OPENAI_API_KEY: "sk-builtin-openai",
+      ANTHROPIC_API_KEY: "sk-builtin-anthropic",
+      GEMINI_API_KEY: "sk-builtin-gemini",
+      MY_CUSTOM_KEY: "my-own-key"
+    };
+
+    // The operator listed only MY_CUSTOM_KEY. Even with allowProviderKeys
+    // semantics historically on, a custom CLI must NOT receive the built-in
+    // provider secrets — it should only receive what its envKeys opt in to.
+    const env = buildRestrictedAgentEnvironment(mockEnv, {
+      extraAllowedKeys: ["MY_CUSTOM_KEY"]
+    });
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.MY_CUSTOM_KEY).toBe("my-own-key");
+  });
 });
 
 function mockExecutionRequest(

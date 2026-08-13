@@ -86,7 +86,6 @@ export class CustomCliProvider implements AgentProvider {
         inactivityTimeoutMs: 15_000,
         maxOutputChars: 20_000,
         env: buildRestrictedAgentEnvironment(process.env, {
-          allowProviderKeys: true,
           extraAllowedKeys: this.config.envKeys
         })
       });
@@ -150,7 +149,6 @@ export class CustomCliProvider implements AgentProvider {
       deadlineAt: request.deadlineAt,
       signal: request.signal,
       env: buildRestrictedAgentEnvironment(process.env, {
-        allowProviderKeys: true,
         extraAllowedKeys: this.config.envKeys
       })
     });
@@ -272,7 +270,6 @@ export class CustomCliProvider implements AgentProvider {
       maxOutputChars: request.maxOutputChars,
       maxReceivedChars: request.maxOutputChars * 2,
       env: buildRestrictedAgentEnvironment(process.env, {
-        allowProviderKeys: true,
         extraAllowedKeys: this.config.envKeys
       })
     });
