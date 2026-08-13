@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
 import {
@@ -154,7 +154,7 @@ async function routeRequest(
       sendJson(response, 400, { error: "command_is_required" });
       return;
     }
-    const state = testAgentConnection(command, args);
+    const state = await testAgentConnection(command, args);
     sendJson(response, 200, state);
     return;
   }
@@ -1304,7 +1304,7 @@ function contentType(filePath: string): string {
  * Used by POST /api/providers/test-connection so the UI can show a real
  * connect/error state before the user commits to the provider.
  */
-function testAgentConnection(command: string, args: string[]): { ok: boolean; detail: string; executable: string | null } {
+async function testAgentConnection(command: string, args: string[]): Promise<{ ok: boolean; detail: string; executable: string | null }> {
   const executable = resolveCustomCliExecutable(command);
   if (!executable) {
     return {
@@ -1313,24 +1313,21 @@ function testAgentConnection(command: string, args: string[]): { ok: boolean; de
       executable: null
     };
   }
-  const wantsProbe = args.length > 0;
-  if (wantsProbe) {
-    // Synchronous version probe so the request stays simple; most CLIs print
-    // a version banner on --version.
-    try {
-      const probeArgs = args.length > 0 ? args : ["--version"];
-      spawnSyncWrapped(executable, probeArgs);
-      return { ok: true, detail: `Conectado (${command}).`, executable };
-    } catch {
-      return { ok: false, detail: `Falha ao executar ${command}.`, executable };
-    }
+  if (args.length > 0) {
+    // Async version probe so a slow/hung CLI does not block the event loop.
+    const ok = await probeExecutable(executable, args);
+    return ok
+      ? { ok: true, detail: `Conectado (${command}).`, executable }
+      : { ok: false, detail: `Falha ao executar ${command}.`, executable };
   }
   return { ok: true, detail: `Executável encontrado (${command}).`, executable };
 }
 
-/** Runs `command args` synchronously; throws if exit != 0. */
-function spawnSyncWrapped(command: string, args: string[]): void {
-  const res = spawnSync(command, args, { timeout: 15_000, encoding: "utf8" });
-  if (res.error) throw res.error;
-  if (res.status !== 0) throw new Error(`exit ${res.status}`);
+/** Runs `command args` asynchronously; resolves true only on exit 0. */
+function probeExecutable(command: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { timeout: 15_000, windowsHide: true });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
 }
