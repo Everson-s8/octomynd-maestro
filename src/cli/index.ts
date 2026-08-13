@@ -15,6 +15,7 @@ import {
   isUiDistStale,
   checkApiHealth
 } from "../desktop/launcher.js";
+import { findProcessOnPort, killProcessGracefully } from "../runtime/port-process.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
@@ -48,6 +49,8 @@ Commands:
   project add <key> <path|github-url>
                         Register a local Git project, or clone a GitHub URL and register it.
   start                 Launch the Maestro orchestrator (dashboard UI + API + workers).
+  restart [--port N] [--host H]
+                        Restart a running Maestro process on the current code.
   dashboard             Launch the web dashboard UI (http://127.0.0.1:4788).
   desktop [--skip-build]
                         Launch Maestro as a native desktop app (Electron).
@@ -121,6 +124,75 @@ async function startCommand(): Promise<void> {
   });
   child.on("close", (code) => process.exit(code ?? 1));
   process.on("SIGINT", () => child.kill("SIGINT"));
+}
+
+function parseRestartCliOptions(argv: string[]): { port: number; host: string } {
+  let port = 4787;
+  let host = "127.0.0.1";
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--port" && argv[i + 1]) {
+      const p = parseInt(argv[i + 1], 10);
+      if (!isNaN(p)) port = p;
+    }
+    if (argv[i] === "--host" && argv[i + 1]) {
+      host = argv[i + 1];
+    }
+  }
+  return { port, host };
+}
+
+async function restartCommand(argv: string[]): Promise<void> {
+  const { port, host } = parseRestartCliOptions(argv);
+
+  console.log(`[..] Looking for a Maestro process on port ${port}...`);
+  const pid = await findProcessOnPort(port);
+  if (!pid) {
+    console.error(`[!] No process is listening on port ${port}. Maestro is not running here.`);
+    process.exit(1);
+  }
+
+  console.log(`[..] Stopping process ${pid}...`);
+  await killProcessGracefully(pid);
+
+  const stillOwned = await findProcessOnPort(port);
+  if (stillOwned) {
+    console.error(`[!] Unable to free port ${port} (process ${stillOwned} still listening).`);
+    process.exit(1);
+  }
+  console.log(`[ok] Port ${port} is free.`);
+
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const srcIndex = path.resolve(cliDir, "../index.ts");
+  const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
+  if (!fs.existsSync(tsxCli) || !fs.existsSync(srcIndex)) {
+    console.error("[!] Unable to locate orchestrator entry files.");
+    process.exit(1);
+  }
+
+  console.log("[..] Relaunching Maestro on the current code...");
+  const child = spawn(process.execPath, [tsxCli, srcIndex], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+
+  let attempts = 0;
+  let healthy = false;
+  while (attempts < 60) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await checkApiHealth(host, port, 1000)) {
+      healthy = true;
+      break;
+    }
+    attempts++;
+  }
+
+  if (!healthy) {
+    console.error(`[!] Maestro restarted but did not become healthy on http://${host}:${port} in time.`);
+    process.exit(1);
+  }
+  console.log(`[ok] Maestro restarted and is healthy on http://${host}:${port}`);
 }
 
 async function dashboardCommand(): Promise<void> {
@@ -289,6 +361,9 @@ async function main(): Promise<void> {
       break;
     case "start":
       await startCommand();
+      break;
+    case "restart":
+      await restartCommand(argv);
       break;
     case "dashboard":
       await dashboardCommand();

@@ -17,6 +17,7 @@
     "cli:setup": "tsx src/cli/index.ts setup",
     "cli:telegram": "tsx src/cli/index.ts telegram connect",
     "cli:start": "tsx src/cli/index.ts start",
+    "cli:restart": "tsx src/cli/index.ts restart",
     "cli:status": "tsx src/cli/index.ts status",
     "cli:desktop": "tsx src/cli/index.ts desktop",
     "dev": "tsx src/index.ts",
