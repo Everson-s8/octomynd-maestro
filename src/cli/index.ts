@@ -286,6 +286,9 @@ async function desktopCommand(argv: string[]): Promise<void> {
   const desktopChild = spawn(electronBin, electronArgs, {
     cwd: process.cwd(),
     stdio: "inherit",
+    // On Windows the local electron/npx bin is a .cmd shim; spawn() of a .cmd
+    // without shell:true throws EINVAL, so enable the shell for the spawn.
+    ...(process.platform === "win32" ? { shell: true } : {}),
     env: {
       ...process.env,
       MAESTRO_API_PORT: String(options.port),
