@@ -59,7 +59,7 @@ export class BacklogAutopilot {
   private autoRetryBackoffUntil = new Map<number, number>();
 
   /** Max times the autopilot auto-retries the same budget-blocked run before
-   *  leaving it `blocked` for human review (prevents an infinite retry furnace). */
+   *  leaving it `blocked` for human review (prevents unbounded repeated retries). */
   private static readonly MAX_AUTO_RETRIES_PER_GOAL = 3;
   /** Backoff between auto-retries of the same run: 60s, then 5m, then 15m. */
   private backoffMs(attempt: number): number {
@@ -207,7 +207,7 @@ export class BacklogAutopilot {
         );
       });
     // Small per-tick cap AND a per-run retry budget + backoff so a stuck-but-not-
-    // loop goal is not retried forever (retry furnace). A run is lifted at most
+    // loop goal is not retried forever. A run is lifted at most
     // MAX_AUTO_RETRIES_PER_GOAL times; after that it stays `blocked` for human.
     const now = Date.now();
     const termStarts = new Set(["completed", "failed", "cancelled", "awaiting_human", "ready_to_merge", "done"]);
@@ -215,7 +215,7 @@ export class BacklogAutopilot {
     // cancelled / awaiting human), so the per-run counter does not leak forever.
     // We deliberately do NOT clear on "transiently not blocked right now" —
     // retryRun flips the run to waiting_provider and stays alive, so a transient
-    // non-blocked state must NOT wipe the counter (that would reopen the furnace).
+    // non-blocked state must NOT wipe the counter (unbounded retries would return).
     const alive = new Set(budgetBlocked.map((goal) => goal.id));
     for (const id of this.autoRetryCounts.keys()) {
       if (!alive.has(id)) {

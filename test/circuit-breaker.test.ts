@@ -132,7 +132,7 @@ describe("GoalCircuitBreaker", () => {
     // when the goal is legitimately iterating its review cycle (e.g. a review
     // that requests changes, the changes are already applied, and the reviewer
     // re-examines). Blocking on 'stable worktree' would kill every real review
-    // cycle — the bug that hard-blocked T101 at phase_budget_exhausted.
+    // cycle.
     const breaker = new GoalCircuitBreaker({ reviewing: 2 });
     const observation = {
       phase: "reviewing" as const,
