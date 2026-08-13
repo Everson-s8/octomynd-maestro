@@ -139,8 +139,15 @@ describe("codex provider telemetry", () => {
   it("names the install and login commands when the Codex CLI is not found", async () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-codex-missing-"));
     const originalPrefix = process.env.NPM_CONFIG_PREFIX;
+    const originalAppData = process.env.APPDATA;
+    const originalCodexKey = process.env.CODEX_API_KEY;
+    const originalOpenaiKey = process.env.OPENAI_API_KEY;
     process.env.APPDATA = emptyDir;
     process.env.NPM_CONFIG_PREFIX = emptyDir;
+    // A truthful health() reports "offline" only when BOTH the CLI and any API key
+    // are absent; clear the keys so this test is deterministic regardless of env.
+    delete process.env.CODEX_API_KEY;
+    delete process.env.OPENAI_API_KEY;
     try {
       const provider = new CodexProvider(5_000);
 
@@ -151,6 +158,12 @@ describe("codex provider telemetry", () => {
     } finally {
       if (originalPrefix === undefined) delete process.env.NPM_CONFIG_PREFIX;
       else process.env.NPM_CONFIG_PREFIX = originalPrefix;
+      if (originalAppData === undefined) process.env.APPDATA = originalAppData;
+      else process.env.APPDATA = originalAppData;
+      if (originalCodexKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = originalCodexKey;
+      if (originalOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenaiKey;
       fs.rmSync(emptyDir, { recursive: true, force: true });
     }
   });
