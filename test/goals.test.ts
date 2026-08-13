@@ -1411,7 +1411,8 @@ describe("goal runner", () => {
       phaseBudgets: { planning: 2 }
     });
 
-    expect(run.status).toBe("blocked");
+    expect(run.status).toBe("waiting_provider");
+    expect(run.waitReason).toBe("budget_exhausted");
     expect(run.lastError).toBe("Phase 'planning' reached its limit of 2 steps.");
     expect(calls).toBe(2);
 
@@ -1421,6 +1422,109 @@ describe("goal runner", () => {
       phase: "planning",
       worktreePreserved: true
     });
+  });
+
+  it("auto-elevates budget on budget trip with no loop signal and transitions to waiting_provider", async () => {
+    const projectDir = path.join(tempDir, "auto-budget-project");
+    const worktreeDir = path.join(tempDir, "auto-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "autobudget", path: projectDir });
+    const task = database.createTask("auto budget task", "dashboard", "autobudget");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    let stepCount = 0;
+    const provider = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], () => {
+      stepCount++;
+      return completed(`step ${stepCount}`);
+    });
+    const registry = new AgentRegistry([provider]);
+
+    const run1 = await runTaskGoal(database, registry, task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 2
+    });
+    expect(run1.status).toBe("waiting_provider");
+    expect(run1.waitReason).toBe("budget_exhausted");
+    expect(run1.maxSteps).toBeGreaterThan(2);
+
+    const events1 = database.listEvents().filter((e) => e.type === "goal.budget_elevated");
+    expect(events1.length).toBe(1);
+    expect(events1[0].metadata).toMatchObject({
+      runId: run1.id,
+      previousMaxSteps: 2,
+      source: "auto_budget_exhausted"
+    });
+  });
+
+  it("retryRun raises maxSteps, logs goal.budget_elevated, and allows goal to proceed past old cap", async () => {
+    const projectDir = path.join(tempDir, "retry-budget-project");
+    const worktreeDir = path.join(tempDir, "retry-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "retrybudget", path: projectDir });
+    const task = database.createTask("retry budget task", "dashboard", "retrybudget");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([new FakeProvider("codex", ["planning"], () => completed("step"))]),
+      path.join(tempDir, "artifacts")
+    );
+
+    const run = database.createGoalRun(task.id, 4);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "planning",
+      stepCount: 4,
+      lastError: "Goal reached its 4-step budget.",
+      waitReason: null
+    });
+
+    const retried = coordinator.retryRun(run.id);
+    expect(retried.status).toBe("waiting_provider");
+    expect(retried.maxSteps).toBeGreaterThanOrEqual(6);
+
+    const events = database.listEvents();
+    const elevatedEvent = events.find((e) => e.type === "goal.budget_elevated");
+    expect(elevatedEvent).toBeTruthy();
+    expect(elevatedEvent?.metadata).toMatchObject({
+      runId: run.id,
+      previousMaxSteps: 4,
+      newMaxSteps: 6,
+      source: "retry_run"
+    });
+  });
+
+  it("loop-flagged goals stay blocked and retryRun refuses to auto-retry non-budget failures", async () => {
+    const projectDir = path.join(tempDir, "loop-blocked-project");
+    const worktreeDir = path.join(tempDir, "loop-blocked-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "loopblocked", path: projectDir });
+    const task = database.createTask("loop blocked task", "dashboard", "loopblocked");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([new FakeProvider("codex", ["planning"], () => completed("step"))]),
+      path.join(tempDir, "artifacts")
+    );
+
+    const run = database.createGoalRun(task.id, 10);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 3,
+      lastError: "implementing completed repeatedly without changing the worktree.",
+      waitReason: null
+    });
+
+    expect(() => coordinator.retryRun(run.id)).toThrow(
+      "Goal #" + run.id + " is not blocked by budget-exhausted; refusing to auto-retry other failures."
+    );
   });
 });
 

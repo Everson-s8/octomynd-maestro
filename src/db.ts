@@ -232,7 +232,7 @@ export type ImprovementProposalInput = {
 export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
 export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
 export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
-export type GoalWaitReason = FailureCategory | "runtime_restart";
+export type GoalWaitReason = FailureCategory | "runtime_restart" | "budget_exhausted";
 
 export type GoalRunRecord = {
   id: number;
@@ -732,6 +732,7 @@ export function createDatabase(databasePath: string) {
     SET status = @status,
         current_phase = @currentPhase,
         step_count = @stepCount,
+        max_steps = @maxSteps,
         last_error = @lastError,
         wait_reason = @waitReason,
         next_retry_at = @nextRetryAt,
@@ -1351,6 +1352,7 @@ export function createDatabase(databasePath: string) {
       status: GoalRunStatus;
       currentPhase: GoalPhase;
       stepCount: number;
+      maxSteps?: number;
       lastError?: string | null;
       waitReason?: GoalWaitReason | null;
       nextRetryAt?: string | null;
@@ -1361,6 +1363,7 @@ export function createDatabase(databasePath: string) {
       const waiting = input.status === "waiting_provider";
       updateGoalRunStatement.run({
         ...input,
+        maxSteps: input.maxSteps ?? existing.maxSteps,
         lastError: input.lastError ?? null,
         waitReason: waiting ? input.waitReason ?? existing.waitReason : null,
         nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
@@ -1369,6 +1372,24 @@ export function createDatabase(databasePath: string) {
         finishedAt: ["running", "waiting_provider"].includes(input.status) ? null : now
       });
       return this.getGoalRun(input.id);
+    },
+
+    countBudgetElevationsForRun(runId: number): number {
+      const row = db
+        .prepare("SELECT task_id FROM goal_runs WHERE id = ?")
+        .get(runId) as { task_id: number } | undefined;
+      if (!row) return 0;
+      const events = db
+        .prepare("SELECT metadata_json FROM events WHERE task_id = ? AND type = 'goal.budget_elevated'")
+        .all(row.task_id) as { metadata_json: string }[];
+      return events.filter((e) => {
+        try {
+          const meta = JSON.parse(e.metadata_json);
+          return meta.runId === runId;
+        } catch {
+          return false;
+        }
+      }).length;
     },
 
     createGoalCheckpoint(input: GoalCheckpointInput): GoalCheckpointRecord {
