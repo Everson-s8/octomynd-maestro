@@ -24,6 +24,7 @@ import {
 import type { TaskDNA, GoalPhase as DnaGoalPhase } from "./task-dna.js";
 export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
+import { elevateMaxSteps, MAESTRO_GOAL_MAX_STEPS } from "./coordinator.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
 import {
@@ -82,14 +83,17 @@ export async function runTaskGoal(
   const dnaPhases: GoalPhase[] = dna?.phases ?? PHASES;
   const dnaPhaseBudgets = dna?.phaseBudgets ?? {};
   // When DNA is present, maxSteps is the sum of phase budgets (no global cap)
-  const effectiveMaxSteps = dna
+  const dnaMaxSteps = dna
     ? Object.values(dna.phaseBudgets).reduce((a, b) => a + b, 0) + 5 // buffer
-    : options.maxSteps ?? 20;
+    : undefined;
+  const effectiveMaxSteps = dnaMaxSteps ?? options.maxSteps ?? 20;
 
   const run = options.existingRun ?? database.createGoalRun(task.id, effectiveMaxSteps);
-  // ── DNA: override maxSteps for existing runs too ─────────
-  if (dna && options.existingRun) {
-    run.maxSteps = effectiveMaxSteps;
+  // ── DNA / Existing: preserve existing run maxSteps, keeping elevated maxSteps ─
+  if (options.existingRun) {
+    run.maxSteps = dnaMaxSteps
+      ? Math.max(options.existingRun.maxSteps, dnaMaxSteps)
+      : options.existingRun.maxSteps;
   }
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
@@ -1017,6 +1021,36 @@ export async function runTaskGoal(
       excluded = new Set();
     }
 
+    const autoReRaises = database.countBudgetElevationsForRun(run.id);
+    if (autoReRaises < 2) {
+      const newMaxSteps = elevateMaxSteps(currentRun.maxSteps);
+      if (newMaxSteps > currentRun.maxSteps) {
+        database.addEvent({
+          source: "maestro",
+          type: "goal.budget_elevated",
+          text: `Goal #${run.id} maxSteps auto-elevated from ${currentRun.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            previousMaxSteps: currentRun.maxSteps,
+            newMaxSteps,
+            ceiling: MAESTRO_GOAL_MAX_STEPS,
+            source: "auto_budget_exhausted"
+          }
+        });
+        return pauseRun(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          `Goal reached its ${currentRun.maxSteps}-step budget.`,
+          task.id,
+          { reason: "budget_exhausted", retryAfterMs: 5_000 },
+          newMaxSteps
+        );
+      }
+    }
+
     return finishRun(
       database,
       currentRun,
@@ -1150,6 +1184,37 @@ function finishCircuitBreak(
     taskId,
     metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
   });
+  if (reason === "phase_budget_exhausted") {
+    const autoReRaises = database.countBudgetElevationsForRun(run.id);
+    if (autoReRaises < 2) {
+      const newMaxSteps = elevateMaxSteps(run.maxSteps);
+      if (newMaxSteps > run.maxSteps) {
+        database.addEvent({
+          source: "maestro",
+          type: "goal.budget_elevated",
+          text: `Goal #${run.id} maxSteps auto-elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+          taskId,
+          metadata: {
+            runId: run.id,
+            previousMaxSteps: run.maxSteps,
+            newMaxSteps,
+            ceiling: MAESTRO_GOAL_MAX_STEPS,
+            source: "auto_budget_exhausted"
+          }
+        });
+        return pauseRun(
+          database,
+          run,
+          phase,
+          stepCount,
+          safeSummary,
+          taskId,
+          { reason: "budget_exhausted", retryAfterMs: 5_000 },
+          newMaxSteps
+        );
+      }
+    }
+  }
   const failureCategory = reason === "phase_budget_exhausted" ? "budget_exhausted" : undefined;
   return finishRun(database, run, "blocked", phase, stepCount, safeSummary, taskId, failureCategory);
 }
@@ -1194,10 +1259,11 @@ function pauseRun(
     reason: GoalWaitReason;
     retryAfterMs?: number;
     provider?: AgentProviderId;
-  }
+  },
+  newMaxSteps?: number
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
-  const retryAfterMs = Math.max(1_000, wait.retryAfterMs ?? 60_000);
+  const retryAfterMs = Math.max(1_000, wait.retryAfterMs ?? (wait.reason === "budget_exhausted" ? 5_000 : 60_000));
   const nextRetryAt = new Date(Date.now() + retryAfterMs).toISOString();
   const checkpoint = database.getLatestGoalCheckpoint(run.id);
   return database.withTransaction(() => {
@@ -1207,6 +1273,7 @@ function pauseRun(
       status: "waiting_provider",
       currentPhase: phase,
       stepCount,
+      maxSteps: newMaxSteps ?? run.maxSteps,
       lastError: safeError,
       waitReason: wait.reason,
       nextRetryAt,

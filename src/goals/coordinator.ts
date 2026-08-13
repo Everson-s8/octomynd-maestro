@@ -25,6 +25,18 @@ const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
   "done"
 ]);
 
+export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "100", 10) || 100;
+
+export function elevateMaxSteps(currentMaxSteps: number, ceiling?: number): number {
+  const effectiveCeiling = ceiling ?? MAESTRO_GOAL_MAX_STEPS;
+  return Math.min(effectiveCeiling, Math.max(currentMaxSteps + 1, Math.ceil(currentMaxSteps * 1.5)));
+}
+
+/** Elevate a run's ceiling but never shrink it (a run may already exceed the cap). */
+export function elevatedMaxStepsAtLeast(currentMaxSteps: number, ceiling?: number): number {
+  return Math.max(currentMaxSteps, elevateMaxSteps(currentMaxSteps, ceiling));
+}
+
 export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
 
 export class GoalCoordinator {
@@ -134,12 +146,29 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
     }
+    const newMaxSteps = elevatedMaxStepsAtLeast(run.maxSteps);
     const reopened = this.database.withTransaction(() => {
+      if (newMaxSteps > run.maxSteps) {
+        this.database.addEvent({
+          source: "human",
+          type: "goal.budget_elevated",
+          text: `Goal #${runId} maxSteps elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+          taskId: run.taskId,
+          metadata: {
+            runId,
+            previousMaxSteps: run.maxSteps,
+            newMaxSteps,
+            ceiling: MAESTRO_GOAL_MAX_STEPS,
+            source: "retry_run"
+          }
+        });
+      }
       const updated = this.database.updateGoalRun({
         id: runId,
         status: "waiting_provider",
         currentPhase: run.currentPhase,
         stepCount: run.stepCount,
+        maxSteps: newMaxSteps,
         lastError: null,
         nextRetryAt: null
       });
@@ -149,7 +178,7 @@ export class GoalCoordinator {
         type: "goal.retry_requested",
         text: `Goal #${runId} retried from checkpoint (budget-exhausted); preserved worktree will resume.`,
         taskId: run.taskId,
-        metadata: { runId, phase: run.currentPhase, stepCount: run.stepCount }
+        metadata: { runId, phase: run.currentPhase, stepCount: run.stepCount, maxSteps: newMaxSteps }
       });
       return updated;
     });
