@@ -21,7 +21,7 @@ import {
   GoalCircuitBreaker,
   DEFAULT_PHASE_BUDGETS,
 } from "./circuit-breaker.js";
-import type { TaskDNA, GoalPhase as DnaGoalPhase } from "./task-dna.js";
+import type { TaskDNA } from "./task-dna.js";
 export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import { elevateMaxSteps, MAESTRO_GOAL_MAX_STEPS } from "./coordinator.js";

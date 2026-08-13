@@ -3,7 +3,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
-import { computeTaskDNAFromText, type TaskDNA } from "./task-dna.js";
+import { computeTaskDNAFromText } from "./task-dna.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
