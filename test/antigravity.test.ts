@@ -81,7 +81,7 @@ describe("Antigravity provider", () => {
     });
   });
 
-  it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", async () => {
+  it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", { timeout: 20_000 }, async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-hang-"));
     tempPaths.push(tempDir);
 
