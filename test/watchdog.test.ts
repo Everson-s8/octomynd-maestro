@@ -99,13 +99,23 @@ describe.sequential("GoalWatchdog", () => {
   it("does NOT stop a goal whose repeated summaries are generic phase-completion placeholders", () => {
     const r = makeRun();
     // Three identical completion templates (same status + summary) — but they
-    // are generic placeholders, not evidence of a loop. Regression: this killed
-    // a live reviewing goal in a real run.
-    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
-    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
-    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing");
+    // are generic placeholders (note the trailing '.' the providers emit), not
+    // evidence of a loop. Regression: this killed a live reviewing goal.
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing.");
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing.");
+    pushStep(r, "reviewing", "completed", "Claude concluiu a fase reviewing.");
     const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(false);
+  });
+
+  it("STILL stops a goal whose genuinely stuck steps use the SAME informative summary", () => {
+    const r = makeRun();
+    pushStep(r, "implementing", "completed", "cannot resolve the database connection for the auth module");
+    pushStep(r, "implementing", "completed", "cannot resolve the database connection for the auth module");
+    pushStep(r, "implementing", "completed", "cannot resolve the database connection for the auth module");
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(true);
+    expect(v.reason).toBe("no_progress");
   });
 
   it("does NOT treat errors sharing a long common prefix as identical", () => {

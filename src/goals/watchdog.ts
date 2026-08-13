@@ -135,12 +135,14 @@ export class GoalWatchdog {
   private isGenericSummary(summary: string | null): boolean {
     const s = (summary ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     if (!s) return true; // empty summary carries no loop evidence
+    // A single terminal '.' (sentence end) is allowed after the phase name.
     return (
-      /^[a-z_-]+\s+(concluiu a fase|completed the)\s+\w+\s*(phase)?\s*$/i.test(s) ||
-      /^[\d\s]+\/\s*[\d]+\s+deterministic checks?\s+passed?\s*$/i.test(s) ||
-      /^6\/6\s+checks? passed\s*$/i.test(s) ||
-      /^\d+\s+checks?\s+passed\s*$/i.test(s)
-    );
+      /^[a-z0-9_-]+\s+(concluiu a fase|completed the|concluiu a)/i.test(s) ||
+      /^[a-z0-9_-]+\s+(completed|concluiu)\s+the?\s+\w+\s*(phase|fase)?\.?\s*$/i.test(s) ||
+      /^[\d\s]+\/[\d]+\s+(deterministic\s+)?checks?\s+passed\.?\s*$/i.test(s) ||
+      /^\d+\s+checks?\s+passed\.?\s*$/i.test(s) ||
+      /^6\/6\s+checks?\s+passed\.?\s*$/i.test(s)
+    ) && !/\b(error|failed|stuck|blocked|bug|crash|exception)\b/.test(s);
   }
 
   /**
