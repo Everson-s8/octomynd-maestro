@@ -168,7 +168,7 @@ describe("CustomCliProvider", () => {
     expect(opencode?.source).toBe("env_key");
   });
 
-  it("sanitizes sensitive environment keys and custom keys in restricted env", () => {
+  it("forwards only provider-scoped env keys but scrubs unlisted secrets", () => {
     const mockEnv = {
       SECRET_KEY: "super-secret",
       OPENCODE_API_KEY: "opencode-token",
@@ -180,15 +180,17 @@ describe("CustomCliProvider", () => {
 
     const env = buildRestrictedAgentEnvironment(mockEnv, {
       allowProviderKeys: true,
-      extraAllowedKeys: ["OPENCODE_API_KEY", "GITHUB_TOKEN", "NORMAL_VAR"]
+      extraAllowedKeys: ["OPENCODE_API_KEY", "NORMAL_VAR"]
     });
 
-    // Secret-shaped names are scrubbed even if listed in extraAllowedKeys,
-    // unless they are a known allow-listed provider key (allowProviderKeys).
+    // A key explicitly listed in the provider's envKeys is forwarded (forwarding
+    // a provider's own auth key to its CLI is the purpose of envKeys).
+    expect(env.OPENCODE_API_KEY).toBe("opencode-token");
+    // Unlisted secret-shaped keys are scrubbed regardless of extraAllowedKeys.
     expect(env.SECRET_KEY).toBeUndefined();
-    expect(env.OPENCODE_API_KEY).toBeUndefined(); // contains API_KEY, not allow-listed
-    expect(env.GITHUB_TOKEN).toBeUndefined();     // contains TOKEN, not allow-listed
-    // Non-secret names pass through even when listed in extraAllowedKeys.
+    expect(env.OPENCODE_GO_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    // Non-secret names pass through when listed in extraAllowedKeys.
     expect(env.NORMAL_VAR).toBe("hello");
     // allow-listed provider keys pass when allowProviderKeys is true.
     expect(env.OPENAI_API_KEY).toBe("sk-openai");

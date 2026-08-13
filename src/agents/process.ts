@@ -212,19 +212,24 @@ function isSensitiveEnvironmentKey(
   extraAllowed?: Set<string>
 ): boolean {
   const upperKey = key.toUpperCase();
-  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY)(?:_|$)/i.test(key);
+  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY|_?KEY)(?:_|$)/i.test(key);
 
   // allowProviderKeys opts the known provider-key names through.
   if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(upperKey)) {
     return false;
   }
 
-  // extraAllowedKeys lets an operator forward a handful of non-secret env vars
-  // to a custom CLI provider. It must NOT act as a bypass for arbitrary
-  // secret-shaped keys: a misconfigured source listing e.g. GITHUB_TOKEN or
-  // DATABASE_PASSWORD must not leak that secret into a spawned child. Only
-  // non-secret-shaped names pass through here.
-  if (extraAllowed?.has(upperKey) && !secretShaped) {
+  // extraAllowedKeys is an EXPLICIT, provider-scoped allow-list: the custom
+  // provider's config.environment author (operator) deliberately named the
+  // keys a given provider may receive (e.g. envKeys: ["OPENCODE_API_KEY"]).
+  // That explicit intent is authoritative — forwarding a provider's own auth
+  // key to its spawned CLI is the whole point of envKeys. Without this, a
+  // custom provider could never authenticate to the model it wraps.
+  //
+  // This is NOT a global bypass: it only affects the keys an operator
+  // explicitly opt-in per provider, and the restricted env build is invoked
+  // per provider, so operators can only forward keys scoped to that config.
+  if (extraAllowed?.has(upperKey)) {
     return false;
   }
 
