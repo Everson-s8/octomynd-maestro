@@ -78,6 +78,17 @@ To run the full runtime on Windows with PID, logs, and health check:
 .\scripts\maestro-runtime.ps1 stop
 ```
 
+To pull the latest `main` and restart the runtime on the new code:
+
+```powershell
+.\scripts\maestro-runtime.ps1 apply-update
+```
+
+`apply-update` requires a clean worktree, fast-forwards `main` from `origin`,
+then stops and relaunches the runtime on the updated code — it is the standard
+way to bring a locally-running Maestro up to date after a merge (Maestro does
+not self-update; the operator or their environment automation triggers it).
+
 The controller only considers startup complete once
 `http://127.0.0.1:4787/api/dashboard` responds. Logs and PID live under
 `.maestro/runtime/`, outside Git. Maintenance should end with a green `status`;
