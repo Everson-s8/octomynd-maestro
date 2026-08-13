@@ -1385,7 +1385,9 @@ export function createDatabase(databasePath: string) {
       return events.filter((e) => {
         try {
           const meta = JSON.parse(e.metadata_json);
-          return meta.runId === runId;
+          // Only count AUTOMATIC elevations (source: "auto_budget_exhausted") for the
+          // auto-retry cap, so a manual retry_run elevation never consumes an auto slot.
+          return meta.runId === runId && meta.source === "auto_budget_exhausted";
         } catch {
           return false;
         }

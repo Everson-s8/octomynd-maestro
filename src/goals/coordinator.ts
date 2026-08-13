@@ -28,8 +28,13 @@ const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
 export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "100", 10) || 100;
 
 export function elevateMaxSteps(currentMaxSteps: number, ceiling?: number): number {
-  const effectiveCeiling = ceiling ?? (Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "", 10) || MAESTRO_GOAL_MAX_STEPS);
+  const effectiveCeiling = ceiling ?? MAESTRO_GOAL_MAX_STEPS;
   return Math.min(effectiveCeiling, Math.max(currentMaxSteps + 1, Math.ceil(currentMaxSteps * 1.5)));
+}
+
+/** Elevate a run's ceiling but never shrink it (a run may already exceed the cap). */
+export function elevatedMaxStepsAtLeast(currentMaxSteps: number, ceiling?: number): number {
+  return Math.max(currentMaxSteps, elevateMaxSteps(currentMaxSteps, ceiling));
 }
 
 export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
@@ -141,7 +146,7 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
     }
-    const newMaxSteps = elevateMaxSteps(run.maxSteps);
+    const newMaxSteps = elevatedMaxStepsAtLeast(run.maxSteps);
     const reopened = this.database.withTransaction(() => {
       if (newMaxSteps > run.maxSteps) {
         this.database.addEvent({

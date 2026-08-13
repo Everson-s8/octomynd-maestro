@@ -1497,6 +1497,66 @@ describe("goal runner", () => {
     });
   });
 
+  it("retryRun never shrinks maxSteps when the run already exceeds the ceiling", async () => {
+    const projectDir = path.join(tempDir, "retry-ceiling-project");
+    const worktreeDir = path.join(tempDir, "retry-ceiling-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "retryceiling", path: projectDir });
+    const task = database.createTask("retry ceiling task", "dashboard", "retryceiling");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([new FakeProvider("codex", ["planning"], () => completed("step"))]),
+      path.join(tempDir, "artifacts")
+    );
+
+    // A DNA-based run may already exceed MAESTRO_GOAL_MAX_STEPS (targeted no-cap runs).
+    const run = database.createGoalRun(task.id, 150);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "planning",
+      stepCount: 150,
+      lastError: "Goal reached its 150-step budget.",
+      waitReason: null
+    });
+
+    const retried = coordinator.retryRun(run.id);
+    // Must NOT lower the budget below the existing ceiling.
+    expect(retried.status).toBe("waiting_provider");
+    expect(retried.maxSteps).toBeGreaterThanOrEqual(150);
+  });
+
+  it("counts only automatic budget elevations toward the auto-retry cap", async () => {
+    const projectDir = path.join(tempDir, "auto-count-project");
+    const worktreeDir = path.join(tempDir, "auto-count-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "autocount", path: projectDir });
+    const task = database.createTask("auto count task", "dashboard", "autocount");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 2);
+
+    database.addEvent({
+      source: "human",
+      type: "goal.budget_elevated",
+      text: "manual",
+      taskId: task.id,
+      metadata: { runId: run.id, source: "retry_run" }
+    });
+    database.addEvent({
+      source: "system",
+      type: "goal.budget_elevated",
+      text: "auto",
+      taskId: task.id,
+      metadata: { runId: run.id, source: "auto_budget_exhausted" }
+    });
+    // Only the automatic one counts, so a manual retry does not consume an auto slot.
+    expect(database.countBudgetElevationsForRun(run.id)).toBe(1);
+  });
+
   it("loop-flagged goals stay blocked and retryRun refuses to auto-retry non-budget failures", async () => {
     const projectDir = path.join(tempDir, "loop-blocked-project");
     const worktreeDir = path.join(tempDir, "loop-blocked-worktree");
