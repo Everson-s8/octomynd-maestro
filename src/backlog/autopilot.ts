@@ -108,9 +108,9 @@ export class BacklogAutopilot {
         return this.snapshot();
       }
 
-      // Auto-recover goals that were hard-blocked by the budget (with preserved
-      // work) — the "kill the budget" fix. Only budget-exhausted blocks that are
-      // NOT a real loop (the runner now blocks loops separately) are retried.
+      // Auto-recover goals that were hard-blocked by the step budget and still
+      // hold preserved work. Only genuine budget-exhausted blocks are retried;
+      // goals blocked because the runner detected a real loop stay blocked.
       await this.recoverBudgetBlockedGoals();
 
       const tasks = this.database.listTasks(500);

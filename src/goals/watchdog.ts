@@ -3,7 +3,7 @@ import { GoalRunRecord, GoalStepRecord, MaestroDatabase } from "../db.js";
 /**
  * LoopSignal describes WHY a goal is considered stuck. It is the only thing
  * (besides an actual delivery / acceptance-criteria met) that may terminate a
- * goal — never a raw step count. This is the "kill the budget" watchdog.
+ * goal — never a raw step count. This is the loop watchdog.
  */
 export type LoopSignal = "no_progress" | "repeated_failure" | "same_decision";
 

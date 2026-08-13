@@ -1022,8 +1022,8 @@ export async function runTaskGoal(
       excluded = new Set();
     }
 
-    // "Kill the budget": a goal only dies on a REAL loop (watchdog), not on a raw
-    // step count. When the budget ceiling is hit, consult the watchdog:
+    // A goal only terminates on a real loop (watchdog), not on a raw step count.
+    // When the step-budget ceiling is hit, consult the watchdog:
     //  - loop (no progress / repeated failure / same decision)  -> hard block
     //  - otherwise (forward progress)                           -> elevate (unbounded
     //    up to MAESTRO_GOAL_MAX_STEPS) and resume, so legitimate long work finishes.
@@ -1205,8 +1205,8 @@ function finishCircuitBreak(
     metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
   });
   if (reason === "phase_budget_exhausted") {
-    // Same "kill the budget" rule as the global budget: only a real loop stops a
-    // goal; forward progress keeps elevating (up to the absolute ceiling).
+    // Same rule as the global budget: only a real loop stops a goal; forward
+    // progress keeps elevating (up to the absolute ceiling).
     const loopVerdict = new GoalWatchdog(database).verdict(run);
     if (loopVerdict.stop) {
       const failureCategory = "budget_exhausted";
