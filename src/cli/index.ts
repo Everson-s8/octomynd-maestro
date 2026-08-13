@@ -8,6 +8,13 @@ import { runTelegramConnectWizard } from "../telegram/connect.js";
 import { createDatabase } from "../db.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { CommandOrigin } from "../commands/types.js";
+import {
+  resolveDesktopPaths,
+  parseDesktopCliOptions,
+  isUiDistMissing,
+  isUiDistStale,
+  checkApiHealth
+} from "../desktop/launcher.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
@@ -41,6 +48,9 @@ Commands:
   project add <key> <path|github-url>
                         Register a local Git project, or clone a GitHub URL and register it.
   start                 Launch the Maestro orchestrator (dashboard UI + API + workers).
+  dashboard             Launch the web dashboard UI (http://127.0.0.1:4788).
+  desktop [--skip-build]
+                        Launch Maestro as a native desktop app (Electron).
   status                Show what is installed, connected, and ready.
 `);
 }
@@ -113,6 +123,103 @@ async function startCommand(): Promise<void> {
   process.on("SIGINT", () => child.kill("SIGINT"));
 }
 
+async function dashboardCommand(): Promise<void> {
+  console.log("Launching Maestro Dashboard web mode (http://127.0.0.1:4788)...");
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const child = spawn(npmCmd, ["run", "dev:platform"], {
+    cwd: process.cwd(),
+    stdio: "inherit"
+  });
+  child.on("close", (code) => process.exit(code ?? 1));
+  process.on("SIGINT", () => child.kill("SIGINT"));
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
+}
+
+async function desktopCommand(argv: string[]): Promise<void> {
+  const options = parseDesktopCliOptions(argv);
+  const paths = resolveDesktopPaths();
+
+  if (options.skipBuild) {
+    if (isUiDistMissing(paths.distIndex)) {
+      console.error(`[!] UI build missing at ${paths.distIndex}. Run 'maestro desktop' without --skip-build or run 'npm run build:ui' first.`);
+      process.exit(1);
+    }
+  } else {
+    if (isUiDistMissing(paths.distIndex) || isUiDistStale(paths.uiDir, paths.distIndex)) {
+      console.log("[..] Building dashboard UI (npm run build:ui)...");
+      const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+      execFileSync(npmCmd, ["run", "build:ui"], { stdio: "inherit" });
+    }
+  }
+
+  const isHealthy = await checkApiHealth(options.host, options.port, 1000);
+  let childBackend: ReturnType<typeof spawn> | undefined;
+
+  if (!isHealthy) {
+    console.log("[..] Orchestrator API server is not running. Starting orchestrator...");
+    const cliDir = path.dirname(fileURLToPath(import.meta.url));
+    const srcIndex = path.resolve(cliDir, "../index.ts");
+    const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
+    if (!fs.existsSync(tsxCli) || !fs.existsSync(srcIndex)) {
+      console.error("[!] Unable to locate orchestrator entry files.");
+      process.exit(1);
+    }
+    childBackend = spawn(process.execPath, [tsxCli, srcIndex], {
+      cwd: process.cwd(),
+      stdio: "inherit"
+    });
+
+    let attempts = 0;
+    let started = false;
+    while (attempts < 60) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (await checkApiHealth(options.host, options.port, 500)) {
+        started = true;
+        break;
+      }
+      attempts++;
+    }
+    if (!started) {
+      console.error("[!] Failed to verify orchestrator API server health.");
+      childBackend?.kill();
+      process.exit(1);
+    }
+  } else {
+    console.log(`[ok] Orchestrator API server running on http://${options.host}:${options.port}`);
+  }
+
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const binName = process.platform === "win32" ? "electron.cmd" : "electron";
+  const localElectron = path.resolve(cliDir, "../../node_modules/.bin", binName);
+  const electronBin = fs.existsSync(localElectron) ? localElectron : (process.platform === "win32" ? "npx.cmd" : "npx");
+  const electronArgs = fs.existsSync(localElectron)
+    ? [paths.desktopEntry]
+    : ["electron", paths.desktopEntry];
+
+  console.log("[..] Launching Maestro Desktop App...");
+  const desktopChild = spawn(electronBin, electronArgs, {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      MAESTRO_API_PORT: String(options.port),
+      MAESTRO_API_HOST: options.host
+    }
+  });
+
+  desktopChild.on("close", (code) => {
+    childBackend?.kill();
+    process.exit(code ?? 0);
+  });
+
+  const cleanup = () => {
+    childBackend?.kill();
+    desktopChild.kill();
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+}
+
 function statusCommand(): void {
   const cwd = process.cwd();
   const nodeMatch = /v(\d+)\./.exec(process.version);
@@ -182,6 +289,12 @@ async function main(): Promise<void> {
       break;
     case "start":
       await startCommand();
+      break;
+    case "dashboard":
+      await dashboardCommand();
+      break;
+    case "desktop":
+      await desktopCommand(argv);
       break;
     case "status":
       statusCommand();
