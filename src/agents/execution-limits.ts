@@ -5,7 +5,7 @@ export type ProviderExecutionLimits = {
 
 export const DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS = 10 * 60_000;
 export const DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
-export const DEFAULT_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
+export const DEFAULT_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
 export function normalizeProviderExecutionLimits(
   input: number | Partial<ProviderExecutionLimits> | undefined,
   defaultInactivityTimeoutMs: number

@@ -80,6 +80,45 @@ describe("Antigravity provider", () => {
       artifactsProduced: []
     });
   });
+
+  it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-hang-"));
+    tempPaths.push(tempDir);
+
+    const scriptPath = path.join(tempDir, process.platform === "win32" ? "agy.exe" : "agy");
+    if (process.platform === "win32") {
+      const psCmd = `powershell -Command "Add-Type -TypeDefinition 'using System.Threading; class P { static void Main() { Thread.Sleep(300000); } }' -OutputAssembly '${scriptPath.replace(/'/g, "''")}' -OutputType ConsoleApplication"`;
+      const { execSync } = await import("node:child_process");
+      execSync(psCmd, { stdio: "ignore" });
+    } else {
+      fs.writeFileSync(scriptPath, "#!/bin/sh\nsleep 300\n", { mode: 0o755 });
+    }
+
+    const provider = new AntigravityProvider({
+      executablePath: scriptPath,
+      healthProbe: false,
+      executionLimits: {
+        inactivityTimeoutMs: 150
+      }
+    });
+
+    const req = request("implementing", "coding");
+    req.task.worktreePath = tempDir;
+    req.project.path = tempDir;
+
+    const started = Date.now();
+    const res = await provider.execute(req);
+    const elapsed = Date.now() - started;
+
+    expect(res.outcome).toBe("failed");
+    expect(res.failureCategory).toBe("timeout");
+    expect(res.retryable).toBe(true);
+    expect(res.retryAfterMs).toBe(15_000);
+    expect(elapsed).toBeLessThan(5_000);
+
+    const health = await provider.health();
+    expect(health.state).toBe("offline");
+  });
 });
 
 function request(

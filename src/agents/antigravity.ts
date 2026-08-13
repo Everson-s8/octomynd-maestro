@@ -176,6 +176,11 @@ export class AntigravityProvider implements AgentProvider {
         this.cacheHealth({ state: category, detail: summary, checkedAt: new Date().toISOString() }, 10 * 60_000);
       } else if (category === "offline" || category === "capacity") {
         this.cacheHealth({ state: "offline", detail: summary, checkedAt: new Date().toISOString() }, 30_000);
+      } else if (category === "timeout" && processResult.breakerReason === "inactivity") {
+        // A hang on inactivity is a provider-health signal -> mark offline (retryable).
+        // Other timeouts (phase_timeout/deadline: the task simply ran long) must NOT
+        // mark the provider offline, matching claude.ts's treatment.
+        this.cacheHealth({ state: "offline", detail: summary, checkedAt: new Date().toISOString() }, 30_000);
       }
       return {
         outcome: "failed",
@@ -254,6 +259,7 @@ export class AntigravityProvider implements AgentProvider {
       ],
       cwd: request.workspacePath,
       timeoutMs: request.timeoutMs,
+      inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       signal: request.signal,
       maxOutputChars: request.maxOutputChars,
       maxReceivedChars: request.maxOutputChars * 2,
