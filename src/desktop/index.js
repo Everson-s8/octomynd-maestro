@@ -14,6 +14,7 @@ export function getDesktopWindowOptions() {
     title: "Maestro",
     backgroundColor: "#0f172a",
     show: true,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
@@ -29,6 +30,12 @@ export function resolveDesktopLoadUrl(apiHost = "127.0.0.1", apiPort = "4787") {
 
 function createWindow() {
   if (!BrowserWindow) return;
+  // Remove the native menu bar (File/Edit/View) so the app renders as a
+  // single-content desktop app, like other local tools.
+  const { Menu } = electronModule;
+  if (typeof Menu?.setApplicationMenu === "function") {
+    Menu.setApplicationMenu(null);
+  }
   const options = getDesktopWindowOptions();
   const mainWindow = new BrowserWindow(options);
 

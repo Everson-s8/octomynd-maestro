@@ -158,6 +158,15 @@ describe("dashboard", () => {
       });
       expect(controlResponse.status).toBe(200);
 
+      // A custom provider id (e.g. a pluggable CLI) must be routable via the
+      // control route too — not rejected with 405.
+      const customControlResponse = await fetch(`http://127.0.0.1:${port}/api/provider-policy/providers/opencode-go`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "enabled", fallbackEnabled: true })
+      });
+      expect(customControlResponse.status).toBe(200);
+
       const routingResponse = await fetch(`http://127.0.0.1:${port}/api/provider-policy/capabilities/reviewing`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

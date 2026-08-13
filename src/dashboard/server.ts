@@ -243,7 +243,7 @@ async function routeRequest(
     return;
   }
 
-  const providerControlMatch = url.pathname.match(/^\/api\/provider-policy\/providers\/(codex|claude|antigravity)$/);
+  const providerControlMatch = url.pathname.match(/^\/api\/provider-policy\/providers\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/);
   if (request.method === "PUT" && providerControlMatch) {
     if (!options.agentRegistry?.updateProviderControl) {
       sendJson(response, 503, { error: "provider_policy_unavailable" });
