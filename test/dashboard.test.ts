@@ -185,6 +185,23 @@ describe("dashboard", () => {
         order: ["codex", "claude", "antigravity"],
         requiredProviderId: "codex"
       });
+
+      // Provider connection probe: a known command resolves; a blank command is rejected.
+      const connectResponse = await fetch(`http://127.0.0.1:${port}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "node", args: ["--version"] })
+      });
+      expect(connectResponse.status).toBe(200);
+      const connectPayload = await connectResponse.json() as { ok: boolean };
+      expect(connectPayload.ok).toBe(true);
+
+      const blankResponse = await fetch(`http://127.0.0.1:${port}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "   " })
+      });
+      expect(blankResponse.status).toBe(400);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(
         (error) => error ? reject(error) : resolve()

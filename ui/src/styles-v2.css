@@ -235,6 +235,15 @@
   .add-provider .plus{width:34px;height:34px;border-radius:50%;border:1.5px dashed currentColor;display:grid;place-items:center;margin:0 auto 10px;font-size:18px}
   .add-provider b{font-family:'Fraunces';font-size:14px;display:block;color:inherit}
   .add-provider span{font-family:'IBM Plex Mono';font-size:11px}
+  .provider-connect-form{margin-top:16px;padding:16px;border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;gap:12px}
+  .provider-connect-form .field{display:flex;flex-direction:column;gap:6px}
+  .provider-connect-form .field label{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono'}
+  .provider-connect-form input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--sepia);color:var(--ivory);font-family:'IBM Plex Mono';font-size:12px}
+  .provider-connect-form input:disabled{opacity:.5}
+  .conn-badge{margin-top:6px;padding:10px 12px;border-radius:8px;font-size:12px;display:flex;flex-direction:column;gap:2px}
+  .conn-badge.ok{background:#12261c;border:1px solid #2e7d4f;color:#7fe0a8}
+  .conn-badge.fail{background:#271414;border:1px solid #8a3a2f;color:#f0a097}
+  .conn-badge span{font-family:'IBM Plex Mono';font-size:11px;opacity:.85}
 
   .routing-row{display:grid;grid-template-columns:110px 1fr 1fr;gap:14px;align-items:center;padding:16px 0;border-top:1px solid var(--line-soft)}
   .routing-row>div{min-width:0}
