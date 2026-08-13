@@ -43,12 +43,14 @@ export const DEFAULT_ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> =
 
 export function resolveProviderOrder(
   capability: AgentCapability,
-  snapshot: ProviderPolicySnapshot
+  snapshot: ProviderPolicySnapshot,
+  registeredProviderIds?: AgentProviderId[]
 ): AgentProviderId[] {
   const controls = new Map(snapshot.controls.map((control) => [control.providerId, control]));
   const routing = snapshot.capabilities.find((item) => item.capability === capability);
   const configuredOrder = routing?.order.length ? routing.order : DEFAULT_ROUTING_ORDER[capability];
-  const completeOrder = [...new Set([...configuredOrder, ...DEFAULT_ROUTING_ORDER[capability]])];
+  const extra = registeredProviderIds ?? [];
+  const completeOrder = [...new Set([...configuredOrder, ...DEFAULT_ROUTING_ORDER[capability], ...extra])];
   const allowed = completeOrder.filter((providerId) => {
     const mode = controls.get(providerId)?.mode ?? "enabled";
     return mode === "enabled";

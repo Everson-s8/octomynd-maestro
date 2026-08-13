@@ -24,6 +24,9 @@ export type WizardDetectionResult = {
   summary: string;
 };
 
+import { resolveCustomCliExecutable } from "../agents/custom-cli.js";
+import { parseCustomProviders } from "../config.js";
+
 export function detectProviders(env: NodeJS.ProcessEnv = process.env): DetectedProviderInfo[] {
   const codexCli = resolveCodexCliEntry();
   const codexKey = env.CODEX_API_KEY?.trim() || env.OPENAI_API_KEY?.trim();
@@ -36,6 +39,33 @@ export function detectProviders(env: NodeJS.ProcessEnv = process.env): DetectedP
   const antigravityCli = resolveAntigravityExecutable();
   const antigravityKey = env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim();
   const antigravityAvailable = Boolean(antigravityCli || antigravityKey);
+
+  const customConfigs = parseCustomProviders(env.MAESTRO_CUSTOM_PROVIDERS);
+  const detectedCustom: DetectedProviderInfo[] = [];
+  if (customConfigs) {
+    for (const custom of customConfigs) {
+      const cli = resolveCustomCliExecutable(custom.command);
+      const envKeyPresent = Boolean(
+        custom.envKeys?.some((key) => Boolean(env[key]?.trim()))
+      );
+      // A custom CLI provider only ever RUNS by spawning its command, so it is
+      // not usable without a resolvable executable even when an env key exists
+      // (execute() has no API-only path). envKeyPresent is surfaced for
+      // diagnostics, but availability requires the CLI to resolve.
+      const available = Boolean(cli);
+      detectedCustom.push({
+        id: custom.id,
+        label: custom.label,
+        available,
+        source: cli ? "cli" : envKeyPresent ? "env_key" : "none",
+        detail: cli
+          ? `${custom.label} CLI detected`
+          : envKeyPresent
+            ? `${custom.label} env key present but CLI not found`
+            : `${custom.label} CLI or API key missing`
+      });
+    }
+  }
 
   return [
     {
@@ -70,7 +100,8 @@ export function detectProviders(env: NodeJS.ProcessEnv = process.env): DetectedP
         : antigravityKey
           ? "Gemini API key detected in ENV"
           : "Antigravity CLI or Gemini API key missing"
-    }
+    },
+    ...detectedCustom
   ];
 }
 
