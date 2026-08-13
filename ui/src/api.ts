@@ -420,6 +420,24 @@ export async function updateProviderControls(
   return payload.controls;
 }
 
+export interface ProviderConnectionResult {
+  ok: boolean;
+  detail: string;
+  executable: string | null;
+}
+
+/** Probe whether a custom provider CLI is reachable (read-only; does not persist). */
+export async function testProviderConnection(input: { command: string; args?: string[] }): Promise<ProviderConnectionResult> {
+  const response = await fetch("/api/providers/test-connection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command: input.command, args: input.args ?? [] })
+  });
+  const payload = await response.json() as ProviderConnectionResult & { error?: string };
+  if (!response.ok) throw new Error(payload.error || "Nao foi possivel testar a conexao.");
+  return payload;
+}
+
 export async function updateCapabilityRouting(
   capability: AgentCapability,
   input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId">

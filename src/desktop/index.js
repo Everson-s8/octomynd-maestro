@@ -30,10 +30,11 @@ export function resolveDesktopLoadUrl(apiHost = "127.0.0.1", apiPort = "4787") {
 
 function createWindow() {
   if (!BrowserWindow) return;
-  // Remove the native menu bar (File/Edit/View) so the app renders as a
-  // single-content desktop app, like other local tools.
+  // Hide the native File/Edit/View menu so the app renders as a single-content
+  // desktop app. On macOS keep a minimal app menu (Quit/Hide) so Cmd+Q etc.
+  // keep working — a fully-null menu strips macOS accelerators.
   const { Menu } = electronModule;
-  if (typeof Menu?.setApplicationMenu === "function") {
+  if (typeof Menu?.setApplicationMenu === "function" && process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
   }
   const options = getDesktopWindowOptions();

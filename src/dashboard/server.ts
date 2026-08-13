@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
 import { MaestroConfig } from "../config.js";
 import {
@@ -25,6 +26,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import type { WorkGraphRuntimeCommands, WorkIntakeCommandInput } from "../commands/application-commands.js";
 import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
+import { resolveCustomCliExecutable } from "../agents/custom-cli.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
@@ -138,6 +140,22 @@ async function routeRequest(
       agents,
       options.backlogAutopilot?.snapshot()
     ));
+    return;
+  }
+
+  // Test whether a custom provider can connect before the user commits to it.
+  // Only read-only probes (executable resolution + optional version probe); it
+  // does NOT persist anything.
+  if (request.method === "POST" && url.pathname === "/api/providers/test-connection") {
+    const body = await readJsonBody(request);
+    const command = typeof body.command === "string" ? body.command.trim() : "";
+    const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === "string") : [];
+    if (!command) {
+      sendJson(response, 400, { error: "command_is_required" });
+      return;
+    }
+    const state = await testAgentConnection(command, args);
+    sendJson(response, 200, state);
     return;
   }
 
@@ -1279,4 +1297,37 @@ function contentType(filePath: string): string {
     ".png": "image/png",
     ".svg": "image/svg+xml"
   }[extension] ?? "application/octet-stream";
+}
+
+/**
+ * Probe whether a custom provider CLI is reachable, without persisting anything.
+ * Used by POST /api/providers/test-connection so the UI can show a real
+ * connect/error state before the user commits to the provider.
+ */
+async function testAgentConnection(command: string, args: string[]): Promise<{ ok: boolean; detail: string; executable: string | null }> {
+  const executable = resolveCustomCliExecutable(command);
+  if (!executable) {
+    return {
+      ok: false,
+      detail: `CLI '${command}' não foi encontrado no PATH.`,
+      executable: null
+    };
+  }
+  if (args.length > 0) {
+    // Async version probe so a slow/hung CLI does not block the event loop.
+    const ok = await probeExecutable(executable, args);
+    return ok
+      ? { ok: true, detail: `Conectado (${command}).`, executable }
+      : { ok: false, detail: `Falha ao executar ${command}.`, executable };
+  }
+  return { ok: true, detail: `Executável encontrado (${command}).`, executable };
+}
+
+/** Runs `command args` asynchronously; resolves true only on exit 0. */
+function probeExecutable(command: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { timeout: 15_000, windowsHide: true });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
 }
