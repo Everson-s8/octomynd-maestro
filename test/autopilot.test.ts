@@ -110,6 +110,66 @@ describe("backlog autopilot", () => {
       reason: `already_resolved_by_task_${resolved.id}`
     });
   });
+
+  it("auto-recovers a budget-blocked goal via GoalStarter.retry when available", async () => {
+    database.registerProject({ key: "alpha", path: tempDir });
+    const task = database.createTask("budget blocked task", "dashboard", "alpha");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "r", worktreePath: tempDir });
+    // Create a blocked run for this task (budget_exhausted, preserved work).
+    database.createGoalRun(task.id, 20);
+    const run = database.listActiveGoalRuns().find((g) => g.taskId === task.id)!;
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "reviewing",
+      stepCount: 20,
+      maxSteps: 20,
+      lastError: "Goal reached its 20-step budget.",
+      waitReason: "budget_exhausted"
+    });
+
+    const retried: number[] = [];
+    const autopilot = new BacklogAutopilot(
+      database,
+      {
+        start: () => { throw new Error("must not fresh-start"); },
+        retry: (taskId: number) => { retried.push(taskId); return database.createGoalRun(taskId, 40); }
+      },
+      { enabled: true, worktreesRoot: tempDir }
+    );
+
+    await autopilot.tick();
+
+    expect(retried).toEqual([task.id]);
+    expect(database.listEvents().some((e) => e.type === "backlog.goal_auto_retried")).toBe(true);
+  });
+
+  it("does not auto-recover budget-blocked goals when the starter has no retry", async () => {
+    database.registerProject({ key: "alpha", path: tempDir });
+    const task = database.createTask("no retry task", "dashboard", "alpha");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "r", worktreePath: tempDir });
+    database.createGoalRun(task.id, 10);
+    const run = database.listActiveGoalRuns().find((g) => g.taskId === task.id)!;
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 10,
+      maxSteps: 10,
+      lastError: "Goal reached its 10-step budget.",
+      waitReason: "budget_exhausted"
+    });
+
+    const autopilot = new BacklogAutopilot(
+      database,
+      { start: () => { throw new Error("must not start"); } },
+      { enabled: true, worktreesRoot: tempDir }
+    );
+
+    await autopilot.tick();
+
+    expect(database.listEvents().some((e) => e.type === "backlog.goal_auto_retried")).toBe(false);
+  });
 });
 
 function createAutopilot(started: number[]) {

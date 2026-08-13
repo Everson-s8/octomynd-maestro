@@ -25,6 +25,7 @@ import type { TaskDNA, GoalPhase as DnaGoalPhase } from "./task-dna.js";
 export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import { elevateMaxSteps, MAESTRO_GOAL_MAX_STEPS } from "./coordinator.js";
+import { GoalWatchdog } from "./watchdog.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
 import {
@@ -1021,43 +1022,62 @@ export async function runTaskGoal(
       excluded = new Set();
     }
 
-    const autoReRaises = database.countBudgetElevationsForRun(run.id);
-    if (autoReRaises < 2) {
-      const newMaxSteps = elevateMaxSteps(currentRun.maxSteps);
-      if (newMaxSteps > currentRun.maxSteps) {
-        database.addEvent({
-          source: "maestro",
-          type: "goal.budget_elevated",
-          text: `Goal #${run.id} maxSteps auto-elevated from ${currentRun.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
-          taskId: task.id,
-          metadata: {
-            runId: run.id,
-            previousMaxSteps: currentRun.maxSteps,
-            newMaxSteps,
-            ceiling: MAESTRO_GOAL_MAX_STEPS,
-            source: "auto_budget_exhausted"
-          }
-        });
-        return pauseRun(
-          database,
-          currentRun,
-          phase,
-          stepCount,
-          `Goal reached its ${currentRun.maxSteps}-step budget.`,
-          task.id,
-          { reason: "budget_exhausted", retryAfterMs: 5_000 },
-          newMaxSteps
-        );
-      }
+    // "Kill the budget": a goal only dies on a REAL loop (watchdog), not on a raw
+    // step count. When the budget ceiling is hit, consult the watchdog:
+    //  - loop (no progress / repeated failure / same decision)  -> hard block
+    //  - otherwise (forward progress)                           -> elevate (unbounded
+    //    up to MAESTRO_GOAL_MAX_STEPS) and resume, so legitimate long work finishes.
+    const loopVerdict = new GoalWatchdog(database, { workspaceHash: () => null }).verdict(currentRun);
+    if (loopVerdict.stop) {
+      return finishRun(
+        database,
+        currentRun,
+        "blocked",
+        phase,
+        stepCount,
+        `Goal loop detected (${loopVerdict.reason}) after ${currentRun.stepCount} steps.`,
+        task.id,
+        "budget_exhausted"
+      );
     }
 
+    const newMaxSteps = elevateMaxSteps(currentRun.maxSteps);
+    if (newMaxSteps > currentRun.maxSteps) {
+      database.addEvent({
+        source: "maestro",
+        type: "goal.budget_elevated",
+        text: `Goal #${run.id} maxSteps auto-elevated from ${currentRun.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+        taskId: task.id,
+        metadata: {
+          runId: run.id,
+          previousMaxSteps: currentRun.maxSteps,
+          newMaxSteps,
+          ceiling: MAESTRO_GOAL_MAX_STEPS,
+          source: "auto_budget_exhausted"
+        }
+      });
+      return pauseRun(
+        database,
+        currentRun,
+        phase,
+        stepCount,
+        `Goal reached its ${currentRun.maxSteps}-step budget; elevating ceiling to ${newMaxSteps}.`,
+        task.id,
+        { reason: "budget_exhausted", retryAfterMs: 5_000 },
+        newMaxSteps
+      );
+    }
+
+    // Ceiling reached: no more elevation possible — a genuine runaway. This is
+    // the absolute safety net, not the normal termination (the watchdog and
+    // delivery gates should have ended the goal well before this).
     return finishRun(
       database,
       currentRun,
       "blocked",
       phase,
       stepCount,
-      `Goal reached its ${run.maxSteps}-step budget.`,
+      `Goal reached the absolute step ceiling of ${MAESTRO_GOAL_MAX_STEPS}; possible runaway.`,
       task.id,
       "budget_exhausted"
     );
@@ -1185,34 +1205,38 @@ function finishCircuitBreak(
     metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
   });
   if (reason === "phase_budget_exhausted") {
-    const autoReRaises = database.countBudgetElevationsForRun(run.id);
-    if (autoReRaises < 2) {
-      const newMaxSteps = elevateMaxSteps(run.maxSteps);
-      if (newMaxSteps > run.maxSteps) {
-        database.addEvent({
-          source: "maestro",
-          type: "goal.budget_elevated",
-          text: `Goal #${run.id} maxSteps auto-elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
-          taskId,
-          metadata: {
-            runId: run.id,
-            previousMaxSteps: run.maxSteps,
-            newMaxSteps,
-            ceiling: MAESTRO_GOAL_MAX_STEPS,
-            source: "auto_budget_exhausted"
-          }
-        });
-        return pauseRun(
-          database,
-          run,
-          phase,
-          stepCount,
-          safeSummary,
-          taskId,
-          { reason: "budget_exhausted", retryAfterMs: 5_000 },
-          newMaxSteps
-        );
-      }
+    // Same "kill the budget" rule as the global budget: only a real loop stops a
+    // goal; forward progress keeps elevating (up to the absolute ceiling).
+    const loopVerdict = new GoalWatchdog(database, { workspaceHash: () => null }).verdict(run);
+    if (loopVerdict.stop) {
+      const failureCategory = "budget_exhausted";
+      return finishRun(database, run, "blocked", phase, stepCount, `Goal loop detected (${loopVerdict.reason}) in ${phase}.`, taskId, failureCategory);
+    }
+    const newMaxSteps = elevateMaxSteps(run.maxSteps);
+    if (newMaxSteps > run.maxSteps) {
+      database.addEvent({
+        source: "maestro",
+        type: "goal.budget_elevated",
+        text: `Goal #${run.id} maxSteps auto-elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+        taskId,
+        metadata: {
+          runId: run.id,
+          previousMaxSteps: run.maxSteps,
+          newMaxSteps,
+          ceiling: MAESTRO_GOAL_MAX_STEPS,
+          source: "auto_budget_exhausted"
+        }
+      });
+      return pauseRun(
+        database,
+        run,
+        phase,
+        stepCount,
+        safeSummary,
+        taskId,
+        { reason: "budget_exhausted", retryAfterMs: 5_000 },
+        newMaxSteps
+      );
     }
   }
   const failureCategory = reason === "phase_budget_exhausted" ? "budget_exhausted" : undefined;

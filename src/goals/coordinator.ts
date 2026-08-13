@@ -25,7 +25,7 @@ const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
   "done"
 ]);
 
-export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "100", 10) || 100;
+export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "150", 10) || 150;
 
 export function elevateMaxSteps(currentMaxSteps: number, ceiling?: number): number {
   const effectiveCeiling = ceiling ?? MAESTRO_GOAL_MAX_STEPS;
@@ -125,6 +125,11 @@ export class GoalCoordinator {
       throw new Error(`Task #${taskId} has no blocked goal to retry.`);
     }
     return this.retryRun(run.id);
+  }
+
+  /** Alias used by the backlog autopilot to resume a budget-blocked goal. */
+  retry(taskId: number): GoalRunRecord {
+    return this.retryTask(taskId);
   }
 
   /**

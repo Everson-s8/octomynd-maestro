@@ -26,6 +26,9 @@ export type BacklogAutopilotOptions = {
 
 export type GoalStarter = {
   start(taskId: number, maxSteps?: number): GoalRunRecord;
+  /** Retry a hard-blocked goal (budget_exhausted). Optional — the autopilot
+   *  only auto-recovers when the starter provides it (real GoalCoordinator does). */
+  retry?: (taskId: number) => GoalRunRecord;
 };
 
 export type TaskPreparer = (
@@ -93,6 +96,11 @@ export class BacklogAutopilot {
         this.lastAction = "running_capacity_reached";
         return this.snapshot();
       }
+
+      // Auto-recover goals that were hard-blocked by the budget (with preserved
+      // work) — the "kill the budget" fix. Only budget-exhausted blocks that are
+      // NOT a real loop (the runner now blocks loops separately) are retried.
+      await this.recoverBudgetBlockedGoals();
 
       const tasks = this.database.listTasks(500);
       const activeTasks = goals
@@ -162,6 +170,46 @@ export class BacklogAutopilot {
       return this.snapshot();
     } finally {
       this.tickRunning = false;
+    }
+  }
+
+  /**
+   * Resume goals that were hard-blocked by the step budget but are NOT a real
+   * loop (the runner now blocks genuine loops separately). Budgeted work with a
+   * preserved worktree is retried in place via GoalStarter.retry (which elevates
+   * the ceiling), so a healthy goal finishes instead of sitting `blocked` until
+   * a human retries it. Guarded: only a few per tick, only when not at capacity.
+   */
+  private async recoverBudgetBlockedGoals(): Promise<void> {
+    if (!this.goals.retry) return;
+    // listGoalRuns includes blocked runs (listActiveGoalRuns excludes them).
+    const budgetBlocked = this.database
+      .listGoalRuns(100)
+      .filter((goal) => goal.status === "blocked")
+      .filter((goal) => {
+        const err = (goal.lastError ?? "").toLowerCase();
+        const reason = (goal.waitReason ?? "").toLowerCase();
+        return (
+          reason.includes("budget_exhausted") ||
+          err.includes("budget") ||
+          err.includes("reached its")
+        );
+      });
+    // Small per-tick cap so a pool of stale blocked goals does not overwhelm it.
+    for (const goal of budgetBlocked.slice(0, 2)) {
+      try {
+        const resumed = this.goals.retry(goal.taskId);
+        this.database.addEvent({
+          source: "maestro",
+          type: "backlog.goal_auto_retried",
+          text: `Autopilot auto-retried budget-blocked goal #${goal.id} for task #${goal.taskId} (ceiling elevated).`,
+          taskId: goal.taskId,
+          metadata: { runId: resumed.id, previousRun: goal.id }
+        });
+        this.lastAction = `auto_retried_task_${goal.taskId}`;
+      } catch {
+        // If retry is not possible (e.g. loop-flagged, no preserved work), skip.
+      }
     }
   }
 
