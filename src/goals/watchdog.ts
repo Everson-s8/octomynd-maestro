@@ -14,26 +14,26 @@ export interface WatchdogVerdict {
 }
 
 export interface WatchdogDeps {
-  /** Hash of the goal worktree contents. Repeat across steps => no forward progress. */
-  workspaceHash: (run: GoalRunRecord) => string | null;
-  /** Max same-looking recent steps before we call it a loop. */
+  /** Max same-looking consecutive steps before we call it a loop. */
   threshold?: number;
 }
 
 const DEFAULT_THRESHOLD = 2;
 
 /**
- * A stateful, per-run loop detector. Feed it the completed goal steps (oldest
- * first) and the current run; it answers whether the goal is spinning in place.
+ * A per-run loop detector. Feed it the completed goal steps (oldest first) and
+ * the current run; it answers whether the goal is spinning in place.
  *
- * It is intentionally conservative: it only stops on strong evidence of no
- * forward progress, so legitimate long implementations are never killed early.
+ * It is deliberately CONSERVATIVE: every signal is scoped to consecutive,
+ * same-phase steps so a legitimate long implementation (which changes summaries,
+ * phases, or fixed errors) is never stopped. We prefer to let a slightly odd
+ * goal run over allowing a false positive that kills real work.
  */
 export class GoalWatchdog {
   private readonly threshold: number;
   constructor(
     private readonly database: MaestroDatabase,
-    private readonly deps: WatchdogDeps
+    private readonly deps: WatchdogDeps = {}
   ) {
     this.threshold = deps.threshold ?? DEFAULT_THRESHOLD;
   }
@@ -42,27 +42,15 @@ export class GoalWatchdog {
   verdict(run: GoalRunRecord): WatchdogVerdict {
     const steps = this.recentSteps(run).filter((step) => step.status !== "running");
     if (steps.length < 2) return { stop: false, stepCount: run.stepCount };
-
-    // 1) repeated_failure: the same error text repeated back-to-back.
-    const repeatedFailure = this.repeatedFailure(steps);
-    if (repeatedFailure) {
+    if (this.repeatedFailure(steps)) {
       return { stop: true, reason: "repeated_failure", stepCount: run.stepCount };
     }
-
-    // 2) same_decision: in reviewing, the same change-request reason repeated
-    //    without new code (no workspace change).
-    const sameDecision = this.sameDecision(steps, run);
-    if (sameDecision) {
+    if (this.sameDecision(steps)) {
       return { stop: true, reason: "same_decision", stepCount: run.stepCount };
     }
-
-    // 3) no_progress: several consecutive steps with identical summary AND an
-    //    unchanged workspace hash => the agent loops without producing diff.
-    const noProgress = this.noProgress(steps, run);
-    if (noProgress) {
+    if (this.noProgress(steps)) {
       return { stop: true, reason: "no_progress", stepCount: run.stepCount };
     }
-
     return { stop: false, stepCount: run.stepCount };
   }
 
@@ -70,16 +58,29 @@ export class GoalWatchdog {
     return this.database
       .listGoalSteps(run.id)
       .sort((a, b) => a.id - b.id)
-      .slice(-Math.max(this.threshold * 2, 4));
+      .slice(-Math.max(this.threshold * 3, 6));
   }
 
+  private normalized(text: string | null, length = 200): string {
+    // Trim plus collapse internal whitespace so trivial line-ending diffs don't
+    // look "different". Generous length reduces prefix collisions between
+    // distinct errors/summaries.
+    return (text ?? "").replace(/\s+/g, " ").trim().slice(0, length);
+  }
+
+  /**
+   * The same failure text repeated across consecutive steps in the SAME phase.
+   * Scoping to same phase is important: a generic "timeout" failing once in
+   * testing then again in an unrelated implementing step is NOT a loop.
+   */
   private repeatedFailure(steps: GoalStepRecord[]): boolean {
     const failed = steps.filter((step) => step.status === "failed" || step.status === "blocked");
-    if (failed.length < 2) return false;
-    const normalized = (text: string | null) => (text ?? "").trim().slice(0, 120);
+    if (failed.length < this.threshold) return false;
     let same = 0;
     for (let i = 1; i < failed.length; i++) {
-      if (normalized(failed[i].error) === normalized(failed[i - 1].error)) {
+      const samePhase = failed[i].phase === failed[i - 1].phase;
+      const sameError = this.normalized(failed[i].error) === this.normalized(failed[i - 1].error);
+      if (samePhase && sameError) {
         same++;
         if (same >= this.threshold) return true;
       } else {
@@ -89,17 +90,41 @@ export class GoalWatchdog {
     return false;
   }
 
-  private sameDecision(steps: GoalStepRecord[], run: GoalRunRecord): boolean {
+  /**
+   * In the reviewing phase, the reviewer keeps returning the SAME change-request
+   * reason across consecutive steps with NO work in between that changed the
+   * code. We require: same phase (reviewing), consecutive, identical normalized
+   * summary. Because identical summaries alone are weak evidence, we also require
+   * the steps between them did not complete (no new code produced).
+   */
+  private sameDecision(steps: GoalStepRecord[]): boolean {
     const reviews = steps.filter((step) => step.status === "changes_requested");
-    if (reviews.length < 2) return false;
-    const hash = this.deps.workspaceHash(run);
-    // If the worktree changed since the review, the agent is addressing feedback.
-    const workspaceUnchanged = hash == null || steps.slice(0, -1).every(() => hash === hash);
-    if (!workspaceUnchanged) return false;
-    const normalized = (text: string) => text.trim().slice(0, 120);
-    let same = 0;
+    if (reviews.length < this.threshold) return false;
     for (let i = 1; i < reviews.length; i++) {
-      if (normalized(reviews[i].summary) === normalized(reviews[i - 1].summary)) {
+      const prev = reviews[i - 1];
+      const curr = reviews[i];
+      const samePhase = prev.phase === curr.phase && prev.phase === "reviewing";
+      const sameReason = this.normalized(prev.summary) === this.normalized(curr.summary);
+      if (!samePhase || !sameReason) continue;
+      // No completed step between the two reviews => the agent produced no new
+      // code while re-circling the same feedback.
+      const between = steps.filter((s) => s.id > prev.id && s.id < curr.id);
+      const noWorkBetween = between.every((s) => s.status === "changes_requested" || s.status === "failed" || s.status === "blocked");
+      if (noWorkBetween) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A run of consecutive identical summaries with no completed/failed work that
+   * changed the picture. This catches "thinking about the design" forever. A
+   * goal that is changing summaries (real steps) is never stopped here.
+   */
+  private noProgress(steps: GoalStepRecord[]): boolean {
+    let same = 0;
+    for (let i = 1; i < steps.length; i++) {
+      if (steps[i].status === steps[i - 1].status
+          && this.normalized(steps[i].summary) === this.normalized(steps[i - 1].summary)) {
         same++;
         if (same >= this.threshold) return true;
       } else {
@@ -107,33 +132,5 @@ export class GoalWatchdog {
       }
     }
     return false;
-  }
-
-  private noProgress(steps: GoalStepRecord[], run: GoalRunRecord): boolean {
-    const hash = this.deps.workspaceHash(run);
-    // Without a workspace hash we fall back to identical summaries.
-    if (hash == null) {
-      let same = 0;
-      for (let i = 1; i < steps.length; i++) {
-        if (steps[i].summary.trim() === steps[i - 1].summary.trim()) {
-          same++;
-          if (same >= this.threshold) return true;
-        } else {
-          same = 0;
-        }
-      }
-      return false;
-    }
-    // Count steps since the last workspace change; if too many and summaries are
-    // identical, it is spinning.
-    let unchangedRuns = 0;
-    for (let i = steps.length - 1; i > 0; i--) {
-      if (steps[i].summary.trim() === steps[i - 1].summary.trim()) {
-        unchangedRuns++;
-      } else {
-        break;
-      }
-    }
-    return unchangedRuns >= this.threshold;
   }
 }

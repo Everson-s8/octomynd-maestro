@@ -32,49 +32,75 @@ function pushStep(run: GoalRunRecord, phase: "planning" | "implementing" | "test
 }
 
 describe.sequential("GoalWatchdog", () => {
-  it("does not stop a goal with no finished steps", () => {
+  it("does not stop a goal with fewer than two finished steps", () => {
     const r = makeRun();
-    const v = new GoalWatchdog(database, { workspaceHash: () => "a" }).verdict(r);
+    const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(false);
   });
 
-  it("stops on repeated identical failures", () => {
-    const r = makeRun({ stepCount: 6 });
+  it("stops on repeated identical failures in the same phase", () => {
+    const r = makeRun();
     pushStep(r, "implementing", "failed", "step", "provider crash");
     pushStep(r, "implementing", "failed", "step", "provider crash");
     pushStep(r, "implementing", "failed", "step", "provider crash");
-    const v = new GoalWatchdog(database, { workspaceHash: () => "a", threshold: 2 }).verdict(r);
+    const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(true);
     expect(v.reason).toBe("repeated_failure");
   });
 
-  it("stops on repeated same change-request reasons with no workspace change", () => {
-    const r = makeRun({ currentPhase: "reviewing", stepCount: 4 });
+  it("does NOT treat the same generic error across different phases as a loop", () => {
+    const r = makeRun();
+    pushStep(r, "testing", "failed", "step", "timeout");
+    pushStep(r, "implementing", "failed", "step", "timeout");
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(false);
+  });
+
+  it("stops when change-request reasons repeat with no work produced between reviews", () => {
+    const r = makeRun();
     pushStep(r, "reviewing", "changes_requested", "add error handling");
     pushStep(r, "reviewing", "changes_requested", "add error handling");
     pushStep(r, "reviewing", "changes_requested", "add error handling");
-    const v = new GoalWatchdog(database, { workspaceHash: () => "same-hash", threshold: 2 }).verdict(r);
+    const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(true);
     expect(v.reason).toBe("same_decision");
   });
 
-  it("stops on repeated identical summaries with an unchanged workspace", () => {
-    const r = makeRun({ stepCount: 4 });
+  it("does NOT stop when new work (completed step) is produced between reviews", () => {
+    const r = makeRun();
+    pushStep(r, "reviewing", "changes_requested", "add error handling");
+    // Agent fixed the code (a completed step with a different summary).
+    pushStep(r, "implementing", "completed", "add error handlers");
+    pushStep(r, "reviewing", "changes_requested", "add error handling");
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(false);
+  });
+
+  it("stops on a run of identical consecutive summaries", () => {
+    const r = makeRun();
     pushStep(r, "implementing", "completed", "thinking about the design");
     pushStep(r, "implementing", "completed", "thinking about the design");
     pushStep(r, "implementing", "completed", "thinking about the design");
-    const v = new GoalWatchdog(database, { workspaceHash: () => "static", threshold: 2 }).verdict(r);
+    const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(true);
     expect(v.reason).toBe("no_progress");
   });
 
   it("does NOT stop a goal that is making forward progress", () => {
-    const r = makeRun({ stepCount: 6 });
+    const r = makeRun();
     pushStep(r, "implementing", "completed", "add User model");
     pushStep(r, "implementing", "completed", "add auth middleware");
     pushStep(r, "implementing", "completed", "add login route");
     pushStep(r, "testing", "completed", "add tests");
-    const v = new GoalWatchdog(database, { workspaceHash: () => "changing", threshold: 2 }).verdict(r);
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(false);
+  });
+
+  it("does NOT treat errors sharing a long common prefix as identical", () => {
+    const r = makeRun();
+    pushStep(r, "implementing", "failed", "step", "SyntaxError: unexpected token X. Long stack trace line one that keeps going for the full length");
+    pushStep(r, "implementing", "failed", "step", "SyntaxError: unexpected token Y. Long stack trace line two that keeps going for the full len");
+    const v = new GoalWatchdog(database).verdict(r);
     expect(v.stop).toBe(false);
   });
 });

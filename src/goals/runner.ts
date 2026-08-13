@@ -1027,7 +1027,7 @@ export async function runTaskGoal(
     //  - loop (no progress / repeated failure / same decision)  -> hard block
     //  - otherwise (forward progress)                           -> elevate (unbounded
     //    up to MAESTRO_GOAL_MAX_STEPS) and resume, so legitimate long work finishes.
-    const loopVerdict = new GoalWatchdog(database, { workspaceHash: () => null }).verdict(currentRun);
+    const loopVerdict = new GoalWatchdog(database).verdict(currentRun);
     if (loopVerdict.stop) {
       return finishRun(
         database,
@@ -1207,7 +1207,7 @@ function finishCircuitBreak(
   if (reason === "phase_budget_exhausted") {
     // Same "kill the budget" rule as the global budget: only a real loop stops a
     // goal; forward progress keeps elevating (up to the absolute ceiling).
-    const loopVerdict = new GoalWatchdog(database, { workspaceHash: () => null }).verdict(run);
+    const loopVerdict = new GoalWatchdog(database).verdict(run);
     if (loopVerdict.stop) {
       const failureCategory = "budget_exhausted";
       return finishRun(database, run, "blocked", phase, stepCount, `Goal loop detected (${loopVerdict.reason}) in ${phase}.`, taskId, failureCategory);
