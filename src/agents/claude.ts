@@ -358,18 +358,21 @@ export const reviewTaskWithClaude = async (
 
 export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord): string {
   return [
-    "Voce e o revisor de produto e design do Octomynd Maestro.",
+    "Voce e o revisor de aceite do Octomynd Maestro.",
     "Trabalhe somente em modo leitura. Nao edite arquivos e nao execute comandos.",
     `Projeto: ${project.name} (@${project.key})`,
     `Task #${task.id}: ${task.text}`,
     "",
-    "Analise o estado atual do repositorio e entregue em portugues:",
-    "1. pontos fortes;",
-    "2. problemas de UX, acessibilidade e coerencia visual;",
-    "3. cinco melhorias priorizadas com arquivos/componentes afetados;",
-    "4. riscos de implementar as mudancas;",
-    "5. veredito curto: aprovado, aprovado com ajustes ou reprovado.",
-    "Se existir docs/VISUAL_IDENTITY.md, use-o como contrato visual."
+    "Sua unica autoridade de aprovacao e o objetivo da task e seus criterios de aceite.",
+    "Avalie o estado atual do repositorio contra esse contrato e entregue em portugues:",
+    "1. criterios cumpridos, com a evidencia concreta de cada um (arquivo/teste/linha);",
+    "2. criterios NAO cumpridos ou defeitos concretos (critico/alto), se houver;",
+    "3. sugestoes opcionais e nao-bloqueantes, sem exigir um numero fixo de melhorias;",
+    "4. veredito unico e exato em linha propria: FINAL_REVIEW_DECISION: approved OU FINAL_REVIEW_DECISION: changes_requested.",
+    "Regras de veredito: aprove se o objetivo esta implementado e nenhum criterio obrigatorio falhou.",
+    "Peca mudancas SOMENTE para criterio obrigatorio nao cumprido ou defeito concreto.",
+    "Melhorias de estilo/UX/refactor cosmetico NAO bloqueiam aprovacao a menos que estejam no escopo da task.",
+    "Se existir docs/VISUAL_IDENTITY.md, use-o como contrato visual apenas quando o escopo envolver UI."
   ].join("\n");
 }
 

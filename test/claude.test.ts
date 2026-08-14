@@ -16,7 +16,7 @@ import { AgentExecutionRequest } from "../src/agents/types.js";
 import { ProjectRecord, TaskRecord } from "../src/db.js";
 
 describe("claude review", () => {
-  it("builds a read-only design review prompt with task context", () => {
+  it("builds an acceptance-based read-only review prompt with task context", () => {
     const project: ProjectRecord = {
       id: 1,
       key: "maestro",
@@ -45,6 +45,20 @@ describe("claude review", () => {
     expect(prompt).toContain("somente em modo leitura");
     expect(prompt).toContain("Task #9: revisar a identidade visual");
     expect(prompt).toContain("docs/VISUAL_IDENTITY.md");
+    // Acceptance-based, not an open-ended design critique.
+    expect(prompt).toContain("criterios de aceite");
+    expect(prompt).toContain("FINAL_REVIEW_DECISION");
+    expect(prompt).not.toContain("cinco melhorias");
+    expect(prompt).not.toContain("pontos fortes");
+  });
+
+  it("instructs the goal reviewer to approve against acceptance criteria, not invent improvements", () => {
+    const prompt = buildClaudeGoalPrompt(executionRequest("reviewing", "reviewing"));
+    expect(prompt).toContain("revisor de aceite");
+    expect(prompt).toContain("FINAL_REVIEW_DECISION");
+    expect(prompt).toContain("PECA MUDANCAS somente");
+    expect(prompt).toContain("NAO justificam changes_requested");
+    expect(prompt).not.toContain("cinco melhorias");
   });
 
   it("supports native and legacy Claude CLI installations", () => {
