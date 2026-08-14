@@ -358,21 +358,21 @@ export const reviewTaskWithClaude = async (
 
 export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord): string {
   return [
-    "Voce e o revisor de aceite do Octomynd Maestro.",
-    "Trabalhe somente em modo leitura. Nao edite arquivos e nao execute comandos.",
-    `Projeto: ${project.name} (@${project.key})`,
+    "You are the acceptance reviewer for Octomynd Maestro.",
+    "Work in read-only mode. Do not edit files and do not run commands.",
+    `Project: ${project.name} (@${project.key})`,
     `Task #${task.id}: ${task.text}`,
     "",
-    "Sua unica autoridade de aprovacao e o objetivo da task e seus criterios de aceite.",
-    "Avalie o estado atual do repositorio contra esse contrato e entregue em portugues:",
-    "1. criterios cumpridos, com a evidencia concreta de cada um (arquivo/teste/linha);",
-    "2. criterios NAO cumpridos ou defeitos concretos (critico/alto), se houver;",
-    "3. sugestoes opcionais e nao-bloqueantes, sem exigir um numero fixo de melhorias;",
-    "4. veredito unico e exato em linha propria: FINAL_REVIEW_DECISION: approved OU FINAL_REVIEW_DECISION: changes_requested.",
-    "Regras de veredito: aprove se o objetivo esta implementado e nenhum criterio obrigatorio falhou.",
-    "Peca mudancas SOMENTE para criterio obrigatorio nao cumprido ou defeito concreto.",
-    "Melhorias de estilo/UX/refactor cosmetico NAO bloqueiam aprovacao a menos que estejam no escopo da task.",
-    "Se existir docs/VISUAL_IDENTITY.md, use-o como contrato visual apenas quando o escopo envolver UI."
+    "Your only approval authority is the task objective and its acceptance criteria.",
+    "Evaluate the current repository state against that contract and answer in Portuguese:",
+    "1. criteria met, with concrete evidence for each (file/test/line);",
+    "2. criteria NOT met or concrete defects (critical/high), if any;",
+    "3. optional non-blocking suggestions, without requiring a fixed number of improvements;",
+    "4. a single exact verdict on its own line: FINAL_REVIEW_DECISION: approved OR FINAL_REVIEW_DECISION: changes_requested.",
+    "Verdict rules: approve if the objective is implemented and no required criterion failed.",
+    "Request changes ONLY for an unmet required criterion or a concrete defect.",
+    "Style/UX/cosmetic-refactor suggestions do NOT block approval unless they are in the task scope.",
+    "If docs/VISUAL_IDENTITY.md exists, use it as a visual contract only when the scope involves UI."
   ].join("\n");
 }
 

@@ -13,14 +13,14 @@ export function buildAgentGoalPrompt(request: AgentExecutionRequest): string {
       ? "Rode os testes relevantes e reporte falhas. Nao edite arquivos."
       : "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
     reviewing: [
-      "Voce e o revisor de aceite desta task. Modo leitura: nao edite arquivos nem rode comandos.",
-      "Avalie o diff e as evidencias contra o contrato da task (objetivo + criterios de aceite + escopo de mutacao).",
-      "APROVE quando o objetivo esta implementado, os testes exigidos passam e nenhum criterio obrigatorio falhou.",
-      "PECA MUDANCAS somente quando um criterio obrigatorio nao esta cumprido, um teste exigido falha ou ha um defeito concreto critico/alto.",
-      "Sugestoes opcionais (naming, refactor cosmetico, UX fora de escopo) NAO justificam changes_requested; liste-as como nao-bloqueantes.",
-      "Nao invente um numero fixo de melhorias e nao aplique rubrica de UX/visual a trabalho de backend que nao tenha UI no escopo.",
-      "Se faltar evidencia de um criterio, peca mudanca citando qual criterio e qual evidencia esta ausente.",
-      "Finalize com uma linha exata: FINAL_REVIEW_DECISION: approved OU FINAL_REVIEW_DECISION: changes_requested."
+      "You are the acceptance reviewer for this task. Read-only: do not edit files or run commands.",
+      "Evaluate the diff and evidence against the task contract (objective + acceptance criteria + mutation scope).",
+      "APPROVE when the objective is implemented, the required tests pass, and no required criterion failed.",
+      "REQUEST CHANGES only when a required criterion is unmet, a required test fails, or there is a concrete critical/high defect.",
+      "Optional suggestions (naming, cosmetic refactor, out-of-scope UX) do NOT justify changes_requested; list them as non-blocking.",
+      "Do not invent a fixed number of improvements and do not apply a UX/visual rubric to backend work with no UI in scope.",
+      "If evidence for a criterion is missing, request changes citing which criterion and which evidence is absent.",
+      "Finish with one exact line: FINAL_REVIEW_DECISION: approved OR FINAL_REVIEW_DECISION: changes_requested."
     ].join(" ")
   }[request.phase];
 

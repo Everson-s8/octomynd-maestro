@@ -42,23 +42,23 @@ describe("claude review", () => {
 
     const prompt = buildClaudeReviewPrompt(task, project);
 
-    expect(prompt).toContain("somente em modo leitura");
+    expect(prompt).toContain("read-only mode");
     expect(prompt).toContain("Task #9: revisar a identidade visual");
     expect(prompt).toContain("docs/VISUAL_IDENTITY.md");
     // Acceptance-based, not an open-ended design critique.
-    expect(prompt).toContain("criterios de aceite");
+    expect(prompt).toContain("acceptance criteria");
     expect(prompt).toContain("FINAL_REVIEW_DECISION");
-    expect(prompt).not.toContain("cinco melhorias");
-    expect(prompt).not.toContain("pontos fortes");
+    expect(prompt).not.toContain("five improvements");
+    expect(prompt).not.toContain("strengths");
   });
 
   it("instructs the goal reviewer to approve against acceptance criteria, not invent improvements", () => {
     const prompt = buildClaudeGoalPrompt(executionRequest("reviewing", "reviewing"));
-    expect(prompt).toContain("revisor de aceite");
+    expect(prompt).toContain("acceptance reviewer");
     expect(prompt).toContain("FINAL_REVIEW_DECISION");
-    expect(prompt).toContain("PECA MUDANCAS somente");
-    expect(prompt).toContain("NAO justificam changes_requested");
-    expect(prompt).not.toContain("cinco melhorias");
+    expect(prompt).toContain("REQUEST CHANGES only");
+    expect(prompt).toContain("do NOT justify changes_requested");
+    expect(prompt).not.toContain("five improvements");
   });
 
   it("supports native and legacy Claude CLI installations", () => {
