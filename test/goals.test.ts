@@ -18,6 +18,7 @@ import { ManualScheduler } from "../src/goals/scheduler.js";
 import { recoverGoalStepRawOutput } from "../src/runtime/artifacts.js";
 import type { ValidationReport } from "../src/validation/runner.js";
 import { WorkGraphCoordinator } from "../src/work-graphs/coordinator.js";
+import type { TaskDNA } from "../src/goals/task-dna.js";
 
 let tempDir: string;
 let database: MaestroDatabase;
@@ -573,6 +574,96 @@ describe("goal runner", () => {
       "reviewing"
     ]);
     expect(database.listEvents().some((event) => event.type === "goal.completed")).toBe(true);
+  }, 15_000);
+
+  // ── Task #121 replay ─────────────────────────────────────────────────
+  // Task #121 was a backend refactor whose reviewer kept requesting changes
+  // (the old "find 5 improvements" prompt) until the goal ran away on step
+  // budgets and eventually failed. These tests lock in the convergence
+  // contract the completion fixes establish.
+  const backendRefactorDna: TaskDNA = {
+    complexity: "medium",
+    phases: ["planning", "implementing", "testing", "reviewing"],
+    phaseBudgets: { planning: 2, implementing: 5, testing: 3, reviewing: 4 },
+    requireReview: true,
+    requireTests: true,
+    allowIteration: true,
+    rationale: "Task #121 replay: backend refactor with review iteration"
+  };
+
+  it("Task #121 replay: a backend refactor needing a couple of review iterations converges and delivers exactly once", async () => {
+    const projectDir = path.join(tempDir, "replay-project");
+    const worktreeDir = path.join(tempDir, "replay-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "replay", path: projectDir });
+    const task = database.createTask("refactor goal state transitions", "dashboard", "replay");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing"], () => completed("backend step"));
+    let reviewCount = 0;
+    const claude = new FakeProvider("claude", ["reviewing"], () => {
+      reviewCount += 1;
+      if (reviewCount <= 2) {
+        return { ...completed(`concrete issue ${reviewCount}`), outcome: "changes_requested" };
+      }
+      return { ...completed("criteria met"), structuredPayload: { reviewDecision: "approved" } };
+    });
+
+    let deliveryCalls = 0;
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA: backendRefactorDna,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "abc123", pullRequestUrl: "https://github.com/example/repo/pull/121", branchName: "task" };
+      }
+    });
+
+    expect(run.status).toBe("completed");
+    expect(reviewCount).toBe(3);
+    expect(deliveryCalls).toBe(1);
+    expect(run.commitSha).toBe("abc123");
+    expect(database.getTask(task.id).status).toBe("awaiting_human");
+    expect(database.listEvents().filter((e) => e.type === "goal.delivered")).toHaveLength(1);
+    // Never escalates the step ceiling: convergence, not runaway.
+    expect(database.listEvents().filter((e) => e.type === "goal.budget_elevated")).toHaveLength(0);
+  }, 15_000);
+
+  it("Task #121 replay: a structured approval terminates immediately without re-entering the loop", async () => {
+    const projectDir = path.join(tempDir, "replay-project");
+    const worktreeDir = path.join(tempDir, "replay-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "replay", path: projectDir });
+    const task = database.createTask("refactor goal state transitions", "dashboard", "replay");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing"], () => completed("backend step"));
+    let reviewCount = 0;
+    const claude = new FakeProvider("claude", ["reviewing"], () => {
+      reviewCount += 1;
+      return { ...completed("criteria met"), structuredPayload: { reviewDecision: "approved" } };
+    });
+
+    let deliveryCalls = 0;
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA: backendRefactorDna,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "abc123", pullRequestUrl: "https://github.com/example/repo/pull/121", branchName: "task" };
+      }
+    });
+
+    expect(run.status).toBe("completed");
+    expect(reviewCount).toBe(1);
+    expect(deliveryCalls).toBe(1);
+    expect(run.stepCount).toBe(4); // planning + implementing + testing + reviewing, nothing after approval
+    expect(database.listGoalSteps(run.id).map((s) => s.phase)).toEqual([
+      "planning", "implementing", "testing", "reviewing"
+    ]);
+    expect(database.listEvents().filter((e) => e.type === "goal.budget_elevated")).toHaveLength(0);
   }, 15_000);
 
   it("uses deterministic validation before spending a testing provider call", async () => {
