@@ -44,6 +44,8 @@ describe("redactSensitiveText", () => {
 describe("truncateForDisplay", () => {
   it("keeps short text untouched", () => {
     expect(truncateForDisplay("short text", 100)).toBe("short text");
+    expect(truncateForDisplay("", 10)).toBe("");
+    expect(truncateForDisplay("exact", 5)).toBe("exact");
   });
 
   it("bounds oversized previews with a visible marker", () => {
