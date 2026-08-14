@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { ClaudeReviewer, reviewTaskWithClaude } from "../agents/claude.js";
+import { runProviderReview } from "../agents/review-runner.js";
 import { MaestroConfig } from "../config.js";
 import {
   ImprovementCategory,
@@ -1123,8 +1124,10 @@ async function routeRequest(
   }
 
   const claudeReviewMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/reviews\/claude$/);
-  if (request.method === "POST" && claudeReviewMatch) {
-    const taskId = Number(claudeReviewMatch[1]);
+  const reviewMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/reviews$/);
+  const taskReviewMatch = claudeReviewMatch ?? reviewMatch;
+  if (request.method === "POST" && taskReviewMatch) {
+    const taskId = Number(taskReviewMatch[1]);
     let task;
     try {
       task = options.database.getTask(taskId);
@@ -1139,26 +1142,44 @@ async function routeRequest(
     }
 
     const project = options.database.getProjectByKey(task.projectKey);
-    const reviewer = options.claudeReviewer ?? reviewTaskWithClaude;
-    const result = await reviewer(task, project);
-    const review = options.database.addTaskReview({
+
+    // Prefer the provider selected by the routing policy for `reviewing`.
+    // Falls back to the injected Claude reviewer (test seam) only when no
+    // review-capable agent registry is available.
+    const acquire = options.agentRegistry?.acquire;
+    const review = acquire
+      ? runProviderReview({ acquire }, task, project)
+      : (async () => {
+          const reviewer = options.claudeReviewer ?? reviewTaskWithClaude;
+          const result = await reviewer(task, project);
+          return {
+            status: result.status,
+            provider: "claude",
+            content: result.content,
+            error: result.error,
+            durationMs: result.durationMs
+          };
+        })();
+
+    const result = await review;
+    const saved = options.database.addTaskReview({
       taskId,
-      provider: "claude",
+      provider: result.provider,
       status: result.status,
       content: result.content,
       error: result.error
     });
 
     options.database.addEvent({
-      source: "claude",
+      source: result.provider,
       type: result.status === "completed" ? "task.reviewed" : "task.review_failed",
-      text: result.status === "completed" ? `Claude review #${review.id}` : result.error ?? "Claude review failed",
+      text: result.status === "completed" ? `${result.provider} review #${saved.id}` : result.error ?? `${result.provider} review failed`,
       taskId,
-      metadata: { reviewId: review.id, status: result.status, durationMs: result.durationMs }
+      metadata: { reviewId: saved.id, status: result.status, durationMs: result.durationMs }
     });
 
     const statusCode = result.status === "completed" ? 201 : result.status === "auth_required" ? 503 : 500;
-    sendJson(response, statusCode, { review });
+    sendJson(response, statusCode, { review: saved });
     return;
   }
 
