@@ -114,7 +114,7 @@ describe("claude review", () => {
     expect(reviewingArgs.join(" ")).toContain("Bash(git diff*)");
     expect(reviewingArgs.join(" ")).toContain("Bash(git show*)");
     expect(reviewingArgs.join(" ")).not.toContain("Edit");
-    expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
+    expect(buildClaudeGoalPrompt(coding)).toContain("Never commit, push, merge, deploy");
     coding.skillContext = {
       available: [],
       loaded: [{
@@ -145,9 +145,11 @@ describe("claude review", () => {
 
     expect(args).toContain("plan");
     expect(args.join(" ")).toContain("Bash(npm test*)");
-    expect(args.join(" ")).not.toContain("Edit");
-    expect(args.join(" ")).not.toContain("Write");
-    expect(buildClaudeGoalPrompt(testing)).toContain("Nao edite arquivos");
+    // Tool names are comma-separated in the tools list; match with a leading
+    // comma so prompt words like "Write scope" don't false-positive.
+    expect(args.join(" ")).not.toContain(",Edit");
+    expect(args.join(" ")).not.toContain(",Write");
+    expect(buildClaudeGoalPrompt(testing)).toContain("Do not edit files");
   });
 
   it("recognizes Claude subscription quota failures", () => {
