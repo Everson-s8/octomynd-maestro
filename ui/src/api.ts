@@ -359,7 +359,7 @@ export type DashboardData = {
   }>;
 };
 
-export type AgentProviderId = "codex" | "claude" | "antigravity";
+export type AgentProviderId = "codex" | "claude" | "antigravity" | (string & {});
 export type AgentCapability =
   | "planning"
   | "coding"
@@ -373,29 +373,36 @@ export type ProviderControl = {
   providerId: AgentProviderId;
   mode: ProviderMode;
   fallbackEnabled: boolean;
+  model?: string | null;
   updatedAt: string | null;
 };
 export type CapabilityRoutingPolicy = {
   capability: AgentCapability;
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
+  preferredModel?: string | null;
   updatedAt: string | null;
 };
 export type ProviderPolicySnapshot = {
   controls: ProviderControl[];
   capabilities: CapabilityRoutingPolicy[];
+  models?: Record<string, string[]>;
 };
 
-export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot> {
+export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }> {
   const response = await fetch("/api/provider-policy");
-  const payload = await response.json() as { policy?: ProviderPolicySnapshot; error?: string };
+  const payload = await response.json() as { policy?: ProviderPolicySnapshot; models?: Record<string, string[]>; error?: string };
   if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
-  return payload.policy;
+  return {
+    ...payload.policy,
+    models: payload.models ?? payload.policy.models,
+    availableModels: payload.models ?? payload.policy.models
+  };
 }
 
 export async function updateProviderControl(
   providerId: AgentProviderId,
-  input: Pick<ProviderControl, "mode" | "fallbackEnabled">
+  input: Pick<ProviderControl, "mode" | "fallbackEnabled"> & { model?: string | null }
 ): Promise<ProviderControl> {
   const response = await fetch(`/api/provider-policy/providers/${providerId}`, {
     method: "PUT",
@@ -408,7 +415,7 @@ export async function updateProviderControl(
 }
 
 export async function updateProviderControls(
-  controls: Array<Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled">>
+  controls: Array<Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled"> & { model?: string | null }>
 ): Promise<ProviderControl[]> {
   const response = await fetch("/api/provider-policy/providers", {
     method: "PUT",
@@ -440,7 +447,7 @@ export async function testProviderConnection(input: { command: string; args?: st
 
 export async function updateCapabilityRouting(
   capability: AgentCapability,
-  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId">
+  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId"> & { preferredModel?: string | null }
 ): Promise<CapabilityRoutingPolicy> {
   const response = await fetch(`/api/provider-policy/capabilities/${capability}`, {
     method: "PUT",

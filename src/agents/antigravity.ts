@@ -56,7 +56,7 @@ export class AntigravityProvider implements AgentProvider {
   readonly label = "Gemini Antigravity";
   readonly capabilities = ANTIGRAVITY_CAPABILITIES;
   private readonly executionLimits: ProviderExecutionLimits;
-  private readonly model: string | null;
+  readonly model: string | null;
   private readonly effort: "low" | "medium" | "high";
   private readonly executablePath?: string;
   private readonly healthProbe: boolean;
@@ -72,6 +72,38 @@ export class AntigravityProvider implements AgentProvider {
     this.effort = options.effort ?? "medium";
     this.executablePath = options.executablePath;
     this.healthProbe = options.healthProbe ?? true;
+  }
+
+  async models(): Promise<string[]> {
+    const executable = resolveAntigravityExecutable(this.executablePath);
+    const fallbacks = [
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-thinking",
+      "gemini-1.5-pro",
+      "gemini-3.6-flash"
+    ];
+    if (!executable) return fallbacks;
+    try {
+      const probe = await runAgentProcess({
+        command: executable,
+        args: ["models"],
+        cwd: process.cwd(),
+        timeoutMs: 10_000,
+        inactivityTimeoutMs: 10_000,
+        maxOutputChars: 10_000,
+        env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
+      });
+      if (probe.exitCode === 0 && probe.stdout.trim()) {
+        const lines = probe.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("Available"));
+        if (lines.length > 0) {
+          return [...new Set(lines)];
+        }
+      }
+    } catch {}
+    return fallbacks;
   }
 
   async health(): Promise<AgentHealth> {
@@ -118,6 +150,7 @@ export class AntigravityProvider implements AgentProvider {
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const executable = resolveAntigravityExecutable(this.executablePath);
     const cwd = request.task.worktreePath || request.project.path;
+    const selectedModel = request.model ?? this.model;
     if (!executable || !fs.existsSync(cwd)) {
       const detail = !executable
         ? "Antigravity CLI nao encontrado."
@@ -129,7 +162,7 @@ export class AntigravityProvider implements AgentProvider {
       command: executable,
       args: buildAntigravityArgs(
         request,
-        this.model,
+        selectedModel,
         this.effort,
         this.executionLimits.maxRuntimeMs ?? 8 * 60 * 60_000
       ),
@@ -153,7 +186,7 @@ export class AntigravityProvider implements AgentProvider {
         retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.model ?? "antigravity"
+        model: selectedModel ?? "antigravity"
       };
     }
 
@@ -195,7 +228,7 @@ export class AntigravityProvider implements AgentProvider {
         durationMs: processResult.durationMs,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.model ?? "antigravity"
+        model: selectedModel ?? "antigravity"
       };
     }
 
@@ -224,7 +257,7 @@ export class AntigravityProvider implements AgentProvider {
       retryable: false,
       processRuntime: processRuntime(processResult),
       tokenUsage: processResult.tokenUsage,
-      model: this.model ?? "antigravity"
+      model: selectedModel ?? "antigravity"
     };
   }
 
@@ -232,6 +265,7 @@ export class AntigravityProvider implements AgentProvider {
     request: ImprovementReviewExecutionRequest
   ): Promise<ImprovementReviewExecutionResult> {
     const executable = resolveAntigravityExecutable(this.executablePath);
+    const selectedModel = this.model;
     if (!executable || !fs.existsSync(request.workspacePath)) {
       const error = !executable
         ? "Antigravity CLI nao encontrado."
@@ -255,7 +289,7 @@ export class AntigravityProvider implements AgentProvider {
         request.workspacePath,
         "--print-timeout",
         `${Math.ceil(request.timeoutMs / 1_000)}s`,
-        ...(this.model ? ["--model", this.model] : [])
+        ...(selectedModel ? ["--model", selectedModel] : [])
       ],
       cwd: request.workspacePath,
       timeoutMs: request.timeoutMs,

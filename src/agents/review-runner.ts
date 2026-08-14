@@ -62,7 +62,8 @@ export async function runProviderReview(
       project,
       previousSteps: [],
       artifactsRoot: project.path,
-      signal
+      signal,
+      model: lease.model
     };
 
     const result = await lease.provider.execute(request);

@@ -50,20 +50,38 @@ const RESULT_SCHEMA = {
   }
 };
 
+export type CodexProviderOptions = Partial<ProviderExecutionLimits> & {
+  model?: string | null;
+  executionLimits?: number | Partial<ProviderExecutionLimits>;
+};
+
 export class CodexProvider implements AgentProvider {
   readonly id = "codex" as const;
   readonly label = "Codex";
   readonly capabilities = CODEX_CAPABILITIES;
+  readonly model: string | null;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
-  private readonly executionLimits: ProviderExecutionLimits;
+  readonly executionLimits: ProviderExecutionLimits;
 
-  constructor(executionLimits?: number | Partial<ProviderExecutionLimits>) {
-    this.executionLimits = normalizeProviderExecutionLimits(
-      executionLimits,
-      DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS
-    );
+  constructor(options?: number | Partial<ProviderExecutionLimits> | CodexProviderOptions) {
+    if (typeof options === "number") {
+      this.model = null;
+      this.executionLimits = normalizeProviderExecutionLimits(options, DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS);
+    } else if (typeof options === "object" && options !== null) {
+      const opts = options as CodexProviderOptions;
+      this.model = opts.model?.trim() || null;
+      const limits = opts.executionLimits !== undefined ? opts.executionLimits : options;
+      this.executionLimits = normalizeProviderExecutionLimits(limits, DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS);
+    } else {
+      this.model = null;
+      this.executionLimits = normalizeProviderExecutionLimits(undefined, DEFAULT_CODEX_INACTIVITY_TIMEOUT_MS);
+    }
+  }
+
+  async models(): Promise<string[]> {
+    return ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "codex"];
   }
 
   async health(): Promise<AgentHealth> {
@@ -87,6 +105,7 @@ export class CodexProvider implements AgentProvider {
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const startedAt = Date.now();
     const cliEntry = resolveCodexCliEntry();
+    const selectedModel = request.model ?? this.model;
     if (!cliEntry) {
       return failure("Codex CLI nao encontrado.", startedAt, false);
     }
@@ -113,6 +132,7 @@ export class CodexProvider implements AgentProvider {
       "--ephemeral",
       "--color",
       "never",
+      ...(selectedModel ? ["--model", selectedModel] : []),
       "--output-schema",
       schemaPath,
       "--output-last-message",
@@ -148,7 +168,7 @@ export class CodexProvider implements AgentProvider {
         retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: "codex"
+        model: selectedModel ?? "codex"
       };
     }
     const combined = [
@@ -185,7 +205,7 @@ export class CodexProvider implements AgentProvider {
         durationMs: processResult.durationMs,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: "codex"
+        model: selectedModel ?? "codex"
       };
     }
 
@@ -207,7 +227,7 @@ export class CodexProvider implements AgentProvider {
         retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: "codex"
+        model: selectedModel ?? "codex"
       };
     } catch (error) {
       const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
@@ -245,7 +265,7 @@ export class CodexProvider implements AgentProvider {
       fs.writeFileSync(schemaPath, JSON.stringify(request.schema), "utf8");
       const processResult = await runAgentProcess({
         command: process.execPath,
-        args: buildCodexImprovementReviewArgs(cliEntry, request, schemaPath, outputPath),
+        args: buildCodexImprovementReviewArgs(cliEntry, request, schemaPath, outputPath, this.model),
         cwd: request.workspacePath,
         stdin: request.prompt,
         timeoutMs: request.timeoutMs,
@@ -327,7 +347,8 @@ export function buildCodexImprovementReviewArgs(
   cliEntry: string,
   request: ImprovementReviewExecutionRequest,
   schemaPath: string,
-  outputPath: string
+  outputPath: string,
+  model?: string | null
 ): string[] {
   return [
     cliEntry,
@@ -335,6 +356,7 @@ export function buildCodexImprovementReviewArgs(
     "--ephemeral",
     "--color",
     "never",
+    ...(model ? ["--model", model] : []),
     "--output-schema",
     schemaPath,
     "--output-last-message",

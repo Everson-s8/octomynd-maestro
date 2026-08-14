@@ -53,7 +53,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -165,7 +165,20 @@ async function routeRequest(
       sendJson(response, 503, { error: "provider_policy_unavailable" });
       return;
     }
-    sendJson(response, 200, { policy: options.agentRegistry.policySnapshot() });
+    const models = options.agentRegistry.getAvailableModels
+      ? await options.agentRegistry.getAvailableModels()
+      : {};
+    sendJson(response, 200, { policy: options.agentRegistry.policySnapshot(), models });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/provider-policy/models") {
+    if (!options.agentRegistry?.getAvailableModels) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    const models = await options.agentRegistry.getAvailableModels();
+    sendJson(response, 200, { models });
     return;
   }
 
@@ -177,13 +190,15 @@ async function routeRequest(
     const body = await readJsonBody(request);
     const controls = Array.isArray(body.controls) ? body.controls : [];
     const validControls: ProviderControlUpdate[] = controls.flatMap((item) => {
-      const providerId = readEnum(item?.providerId, ["codex", "claude", "antigravity"] as const);
+      const providerId = typeof item?.providerId === "string" ? item.providerId.trim() : "";
       const mode = readEnum(item?.mode, ["enabled", "paused", "disabled"] as const);
+      const model = typeof item?.model === "string" ? item.model.trim() || null : item?.model === null ? null : undefined;
       return providerId && mode && typeof item?.fallbackEnabled === "boolean"
         ? [{
             providerId: providerId as AgentProviderId,
             mode: mode as ProviderMode,
-            fallbackEnabled: item.fallbackEnabled as boolean
+            fallbackEnabled: item.fallbackEnabled as boolean,
+            model
           }]
         : [];
     });
@@ -274,10 +289,12 @@ async function routeRequest(
       sendJson(response, 400, { error: "valid_mode_and_fallbackEnabled_are_required" });
       return;
     }
+    const model = typeof body.model === "string" ? body.model.trim() || null : body.model === null ? null : undefined;
     const control = options.agentRegistry.updateProviderControl({
       providerId: providerControlMatch[1] as AgentProviderId,
       mode: mode as ProviderMode,
-      fallbackEnabled: body.fallbackEnabled
+      fallbackEnabled: body.fallbackEnabled,
+      model
     });
     options.database.addEvent({
       source: "dashboard",
@@ -300,16 +317,28 @@ async function routeRequest(
     ] as const) as AgentCapability | null;
     const body = await readJsonBody(request);
     const order = Array.isArray(body.order)
-      ? body.order.filter((item): item is AgentProviderId => ["codex", "claude", "antigravity"].includes(String(item)))
+      ? body.order.filter((item): item is AgentProviderId => typeof item === "string" && Boolean(item.trim()))
       : [];
     const requiredProviderId = body.requiredProviderId === null
       ? null
-      : readEnum(body.requiredProviderId, ["codex", "claude", "antigravity"] as const) as AgentProviderId | null;
-    if (!capability || order.length === 0 || (body.requiredProviderId !== null && !requiredProviderId)) {
+      : typeof body.requiredProviderId === "string" && body.requiredProviderId.trim()
+        ? body.requiredProviderId.trim() as AgentProviderId
+        : null;
+    const preferredModel = typeof body.preferredModel === "string"
+      ? body.preferredModel.trim() || null
+      : body.preferredModel === null
+        ? null
+        : undefined;
+    if (!capability || order.length === 0) {
       sendJson(response, 400, { error: "valid_capability_order_and_requiredProviderId_are_required" });
       return;
     }
-    const routing = options.agentRegistry.updateCapabilityRouting({ capability, order, requiredProviderId });
+    const routing = options.agentRegistry.updateCapabilityRouting({
+      capability,
+      order,
+      requiredProviderId,
+      preferredModel
+    });
     options.database.addEvent({
       source: "dashboard",
       type: "provider.routing_updated",

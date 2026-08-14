@@ -71,11 +71,13 @@ const providerLimits = { maxRuntimeMs: config.runtime.providerMaxRuntimeMs };
 const agentProviders: AgentProvider[] = [
   new CodexProvider({
     ...providerLimits,
-    inactivityTimeoutMs: config.runtime.codexInactivityTimeoutMs
+    inactivityTimeoutMs: config.runtime.codexInactivityTimeoutMs,
+    model: config.runtime.codexModel
   }),
   new ClaudeProvider({
     ...providerLimits,
-    inactivityTimeoutMs: config.runtime.claudeInactivityTimeoutMs
+    inactivityTimeoutMs: config.runtime.claudeInactivityTimeoutMs,
+    model: config.runtime.claudeModel
   })
 ];
 if (config.runtime.antigravityEnabled) {
@@ -90,7 +92,10 @@ if (config.runtime.antigravityEnabled) {
 }
 if (config.runtime.customProviders && config.runtime.customProviders.length > 0) {
   for (const customConfig of config.runtime.customProviders) {
-    agentProviders.push(new CustomCliProvider(customConfig, { executionLimits: providerLimits }));
+    agentProviders.push(new CustomCliProvider(customConfig, {
+      executionLimits: providerLimits,
+      model: customConfig.model
+    }));
   }
 }
 const agentRegistry = new AgentRegistry(agentProviders, undefined, Date.now, database);

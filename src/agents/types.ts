@@ -29,6 +29,8 @@ export type CustomCliProviderConfig = {
   envKeys?: string[];
   capabilities: AgentCapability[];
   healthProbe?: boolean;
+  model?: string | null;
+  models?: string[];
 };
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
@@ -60,6 +62,7 @@ export type AgentExecutionRequest = {
   artifactsRoot: string;
   deadlineAt?: number;
   signal?: AbortSignal;
+  model?: string | null;
 };
 
 export type NormalizedResult = {
@@ -91,9 +94,11 @@ export interface ProviderAdapter {
   id: AgentProviderId;
   label: string;
   capabilities: ReadonlySet<AgentCapability>;
+  model?: string | null;
   health(): Promise<AgentHealth>;
   execute(request: AgentExecutionRequest): Promise<AgentExecutionResult>;
   reviewImprovements?(request: ImprovementReviewExecutionRequest): Promise<ImprovementReviewExecutionResult>;
+  models?(): Promise<string[]>;
 }
 
 export type AgentProvider = ProviderAdapter;

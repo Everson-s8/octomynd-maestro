@@ -112,7 +112,8 @@ export async function runWorkGraph(
           },
           artifactsRoot: path.resolve(options.artifactsRoot),
           deadlineAt: Date.now() + node.deadlineMs,
-          signal: options.signal
+          signal: options.signal,
+          model: lease.model
         });
       } catch (error) {
         result = {

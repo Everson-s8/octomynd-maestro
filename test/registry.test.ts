@@ -131,6 +131,42 @@ describe("agent registry leases", () => {
     });
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
+
+  it("resolves model preference hierarchically: capability > provider control > provider default", async () => {
+    const policy = policyStore();
+    const codex = provider("codex", ["coding"], "codex-default", ["gpt-4o", "o3-mini"]);
+    const registry = new AgentRegistry([codex], undefined, Date.now, policy);
+
+    // 1. Provider default model
+    let lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("codex-default");
+    lease?.release();
+
+    // 2. Provider control override
+    policy.updateProviderControl({ providerId: "codex", mode: "enabled", fallbackEnabled: true, model: "gpt-4o" });
+    lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("gpt-4o");
+    lease?.release();
+
+    // 3. Capability preferred model override
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["codex"],
+      requiredProviderId: null,
+      preferredModel: "o3-mini"
+    });
+    lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("o3-mini");
+    lease?.release();
+
+    // Check snapshot contains models and currentModel
+    const snapshot = await registry.snapshot();
+    expect(snapshot[0].models).toEqual(["gpt-4o", "o3-mini"]);
+    expect(snapshot[0].currentModel).toBe("gpt-4o");
+
+    const available = await registry.getAvailableModels();
+    expect(available.codex).toEqual(["gpt-4o", "o3-mini"]);
+  });
 });
 
 function policyStore(): ProviderPolicyStore {
@@ -164,7 +200,12 @@ function policyStore(): ProviderPolicyStore {
   };
 }
 
-function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentProvider {
+function provider(
+  id: AgentProviderId,
+  capabilities: AgentCapability[],
+  model?: string,
+  modelsList?: string[]
+): AgentProvider {
   const completed: AgentExecutionResult = {
     outcome: "completed",
     summary: "done",
@@ -177,6 +218,8 @@ function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentPr
     id,
     label: id,
     capabilities: new Set(capabilities),
+    ...(model !== undefined ? { model } : {}),
+    ...(modelsList ? { models: async () => modelsList } : {}),
     health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
     execute: async () => completed
   };

@@ -17,6 +17,7 @@ import {
 export type RoutedAgent = {
   provider: AgentProvider;
   health: AgentHealth;
+  model?: string | null;
 };
 
 export type AgentLease = RoutedAgent & {
@@ -42,9 +43,12 @@ export type AgentProviderSnapshot = {
   activeCount: number;
   cooldownUntil: string | null;
   detail: string;
+  models?: string[];
+  currentModel?: string | null;
   control: {
     mode: "enabled" | "paused" | "disabled";
     fallbackEnabled: boolean;
+    model?: string | null;
   };
 };
 
@@ -92,7 +96,8 @@ export class AgentRegistry {
       if (!provider || !provider.capabilities.has(capability)) continue;
       const health = await provider.health();
       if (health.state === "ready") {
-        return { provider, health };
+        const model = this.resolveModelForExecution(providerId, capability);
+        return { provider, health, model };
       }
     }
     return null;
@@ -114,9 +119,11 @@ export class AgentRegistry {
       if ((this.activeLeases.get(providerId) ?? 0) >= limit) continue;
       this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
       let released = false;
+      const model = this.resolveModelForExecution(providerId, capability);
       return {
         provider,
         health,
+        model,
         release: (feedback) => {
           if (released) return;
           released = true;
@@ -193,6 +200,8 @@ export class AgentRegistry {
           : cooldown
             ? "cooldown"
             : "ready";
+      const availableModels = provider.models ? await provider.models() : [];
+      const configuredModel = controls.get(provider.id)?.model ?? provider.model ?? null;
       return {
         id: provider.id,
         label: provider.label,
@@ -202,12 +211,23 @@ export class AgentRegistry {
         activeCount,
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
         detail: cooldown?.detail ?? health.detail,
+        models: availableModels,
+        currentModel: configuredModel,
         control: {
           mode: controls.get(provider.id)?.mode ?? "enabled",
-          fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true
+          fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true,
+          model: configuredModel
         }
       };
     }));
+  }
+
+  async getAvailableModels(): Promise<Record<AgentProviderId, string[]>> {
+    const result: Record<string, string[]> = {};
+    for (const provider of this.list()) {
+      result[provider.id] = provider.models ? await provider.models() : [];
+    }
+    return result;
   }
 
   policySnapshot(): ProviderPolicySnapshot {
@@ -227,6 +247,22 @@ export class AgentRegistry {
   updateCapabilityRouting(...args: Parameters<ProviderPolicyStore["updateCapabilityRouting"]>) {
     if (!this.policyStore) throw new Error("Provider policy store is unavailable.");
     return this.policyStore.updateCapabilityRouting(...args);
+  }
+
+  private resolveModelForExecution(providerId: AgentProviderId, capability?: AgentCapability): string | null {
+    const policy = this.policySnapshot();
+    if (capability) {
+      const capabilityRouting = policy.capabilities.find((c) => c.capability === capability);
+      if (capabilityRouting?.preferredModel) {
+        return capabilityRouting.preferredModel;
+      }
+    }
+    const control = policy.controls.find((c) => c.providerId === providerId);
+    if (control?.model) {
+      return control.model;
+    }
+    const provider = this.providers.get(providerId);
+    return provider?.model ?? null;
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {
