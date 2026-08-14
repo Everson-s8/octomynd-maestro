@@ -150,7 +150,7 @@ export function createTelegramGoalProgressNotifier(
       `Projeto: ${task.projectKey ? `@${task.projectKey}` : "sem projeto"}`,
       `Agente: ${providerId}`,
       `Fase: ${run.currentPhase}`,
-      `Progresso: ${run.stepCount}/${run.maxSteps}`
+      `Etapas executadas: ${run.stepCount}`
     ].join("\n");
     await sendMessage(chatId, text);
     database.addEvent({
