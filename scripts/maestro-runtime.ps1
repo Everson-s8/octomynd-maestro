@@ -114,6 +114,25 @@ function Stop-MaestroRuntime {
     Write-Output "Maestro runtime: stopped."
 }
 
+function Remove-EnvironmentCaseDuplicates {
+    # Windows process environment blocks are case-insensitive (TEMP/temp/Tmp are
+    # the same variable). When a shell (e.g. MSYS/git-bash) exports a lowercase
+    # 'tmp' alongside the uppercase 'TMP', Start-Process -RedirectStandardOutput
+    # throws "item has already been added. Key in dictionary: 'TMP'; key being
+    # added: 'tmp'". This has broken Maestro restarts on Windows. Drop duplicate
+    # case-variants from the current process environment before launching, so the
+    # child inherits exactly one spelling per variable name.
+    $existing = @{}
+    $duplicates = @()
+    foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) {
+        $lower = $key.ToLowerInvariant()
+        if ($existing.ContainsKey($lower)) { $duplicates += $key } else { $existing[$lower] = $key }
+    }
+    foreach ($key in $duplicates) {
+        [Environment]::SetEnvironmentVariable($key, $null, 'Process')
+    }
+}
+
 function Start-MaestroRuntime {
     if (Test-MaestroHealth) {
         Write-Output "Maestro runtime: already healthy at $healthUrl"
@@ -127,6 +146,8 @@ function Start-MaestroRuntime {
 
     New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+
+    Remove-EnvironmentCaseDuplicates
 
     $escapedRepoRoot = $repoRoot.Replace("'", "''")
     $command = "Set-Location -LiteralPath '$escapedRepoRoot'; & npm.cmd run dev; exit `$LASTEXITCODE"
