@@ -69,22 +69,26 @@ export class GoalWatchdog {
   }
 
   /**
-   * The same failure text repeated across consecutive steps in the SAME phase.
-   * Scoping to same phase is important: a generic "timeout" failing once in
-   * testing then again in an unrelated implementing step is NOT a loop.
+   * The same failure text repeated across CONSECUTIVE steps in the SAME phase.
+   * We walk the actual step sequence, not a filtered failure list: a matching
+   * failure separated by successful work (or by a different phase/error) must
+   * reset the run, otherwise a recurring but interleaved error is misread as a
+   * tight loop and a legitimate long task is killed.
    */
   private repeatedFailure(steps: GoalStepRecord[]): boolean {
-    const failed = steps.filter((step) => step.status === "failed" || step.status === "blocked");
-    if (failed.length < this.threshold) return false;
-    let same = 0;
-    for (let i = 1; i < failed.length; i++) {
-      const samePhase = failed[i].phase === failed[i - 1].phase;
-      const sameError = this.normalized(failed[i].error) === this.normalized(failed[i - 1].error);
-      if (samePhase && sameError) {
-        same++;
-        if (same >= this.threshold) return true;
+    let run = 0;
+    for (let i = 1; i < steps.length; i++) {
+      const prev = steps[i - 1];
+      const curr = steps[i];
+      const prevFailed = prev.status === "failed" || prev.status === "blocked";
+      const currFailed = curr.status === "failed" || curr.status === "blocked";
+      const samePhase = prev.phase === curr.phase;
+      const sameError = this.normalized(prev.error) === this.normalized(curr.error);
+      if (prevFailed && currFailed && samePhase && sameError) {
+        run += 1;
+        if (run >= this.threshold) return true;
       } else {
-        same = 0;
+        run = 0;
       }
     }
     return false;

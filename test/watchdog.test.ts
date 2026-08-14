@@ -56,6 +56,16 @@ describe.sequential("GoalWatchdog", () => {
     expect(v.stop).toBe(false);
   });
 
+  it("does NOT treat identical failures separated by successful work as consecutive", () => {
+    const r = makeRun();
+    pushStep(r, "implementing", "failed", "step", "provider crash");
+    pushStep(r, "implementing", "completed", "fixed the crash");
+    pushStep(r, "implementing", "failed", "step", "provider crash");
+    pushStep(r, "implementing", "failed", "step", "provider crash");
+    const v = new GoalWatchdog(database).verdict(r);
+    expect(v.stop).toBe(false);
+  });
+
   it("stops when change-request reasons repeat with no work produced between reviews", () => {
     const r = makeRun();
     pushStep(r, "reviewing", "changes_requested", "add error handling");
