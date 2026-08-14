@@ -142,11 +142,8 @@ export class GoalCoordinator {
     if (run.status !== "blocked") {
       throw new Error(`Goal #${runId} is not blocked and cannot be retried.`);
     }
-    const blockedByBudget = (run.lastError ?? "").toLowerCase().includes("budget")
-      || (run.lastError ?? "").toLowerCase().includes("without measurable progress")
-      || (run.lastError ?? "").toLowerCase().includes("reached its limit");
-    if (!blockedByBudget) {
-      throw new Error(`Goal #${runId} is not blocked by budget-exhausted; refusing to auto-retry other failures.`);
+    if (run.failureCategory !== "budget_exhausted") {
+      throw new Error(`Goal #${runId} is not blocked by budget-exhausted (category: ${run.failureCategory ?? "unknown"}); refusing to auto-retry other failures.`);
     }
     if (this.active.has(run.taskId)) {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  GoalFailureCategory,
   GoalPhase,
   GoalRunRecord,
   GoalStepStatus,
@@ -1059,7 +1060,7 @@ export async function runTaskGoal(
         stepCount,
         `Goal loop detected (${loopVerdict.reason}) after ${currentRun.stepCount} steps.`,
         task.id,
-        "budget_exhausted"
+        "loop"
       );
     }
 
@@ -1231,8 +1232,7 @@ function finishCircuitBreak(
     // progress keeps elevating (up to the absolute ceiling).
     const loopVerdict = new GoalWatchdog(database).verdict(run);
     if (loopVerdict.stop) {
-      const failureCategory = "budget_exhausted";
-      return finishRun(database, run, "blocked", phase, stepCount, `Goal loop detected (${loopVerdict.reason}) in ${phase}.`, taskId, failureCategory);
+      return finishRun(database, run, "blocked", phase, stepCount, `Goal loop detected (${loopVerdict.reason}) in ${phase}.`, taskId, "loop");
     }
     const newMaxSteps = elevateMaxSteps(run.maxSteps);
     if (newMaxSteps > run.maxSteps) {
@@ -1371,7 +1371,7 @@ function finishRun(
   stepCount: number,
   error: string,
   taskId: number,
-  explicitFailureCategory?: string
+  explicitFailureCategory?: GoalFailureCategory
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
   const checkpoint = database.getLatestGoalCheckpoint(run.id);
@@ -1383,7 +1383,8 @@ function finishRun(
       status,
       currentPhase: phase,
       stepCount,
-      lastError: safeError
+      lastError: safeError,
+      failureCategory
     });
     database.addEvent({
       source: "maestro",

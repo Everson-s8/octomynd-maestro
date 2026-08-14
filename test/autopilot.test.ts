@@ -125,7 +125,7 @@ describe("backlog autopilot", () => {
       stepCount: 20,
       maxSteps: 20,
       lastError: "Goal reached its 20-step budget.",
-      waitReason: "budget_exhausted"
+      failureCategory: "budget_exhausted"
     });
 
     const retried: number[] = [];
@@ -144,6 +144,38 @@ describe("backlog autopilot", () => {
     expect(database.listEvents().some((e) => e.type === "backlog.goal_auto_retried")).toBe(true);
   });
 
+  it("does not auto-recover a loop-category block (a genuine loop stays blocked)", async () => {
+    database.registerProject({ key: "alpha", path: tempDir });
+    const task = database.createTask("loop blocked task", "dashboard", "alpha");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "r", worktreePath: tempDir });
+    database.createGoalRun(task.id, 20);
+    const run = database.listActiveGoalRuns().find((g) => g.taskId === task.id)!;
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "reviewing",
+      stepCount: 20,
+      maxSteps: 20,
+      lastError: "Goal loop detected (repeated_failure).",
+      failureCategory: "loop"
+    });
+
+    const retried: number[] = [];
+    const autopilot = new BacklogAutopilot(
+      database,
+      {
+        start: () => { throw new Error("must not fresh-start"); },
+        retry: (taskId: number) => { retried.push(taskId); return database.createGoalRun(taskId, 40); }
+      },
+      { enabled: true, worktreesRoot: tempDir }
+    );
+
+    await autopilot.tick();
+
+    expect(retried).toEqual([]);
+    expect(database.listEvents().some((e) => e.type === "backlog.goal_auto_retried")).toBe(false);
+  });
+
   it("does not auto-recover budget-blocked goals when the starter has no retry", async () => {
     database.registerProject({ key: "alpha", path: tempDir });
     const task = database.createTask("no retry task", "dashboard", "alpha");
@@ -157,7 +189,7 @@ describe("backlog autopilot", () => {
       stepCount: 10,
       maxSteps: 10,
       lastError: "Goal reached its 10-step budget.",
-      waitReason: "budget_exhausted"
+      failureCategory: "budget_exhausted"
     });
 
     const autopilot = new BacklogAutopilot(

@@ -234,6 +234,11 @@ export type GoalPhase = "planning" | "implementing" | "testing" | "reviewing";
 export type GoalStepStatus = "running" | "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
 export type GoalWaitReason = FailureCategory | "runtime_restart" | "budget_exhausted";
 
+/** Typed reason a goal run reached a terminal (blocked/failed) state. Used by
+ *  the coordinator and autopilot to decide whether a block is safe to auto-retry
+ *  (budget_exhausted) versus a genuine loop that must stay blocked. */
+export type GoalFailureCategory = FailureCategory | "budget_exhausted" | "loop";
+
 export type GoalRunRecord = {
   id: number;
   taskId: number;
@@ -242,6 +247,7 @@ export type GoalRunRecord = {
   stepCount: number;
   maxSteps: number;
   lastError: string | null;
+  failureCategory?: GoalFailureCategory | null;
   waitReason?: GoalWaitReason | null;
   nextRetryAt?: string | null;
   lastProvider?: string | null;
@@ -723,9 +729,9 @@ export function createDatabase(databasePath: string) {
   const createGoalRunStatement = db.prepare(`
     INSERT INTO goal_runs (
       task_id, status, current_phase, step_count, max_steps, last_error,
-      wait_reason, next_retry_at, last_provider, created_at, updated_at, finished_at
+      wait_reason, next_retry_at, last_provider, failure_category, created_at, updated_at, finished_at
     )
-    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, @now, @now, NULL)
+    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, NULL, @now, @now, NULL)
   `);
   const updateGoalRunStatement = db.prepare(`
     UPDATE goal_runs
@@ -737,6 +743,7 @@ export function createDatabase(databasePath: string) {
         wait_reason = @waitReason,
         next_retry_at = @nextRetryAt,
         last_provider = @lastProvider,
+        failure_category = @failureCategory,
         updated_at = @now,
         finished_at = @finishedAt
     WHERE id = @id
@@ -1354,6 +1361,7 @@ export function createDatabase(databasePath: string) {
       stepCount: number;
       maxSteps?: number;
       lastError?: string | null;
+      failureCategory?: GoalFailureCategory | null;
       waitReason?: GoalWaitReason | null;
       nextRetryAt?: string | null;
       lastProvider?: string | null;
@@ -1365,6 +1373,7 @@ export function createDatabase(databasePath: string) {
         ...input,
         maxSteps: input.maxSteps ?? existing.maxSteps,
         lastError: input.lastError ?? null,
+        failureCategory: input.failureCategory ?? existing.failureCategory ?? null,
         waitReason: waiting ? input.waitReason ?? existing.waitReason : null,
         nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
         lastProvider: input.lastProvider ?? existing.lastProvider,
@@ -3161,6 +3170,7 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "goal_runs", "wait_reason", "TEXT");
   addColumnIfMissing(db, "goal_runs", "next_retry_at", "TEXT");
   addColumnIfMissing(db, "goal_runs", "last_provider", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "failure_category", "TEXT");
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "feature_plans", "priority", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "feature_plans", "is_paused", "INTEGER NOT NULL DEFAULT 0");
@@ -3274,6 +3284,7 @@ type GoalRunRow = {
   step_count: number;
   max_steps: number;
   last_error: string | null;
+  failure_category: GoalFailureCategory | null;
   wait_reason: GoalWaitReason | null;
   next_retry_at: string | null;
   last_provider: string | null;
@@ -3927,6 +3938,7 @@ function mapGoalRun(row: GoalRunRow): GoalRunRecord {
     stepCount: row.step_count,
     maxSteps: row.max_steps,
     lastError: row.last_error,
+    failureCategory: row.failure_category,
     waitReason: row.wait_reason,
     nextRetryAt: row.next_retry_at,
     lastProvider: row.last_provider,

@@ -1539,7 +1539,7 @@ describe("goal runner", () => {
       currentPhase: "planning",
       stepCount: 4,
       lastError: "Goal reached its 4-step budget.",
-      waitReason: null
+      failureCategory: "budget_exhausted"
     });
 
     const retried = coordinator.retryRun(run.id);
@@ -1580,7 +1580,7 @@ describe("goal runner", () => {
       currentPhase: "planning",
       stepCount: 150,
       lastError: "Goal reached its 150-step budget.",
-      waitReason: null
+      failureCategory: "budget_exhausted"
     });
 
     const retried = coordinator.retryRun(run.id);
@@ -1639,11 +1639,11 @@ describe("goal runner", () => {
       currentPhase: "implementing",
       stepCount: 3,
       lastError: "implementing completed repeatedly without changing the worktree.",
-      waitReason: null
+      failureCategory: "loop"
     });
 
     expect(() => coordinator.retryRun(run.id)).toThrow(
-      "Goal #" + run.id + " is not blocked by budget-exhausted; refusing to auto-retry other failures."
+      `Goal #${run.id} is not blocked by budget-exhausted (category: loop); refusing to auto-retry other failures.`
     );
   });
 });

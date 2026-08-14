@@ -194,18 +194,12 @@ export class BacklogAutopilot {
   private async recoverBudgetBlockedGoals(): Promise<void> {
     if (!this.goals.retry) return;
     // listGoalRuns includes blocked runs (listActiveGoalRuns excludes them).
+    // Only goals blocked by a typed `budget_exhausted` category are retried; a
+    // genuine loop (category `loop`) or any other failure stays blocked.
     const budgetBlocked = this.database
       .listGoalRuns(100)
       .filter((goal) => goal.status === "blocked")
-      .filter((goal) => {
-        const err = (goal.lastError ?? "").toLowerCase();
-        const reason = (goal.waitReason ?? "").toLowerCase();
-        return (
-          reason.includes("budget_exhausted") ||
-          err.includes("budget") ||
-          err.includes("reached its")
-        );
-      });
+      .filter((goal) => goal.failureCategory === "budget_exhausted");
     // Small per-tick cap AND a per-run retry budget + backoff so a stuck-but-not-
     // loop goal is not retried forever. A run is lifted at most
     // MAX_AUTO_RETRIES_PER_GOAL times; after that it stays `blocked` for human.
