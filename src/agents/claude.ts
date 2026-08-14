@@ -29,6 +29,7 @@ import {
   ProviderExecutionLimits
 } from "./execution-limits.js";
 import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
+import { buildReviewPrompt } from "./review-prompt.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -316,7 +317,7 @@ export const reviewTaskWithClaude = async (
   const args = [
     ...cli.argsPrefix,
     "--print",
-    buildClaudeReviewPrompt(task, project),
+    buildReviewPrompt(task, project),
     "--permission-mode",
     "plan",
     "--tools",
@@ -355,26 +356,6 @@ export const reviewTaskWithClaude = async (
     durationMs: Date.now() - startedAt
   };
 };
-
-export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord): string {
-  return [
-    "You are the acceptance reviewer for Octomynd Maestro.",
-    "Work in read-only mode. Do not edit files and do not run commands.",
-    `Project: ${project.name} (@${project.key})`,
-    `Task #${task.id}: ${task.text}`,
-    "",
-    "Your only approval authority is the task objective and its acceptance criteria.",
-    "Evaluate the current repository state against that contract and answer in Portuguese:",
-    "1. criteria met, with concrete evidence for each (file/test/line);",
-    "2. criteria NOT met or concrete defects (critical/high), if any;",
-    "3. optional non-blocking suggestions, without requiring a fixed number of improvements;",
-    "4. a single exact verdict on its own line: FINAL_REVIEW_DECISION: approved OR FINAL_REVIEW_DECISION: changes_requested.",
-    "Verdict rules: approve if the objective is implemented and no required criterion failed.",
-    "Request changes ONLY for an unmet required criterion or a concrete defect.",
-    "Style/UX/cosmetic-refactor suggestions do NOT block approval unless they are in the task scope.",
-    "If docs/VISUAL_IDENTITY.md exists, use it as a visual contract only when the scope involves UI."
-  ].join("\n");
-}
 
 export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
   return buildAgentGoalPrompt(request);

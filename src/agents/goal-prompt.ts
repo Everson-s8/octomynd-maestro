@@ -1,5 +1,6 @@
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import { formatSkillPromptContext } from "../skills/prompt.js";
+import { buildReviewPhaseInstruction } from "./review-prompt.js";
 import type { AgentExecutionRequest } from "./types.js";
 
 /**
@@ -33,16 +34,7 @@ export function buildAgentGoalPrompt(
     testing: request.workerContext?.mode === "read_only"
       ? "Run the relevant tests and report failures. Do not edit files."
       : "Run the relevant tests. Fix only failures caused by the task and validate again.",
-    reviewing: [
-      "You are the acceptance reviewer for this task. Read-only: do not edit files or run commands.",
-      "Evaluate the diff and evidence against the task contract (objective + acceptance criteria + mutation scope).",
-      "APPROVE when the objective is implemented, the required tests pass, and no required criterion failed.",
-      "REQUEST CHANGES only when a required criterion is unmet, a required test fails, or there is a concrete critical/high defect.",
-      "Optional suggestions (naming, cosmetic refactor, out-of-scope UX) do NOT justify changes_requested; list them as non-blocking.",
-      "Do not invent a fixed number of improvements and do not apply a UX/visual rubric to backend work with no UI in scope.",
-      "If evidence for a criterion is missing, request changes citing which criterion and which evidence is absent.",
-      outputFormat.reviewingVerdict
-    ].join(" ")
+    reviewing: buildReviewPhaseInstruction(outputFormat.reviewingVerdict)
   }[request.phase];
 
   return [

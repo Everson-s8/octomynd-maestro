@@ -6,52 +6,14 @@ import {
   buildClaudeCliCommand,
   buildClaudeGoalArgs,
   buildClaudeGoalPrompt,
-  buildClaudeReviewPrompt,
   ClaudeProvider,
   isClaudeAuthenticationError,
   isClaudeQuotaError,
   parseClaudeReviewDecision
 } from "../src/agents/claude.js";
 import { AgentExecutionRequest } from "../src/agents/types.js";
-import { ProjectRecord, TaskRecord } from "../src/db.js";
 
 describe("claude review", () => {
-  it("builds an acceptance-based read-only review prompt with task context", () => {
-    const project: ProjectRecord = {
-      id: 1,
-      key: "maestro",
-      name: "Octomynd Maestro",
-      path: "C:/repo/maestro",
-      defaultBranch: "main",
-      createdAt: "now",
-      updatedAt: "now"
-    };
-    const task: TaskRecord = {
-      id: 9,
-      projectId: 1,
-      projectKey: "maestro",
-      projectName: project.name,
-      text: "revisar a identidade visual",
-      status: "planning",
-      source: "dashboard",
-      branchName: "maestro/task-9-review",
-      worktreePath: "C:/worktrees/task-9",
-      createdAt: "now",
-      updatedAt: "now"
-    };
-
-    const prompt = buildClaudeReviewPrompt(task, project);
-
-    expect(prompt).toContain("read-only mode");
-    expect(prompt).toContain("Task #9: revisar a identidade visual");
-    expect(prompt).toContain("docs/VISUAL_IDENTITY.md");
-    // Acceptance-based, not an open-ended design critique.
-    expect(prompt).toContain("acceptance criteria");
-    expect(prompt).toContain("FINAL_REVIEW_DECISION");
-    expect(prompt).not.toContain("five improvements");
-    expect(prompt).not.toContain("strengths");
-  });
-
   it("instructs the goal reviewer to approve against acceptance criteria, not invent improvements", () => {
     const prompt = buildClaudeGoalPrompt(executionRequest("reviewing", "reviewing"));
     expect(prompt).toContain("acceptance reviewer");
