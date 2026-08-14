@@ -804,6 +804,66 @@ describe("goal runner", () => {
     expect(database.listEvents().some((event) => event.type === "goal.delivered")).toBe(true);
   });
 
+  it("routes a structured approved review straight to exactly-once delivery without budget elevation", async () => {
+    const projectDir = path.join(tempDir, "project");
+    const worktreeDir = path.join(tempDir, "worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "approval", path: projectDir });
+    const task = database.createTask("approve and deliver once", "dashboard", "approval");
+    database.updateTaskWorktree({
+      id: task.id,
+      status: "planning",
+      branchName: "maestro/task-approval",
+      worktreePath: worktreeDir
+    });
+
+    let reviewCalls = 0;
+    let deliveryCalls = 0;
+    const provider = new FakeProvider(
+      "codex",
+      ["planning", "coding", "testing", "reviewing"],
+      (request) => {
+        if (request.phase === "reviewing") {
+          reviewCalls += 1;
+          return {
+            outcome: "completed",
+            summary: "approved by structured review",
+            output: "approved",
+            error: null,
+            durationMs: 1,
+            retryable: false,
+            structuredPayload: { reviewDecision: "approved" }
+          };
+        }
+        return completed(`${request.phase} done`);
+      }
+    );
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 6,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return {
+          commitSha: "abc123",
+          pullRequestUrl: "https://github.com/example/repo/pull/7",
+          branchName: "maestro/task-approval"
+        };
+      }
+    });
+
+    expect(run.status).toBe("completed");
+    expect(reviewCalls).toBe(1);
+    expect(deliveryCalls).toBe(1);
+    expect(run.commitSha).toBe("abc123");
+    expect(run.pullRequestUrl).toBe("https://github.com/example/repo/pull/7");
+    expect(database.getTask(task.id).status).toBe("awaiting_human");
+    expect(database.listEvents().filter((event) => event.type === "goal.delivered")).toHaveLength(1);
+    expect(database.listEvents().filter((event) => event.type === "goal.budget_elevated")).toHaveLength(0);
+    expect(database.listEvents().filter((event) => event.type === "goal.completed")).toHaveLength(1);
+  });
+
   it("waits for quota and resumes the same goal automatically", async () => {
     const projectDir = path.join(tempDir, "project");
     const worktreeDir = path.join(tempDir, "worktree");

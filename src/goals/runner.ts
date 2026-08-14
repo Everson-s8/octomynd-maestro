@@ -150,6 +150,116 @@ export async function runTaskGoal(
     }
   });
 
+  // ── Terminal transition: deliver / complete exactly once ─────────────
+  // Every path that means "the goal is done" — reviewer approved, tests
+  // passed with no review required, changes_requested with iteration
+  // disabled, or the final phase finishing — funnels through this single
+  // delivery path. A loop `break` must never implicitly mean completion:
+  // completion is an explicit transition that persists a terminal state
+  // exactly once and can never fall through into budget handling.
+  const deliverGoal = async (): Promise<GoalRunRecord> => {
+    // Idempotency guard: never deliver the same run twice (duplicate
+    // scheduler tick, retry, or resume must not create a second PR).
+    if (currentRun.commitSha || currentRun.pullRequestUrl || currentRun.status === "completed") {
+      return currentRun;
+    }
+
+    const worktreePath = task.worktreePath;
+    if (!worktreePath) {
+      return finishRun(database, currentRun, "blocked", phase, stepCount, "Task has no worktree to deliver.", task.id);
+    }
+
+    // ── skip delivery for trivial tasks with no changes ──
+    const workspaceFingerprint = captureWorkspaceProgress(worktreePath);
+    const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
+    const hasChanges = workspaceFingerprint !== null
+      && previousCheckpoint !== null
+      && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
+
+    if (dna?.complexity === "trivial" && !hasChanges) {
+      // Trivial task with no file changes — complete without PR
+      database.updateTaskStatus(task.id, "done");
+      const completed = database.withTransaction(() => {
+        const updated = database.updateGoalRun({
+          id: run.id,
+          status: "completed",
+          currentPhase: phase,
+          stepCount
+        });
+        database.addEvent({
+          source: "maestro",
+          type: "goal.completed",
+          text: `Goal #${run.id} completed (trivial, no changes needed).`,
+          taskId: task.id,
+          metadata: { runId: run.id, stepCount, trivial: true }
+        });
+        return updated;
+      });
+      return completed;
+    }
+
+    let deliveredRun = currentRun;
+    if (options.delivery) {
+      database.withTransaction(() => {
+        database.updateTaskStatus(task.id, "awaiting_human");
+        database.addEvent({
+          source: "maestro",
+          type: "goal.delivery_started",
+          text: `Delivering goal #${run.id} to a draft pull request.`,
+          taskId: task.id,
+          metadata: { runId: run.id }
+        });
+      });
+      try {
+        const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
+        deliveredRun = database.withTransaction(() => {
+          const updated = database.updateGoalDelivery({
+            id: run.id,
+            commitSha: delivery.commitSha,
+            pullRequestUrl: delivery.pullRequestUrl
+          });
+          database.addEvent({
+            source: "maestro",
+            type: "goal.delivered",
+            text: `Draft pull request created for goal #${run.id}.`,
+            taskId: task.id,
+            metadata: { runId: run.id, ...delivery }
+          });
+          return updated;
+        });
+      } catch (error) {
+        return finishRun(
+          database,
+          currentRun,
+          "blocked",
+          phase,
+          stepCount,
+          error instanceof Error ? error.message : "Unknown goal delivery error.",
+          task.id
+        );
+      }
+    } else {
+      database.updateTaskStatus(task.id, "done");
+    }
+    const completed = database.withTransaction(() => {
+      const updated = database.updateGoalRun({
+        id: deliveredRun.id,
+        status: "completed",
+        currentPhase: phase,
+        stepCount
+      });
+      database.addEvent({
+        source: "maestro",
+        type: "goal.completed",
+        text: `Goal #${run.id} completed automatically.`,
+        taskId: task.id,
+        metadata: { runId: run.id, stepCount }
+      });
+      return updated;
+    });
+    return completed;
+  };
+
   try {
     while (stepCount < run.maxSteps) {
       if (options.signal?.aborted) {
@@ -174,8 +284,8 @@ export async function runTaskGoal(
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
         if (phaseIndex === dnaPhases.length - 1) {
-          // Last phase budget exhausted — deliver
-          break; // Exit loop to delivery logic below
+          // Last phase budget exhausted — deliver via the single completion path.
+          return await deliverGoal();
         }
         // Not last phase — move to next DNA phase
         const nextDnaPhase = dnaPhases[phaseIndex + 1];
@@ -874,8 +984,8 @@ export async function runTaskGoal(
         }
         // DNA: check if iteration is allowed
         if (dna && !dna.allowIteration) {
-          // No iteration allowed — deliver as-is
-          break;
+          // No iteration allowed — deliver as-is via the single completion path.
+          return await deliverGoal();
         }
         phase = "implementing";
         excluded = new Set();
@@ -888,8 +998,8 @@ export async function runTaskGoal(
       if (result.outcome === "completed") {
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
-          // Reviewer approved — deliver immediately
-          break;
+          // Reviewer approved — complete through the single delivery path.
+          return await deliverGoal();
         }
         // DNA: if this is the last required phase and no review needed, deliver
         if (dna && !dna.requireReview && phase === (dna.phases[dna.phases.length - 1])) {
@@ -916,7 +1026,7 @@ export async function runTaskGoal(
         }
         // DNA: if tests passed and no review needed, deliver
         if (dna && !dna.requireReview && phase === "testing" && result.structuredPayload?.testsPassed) {
-          break;
+          return await deliverGoal();
         }
       }
 
@@ -927,96 +1037,8 @@ export async function runTaskGoal(
 
       const nextPhase = nextPhaseAfter(phase, dnaPhases);
       if (!nextPhase) {
-        let deliveredRun = currentRun;
-
-        // ── DNA: skip delivery for trivial tasks with no changes ──
-        const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
-        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
-        const hasChanges = workspaceFingerprint !== null
-          && previousCheckpoint !== null
-          && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
-
-        if (dna?.complexity === "trivial" && !hasChanges) {
-          // Trivial task with no file changes — complete without PR
-          database.updateTaskStatus(task.id, "done");
-          const completed = database.withTransaction(() => {
-            const updated = database.updateGoalRun({
-              id: run.id,
-              status: "completed",
-              currentPhase: phase,
-              stepCount
-            });
-            database.addEvent({
-              source: "maestro",
-              type: "goal.completed",
-              text: `Goal #${run.id} completed (trivial, no changes needed).`,
-              taskId: task.id,
-              metadata: { runId: run.id, stepCount, trivial: true }
-            });
-            return updated;
-          });
-          return completed;
-        }
-
-        if (options.delivery) {
-          database.withTransaction(() => {
-            database.updateTaskStatus(task.id, "awaiting_human");
-            database.addEvent({
-              source: "maestro",
-              type: "goal.delivery_started",
-              text: `Delivering goal #${run.id} to a draft pull request.`,
-              taskId: task.id,
-              metadata: { runId: run.id }
-            });
-          });
-          try {
-            const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
-            deliveredRun = database.withTransaction(() => {
-              const updated = database.updateGoalDelivery({
-                id: run.id,
-                commitSha: delivery.commitSha,
-                pullRequestUrl: delivery.pullRequestUrl
-              });
-              database.addEvent({
-                source: "maestro",
-                type: "goal.delivered",
-                text: `Draft pull request created for goal #${run.id}.`,
-                taskId: task.id,
-                metadata: { runId: run.id, ...delivery }
-              });
-              return updated;
-            });
-          } catch (error) {
-            return finishRun(
-              database,
-              currentRun,
-              "blocked",
-              phase,
-              stepCount,
-              error instanceof Error ? error.message : "Unknown goal delivery error.",
-              task.id
-            );
-          }
-        } else {
-          database.updateTaskStatus(task.id, "done");
-        }
-        const completed = database.withTransaction(() => {
-          const updated = database.updateGoalRun({
-            id: deliveredRun.id,
-            status: "completed",
-            currentPhase: phase,
-            stepCount
-          });
-          database.addEvent({
-            source: "maestro",
-            type: "goal.completed",
-            text: `Goal #${run.id} completed automatically.`,
-            taskId: task.id,
-            metadata: { runId: run.id, stepCount }
-          });
-          return updated;
-        });
-        return completed;
+        // Final phase finished — complete through the single delivery path.
+        return await deliverGoal();
       }
       phase = nextPhase;
       excluded = new Set();
