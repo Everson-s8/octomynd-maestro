@@ -5,6 +5,7 @@ import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels, statusProgress, formatRelative } from "../helpers";
+import { ProvidersPage } from "./ProvidersPage";
 
 const routes = [
   { to: "/", label: "Visão geral", icon: "grid", end: true },
@@ -133,5 +134,5 @@ export function MaestroV2({ data, onRefresh, onCreate, refreshing }: { data: Das
   const location = useLocation();
   const pending = data.features.filter(f => ["reviewing", "waiting_checks", "changes_requested"].includes(f.status)).length;
   const page = location.pathname;
-  return <div className="app"><AppSidebar pending={pending} /><main><div className="inner">{page === "/chat" ? <Chat data={data} /> : page === "/backlog" ? <FlowFiltered data={data} onCreate={onCreate} /> : page === "/reviews" ? <Reviews data={data} /> : page === "/projects" ? <Projects data={data} /> : page === "/providers" ? <Providers data={data} /> : page === "/analytics" ? <Analytics data={data} /> : page === "/settings" ? <Settings data={data} /> : <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />}</div></main></div>;
+  return <div className="app"><AppSidebar pending={pending} /><main><div className="inner">{page === "/chat" ? <Chat data={data} /> : page === "/backlog" ? <FlowFiltered data={data} onCreate={onCreate} /> : page === "/reviews" ? <Reviews data={data} /> : page === "/projects" ? <Projects data={data} /> : page === "/providers" ? <ProvidersPage data={data} /> : page === "/analytics" ? <Analytics data={data} /> : page === "/settings" ? <Settings data={data} /> : <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />}</div></main></div>;
 }

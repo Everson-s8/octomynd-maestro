@@ -76,11 +76,21 @@ export class AntigravityProvider implements AgentProvider {
 
   async models(): Promise<string[]> {
     const executable = resolveAntigravityExecutable(this.executablePath);
+    // Fallback only if the live `antigravity models` probe fails. Kept in sync
+    // with current account-available Gemini models (the dynamic probe is the
+    // authoritative list); these are just a reasonable default for the dropdown.
     const fallbacks = [
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-thinking",
-      "gemini-1.5-pro",
-      "gemini-3.6-flash"
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-low",
+      "gemini-3.6-flash-high",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-low",
+      "gemini-3.5-flash-high",
+      "gemini-3.5-flash-medium",
+      "gemini-3.5-flash-low",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-low"
     ];
     if (!executable) return fallbacks;
     try {
@@ -94,10 +104,13 @@ export class AntigravityProvider implements AgentProvider {
         env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
       });
       if (probe.exitCode === 0 && probe.stdout.trim()) {
+        // `antigravity models` may output "<slug>\t<Description>" rows; extract the slug.
         const lines = probe.stdout
           .split("\n")
           .map((line) => line.trim())
-          .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("Available"));
+          .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("Available"))
+          .map((line) => line.split(/\t| {2,}/)[0].trim())
+          .filter(Boolean);
         if (lines.length > 0) {
           return [...new Set(lines)];
         }

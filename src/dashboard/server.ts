@@ -28,6 +28,13 @@ import type { WorkGraphRuntimeCommands, WorkIntakeCommandInput } from "../comman
 import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import { resolveCustomCliExecutable } from "../agents/custom-cli.js";
+import {
+  PROVIDER_PRESETS,
+  addCustomProvider,
+  configFromPreset,
+  readCustomProviders,
+  removeCustomProvider
+} from "../agents/provider-config.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
@@ -157,6 +164,75 @@ async function routeRequest(
     }
     const state = await testAgentConnection(command, args);
     sendJson(response, 200, state);
+    return;
+  }
+
+  // Provider management: curated presets, list registered custom providers,
+  // register a new provider (persists MAESTRO_CUSTOM_PROVIDERS to .env), and
+  // delete one. Registration applies on the next start (index.ts reads it at
+  // boot); the endpoint here persists the config file.
+  if (request.method === "GET" && url.pathname === "/api/providers/presets") {
+    sendJson(response, 200, {
+      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint }) => ({
+        id, label, command, args: args ?? [], envKeys: envKeys ?? [], description, models: models ?? [], connectionHint
+      })),
+      registered: readCustomProviders(process.cwd())
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/providers/registered") {
+    sendJson(response, 200, { providers: readCustomProviders(process.cwd()) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/register") {
+    const body = await readJsonBody(request);
+    const id = typeof body.id === "string" ? body.id.trim().toLowerCase() : "";
+    const label = typeof body.label === "string" ? body.label.trim() : "";
+    const command = typeof body.command === "string" ? body.command.trim() : "";
+    const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === "string" && a.trim() !== "") : [];
+    const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    const envKeys = Array.isArray(body.envKeys) ? body.envKeys.filter((k): k is string => typeof k === "string" && k.trim() !== "") : [];
+    const presetId = typeof body.presetId === "string" ? body.presetId : id;
+    const preset = PROVIDER_PRESETS.find((p) => p.id === presetId);
+
+    if (!id || !command) {
+      sendJson(response, 400, { error: "id_and_command_are_required" });
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+      sendJson(response, 400, { error: "invalid_provider_id" });
+      return;
+    }
+
+    const config = configFromPreset(
+      preset ?? { id, label: label || id, command, models: [], connectionHint: "local", description: "" },
+      { id, label: label || preset?.label || id, command, args: args.length ? args : undefined, model, capabilities: preset ? undefined : undefined }
+    );
+
+    const result = addCustomProvider({ ...config, envKeys });
+    options.database.addEvent({
+      source: "maestro",
+      type: "provider.registered",
+      text: `Custom provider ${id} registered (${command}).`,
+      metadata: { providerId: id, command, model: model ?? null, envPath: result.envPath }
+    });
+    sendJson(response, 201, { provider: config, envPath: result.envPath, providers: result.providers });
+    return;
+  }
+
+  const deleteProviderMatch = url.pathname.match(/^\/api\/providers\/([a-zA-Z0-9._-]+)$/);
+  if (request.method === "DELETE" && deleteProviderMatch) {
+    const id = deleteProviderMatch[1];
+    const result = removeCustomProvider(id, process.cwd());
+    options.database.addEvent({
+      source: "maestro",
+      type: result.removed ? "provider.removed" : "provider.remove_ignored",
+      text: result.removed ? `Custom provider ${id} removed.` : `Custom provider ${id} not found.`,
+      metadata: { providerId: id, removed: result.removed }
+    });
+    sendJson(response, result.removed ? 200 : 404, { removed: result.removed, providers: result.providers });
     return;
   }
 

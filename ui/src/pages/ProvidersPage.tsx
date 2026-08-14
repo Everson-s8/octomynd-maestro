@@ -1,5 +1,6 @@
 import { DashboardData } from "../api";
 import { AgentDock } from "../components/AgentDock";
+import { ProviderManager } from "../components/ProviderManager";
 import { SectionHeader } from "../components/SectionHeader";
 
 export interface ProvidersPageProps {
@@ -17,6 +18,7 @@ export function ProvidersPage({ data }: ProvidersPageProps) {
       </div>
 
       <AgentDock agents={data.agents} environments={data.environments} />
+      <ProviderManager />
     </div>
   );
 }

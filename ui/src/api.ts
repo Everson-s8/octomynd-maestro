@@ -459,6 +459,79 @@ export async function updateCapabilityRouting(
   return payload.routing;
 }
 
+export type ProviderConnectionMode = "account" | "api_key" | "local";
+
+export type ProviderPreset = {
+  id: string;
+  label: string;
+  command: string;
+  args: string[];
+  envKeys: string[];
+  description: string;
+  models: string[];
+  connectionHint: ProviderConnectionMode;
+};
+
+export type RegisteredCustomProvider = {
+  id: string;
+  label: string;
+  command: string;
+  args?: string[];
+  envKeys?: string[];
+  model?: string | null;
+  models?: string[];
+};
+
+export type RegisterProviderInput = {
+  id: string;
+  label?: string;
+  command: string;
+  args?: string[];
+  model?: string | null;
+  envKeys?: string[];
+  presetId?: string;
+  connectionMode?: ProviderConnectionMode;
+};
+
+export type RegisterProviderResult = {
+  provider?: RegisteredCustomProvider;
+  envPath: string;
+  providers: RegisteredCustomProvider[];
+  error?: string;
+};
+
+export async function fetchProviderPresets(): Promise<{ presets: ProviderPreset[]; registered: RegisteredCustomProvider[] }> {
+  const response = await fetch("/api/providers/presets");
+  const payload = await response.json() as { presets?: ProviderPreset[]; registered?: RegisteredCustomProvider[]; error?: string };
+  if (!response.ok) throw new Error(payload.error || "Nao foi possivel carregar presets de providers.");
+  return { presets: payload.presets ?? [], registered: payload.registered ?? [] };
+}
+
+export async function fetchRegisteredProviders(): Promise<RegisteredCustomProvider[]> {
+  const response = await fetch("/api/providers/registered");
+  const payload = await response.json() as { providers?: RegisteredCustomProvider[]; error?: string };
+  if (!response.ok) throw new Error(payload.error || "Nao foi possivel carregar providers registrados.");
+  return payload.providers ?? [];
+}
+
+export async function registerProvider(input: RegisterProviderInput): Promise<RegisterProviderResult> {
+  const response = await fetch("/api/providers/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as RegisterProviderResult;
+  if (!response.ok) throw new Error(payload.error || "Nao foi possivel registrar o provider.");
+  return payload;
+}
+
+export async function deleteProvider(providerId: string): Promise<RegisteredCustomProvider[]> {
+  const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  const payload = await response.json() as { removed?: boolean; providers?: RegisteredCustomProvider[]; error?: string };
+  if (!response.ok) throw new Error(payload.error || "Nao foi possivel remover o provider.");
+  return payload.providers ?? [];
+}
+
 export type ConnectTelegramInput = {
   botToken: string;
   allowedUserId?: string;
