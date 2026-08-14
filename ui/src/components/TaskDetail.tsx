@@ -227,9 +227,9 @@ export function TaskDetail({
             {startingGoal
               ? "Iniciando goal..."
               : goal?.status === "running"
-              ? `Rodando ${goal.currentPhase} · ${goal.stepCount}/${goal.maxSteps}`
+              ? `Rodando ${goal.currentPhase} · ${goal.stepCount} etapas`
               : goal?.status === "waiting_provider"
-              ? `Aguardando provider · ${goal.stepCount}/${goal.maxSteps}`
+              ? `Aguardando provider · ${goal.stepCount} etapas`
               : task.status === "awaiting_human" && goal?.pullRequestUrl
               ? "Draft PR aguardando merge"
               : task.worktreePrepared
@@ -243,7 +243,7 @@ export function TaskDetail({
                 goal #{goal.id} · {goal.status}
               </span>
               <strong>
-                {goal.currentPhase} · passo {goal.stepCount}/{goal.maxSteps}
+                {goal.currentPhase} · {goal.stepCount} etapas executadas
               </strong>
               {goal.observability ? (
                 <small className="goal-observability">

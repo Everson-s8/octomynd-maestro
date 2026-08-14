@@ -79,7 +79,6 @@ Sources:
 - [Background review](https://github.com/NousResearch/hermes-agent/blob/main/agent/background_review.py)
 - [Curator](https://github.com/NousResearch/hermes-agent/blob/main/agent/curator.py)
 - [Skill provenance](https://github.com/NousResearch/hermes-agent/blob/main/tools/skill_provenance.py)
-- Existing local analysis: [HERMES_APPLIED_STUDY.md](HERMES_APPLIED_STUDY.md)
 
 ### Matt Pocock engineering skills
 

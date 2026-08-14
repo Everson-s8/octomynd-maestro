@@ -29,6 +29,7 @@ import {
   ProviderExecutionLimits
 } from "./execution-limits.js";
 import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
+import { buildReviewPrompt } from "./review-prompt.js";
 
 export type ClaudeReviewResult = {
   status: TaskReviewStatus;
@@ -316,7 +317,7 @@ export const reviewTaskWithClaude = async (
   const args = [
     ...cli.argsPrefix,
     "--print",
-    buildClaudeReviewPrompt(task, project),
+    buildReviewPrompt(task, project),
     "--permission-mode",
     "plan",
     "--tools",
@@ -355,23 +356,6 @@ export const reviewTaskWithClaude = async (
     durationMs: Date.now() - startedAt
   };
 };
-
-export function buildClaudeReviewPrompt(task: TaskRecord, project: ProjectRecord): string {
-  return [
-    "Voce e o revisor de produto e design do Octomynd Maestro.",
-    "Trabalhe somente em modo leitura. Nao edite arquivos e nao execute comandos.",
-    `Projeto: ${project.name} (@${project.key})`,
-    `Task #${task.id}: ${task.text}`,
-    "",
-    "Analise o estado atual do repositorio e entregue em portugues:",
-    "1. pontos fortes;",
-    "2. problemas de UX, acessibilidade e coerencia visual;",
-    "3. cinco melhorias priorizadas com arquivos/componentes afetados;",
-    "4. riscos de implementar as mudancas;",
-    "5. veredito curto: aprovado, aprovado com ajustes ou reprovado.",
-    "Se existir docs/VISUAL_IDENTITY.md, use-o como contrato visual."
-  ].join("\n");
-}
 
 export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
   return buildAgentGoalPrompt(request);

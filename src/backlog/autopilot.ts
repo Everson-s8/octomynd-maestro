@@ -26,6 +26,9 @@ export type BacklogAutopilotOptions = {
 
 export type GoalStarter = {
   start(taskId: number, maxSteps?: number): GoalRunRecord;
+  /** Retry a hard-blocked goal (budget_exhausted). Optional — the autopilot
+   *  only auto-recovers when the starter provides it (real GoalCoordinator does). */
+  retry?: (taskId: number) => GoalRunRecord;
 };
 
 export type TaskPreparer = (
@@ -51,6 +54,17 @@ export class BacklogAutopilot {
   private tickRunning = false;
   private lastAction = "not_started";
   private lastTickAt: string | null = null;
+  /** Per-run auto-retry budget so a stuck-but-not-loop goal is not retried forever. */
+  private autoRetryCounts = new Map<number, number>();
+  private autoRetryBackoffUntil = new Map<number, number>();
+
+  /** Max times the autopilot auto-retries the same budget-blocked run before
+   *  leaving it `blocked` for human review (prevents unbounded repeated retries). */
+  private static readonly MAX_AUTO_RETRIES_PER_GOAL = 3;
+  /** Backoff between auto-retries of the same run: 60s, then 5m, then 15m. */
+  private backoffMs(attempt: number): number {
+    return [60_000, 300_000, 900_000][Math.min(attempt, 2)] ?? 900_000;
+  }
 
   constructor(
     private readonly database: MaestroDatabase,
@@ -93,6 +107,11 @@ export class BacklogAutopilot {
         this.lastAction = "running_capacity_reached";
         return this.snapshot();
       }
+
+      // Auto-recover goals that were hard-blocked by the step budget and still
+      // hold preserved work. Only genuine budget-exhausted blocks are retried;
+      // goals blocked because the runner detected a real loop stay blocked.
+      await this.recoverBudgetBlockedGoals();
 
       const tasks = this.database.listTasks(500);
       const activeTasks = goals
@@ -162,6 +181,71 @@ export class BacklogAutopilot {
       return this.snapshot();
     } finally {
       this.tickRunning = false;
+    }
+  }
+
+  /**
+   * Resume goals that were hard-blocked by the step budget but are NOT a real
+   * loop (the runner now blocks genuine loops separately). Budgeted work with a
+   * preserved worktree is retried in place via GoalStarter.retry (which elevates
+   * the ceiling), so a healthy goal finishes instead of sitting `blocked` until
+   * a human retries it. Guarded: only a few per tick, only when not at capacity.
+   */
+  private async recoverBudgetBlockedGoals(): Promise<void> {
+    if (!this.goals.retry) return;
+    // listGoalRuns includes blocked runs (listActiveGoalRuns excludes them).
+    // Only goals blocked by a typed `budget_exhausted` category are retried; a
+    // genuine loop (category `loop`) or any other failure stays blocked.
+    const budgetBlocked = this.database
+      .listGoalRuns(100)
+      .filter((goal) => goal.status === "blocked")
+      .filter((goal) => goal.failureCategory === "budget_exhausted");
+    // Small per-tick cap AND a per-run retry budget + backoff so a stuck-but-not-
+    // loop goal is not retried forever. A run is lifted at most
+    // MAX_AUTO_RETRIES_PER_GOAL times; after that it stays `blocked` for human.
+    const now = Date.now();
+    const termStarts = new Set(["completed", "failed", "cancelled", "awaiting_human", "ready_to_merge", "done"]);
+    // Forget runs that have reached a TERMINAL state (completed / failed /
+    // cancelled / awaiting human), so the per-run counter does not leak forever.
+    // We deliberately do NOT clear on "transiently not blocked right now" —
+    // retryRun flips the run to waiting_provider and stays alive, so a transient
+    // non-blocked state must NOT wipe the counter (unbounded retries would return).
+    const alive = new Set(budgetBlocked.map((goal) => goal.id));
+    for (const id of this.autoRetryCounts.keys()) {
+      if (!alive.has(id)) {
+        const current = this.database.getGoalRun(id);
+        if (!current || termStarts.has(current.status)) {
+          this.autoRetryCounts.delete(id);
+          this.autoRetryBackoffUntil.delete(id);
+        }
+      }
+    }
+    for (const goal of budgetBlocked.slice(0, 2)) {
+      // Respect the per-run backoff.
+      const backoffUntil = this.autoRetryBackoffUntil.get(goal.id) ?? 0;
+      if (now < backoffUntil) continue;
+      // Enforce the per-run retry budget.
+      const attempts = this.autoRetryCounts.get(goal.id) ?? 0;
+      if (attempts >= BacklogAutopilot.MAX_AUTO_RETRIES_PER_GOAL) continue;
+
+      try {
+        const resumed = this.goals.retry(goal.taskId);
+        const nextAttempt = attempts + 1;
+        this.autoRetryCounts.set(goal.id, nextAttempt);
+        this.autoRetryBackoffUntil.set(goal.id, now + this.backoffMs(nextAttempt));
+        this.database.addEvent({
+          source: "maestro",
+          type: "backlog.goal_auto_retried",
+          text: `Autopilot auto-retried budget-blocked goal #${goal.id} for task #${goal.taskId} (ceiling elevated, attempt ${nextAttempt}).`,
+          taskId: goal.taskId,
+          metadata: { runId: resumed.id, previousRun: goal.id, attempt: nextAttempt }
+        });
+        this.lastAction = `auto_retried_task_${goal.taskId}`;
+      } catch {
+        // If retry is not possible (e.g. no preserved work), keep counting so we
+        // don't hammer it; leave the block for human review.
+        this.autoRetryCounts.set(goal.id, (this.autoRetryCounts.get(goal.id) ?? 0) + 1);
+      }
     }
   }
 

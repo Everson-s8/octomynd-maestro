@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  GoalFailureCategory,
   GoalPhase,
   GoalRunRecord,
   GoalStepStatus,
@@ -21,10 +22,11 @@ import {
   GoalCircuitBreaker,
   DEFAULT_PHASE_BUDGETS,
 } from "./circuit-breaker.js";
-import type { TaskDNA, GoalPhase as DnaGoalPhase } from "./task-dna.js";
+import type { TaskDNA } from "./task-dna.js";
 export { DEFAULT_PHASE_BUDGETS };
 import { captureGoalCheckpoint, formatCheckpointForResume } from "./checkpoint.js";
 import { elevateMaxSteps, MAESTRO_GOAL_MAX_STEPS } from "./coordinator.js";
+import { GoalWatchdog } from "./watchdog.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import type { SkillExecutionContext } from "../skills/types.js";
 import {
@@ -149,6 +151,116 @@ export async function runTaskGoal(
     }
   });
 
+  // ── Terminal transition: deliver / complete exactly once ─────────────
+  // Every path that means "the goal is done" — reviewer approved, tests
+  // passed with no review required, changes_requested with iteration
+  // disabled, or the final phase finishing — funnels through this single
+  // delivery path. A loop `break` must never implicitly mean completion:
+  // completion is an explicit transition that persists a terminal state
+  // exactly once and can never fall through into budget handling.
+  const deliverGoal = async (): Promise<GoalRunRecord> => {
+    // Idempotency guard: never deliver the same run twice (duplicate
+    // scheduler tick, retry, or resume must not create a second PR).
+    if (currentRun.commitSha || currentRun.pullRequestUrl || currentRun.status === "completed") {
+      return currentRun;
+    }
+
+    const worktreePath = task.worktreePath;
+    if (!worktreePath) {
+      return finishRun(database, currentRun, "blocked", phase, stepCount, "Task has no worktree to deliver.", task.id);
+    }
+
+    // ── skip delivery for trivial tasks with no changes ──
+    const workspaceFingerprint = captureWorkspaceProgress(worktreePath);
+    const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
+    const hasChanges = workspaceFingerprint !== null
+      && previousCheckpoint !== null
+      && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
+
+    if (dna?.complexity === "trivial" && !hasChanges) {
+      // Trivial task with no file changes — complete without PR
+      database.updateTaskStatus(task.id, "done");
+      const completed = database.withTransaction(() => {
+        const updated = database.updateGoalRun({
+          id: run.id,
+          status: "completed",
+          currentPhase: phase,
+          stepCount
+        });
+        database.addEvent({
+          source: "maestro",
+          type: "goal.completed",
+          text: `Goal #${run.id} completed (trivial, no changes needed).`,
+          taskId: task.id,
+          metadata: { runId: run.id, stepCount, trivial: true }
+        });
+        return updated;
+      });
+      return completed;
+    }
+
+    let deliveredRun = currentRun;
+    if (options.delivery) {
+      database.withTransaction(() => {
+        database.updateTaskStatus(task.id, "awaiting_human");
+        database.addEvent({
+          source: "maestro",
+          type: "goal.delivery_started",
+          text: `Delivering goal #${run.id} to a draft pull request.`,
+          taskId: task.id,
+          metadata: { runId: run.id }
+        });
+      });
+      try {
+        const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
+        deliveredRun = database.withTransaction(() => {
+          const updated = database.updateGoalDelivery({
+            id: run.id,
+            commitSha: delivery.commitSha,
+            pullRequestUrl: delivery.pullRequestUrl
+          });
+          database.addEvent({
+            source: "maestro",
+            type: "goal.delivered",
+            text: `Draft pull request created for goal #${run.id}.`,
+            taskId: task.id,
+            metadata: { runId: run.id, ...delivery }
+          });
+          return updated;
+        });
+      } catch (error) {
+        return finishRun(
+          database,
+          currentRun,
+          "blocked",
+          phase,
+          stepCount,
+          error instanceof Error ? error.message : "Unknown goal delivery error.",
+          task.id
+        );
+      }
+    } else {
+      database.updateTaskStatus(task.id, "done");
+    }
+    const completed = database.withTransaction(() => {
+      const updated = database.updateGoalRun({
+        id: deliveredRun.id,
+        status: "completed",
+        currentPhase: phase,
+        stepCount
+      });
+      database.addEvent({
+        source: "maestro",
+        type: "goal.completed",
+        text: `Goal #${run.id} completed automatically.`,
+        taskId: task.id,
+        metadata: { runId: run.id, stepCount }
+      });
+      return updated;
+    });
+    return completed;
+  };
+
   try {
     while (stepCount < run.maxSteps) {
       if (options.signal?.aborted) {
@@ -173,8 +285,8 @@ export async function runTaskGoal(
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
         if (phaseIndex === dnaPhases.length - 1) {
-          // Last phase budget exhausted — deliver
-          break; // Exit loop to delivery logic below
+          // Last phase budget exhausted — deliver via the single completion path.
+          return await deliverGoal();
         }
         // Not last phase — move to next DNA phase
         const nextDnaPhase = dnaPhases[phaseIndex + 1];
@@ -873,8 +985,8 @@ export async function runTaskGoal(
         }
         // DNA: check if iteration is allowed
         if (dna && !dna.allowIteration) {
-          // No iteration allowed — deliver as-is
-          break;
+          // No iteration allowed — deliver as-is via the single completion path.
+          return await deliverGoal();
         }
         phase = "implementing";
         excluded = new Set();
@@ -887,8 +999,8 @@ export async function runTaskGoal(
       if (result.outcome === "completed") {
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
-          // Reviewer approved — deliver immediately
-          break;
+          // Reviewer approved — complete through the single delivery path.
+          return await deliverGoal();
         }
         // DNA: if this is the last required phase and no review needed, deliver
         if (dna && !dna.requireReview && phase === (dna.phases[dna.phases.length - 1])) {
@@ -915,7 +1027,7 @@ export async function runTaskGoal(
         }
         // DNA: if tests passed and no review needed, deliver
         if (dna && !dna.requireReview && phase === "testing" && result.structuredPayload?.testsPassed) {
-          break;
+          return await deliverGoal();
         }
       }
 
@@ -926,138 +1038,69 @@ export async function runTaskGoal(
 
       const nextPhase = nextPhaseAfter(phase, dnaPhases);
       if (!nextPhase) {
-        let deliveredRun = currentRun;
-
-        // ── DNA: skip delivery for trivial tasks with no changes ──
-        const workspaceFingerprint = captureWorkspaceProgress(task.worktreePath);
-        const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
-        const hasChanges = workspaceFingerprint !== null
-          && previousCheckpoint !== null
-          && workspaceFingerprint !== previousCheckpoint.workspaceFingerprint;
-
-        if (dna?.complexity === "trivial" && !hasChanges) {
-          // Trivial task with no file changes — complete without PR
-          database.updateTaskStatus(task.id, "done");
-          const completed = database.withTransaction(() => {
-            const updated = database.updateGoalRun({
-              id: run.id,
-              status: "completed",
-              currentPhase: phase,
-              stepCount
-            });
-            database.addEvent({
-              source: "maestro",
-              type: "goal.completed",
-              text: `Goal #${run.id} completed (trivial, no changes needed).`,
-              taskId: task.id,
-              metadata: { runId: run.id, stepCount, trivial: true }
-            });
-            return updated;
-          });
-          return completed;
-        }
-
-        if (options.delivery) {
-          database.withTransaction(() => {
-            database.updateTaskStatus(task.id, "awaiting_human");
-            database.addEvent({
-              source: "maestro",
-              type: "goal.delivery_started",
-              text: `Delivering goal #${run.id} to a draft pull request.`,
-              taskId: task.id,
-              metadata: { runId: run.id }
-            });
-          });
-          try {
-            const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
-            deliveredRun = database.withTransaction(() => {
-              const updated = database.updateGoalDelivery({
-                id: run.id,
-                commitSha: delivery.commitSha,
-                pullRequestUrl: delivery.pullRequestUrl
-              });
-              database.addEvent({
-                source: "maestro",
-                type: "goal.delivered",
-                text: `Draft pull request created for goal #${run.id}.`,
-                taskId: task.id,
-                metadata: { runId: run.id, ...delivery }
-              });
-              return updated;
-            });
-          } catch (error) {
-            return finishRun(
-              database,
-              currentRun,
-              "blocked",
-              phase,
-              stepCount,
-              error instanceof Error ? error.message : "Unknown goal delivery error.",
-              task.id
-            );
-          }
-        } else {
-          database.updateTaskStatus(task.id, "done");
-        }
-        const completed = database.withTransaction(() => {
-          const updated = database.updateGoalRun({
-            id: deliveredRun.id,
-            status: "completed",
-            currentPhase: phase,
-            stepCount
-          });
-          database.addEvent({
-            source: "maestro",
-            type: "goal.completed",
-            text: `Goal #${run.id} completed automatically.`,
-            taskId: task.id,
-            metadata: { runId: run.id, stepCount }
-          });
-          return updated;
-        });
-        return completed;
+        // Final phase finished — complete through the single delivery path.
+        return await deliverGoal();
       }
       phase = nextPhase;
       excluded = new Set();
     }
 
-    const autoReRaises = database.countBudgetElevationsForRun(run.id);
-    if (autoReRaises < 2) {
-      const newMaxSteps = elevateMaxSteps(currentRun.maxSteps);
-      if (newMaxSteps > currentRun.maxSteps) {
-        database.addEvent({
-          source: "maestro",
-          type: "goal.budget_elevated",
-          text: `Goal #${run.id} maxSteps auto-elevated from ${currentRun.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
-          taskId: task.id,
-          metadata: {
-            runId: run.id,
-            previousMaxSteps: currentRun.maxSteps,
-            newMaxSteps,
-            ceiling: MAESTRO_GOAL_MAX_STEPS,
-            source: "auto_budget_exhausted"
-          }
-        });
-        return pauseRun(
-          database,
-          currentRun,
-          phase,
-          stepCount,
-          `Goal reached its ${currentRun.maxSteps}-step budget.`,
-          task.id,
-          { reason: "budget_exhausted", retryAfterMs: 5_000 },
-          newMaxSteps
-        );
-      }
+    // A goal only terminates on a real loop (watchdog), not on a raw step count.
+    // When the step-budget ceiling is hit, consult the watchdog:
+    //  - loop (no progress / repeated failure / same decision)  -> hard block
+    //  - otherwise (forward progress)                           -> elevate (unbounded
+    //    up to MAESTRO_GOAL_MAX_STEPS) and resume, so legitimate long work finishes.
+    const loopVerdict = new GoalWatchdog(database).verdict(currentRun);
+    if (loopVerdict.stop) {
+      return finishRun(
+        database,
+        currentRun,
+        "blocked",
+        phase,
+        stepCount,
+        `Goal loop detected (${loopVerdict.reason}) after ${currentRun.stepCount} steps.`,
+        task.id,
+        "loop"
+      );
     }
 
+    const newMaxSteps = elevateMaxSteps(currentRun.maxSteps);
+    if (newMaxSteps > currentRun.maxSteps) {
+      database.addEvent({
+        source: "maestro",
+        type: "goal.budget_elevated",
+        text: `Goal #${run.id} maxSteps auto-elevated from ${currentRun.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+        taskId: task.id,
+        metadata: {
+          runId: run.id,
+          previousMaxSteps: currentRun.maxSteps,
+          newMaxSteps,
+          ceiling: MAESTRO_GOAL_MAX_STEPS,
+          source: "auto_budget_exhausted"
+        }
+      });
+      return pauseRun(
+        database,
+        currentRun,
+        phase,
+        stepCount,
+        `Goal reached its ${currentRun.maxSteps}-step budget; elevating ceiling to ${newMaxSteps}.`,
+        task.id,
+        { reason: "budget_exhausted", retryAfterMs: 5_000 },
+        newMaxSteps
+      );
+    }
+
+    // Ceiling reached: no more elevation possible — a genuine runaway. This is
+    // the absolute safety net, not the normal termination (the watchdog and
+    // delivery gates should have ended the goal well before this).
     return finishRun(
       database,
       currentRun,
       "blocked",
       phase,
       stepCount,
-      `Goal reached its ${run.maxSteps}-step budget.`,
+      `Goal reached the absolute step ceiling of ${MAESTRO_GOAL_MAX_STEPS}; possible runaway.`,
       task.id,
       "budget_exhausted"
     );
@@ -1185,34 +1228,37 @@ function finishCircuitBreak(
     metadata: { runId: run.id, phase, stepCount, reason, worktreePreserved: true }
   });
   if (reason === "phase_budget_exhausted") {
-    const autoReRaises = database.countBudgetElevationsForRun(run.id);
-    if (autoReRaises < 2) {
-      const newMaxSteps = elevateMaxSteps(run.maxSteps);
-      if (newMaxSteps > run.maxSteps) {
-        database.addEvent({
-          source: "maestro",
-          type: "goal.budget_elevated",
-          text: `Goal #${run.id} maxSteps auto-elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
-          taskId,
-          metadata: {
-            runId: run.id,
-            previousMaxSteps: run.maxSteps,
-            newMaxSteps,
-            ceiling: MAESTRO_GOAL_MAX_STEPS,
-            source: "auto_budget_exhausted"
-          }
-        });
-        return pauseRun(
-          database,
-          run,
-          phase,
-          stepCount,
-          safeSummary,
-          taskId,
-          { reason: "budget_exhausted", retryAfterMs: 5_000 },
-          newMaxSteps
-        );
-      }
+    // Same rule as the global budget: only a real loop stops a goal; forward
+    // progress keeps elevating (up to the absolute ceiling).
+    const loopVerdict = new GoalWatchdog(database).verdict(run);
+    if (loopVerdict.stop) {
+      return finishRun(database, run, "blocked", phase, stepCount, `Goal loop detected (${loopVerdict.reason}) in ${phase}.`, taskId, "loop");
+    }
+    const newMaxSteps = elevateMaxSteps(run.maxSteps);
+    if (newMaxSteps > run.maxSteps) {
+      database.addEvent({
+        source: "maestro",
+        type: "goal.budget_elevated",
+        text: `Goal #${run.id} maxSteps auto-elevated from ${run.maxSteps} to ${newMaxSteps} (ceiling ${MAESTRO_GOAL_MAX_STEPS}).`,
+        taskId,
+        metadata: {
+          runId: run.id,
+          previousMaxSteps: run.maxSteps,
+          newMaxSteps,
+          ceiling: MAESTRO_GOAL_MAX_STEPS,
+          source: "auto_budget_exhausted"
+        }
+      });
+      return pauseRun(
+        database,
+        run,
+        phase,
+        stepCount,
+        safeSummary,
+        taskId,
+        { reason: "budget_exhausted", retryAfterMs: 5_000 },
+        newMaxSteps
+      );
     }
   }
   const failureCategory = reason === "phase_budget_exhausted" ? "budget_exhausted" : undefined;
@@ -1325,7 +1371,7 @@ function finishRun(
   stepCount: number,
   error: string,
   taskId: number,
-  explicitFailureCategory?: string
+  explicitFailureCategory?: GoalFailureCategory
 ): GoalRunRecord {
   const safeError = sanitizeForRunSummary(error);
   const checkpoint = database.getLatestGoalCheckpoint(run.id);
@@ -1337,7 +1383,8 @@ function finishRun(
       status,
       currentPhase: phase,
       stepCount,
-      lastError: safeError
+      lastError: safeError,
+      failureCategory
     });
     database.addEvent({
       source: "maestro",

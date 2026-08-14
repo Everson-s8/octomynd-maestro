@@ -43,7 +43,7 @@ describe("Antigravity provider", () => {
     expect(codingArgs).toContain("accept-edits");
     expect(codingArgs).toContain("gemini-model");
     expect(codingArgs).toContain("high");
-    expect(codingArgs.join(" ")).toContain("Nunca faca commit, push, merge, deploy");
+    expect(codingArgs.join(" ")).toContain("Never commit, push, merge, deploy");
     expect(codingArgs).not.toContain("--dangerously-skip-permissions");
   });
 

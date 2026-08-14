@@ -1,45 +1,62 @@
 import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
 import { formatSkillPromptContext } from "../skills/prompt.js";
+import { buildReviewPhaseInstruction } from "./review-prompt.js";
 import type { AgentExecutionRequest } from "./types.js";
 
-export function buildAgentGoalPrompt(request: AgentExecutionRequest): string {
+/**
+ * Provider-specific output contract. The phase prompt itself is shared by every
+ * provider — one prompt per phase/role, regardless of which AI is routed to it.
+ * Only the output shape differs: text providers emit a FINAL_REVIEW_DECISION
+ * line, JSON providers set an `outcome` field.
+ */
+export type GoalPromptOutputFormat = {
+  /** Closing instruction describing the required output shape. */
+  output: string;
+  /** How the reviewer reports its verdict in the reviewing phase. */
+  reviewingVerdict: string;
+};
+
+export const TEXT_GOAL_PROMPT_OUTPUT: GoalPromptOutputFormat = {
+  output: "Answer in Portuguese with changed files, tests, blockers and evidence.",
+  reviewingVerdict: "Finish with one exact line: FINAL_REVIEW_DECISION: approved OR FINAL_REVIEW_DECISION: changes_requested."
+};
+
+export function buildAgentGoalPrompt(
+  request: AgentExecutionRequest,
+  outputFormat: GoalPromptOutputFormat = TEXT_GOAL_PROMPT_OUTPUT
+): string {
   const previous = request.previousStepHandoff
     ? formatTokenEfficientPreviousSteps(request.previousStepHandoff)
     : formatLegacyPreviousSteps(request.previousSteps);
   const phaseInstruction = {
-    planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
-    implementing: "Implemente integralmente a task no workspace. Preserve o escopo.",
+    planning: "Inspect the repository and produce an executable plan. Do not edit files.",
+    implementing: "Fully implement the task in the workspace. Preserve scope.",
     testing: request.workerContext?.mode === "read_only"
-      ? "Rode os testes relevantes e reporte falhas. Nao edite arquivos."
-      : "Rode os testes relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
-    reviewing: [
-      "Revise o diff, requisitos e testes. Nao edite.",
-      "Solicite ajustes somente para problemas concretos.",
-      "Finalize com uma linha exata: FINAL_REVIEW_DECISION: approved ou FINAL_REVIEW_DECISION: changes_requested.",
-      "Se nao conseguir inspecionar todo o diff ou validar as evidencias, use changes_requested."
-    ].join(" ")
+      ? "Run the relevant tests and report failures. Do not edit files."
+      : "Run the relevant tests. Fix only failures caused by the task and validate again.",
+    reviewing: buildReviewPhaseInstruction(outputFormat.reviewingVerdict)
   }[request.phase];
 
   return [
-    "Voce e um worker do Octomynd Maestro executando uma goal persistente.",
-    "Trabalhe autonomamente nesta etapa, sem pedir atualizacao manual da task.",
-    "Use respostas estruturadas e tersas nos handoffs internos.",
-    "Nao use estilo Caveman em decisoes de seguranca, review final, merge ou mensagens importantes ao usuario.",
-    "Nunca faca commit, push, merge, deploy, altere credenciais ou saia do workspace.",
-    `Projeto: ${request.project.name} (@${request.project.key})`,
+    "You are an Octomynd Maestro worker executing a persistent goal.",
+    "Work autonomously on this step without asking for manual task updates.",
+    "Use structured, terse responses in internal handoffs.",
+    "Do not use Caveman-style phrasing in security decisions, final reviews, merges, or important messages to the user.",
+    "Never commit, push, merge, deploy, change credentials, or leave the workspace.",
+    `Project: ${request.project.name} (@${request.project.key})`,
     `Task #${request.task.id}: ${request.task.text}`,
-    `Fase: ${request.phase}`,
+    `Phase: ${request.phase}`,
     phaseInstruction,
     ...formatFeatureTaskContract(request.featureTaskContract),
     ...formatWorkerContext(request.workerContext),
     "",
-    "Historico resumido das etapas:",
+    "Summarized step history:",
     previous,
-    ...(request.resumeContext ? ["", "Checkpoint de retomada:", request.resumeContext] : []),
+    ...(request.resumeContext ? ["", "Resume checkpoint:", request.resumeContext] : []),
     ...formatSkillPromptContext(request.skillContext),
-    ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
+    ...(request.humanFeedback ? ["", "Adjustments requested by the responsible person:", request.humanFeedback] : []),
     "",
-    "Entregue um resumo em portugues com arquivos alterados, testes, bloqueios e evidencias."
+    outputFormat.output
   ].join("\n");
 }
 
@@ -53,14 +70,14 @@ function formatFeatureTaskContract(contract: AgentExecutionRequest["featureTaskC
   if (!contract) return [];
   return [
     "",
-    "Contrato desta Task na Feature:",
-    `Objetivo: ${contract.objective}`,
-    `Dependencias: ${contract.dependsOnTaskIds.length ? contract.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
-    `Escopo de mutacao: ${contract.mutationScope.length ? contract.mutationScope.join(", ") : "somente leitura"}`,
-    `Fora de escopo: ${contract.excludedScope.length ? contract.excludedScope.join(", ") : "nao especificado"}`,
-    "Criterios de aceite:",
+    "This task's contract in the Feature:",
+    `Objective: ${contract.objective}`,
+    `Dependencies: ${contract.dependsOnTaskIds.length ? contract.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "none"}`,
+    `Mutation scope: ${contract.mutationScope.length ? contract.mutationScope.join(", ") : "read-only"}`,
+    `Out of scope: ${contract.excludedScope.length ? contract.excludedScope.join(", ") : "not specified"}`,
+    "Acceptance criteria:",
     ...contract.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "Nao amplie o escopo sem bloquear com evidencia concreta."
+    "Do not expand scope without blocking with concrete evidence."
   ];
 }
 
@@ -69,13 +86,13 @@ function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): s
   return [
     "",
     `Worker ${context.key} (${context.role}, ${context.mode})`,
-    `Objetivo do Worker: ${context.objective}`,
-    `Contrato de saida: ${context.outputContract}`,
-    `Escopo de escrita: ${context.writeScope.length > 0 ? context.writeScope.join(", ") : "nenhum"}`,
-    "Artifacts de entrada:",
+    `Worker objective: ${context.objective}`,
+    `Output contract: ${context.outputContract}`,
+    `Write scope: ${context.writeScope.length > 0 ? context.writeScope.join(", ") : "none"}`,
+    "Input artifacts:",
     ...(context.inputArtifacts.length > 0
       ? context.inputArtifacts.map((artifact) => `- artifact:${artifact.key} - ${artifact.summary}`)
-      : ["- nenhum"]),
-    "Cumpra somente este contrato; nao absorva responsabilidades de outros Workers."
+      : ["- none"]),
+    "Fulfill only this contract; do not absorb other Workers' responsibilities."
   ];
 }

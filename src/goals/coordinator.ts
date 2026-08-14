@@ -3,7 +3,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
-import { computeTaskDNAFromText, type TaskDNA } from "./task-dna.js";
+import { computeTaskDNAFromText } from "./task-dna.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
@@ -25,7 +25,7 @@ const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
   "done"
 ]);
 
-export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "100", 10) || 100;
+export const MAESTRO_GOAL_MAX_STEPS = Number.parseInt(process.env.MAESTRO_GOAL_MAX_STEPS ?? "150", 10) || 150;
 
 export function elevateMaxSteps(currentMaxSteps: number, ceiling?: number): number {
   const effectiveCeiling = ceiling ?? MAESTRO_GOAL_MAX_STEPS;
@@ -127,6 +127,11 @@ export class GoalCoordinator {
     return this.retryRun(run.id);
   }
 
+  /** Alias used by the backlog autopilot to resume a budget-blocked goal. */
+  retry(taskId: number): GoalRunRecord {
+    return this.retryTask(taskId);
+  }
+
   /**
    * Retry a goal that was hard-blocked by the circuit breaker (budget_exhausted /
    * phase_budget_exhausted), preserving the already-prepared worktree so the
@@ -137,11 +142,8 @@ export class GoalCoordinator {
     if (run.status !== "blocked") {
       throw new Error(`Goal #${runId} is not blocked and cannot be retried.`);
     }
-    const blockedByBudget = (run.lastError ?? "").toLowerCase().includes("budget")
-      || (run.lastError ?? "").toLowerCase().includes("without measurable progress")
-      || (run.lastError ?? "").toLowerCase().includes("reached its limit");
-    if (!blockedByBudget) {
-      throw new Error(`Goal #${runId} is not blocked by budget-exhausted; refusing to auto-retry other failures.`);
+    if (run.failureCategory !== "budget_exhausted") {
+      throw new Error(`Goal #${runId} is not blocked by budget-exhausted (category: ${run.failureCategory ?? "unknown"}); refusing to auto-retry other failures.`);
     }
     if (this.active.has(run.taskId)) {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);

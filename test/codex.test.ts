@@ -25,7 +25,7 @@ describe("codex provider", () => {
     request.workerContext = workerContext("tester", "read_only");
 
     expect(codexSandboxForRequest(request)).toBe("read-only");
-    expect(buildCodexGoalPrompt(request)).toContain("Nao edite arquivos");
+    expect(buildCodexGoalPrompt(request)).toContain("Do not edit files");
   });
 
   it("classifies quota and authentication failures", () => {
@@ -40,8 +40,8 @@ describe("codex provider", () => {
     request.skillContext = skillContext();
     const prompt = buildCodexGoalPrompt(request);
 
-    expect(prompt).toContain("Fase: implementing");
-    expect(prompt).toContain("Nunca faca");
+    expect(prompt).toContain("Phase: implementing");
+    expect(prompt).toContain("Never");
     expect(prompt).toContain("commit, push, merge, deploy");
     expect(prompt).toContain("repository:implement-task");
     expect(prompt).toContain("PINNED SKILL PROCEDURE");

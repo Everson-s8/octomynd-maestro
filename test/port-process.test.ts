@@ -89,11 +89,10 @@ describe("killProcessGracefully", () => {
       calls.push([cmd, ...args]);
       return { ok: true, stdout: "", stderr: "" };
     });
-    let aliveCallCount = 0;
-    const isAlive = () => {
-      aliveCallCount++;
-      return aliveCallCount < 2;
-    };
+    // Always alive: the process lingers past the grace period, so the loop
+    // deterministically escalates to the force-kill. (A mock that flips to
+    // "dead" after one poll made this race the 10ms grace window and flake.)
+    const isAlive = () => true;
     await killProcessGracefully("123", "win32", runner, 10, isAlive);
     expect(calls[0]).toEqual(["taskkill", "/PID", "123", "/T"]);
     expect(calls[1]).toEqual(["taskkill", "/PID", "123", "/T", "/F"]);
@@ -116,11 +115,8 @@ describe("killProcessGracefully", () => {
       calls.push([cmd, ...args]);
       return { ok: true, stdout: "", stderr: "" };
     });
-    let aliveCallCount = 0;
-    const isAlive = () => {
-      aliveCallCount++;
-      return aliveCallCount < 2;
-    };
+    // Always alive: lingers past the grace period, so SIGKILL is deterministic.
+    const isAlive = () => true;
     await killProcessGracefully("456", "linux", runner, 10, isAlive);
     expect(calls[0]).toEqual(["kill", "-TERM", "456"]);
     expect(calls[1]).toEqual(["kill", "-KILL", "456"]);

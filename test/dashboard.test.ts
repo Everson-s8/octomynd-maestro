@@ -809,8 +809,8 @@ describe("dashboard", () => {
       const taskPayload = await createTaskResponse.json() as { task: { id: number } };
       const taskId = taskPayload.task.id;
 
-      // Force a blocked goal with a budget-exhausted lastError, mimicking a
-      // circuit-breaker stop. A brand-new task should NOT be created by retry.
+      // Force a blocked goal with a budget-exhausted failure category, mimicking
+      // a circuit-breaker stop. A brand-new task should NOT be created by retry.
       const run = database.createGoalRun(taskId);
       database.updateGoalRun({
         id: run.id,
@@ -818,7 +818,7 @@ describe("dashboard", () => {
         currentPhase: "reviewing",
         stepCount: 4,
         lastError: "Phase 'reviewing' reached its limit of 3 steps without measurable progress.",
-        waitReason: null
+        failureCategory: "budget_exhausted"
       });
 
       const retryResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${taskId}/retry`, { method: "POST" });

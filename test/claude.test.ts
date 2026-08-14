@@ -6,45 +6,21 @@ import {
   buildClaudeCliCommand,
   buildClaudeGoalArgs,
   buildClaudeGoalPrompt,
-  buildClaudeReviewPrompt,
   ClaudeProvider,
   isClaudeAuthenticationError,
   isClaudeQuotaError,
   parseClaudeReviewDecision
 } from "../src/agents/claude.js";
 import { AgentExecutionRequest } from "../src/agents/types.js";
-import { ProjectRecord, TaskRecord } from "../src/db.js";
 
 describe("claude review", () => {
-  it("builds a read-only design review prompt with task context", () => {
-    const project: ProjectRecord = {
-      id: 1,
-      key: "maestro",
-      name: "Octomynd Maestro",
-      path: "C:/repo/maestro",
-      defaultBranch: "main",
-      createdAt: "now",
-      updatedAt: "now"
-    };
-    const task: TaskRecord = {
-      id: 9,
-      projectId: 1,
-      projectKey: "maestro",
-      projectName: project.name,
-      text: "revisar a identidade visual",
-      status: "planning",
-      source: "dashboard",
-      branchName: "maestro/task-9-review",
-      worktreePath: "C:/worktrees/task-9",
-      createdAt: "now",
-      updatedAt: "now"
-    };
-
-    const prompt = buildClaudeReviewPrompt(task, project);
-
-    expect(prompt).toContain("somente em modo leitura");
-    expect(prompt).toContain("Task #9: revisar a identidade visual");
-    expect(prompt).toContain("docs/VISUAL_IDENTITY.md");
+  it("instructs the goal reviewer to approve against acceptance criteria, not invent improvements", () => {
+    const prompt = buildClaudeGoalPrompt(executionRequest("reviewing", "reviewing"));
+    expect(prompt).toContain("acceptance reviewer");
+    expect(prompt).toContain("FINAL_REVIEW_DECISION");
+    expect(prompt).toContain("REQUEST CHANGES only");
+    expect(prompt).toContain("do NOT justify changes_requested");
+    expect(prompt).not.toContain("five improvements");
   });
 
   it("supports native and legacy Claude CLI installations", () => {
@@ -100,7 +76,7 @@ describe("claude review", () => {
     expect(reviewingArgs.join(" ")).toContain("Bash(git diff*)");
     expect(reviewingArgs.join(" ")).toContain("Bash(git show*)");
     expect(reviewingArgs.join(" ")).not.toContain("Edit");
-    expect(buildClaudeGoalPrompt(coding)).toContain("Nunca faca commit, push, merge, deploy");
+    expect(buildClaudeGoalPrompt(coding)).toContain("Never commit, push, merge, deploy");
     coding.skillContext = {
       available: [],
       loaded: [{
@@ -131,9 +107,11 @@ describe("claude review", () => {
 
     expect(args).toContain("plan");
     expect(args.join(" ")).toContain("Bash(npm test*)");
-    expect(args.join(" ")).not.toContain("Edit");
-    expect(args.join(" ")).not.toContain("Write");
-    expect(buildClaudeGoalPrompt(testing)).toContain("Nao edite arquivos");
+    // Tool names are comma-separated in the tools list; match with a leading
+    // comma so prompt words like "Write scope" don't false-positive.
+    expect(args.join(" ")).not.toContain(",Edit");
+    expect(args.join(" ")).not.toContain(",Write");
+    expect(buildClaudeGoalPrompt(testing)).toContain("Do not edit files");
   });
 
   it("recognizes Claude subscription quota failures", () => {

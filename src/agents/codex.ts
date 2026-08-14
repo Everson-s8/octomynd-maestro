@@ -10,7 +10,7 @@ import {
   retryAfterMsForFailure,
   type FailureCategory
 } from "./failure.js";
-import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "../runtime/compression.js";
+import { buildAgentGoalPrompt } from "./goal-prompt.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -21,7 +21,6 @@ import type {
   ImprovementReviewExecutionRequest,
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
-import { formatSkillPromptContext } from "../skills/prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { withRemediation } from "./remediation.js";
 import { filesystemAccessForExecution } from "./execution-policy.js";
@@ -130,7 +129,7 @@ export class CodexProvider implements AgentProvider {
       args,
       cwd,
       provider: this.id,
-      stdin: buildPrompt(request),
+      stdin: buildCodexGoalPrompt(request),
       timeoutMs: this.executionLimits.maxRuntimeMs,
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
@@ -310,7 +309,10 @@ function processRuntime(result: AgentProcessResult): NonNullable<AgentExecutionR
 }
 
 export function buildCodexGoalPrompt(request: AgentExecutionRequest): string {
-  return buildPrompt(request);
+  return buildAgentGoalPrompt(request, {
+    output: "Return the requested JSON schema. The details field must record files, tests, blockers and relevant evidence.",
+    reviewingVerdict: "Report your verdict in the outcome field: 'completed' to approve or 'changes_requested' to request changes."
+  });
 }
 
 export function codexSandboxForCapability(capability: AgentExecutionRequest["capability"]): "read-only" | "workspace-write" {
@@ -351,73 +353,6 @@ export function isCodexQuotaError(errorText: string): boolean {
 
 export function isCodexAuthenticationError(errorText: string): boolean {
   return /401|authentication|login required|credentials/i.test(errorText);
-}
-
-function buildPrompt(request: AgentExecutionRequest): string {
-  const previous = request.previousStepHandoff
-    ? formatTokenEfficientPreviousSteps(request.previousStepHandoff)
-    : formatLegacyPreviousSteps(request.previousSteps);
-  const phaseInstruction = {
-    planning: "Inspecione o repositorio e produza um plano executavel. Nao edite arquivos.",
-    implementing: "Implemente integralmente a task no workspace. Preserve o escopo e nao faca commit nem push.",
-    testing: request.workerContext?.mode === "read_only"
-      ? "Rode os testes mais relevantes e reporte falhas. Nao edite arquivos."
-      : "Rode os testes mais relevantes. Corrija apenas falhas causadas pela task e valide novamente.",
-    reviewing: "Revise o diff, requisitos e testes. Nao edite. Use changes_requested somente para problemas concretos."
-  }[request.phase];
-
-  return [
-    "Voce e um worker do Octomynd Maestro executando uma goal persistente.",
-    "Trabalhe autonomamente nesta etapa, sem pedir atualizacao manual da task.",
-    "Use respostas estruturadas e tersas nos handoffs internos.",
-    "Nao use estilo Caveman em decisoes de seguranca, review final, merge ou mensagens importantes ao usuario.",
-    "Nunca faca commit, push, merge, deploy, altere credenciais ou saia do workspace.",
-    `Projeto: ${request.project.name} (@${request.project.key})`,
-    `Task #${request.task.id}: ${request.task.text}`,
-    `Fase: ${request.phase}`,
-    phaseInstruction,
-    ...formatFeatureTaskContract(request.featureTaskContract),
-    ...formatWorkerContext(request.workerContext),
-    "",
-    "Historico resumido das etapas:",
-    previous,
-    ...(request.resumeContext ? ["", "Checkpoint de retomada:", request.resumeContext] : []),
-    ...formatSkillPromptContext(request.skillContext),
-    ...(request.humanFeedback ? ["", "Ajustes solicitados pela pessoa responsavel:", request.humanFeedback] : []),
-    "",
-    "Retorne o schema solicitado. details deve registrar arquivos, testes, bloqueios e evidencias relevantes."
-  ].join("\n");
-}
-
-function formatFeatureTaskContract(contract: AgentExecutionRequest["featureTaskContract"]): string[] {
-  if (!contract) return [];
-  return [
-    "",
-    "Contrato desta Task na Feature:",
-    `Objetivo: ${contract.objective}`,
-    `Dependencias: ${contract.dependsOnTaskIds.length ? contract.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"}`,
-    `Escopo de mutacao: ${contract.mutationScope.length ? contract.mutationScope.join(", ") : "somente leitura"}`,
-    `Fora de escopo: ${contract.excludedScope.length ? contract.excludedScope.join(", ") : "nao especificado"}`,
-    "Criterios de aceite:",
-    ...contract.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "Nao amplie o escopo sem bloquear com evidencia concreta."
-  ];
-}
-
-function formatWorkerContext(context: AgentExecutionRequest["workerContext"]): string[] {
-  if (!context) return [];
-  return [
-    "",
-    `Worker ${context.key} (${context.role}, ${context.mode})`,
-    `Objetivo do Worker: ${context.objective}`,
-    `Contrato de saida: ${context.outputContract}`,
-    `Escopo de escrita: ${context.writeScope.length > 0 ? context.writeScope.join(", ") : "nenhum"}`,
-    "Artifacts de entrada:",
-    ...(context.inputArtifacts.length > 0
-      ? context.inputArtifacts.map((artifact) => `- artifact:${artifact.key} - ${artifact.summary}`)
-      : ["- nenhum"]),
-    "Cumpra somente este contrato; nao absorva responsabilidades de outros Workers."
-  ];
 }
 
 export function resolveCodexCliEntry(): string | null {

@@ -172,7 +172,6 @@ rollback. The reviewer never writes skills, memory, or code.
 Governance is separated from persona:
 
 - `docs/MAESTRO_CONSTITUTION.md`: protected principles agents cannot edit;
-- `docs/HERMES_APPLIED_STUDY.md`: conclusions of the study and prioritized elements;
 - a future `SOUL.md`: tone and personality only, with no power to change security.
 
 ## Governed Skills
