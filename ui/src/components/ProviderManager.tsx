@@ -352,11 +352,8 @@ export function ProviderManager({
   const handleAccountPrimary = async () => {
     const preset = wizardPreset;
     if (!preset) return;
-    if (preset.builtIn) {
-      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
-      closeWizard();
-      return;
-    }
+    // Built-in providers still need auth (e.g. codex device-code login), but
+    // they don't get re-registered. Only block registration, not authentication.
     if (preset.authFlow === "device_code" && (!authSession || authSession.state !== "connected")) {
       if (authSession?.state === "waiting") return;
       setWizardBusy(true);
