@@ -11,3 +11,4 @@ coverage/
 !.env.example
 .maestro-dev/
 .maestro-test/
+.design-ref/

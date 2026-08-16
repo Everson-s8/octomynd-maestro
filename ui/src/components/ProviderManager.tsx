@@ -2,46 +2,34 @@ import { useEffect, useMemo, useState } from "react";
 import {
   cancelProviderAuth,
   deleteProvider,
-  discoverProviderModels,
   fetchProviderAuth,
   fetchProviderPresets,
+  fetchProviderPolicy,
   ProviderAuthSession,
-  ProviderConnectionMode,
+  ProviderPolicySnapshot,
   ProviderPreset,
   registerProvider,
   RegisteredCustomProvider,
   DashboardData,
   startProviderAuth,
-  testProviderConnection
+  testProviderConnection,
+  updateProviderControl
 } from "../api";
 
-type ProviderFilter = "all" | "account" | "api" | "local";
-type ConnectionState = "idle" | "testing" | "discovering" | "saving" | "deleting";
+type ConnectStep = "method" | "list-apikey" | "list-account" | "apikey" | "account";
 
-type ProviderDraft = {
-  id: string;
+type ConnectedProvider = {
+  key: string;
+  providerId: string;
   label: string;
-  command: string;
-  args: string;
+  detail: string;
+  type: "cloud" | "local" | "custom";
   model: string;
+  active: boolean;
+  connected: boolean;
+  color: string;
   models: string[];
-  connectionMode: ProviderConnectionMode;
-  endpointUrl: string;
-  apiKey: string;
-  apiKeyEnv: string;
-};
-
-const EMPTY_DRAFT: ProviderDraft = {
-  id: "",
-  label: "",
-  command: "opencode",
-  args: "run {prompt} -m {model}",
-  model: "",
-  models: [],
-  connectionMode: "custom",
-  endpointUrl: "",
-  apiKey: "",
-  apiKeyEnv: ""
+  registeredProvider: RegisteredCustomProvider | null;
 };
 
 export function ProviderManager({
@@ -53,25 +41,33 @@ export function ProviderManager({
 }) {
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [registered, setRegistered] = useState<RegisteredCustomProvider[]>([]);
-  const [selectedPreset, setSelectedPreset] = useState<ProviderPreset | null>(null);
-  const [editingProvider, setEditingProvider] = useState<RegisteredCustomProvider | null>(null);
-  const [draft, setDraft] = useState<ProviderDraft>(EMPTY_DRAFT);
-  const [filter, setFilter] = useState<ProviderFilter>("all");
-  const [query, setQuery] = useState("");
-  const [state, setState] = useState<ConnectionState>("idle");
+  const [policy, setPolicy] = useState<(ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [connectionDetail, setConnectionDetail] = useState("");
-  const [showCatalog, setShowCatalog] = useState(false);
-  const [customModalOpen, setCustomModalOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<RegisteredCustomProvider | null>(null);
+
+  const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [modelQuery, setModelQuery] = useState("");
+  const [dangerConfirm, setDangerConfirm] = useState(false);
+  const [detailBusy, setDetailBusy] = useState(false);
+
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState<ConnectStep>("method");
+  const [wizardHistory, setWizardHistory] = useState<ConnectStep[]>([]);
+  const [wizardPreset, setWizardPreset] = useState<ProviderPreset | null>(null);
+  const [wizardCustomEndpoint, setWizardCustomEndpoint] = useState(false);
+  const [apiKeyValue, setApiKeyValue] = useState("");
+  const [baseUrlValue, setBaseUrlValue] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [wizardBusy, setWizardBusy] = useState(false);
   const [authSession, setAuthSession] = useState<ProviderAuthSession | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
   const load = async () => {
     try {
-      const data = await fetchProviderPresets();
-      setPresets(data.presets);
-      setRegistered(data.registered);
+      const [presetData, policyData] = await Promise.all([fetchProviderPresets(), fetchProviderPolicy()]);
+      setPresets(presetData.presets);
+      setRegistered(presetData.registered);
+      setPolicy(policyData);
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel carregar os providers."));
     }
@@ -84,245 +80,340 @@ export function ProviderManager({
     const timer = window.setInterval(() => {
       void fetchProviderAuth(authSession.id).then((session) => {
         setAuthSession(session);
-        if (session.state === "connected") setConnectionDetail(session.detail);
         if (session.state === "failed") setError(session.detail);
       }).catch((cause) => setError(readError(cause, "Nao foi possivel acompanhar a autenticacao.")));
     }, 1_200);
     return () => window.clearInterval(timer);
   }, [authSession?.id, authSession?.state]);
 
-  const visiblePresets = useMemo(() => presets.filter((preset) => {
-    if (filter !== "all" && preset.category !== filter) return false;
-    const haystack = `${preset.label} ${preset.description} ${preset.id}`.toLowerCase();
-    return haystack.includes(query.trim().toLowerCase());
-  }), [filter, presets, query]);
-
-  const closeModal = () => {
-    if (authSession?.state === "waiting") void cancelProviderAuth(authSession.id).catch(() => undefined);
-    setSelectedPreset(null);
-    setEditingProvider(null);
-    setCustomModalOpen(false);
-    setDraft(EMPTY_DRAFT);
-    setState("idle");
-    setError("");
-    setConnectionDetail("");
-    setAuthSession(null);
-  };
-
-  const openPreset = (preset: ProviderPreset) => {
-    setSelectedPreset(preset);
-    setEditingProvider(null);
-    setCustomModalOpen(false);
-    setDraft({
-      id: preset.id,
-      label: preset.label,
-      command: preset.command,
-      args: preset.args.join(" "),
-      model: preset.models[0] ?? "",
-      models: preset.models,
-      connectionMode: preset.connectionHint,
-      endpointUrl: preset.defaultEndpoint ?? "",
-      apiKey: "",
-      apiKeyEnv: preset.apiKeyEnv ?? preset.envKeys[0] ?? ""
-    });
-    setError("");
-    setConnectionDetail("");
-  };
-
-  const openCustom = () => {
-    setSelectedPreset(null);
-    setEditingProvider(null);
-    setCustomModalOpen(true);
-    setDraft({ ...EMPTY_DRAFT });
-    setError("");
-    setConnectionDetail("");
-  };
-
-  const openEdit = (provider: RegisteredCustomProvider) => {
-    const preset = presets.find((item) => item.id === provider.presetId) ?? null;
-    setSelectedPreset(preset);
-    setEditingProvider(provider);
-    setCustomModalOpen(false);
-    setDraft({
-      id: provider.id,
-      label: provider.label,
-      command: provider.command,
-      args: provider.args?.join(" ") ?? "",
-      model: provider.model ?? provider.models?.[0] ?? "",
-      models: provider.models ?? [],
-      connectionMode: provider.connectionMode ?? preset?.connectionHint ?? "local",
-      endpointUrl: provider.endpointUrl ?? preset?.defaultEndpoint ?? "",
-      apiKey: "",
-      apiKeyEnv: provider.apiKeyEnv ?? preset?.apiKeyEnv ?? ""
-    });
-    setError("");
-    setConnectionDetail("");
-  };
-
-  const testConnection = async () => {
-    if (!draft.command.trim() && !draft.endpointUrl.trim()) {
-      return setError("Informe o comando CLI ou o endpoint usado pelo provider.");
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (wizardOpen) closeWizard();
+      else if (detailKey) closeDetail();
     }
-    setState("testing");
-    setError("");
-    setConnectionDetail("");
-    try {
-      const result = await testProviderConnection({
-        command: draft.command.trim(),
-        args: [],
-        presetId: selectedPreset?.id,
-        endpointUrl: draft.endpointUrl.trim(),
-        apiKey: draft.apiKey,
-        apiKeyEnv: draft.apiKeyEnv
-      });
-      if (!result.ok) throw new Error(result.detail);
-      const models = result.models ?? [];
-      if (models.length) {
-        setDraft((current) => ({
-          ...current,
-          models,
-          model: models.includes(current.model) ? current.model : models[0]
-        }));
-      }
-      setConnectionDetail(result.detail || "Provider conectado e pronto para uso.");
-    } catch (cause) {
-      setError(readError(cause, "Nao foi possivel validar o provider."));
-    } finally {
-      setState("idle");
-    }
-  };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wizardOpen, detailKey]);
 
-  const discoverModels = async () => {
-    if (!draft.endpointUrl.trim() && selectedPreset?.modelDiscovery !== "cli") {
-      return setError("Informe um endpoint compativel para descobrir modelos.");
-    }
-    setState("discovering");
-    setError("");
-    try {
-      const models = await discoverProviderModels({
-        presetId: selectedPreset?.id,
-        endpointUrl: draft.endpointUrl,
-        apiKey: draft.apiKey,
-        apiKeyEnv: draft.apiKeyEnv
-      });
-      if (!models.length) throw new Error("O endpoint respondeu, mas nao anunciou modelos.");
-      setDraft((current) => ({ ...current, models, model: models.includes(current.model) ? current.model : models[0] }));
-      setConnectionDetail(`${models.length} modelo(s) encontrado(s).`);
-    } catch (cause) {
-      setError(readError(cause, "Nao foi possivel descobrir os modelos."));
-    } finally {
-      setState("idle");
-    }
-  };
-
-  const connectAccount = async () => {
-    if (!selectedPreset || selectedPreset.authFlow === "none") return;
-    setState("testing");
-    setError("");
-    setConnectionDetail("");
-    try {
-      setAuthSession(await startProviderAuth(selectedPreset.id));
-    } catch (cause) {
-      setError(readError(cause, "Nao foi possivel iniciar a autenticacao."));
-    } finally {
-      setState("idle");
-    }
-  };
-
-  const save = async () => {
-    if (selectedPreset?.builtIn) {
-      setNotice(`${selectedPreset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
-      closeModal();
-      return;
-    }
-    if (!draft.command.trim()) return setError("Informe o comando usado para executar o provider.");
-    const id = sanitizeId(draft.id || draft.label || draft.command);
-    if (!id) return setError("Informe um nome valido para o provider.");
-    if (draft.connectionMode === "api_key" && !draft.apiKey && !draft.apiKeyEnv) {
-      return setError("Informe a API key ou o nome da variavel de ambiente que ja contem a chave.");
-    }
-    setState("saving");
-    setError("");
-    try {
-      const result = await registerProvider({
-        id,
-        label: draft.label || id,
-        command: draft.command.trim(),
-        args: splitArguments(draft.args),
-        model: draft.model || null,
-        models: draft.models,
-        presetId: selectedPreset?.id,
-        connectionMode: draft.connectionMode,
-        endpointUrl: draft.endpointUrl || null,
-        apiKey: draft.apiKey,
-        apiKeyEnv: draft.apiKeyEnv
-      });
-      setRegistered(result.providers);
-      setNotice(`${draft.label || id} foi conectado e ativado sem reiniciar o Maestro.`);
-      onChanged?.();
-      closeModal();
-    } catch (cause) {
-      setError(readError(cause, "Nao foi possivel salvar o provider."));
-    } finally {
-      setState("idle");
-    }
-  };
-
-  const remove = async () => {
-    if (!confirmDelete) return;
-    setState("deleting");
-    setError("");
-    try {
-      const providers = await deleteProvider(confirmDelete.id);
-      setRegistered(providers);
-      setNotice(`${confirmDelete.label} foi desconectado. Rotas e fallbacks dependentes foram reparados.`);
-      setConfirmDelete(null);
-      onChanged?.();
-    } catch (cause) {
-      setError(readError(cause, "Nao foi possivel remover o provider."));
-    } finally {
-      setState("idle");
-    }
-  };
-
-  const modalOpen = Boolean(selectedPreset || editingProvider || customModalOpen);
-  const connectedProviders = useMemo(() => {
+  const connectedProviders = useMemo<ConnectedProvider[]>(() => {
     const builtIns = presets.filter((preset) => preset.builtIn).map((preset) => {
       const runtimeId = preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
       const agent = agents.find((item) => item.id === runtimeId);
+      const control = policy?.controls.find((item) => item.providerId === runtimeId);
+      const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
+      const activeModel = control?.model || models[0] || "";
       return {
         key: `preset:${preset.id}`,
+        providerId: runtimeId,
         label: preset.label,
         detail: agent?.detail || (agent?.state === "offline" ? "indisponivel" : "CLI disponivel"),
-        type: "cloud",
-        model: "Padrao do provider",
+        type: "cloud" as const,
+        model: activeModel || "Padrao do provider",
         active: agent?.state !== "offline",
+        connected: models.length > 0,
         color: providerColor(preset.id),
-        open: () => openPreset(preset)
+        models,
+        registeredProvider: null
       };
     });
     const custom = registered.map((provider) => {
       const preset = presets.find((item) => item.id === provider.presetId);
       const local = preset?.category === "local" || provider.connectionMode === "local";
+      const control = policy?.controls.find((item) => item.providerId === provider.id);
+      const models = policy?.availableModels?.[provider.id] ?? provider.models ?? [];
+      const activeModel = control?.model || provider.model || models[0] || "";
       return {
         key: `registered:${provider.id}`,
+        providerId: provider.id,
         label: provider.label,
         detail: local ? provider.endpointUrl || "endpoint local" : "conectado",
-        type: local ? "local" : "custom",
-        model: provider.model || "Padrao do provider",
+        type: (local ? "local" : "custom") as "local" | "custom",
+        model: activeModel || "Padrao do provider",
         active: true,
+        connected: models.length > 0,
         color: providerColor(provider.id),
-        open: () => openEdit(provider)
+        models,
+        registeredProvider: provider
       };
     });
     return [...builtIns, ...custom];
-  }, [agents, presets, registered]);
+  }, [agents, presets, registered, policy]);
 
   const groupedProviders = {
     Nuvem: connectedProviders.filter((provider) => provider.type === "cloud"),
     Local: connectedProviders.filter((provider) => provider.type === "local"),
     Personalizado: connectedProviders.filter((provider) => provider.type === "custom")
   };
+
+  const detailProvider = connectedProviders.find((provider) => provider.key === detailKey) ?? null;
+
+  const filteredModels = useMemo(() => {
+    if (!detailProvider) return [];
+    const q = modelQuery.trim().toLowerCase();
+    return q ? detailProvider.models.filter((model) => model.toLowerCase().includes(q)) : detailProvider.models;
+  }, [detailProvider, modelQuery]);
+
+  const openDetail = (key: string) => {
+    setDetailKey(key);
+    setModelQuery("");
+    setDangerConfirm(false);
+    setError("");
+  };
+
+  const closeDetail = () => {
+    setDetailKey(null);
+    setDangerConfirm(false);
+    setModelQuery("");
+  };
+
+  const selectModel = async (model: string) => {
+    if (!detailProvider) return;
+    setDetailBusy(true);
+    setError("");
+    try {
+      const control = policy?.controls.find((item) => item.providerId === detailProvider.providerId);
+      await updateProviderControl(detailProvider.providerId, {
+        mode: control?.mode ?? "enabled",
+        fallbackEnabled: control?.fallbackEnabled ?? true,
+        model
+      });
+      await load();
+      onChanged?.();
+    } catch (cause) {
+      setError(readError(cause, "Nao foi possivel atualizar o modelo."));
+    } finally {
+      setDetailBusy(false);
+    }
+  };
+
+  const removeProvider = async () => {
+    if (!detailProvider) return;
+    setDetailBusy(true);
+    setError("");
+    try {
+      if (detailProvider.registeredProvider) {
+        const providers = await deleteProvider(detailProvider.registeredProvider.id);
+        setRegistered(providers);
+        setNotice(`${detailProvider.label} foi desconectado. Rotas e fallbacks dependentes foram reparados.`);
+      } else {
+        const control = policy?.controls.find((item) => item.providerId === detailProvider.providerId);
+        await updateProviderControl(detailProvider.providerId, {
+          mode: "disabled",
+          fallbackEnabled: control?.fallbackEnabled ?? false
+        });
+        setNotice(`${detailProvider.label} foi pausado e removido das rotas.`);
+        await load();
+      }
+      onChanged?.();
+      closeDetail();
+    } catch (cause) {
+      setError(readError(cause, "Nao foi possivel desconectar o provider."));
+    } finally {
+      setDetailBusy(false);
+    }
+  };
+
+  const resetWizard = () => {
+    setWizardStep("method");
+    setWizardHistory([]);
+    setWizardPreset(null);
+    setWizardCustomEndpoint(false);
+    setApiKeyValue("");
+    setBaseUrlValue("");
+    setCustomLabel("");
+    setAuthSession(null);
+    setCopyState("idle");
+    setError("");
+  };
+
+  const openWizard = () => {
+    resetWizard();
+    setWizardOpen(true);
+  };
+
+  const closeWizard = () => {
+    if (authSession?.state === "waiting") void cancelProviderAuth(authSession.id).catch(() => undefined);
+    setWizardOpen(false);
+    resetWizard();
+  };
+
+  const gotoStep = (step: ConnectStep) => {
+    setWizardHistory((history) => [...history, wizardStep]);
+    setWizardStep(step);
+  };
+
+  const backStep = () => {
+    setWizardHistory((history) => {
+      if (!history.length) return history;
+      setWizardStep(history[history.length - 1]);
+      return history.slice(0, -1);
+    });
+  };
+
+  const openApiKeyPreset = (preset: ProviderPreset) => {
+    setWizardPreset(preset);
+    setWizardCustomEndpoint(false);
+    setApiKeyValue("");
+    setBaseUrlValue(preset.defaultEndpoint ?? "");
+    gotoStep("apikey");
+  };
+
+  const openApiKeyCustom = () => {
+    setWizardPreset(null);
+    setWizardCustomEndpoint(true);
+    setApiKeyValue("");
+    setBaseUrlValue("");
+    setCustomLabel("");
+    gotoStep("apikey");
+  };
+
+  const openAccountPreset = (preset: ProviderPreset) => {
+    setWizardPreset(preset);
+    setAuthSession(null);
+    setCopyState("idle");
+    gotoStep("account");
+  };
+
+  const connectApiKey = async () => {
+    const preset = wizardPreset;
+    if (preset?.builtIn) {
+      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
+      closeWizard();
+      return;
+    }
+    if (!apiKeyValue.trim()) return setError("Informe a API key.");
+    const label = preset?.label ?? (customLabel.trim() || "Endpoint customizado");
+    const id = sanitizeId(preset?.id ?? customLabel ?? label);
+    if (!id) return setError("Informe um nome valido para o provider.");
+    setWizardBusy(true);
+    setError("");
+    try {
+      const result = await registerProvider({
+        id,
+        label,
+        command: preset?.command ?? "opencode",
+        args: preset?.args ?? [],
+        model: preset?.models?.[0] ?? null,
+        presetId: preset?.id,
+        connectionMode: "api_key",
+        endpointUrl: baseUrlValue.trim() || preset?.defaultEndpoint || null,
+        apiKey: apiKeyValue,
+        apiKeyEnv: preset?.apiKeyEnv ?? undefined
+      });
+      setRegistered(result.providers);
+      setNotice(`${label} foi conectado e ativado sem reiniciar o Maestro.`);
+      await load();
+      onChanged?.();
+      closeWizard();
+    } catch (cause) {
+      setError(readError(cause, "Nao foi possivel conectar o provider."));
+    } finally {
+      setWizardBusy(false);
+    }
+  };
+
+  const confirmAccountLogin = async () => {
+    const preset = wizardPreset;
+    if (!preset) return;
+    if (preset.builtIn) {
+      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
+      closeWizard();
+      return;
+    }
+    setWizardBusy(true);
+    setError("");
+    try {
+      const testResult = await testProviderConnection({ command: preset.command, args: preset.args, presetId: preset.id });
+      if (!testResult.ok) throw new Error(testResult.detail || "Login ainda nao detectado. Verifique o terminal e tente novamente.");
+      const result = await registerProvider({
+        id: preset.id,
+        label: preset.label,
+        command: preset.command,
+        args: preset.args,
+        model: testResult.models?.[0] ?? preset.models[0] ?? null,
+        models: testResult.models ?? preset.models,
+        presetId: preset.id,
+        connectionMode: "account"
+      });
+      setRegistered(result.providers);
+      setNotice(`${preset.label} foi conectado e ativado sem reiniciar o Maestro.`);
+      await load();
+      onChanged?.();
+      closeWizard();
+    } catch (cause) {
+      setError(readError(cause, "Nao foi possivel confirmar o login."));
+    } finally {
+      setWizardBusy(false);
+    }
+  };
+
+  const handleAccountPrimary = async () => {
+    const preset = wizardPreset;
+    if (!preset) return;
+    if (preset.builtIn) {
+      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
+      closeWizard();
+      return;
+    }
+    if (preset.authFlow === "device_code" && (!authSession || authSession.state !== "connected")) {
+      if (authSession?.state === "waiting") return;
+      setWizardBusy(true);
+      setError("");
+      try {
+        setAuthSession(await startProviderAuth(preset.id));
+      } catch (cause) {
+        setError(readError(cause, "Nao foi possivel iniciar a autenticacao."));
+      } finally {
+        setWizardBusy(false);
+      }
+      return;
+    }
+    await confirmAccountLogin();
+  };
+
+  const accountPrimaryLabel = () => {
+    if (!wizardPreset) return "Ja fiz login";
+    if (wizardPreset.authFlow === "device_code") {
+      if (!authSession) return wizardBusy ? "Abrindo..." : "Conectar conta";
+      if (authSession.state === "waiting") return "Aguardando autorizacao...";
+      if (authSession.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
+      return "Tentar novamente";
+    }
+    return wizardBusy ? "Verificando..." : "Ja fiz login";
+  };
+
+  const copyCommand = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1_800);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  const wizardCopy = (): { title: string; desc: string } => {
+    switch (wizardStep) {
+      case "method":
+        return { title: "Conectar provider", desc: "Como voce quer autenticar? A forma de conexao depende do provider escolhido." };
+      case "list-apikey":
+        return { title: "Via chave de API", desc: "Escolha o provider que voce quer conectar com API key." };
+      case "list-account":
+        return { title: "Via conta (CLI)", desc: "Escolha o provider — o login acontece pela CLI oficial dele." };
+      case "apikey": {
+        const name = wizardPreset?.label ?? "Endpoint customizado";
+        return { title: name, desc: `Cole a chave de API para conectar ${name}.` };
+      }
+      case "account": {
+        const name = wizardPreset?.label ?? "este provider";
+        return { title: `Entrar com ${name}`, desc: `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".` };
+      }
+    }
+  };
+
+  const { title: wizardTitle, desc: wizardDesc } = wizardCopy();
 
   return (
     <section className="provider-manager">
@@ -332,157 +423,194 @@ export function ProviderManager({
         <div key={group}>
           <div className="prov-group-lbl">{group}</div>
           {groupedProviders[group].map((provider) => (
-            <button type="button" className="prov-card provider-card-button" key={provider.key} onClick={provider.open}>
+            <button type="button" className="prov-card" key={provider.key} onClick={() => openDetail(provider.key)}>
               <div className="head">
                 <div className="av" style={{ background: provider.color }}>{provider.label.slice(0, 1).toUpperCase()}</div>
                 <div><b>{provider.label}</b><span><i className="st-dot" />{provider.detail}</span></div>
                 <span className="type-tag">{provider.type}</span>
-                <span className="pc-chev" aria-hidden="true">›</span>
+                <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
               </div>
               <div className="prov-uso">
                 <div className="prov-uso-l"><div className={`toggle${provider.active ? " on" : ""}`}><i /></div><label>{provider.active ? "ativo" : "indisponivel"}</label></div>
-                <span className="model-badge">{provider.model}</span>
+                {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
               </div>
             </button>
           ))}
         </div>
       ) : null)}
-      <button type="button" className="add-provider" onClick={() => setShowCatalog(true)}>
+      <button type="button" className="add-provider" onClick={openWizard}>
         <div className="plus">+</div><b>Conectar provider</b><span>Local, OpenAI-compatible, ou endpoint próprio</span>
       </button>
 
-      {showCatalog ? (
-        <div className="modal-overlay active" onMouseDown={(event) => { if (event.currentTarget === event.target) setShowCatalog(false); }}>
-        <div className="modal provider-catalog-panel">
-          <div className="provider-catalog-toolbar">
-            <div><div className="eyebrow">Novo braço</div><h2>Conectar provider</h2><p>Escolha como o Maestro vai acessar o modelo.</p></div>
-            <button type="button" className="modal-close" onClick={() => setShowCatalog(false)} aria-label="Fechar catálogo">×</button>
-          </div>
-          <div className="provider-search-row">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar Claude, OpenRouter, Ollama..." />
-            <div className="provider-filter-tabs" role="tablist" aria-label="Filtrar providers">
-              {(["all", "account", "api", "local"] as ProviderFilter[]).map((item) => (
-                <button type="button" className={filter === item ? "active" : ""} onClick={() => setFilter(item)} key={item}>
-                  {item === "all" ? "Todos" : item === "account" ? "Contas" : item === "api" ? "API keys" : "Locais"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="provider-option-list">
-            {visiblePresets.map((preset) => (
-              <button type="button" className="provider-option" onClick={() => openPreset(preset)} key={preset.id}>
-                <span className="provider-option-mark">{preset.label.slice(0, 1)}</span>
-                <span className="provider-option-copy"><strong>{preset.label}</strong><small>{preset.description}</small></span>
-                <span className="provider-option-method">{preset.builtIn ? "Integrado" : preset.category === "account" ? "Conta" : preset.category === "api" ? "API key" : "Local"}</span>
-                <span aria-hidden="true">→</span>
-              </button>
-            ))}
-            {filter === "all" || filter === "local" ? (
-              <button type="button" className="provider-option custom" onClick={openCustom}>
-                <span className="provider-option-mark">+</span>
-                <span className="provider-option-copy"><strong>Endpoint OpenAI-compatible</strong><small>Ollama, vLLM, llama.cpp, proxy ou endpoint proprio.</small></span>
-                <span className="provider-option-method">Custom</span>
-                <span aria-hidden="true">→</span>
-              </button>
-            ) : null}
-          </div>
-        </div></div>
-      ) : null}
-
-      {modalOpen ? (
-        <div className="provider-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) closeModal(); }}>
-          <div className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
-            <div className="provider-modal-head">
-              <div className="provider-mark large">{(draft.label || "C").slice(0, 1).toUpperCase()}</div>
-              <div><span>{editingProvider ? "Configurar provider" : "Nova conexao"}</span><h3 id="provider-modal-title">{draft.label || "Endpoint customizado"}</h3></div>
-              <button type="button" className="provider-close" onClick={closeModal} aria-label="Fechar">×</button>
-            </div>
-
-            {selectedPreset?.description ? <p className="provider-modal-description">{selectedPreset.description}</p> : null}
-            {error ? <div className="provider-feedback error" role="alert">{error}</div> : null}
-            {connectionDetail ? <div className="provider-feedback success">{connectionDetail}</div> : null}
-
-            {selectedPreset?.builtIn ? (
-              <div className="provider-built-in-note">
-                <strong>Provider integrado ao Maestro</strong>
-                <p>Ele ja aparece no controle de prioridade. Use as instrucoes abaixo apenas para autenticar o CLI neste computador.</p>
-              </div>
-            ) : null}
-
-            {draft.connectionMode === "account" ? (
-              <div className="provider-setup-block">
-                <span className="provider-field-label">Conectar por conta</span>
-                <p>O Maestro abre o fluxo oficial e acompanha a autorizacao. As credenciais continuam sob controle do CLI.</p>
-                {authSession ? <AuthSessionPanel session={authSession} /> : null}
-                <div className="provider-inline-actions">
-                  {!authSession && selectedPreset?.authFlow !== "none" ? <button type="button" className="btn-new" onClick={() => void connectAccount()} disabled={state !== "idle"}>{state === "testing" ? "Abrindo..." : "Conectar conta"}</button> : null}
-                  {!authSession && selectedPreset?.setupCommand ? <CommandBox command={selectedPreset.setupCommand} /> : null}
-                  {!authSession && selectedPreset?.docsUrl ? <a href={selectedPreset.docsUrl} target="_blank" rel="noreferrer" className="btn-ghost">Documentacao oficial</a> : null}
+      {detailProvider ? (
+        <div className="modal-overlay active" onMouseDown={(event) => { if (event.currentTarget === event.target) closeDetail(); }}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={closeDetail} aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+            <div className="modal-head">
+              <div className="modal-eyebrow">{detailProvider.type === "cloud" ? "Cloud" : detailProvider.type === "local" ? "Local" : "Custom"}</div>
+              <div className="pd-head-row">
+                <div className="pd-av" style={{ background: detailProvider.color }}>{detailProvider.label.slice(0, 1).toUpperCase()}</div>
+                <div>
+                  <div className="pd-name">{detailProvider.label}</div>
+                  <div className="pd-status"><span className="st-dot" style={detailProvider.active ? undefined : { background: "var(--warn)" }} />{detailProvider.detail}</div>
                 </div>
               </div>
-            ) : null}
+            </div>
+            <div className="modal-body">
+              {detailProvider.connected ? (
+                <>
+                  <div className="pd-section-lbl">Modelo ativo</div>
+                  {detailProvider.models.length > 6 ? (
+                    <div className="model-search">
+                      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+                      <input type="text" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Buscar modelo..." />
+                      <span className="count">{filteredModels.length} de {detailProvider.models.length}</span>
+                    </div>
+                  ) : null}
+                  <div className="model-list-scroll">
+                    {filteredModels.length ? filteredModels.map((model) => (
+                      <div
+                        className={`model-row${model === detailProvider.model ? " active" : ""}`}
+                        key={model}
+                        onClick={() => { if (!detailBusy) void selectModel(model); }}
+                      >
+                        <div className="radio" />
+                        <div className="tx"><b>{model}</b></div>
+                        {model === detailProvider.models[0] ? <span className="default-tag">padrão</span> : null}
+                      </div>
+                    )) : <div className="model-empty">Nenhum modelo encontrado</div>}
+                  </div>
+                </>
+              ) : (
+                <div className="pd-unconfigured">Conecte uma chave de API válida para escolher o modelo deste provider.</div>
+              )}
 
-            {draft.connectionMode === "api_key" ? (
-              <div className="provider-form-grid">
-                <label className="provider-field full"><span>API key</span><input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={editingProvider ? "Deixe vazio para manter a chave atual" : "Cole a chave aqui"} /></label>
-                <label className="provider-field"><span>Variavel protegida</span><input value={draft.apiKeyEnv} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value.toUpperCase() })} placeholder="PROVIDER_API_KEY" /></label>
-                <label className="provider-field"><span>Endpoint</span><input value={draft.endpointUrl} onChange={(event) => setDraft({ ...draft, endpointUrl: event.target.value })} placeholder="https://api.exemplo.com/v1" /></label>
-                {selectedPreset?.docsUrl ? <a className="provider-help-link full" href={selectedPreset.docsUrl} target="_blank" rel="noreferrer">Onde obter a API key →</a> : null}
+              <div className="danger-zone">
+                <button type="button" className="danger-trigger" onClick={() => setDangerConfirm(true)}>
+                  <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6" /></svg>
+                  Desconectar provider
+                </button>
+                <div className={`danger-confirm${dangerConfirm ? " show" : ""}`}>
+                  <p>Isso remove <b>{detailProvider.label}</b> das suas rotas. Tasks em andamento com fallback automático migram para o próximo da fila.</p>
+                  <div className="row">
+                    <button type="button" className="btn-ghost" onClick={() => setDangerConfirm(false)}>Cancelar</button>
+                    <button type="button" className="btn-danger" onClick={() => void removeProvider()} disabled={detailBusy}>
+                      {detailBusy ? "Removendo..." : detailProvider.registeredProvider ? "Remover conexão" : "Pausar provider"}
+                    </button>
+                  </div>
+                </div>
               </div>
-            ) : null}
-
-            {draft.connectionMode === "local" || draft.connectionMode === "custom" ? (
-              <div className="provider-form-grid">
-                <label className="provider-field"><span>Nome</span><input value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} placeholder="Meu provider" /></label>
-                <label className="provider-field"><span>ID interno</span><input value={draft.id} disabled={Boolean(editingProvider)} onChange={(event) => setDraft({ ...draft, id: sanitizeId(event.target.value) })} placeholder="meu-provider" /></label>
-                <label className="provider-field full"><span>Endpoint OpenAI-compatible</span><input value={draft.endpointUrl} onChange={(event) => setDraft({ ...draft, endpointUrl: event.target.value })} placeholder="http://127.0.0.1:11434" /></label>
-                <label className="provider-field"><span>Comando CLI</span><input value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="opencode" /></label>
-                <label className="provider-field"><span>Argumentos</span><input value={draft.args} onChange={(event) => setDraft({ ...draft, args: event.target.value })} placeholder="run {prompt} -m {model}" /></label>
-              </div>
-            ) : null}
-
-            {selectedPreset?.modelDiscovery !== "manual" || !selectedPreset?.builtIn ? (
-              <div className="provider-model-block">
-                <div className="provider-model-head"><div><span className="provider-field-label">Modelo</span><p>{selectedPreset?.modelDiscovery === "manual" ? "Este CLI nao publica um catalogo confiavel. Use Auto ou informe um ID suportado." : "Catalogo consultado diretamente no provider; nenhum modelo e inventado pelo Maestro."}</p></div>{selectedPreset?.modelDiscovery !== "manual" ? <button type="button" className="btn-ghost" onClick={() => void discoverModels()} disabled={state !== "idle"}>{state === "discovering" ? "Buscando..." : "Buscar modelos reais"}</button> : null}</div>
-                {draft.models.length ? (
-                  <select value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })}>{draft.models.map((model) => <option value={model} key={model}>{model}</option>)}</select>
-                ) : (
-                  <input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="Auto ou ID do modelo" />
-                )}
-              </div>
-            ) : null}
-
-            <div className="provider-modal-actions">
-              <button type="button" className="btn-ghost" onClick={closeModal}>Cancelar</button>
-              {!selectedPreset?.builtIn ? <button type="button" className="btn-ghost" onClick={() => void testConnection()} disabled={state !== "idle"}>{state === "testing" ? "Testando..." : "Testar conexão"}</button> : null}
-              <button type="button" className="btn-new" onClick={() => void save()} disabled={state !== "idle"}>{state === "saving" ? "Salvando..." : selectedPreset?.builtIn ? "Entendi" : editingProvider ? "Salvar alteracoes" : "Conectar provider"}</button>
             </div>
           </div>
         </div>
       ) : null}
 
-      {confirmDelete ? (
-        <div className="provider-modal-backdrop">
-          <div className="provider-confirm-dialog" role="alertdialog" aria-modal="true">
-            <div className="provider-mark large">{confirmDelete.label.slice(0, 1)}</div>
-            <h3>Desconectar {confirmDelete.label}?</h3>
-            <p>O provider sera removido do runtime e de todas as prioridades e fallbacks. Trabalho ativo impede a remocao para evitar perda de progresso.</p>
-            <div className="provider-modal-actions"><button type="button" className="btn-ghost" onClick={() => setConfirmDelete(null)}>Cancelar</button><button type="button" className="btn-new danger" onClick={() => void remove()} disabled={state === "deleting"}>{state === "deleting" ? "Removendo..." : "Desconectar"}</button></div>
+      {wizardOpen ? (
+        <div className="modal-overlay active" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWizard(); }}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className={`modal-back${wizardHistory.length ? " show" : ""}`} onClick={backStep} aria-label="Voltar"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+            <button type="button" className="modal-close" onClick={closeWizard} aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+
+            <div className={`modal-head${wizardHistory.length ? " with-back" : ""}`}>
+              <div className="modal-eyebrow">Novo braço</div>
+              <h3>{wizardTitle}</h3>
+              <p>{wizardDesc}</p>
+            </div>
+
+            <div className="modal-body">
+              {error ? <div className="provider-feedback error" role="alert">{error}</div> : null}
+
+              <div className={`cp-step${wizardStep === "method" ? " active" : ""}`}>
+                <div className="method-grid">
+                  <div className="method-card" onClick={() => gotoStep("list-apikey")}>
+                    <div className="ico"><svg viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.778-7.778zm0 0L15.5 7.5m0 0L19 4m-3.5 3.5L19 4" /></svg></div>
+                    <b>Via chave de API</b>
+                    <p>Cole uma API key. Bom para OpenAI, Anthropic API, ou qualquer endpoint compatível.</p>
+                  </div>
+                  <div className="method-card" onClick={() => gotoStep("list-account")}>
+                    <div className="ico"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8" /></svg></div>
+                    <b>Via conta (CLI)</b>
+                    <p>Login pela CLI oficial do provider. Nenhuma chave fica salva no Octomynd.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className={`cp-step${wizardStep === "list-apikey" ? " active" : ""}`}>
+                {presets.filter((preset) => preset.category === "api").map((preset) => (
+                  <div className="pick-row" key={preset.id} onClick={() => openApiKeyPreset(preset)}>
+                    <div className="av" style={{ background: providerColor(preset.id) }}>{preset.label.slice(0, 1).toUpperCase()}</div>
+                    <div className="tx"><b>{preset.label}</b><span>{preset.description}</span></div>
+                    <svg className="go" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                  </div>
+                ))}
+                <div className="pick-row" onClick={openApiKeyCustom}>
+                  <div className="av" style={{ background: "#5c5347" }}>+</div>
+                  <div className="tx"><b>Endpoint customizado</b><span>compatível com OpenAI · URL + chave</span></div>
+                  <svg className="go" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                </div>
+              </div>
+
+              <div className={`cp-step${wizardStep === "list-account" ? " active" : ""}`}>
+                {presets.filter((preset) => preset.category === "account").map((preset) => (
+                  <div className="pick-row" key={preset.id} onClick={() => openAccountPreset(preset)}>
+                    <div className="av" style={{ background: providerColor(preset.id) }}>{preset.label.slice(0, 1).toUpperCase()}</div>
+                    <div className="tx"><b>{preset.label}</b><span>login via CLI oficial</span></div>
+                    <svg className="go" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                  </div>
+                ))}
+              </div>
+
+              <div className={`cp-step${wizardStep === "apikey" ? " active" : ""}`}>
+                <div className="apikey-hint">A chave é armazenada localmente e nunca sai da sua máquina — o Octomynd é local-first.</div>
+                {wizardCustomEndpoint ? (
+                  <div className="mfield">
+                    <label>Nome</label>
+                    <input value={customLabel} onChange={(event) => setCustomLabel(event.target.value)} placeholder="Meu endpoint" />
+                  </div>
+                ) : null}
+                <div className="mfield">
+                  <label>API key</label>
+                  <input type="password" value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder="sk-••••••••••••••••••••••••" />
+                </div>
+                <div className="mfield" style={{ display: wizardCustomEndpoint ? "block" : "none" }}>
+                  <label>Base URL</label>
+                  <input type="text" value={baseUrlValue} onChange={(event) => setBaseUrlValue(event.target.value)} placeholder="https://api.exemplo.com/v1" />
+                </div>
+                <div className="cp-foot">
+                  <button type="button" className="btn-ghost" onClick={closeWizard}>Cancelar</button>
+                  <button type="button" className="btn-new" onClick={() => void connectApiKey()} disabled={wizardBusy}>{wizardBusy ? "Conectando..." : "Conectar"}</button>
+                </div>
+              </div>
+
+              <div className={`cp-step${wizardStep === "account" ? " active" : ""}`}>
+                {wizardPreset?.setupCommand ? (
+                  <div className="term-box">
+                    <div className="cmd"><span className="dollar">$</span> <span className="arg">{wizardPreset.setupCommand}</span></div>
+                    <button type="button" className={`copy-btn${copyState === "copied" ? " copied" : ""}`} onClick={() => void copyCommand(wizardPreset.setupCommand!)}>
+                      {copyState === "copied" ? "Copiado ✓" : "Copiar"}
+                    </button>
+                  </div>
+                ) : null}
+                {wizardPreset?.authFlow === "device_code" && authSession ? <AuthSessionPanel session={authSession} /> : null}
+                {wizardPreset?.docsUrl ? (
+                  <a href={wizardPreset.docsUrl} className="docs-link" target="_blank" rel="noreferrer">
+                    <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" /></svg>
+                    <span>{wizardPreset?.label} docs</span>
+                  </a>
+                ) : null}
+                <div className="cp-foot">
+                  <button type="button" className="btn-ghost" onClick={closeWizard}>Cancelar</button>
+                  <button type="button" className="btn-new" onClick={() => void handleAccountPrimary()} disabled={wizardBusy || authSession?.state === "waiting"}>
+                    {accountPrimaryLabel()}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
     </section>
   );
-}
-
-function CommandBox({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
-  };
-  return <div className="provider-command-box"><code>$ {command}</code><button type="button" onClick={() => void copy()}>{copied ? "Copiado" : "Copiar"}</button></div>;
 }
 
 function AuthSessionPanel({ session }: { session: ProviderAuthSession }) {
@@ -507,10 +635,6 @@ function AuthSessionPanel({ session }: { session: ProviderAuthSession }) {
   );
 }
 
-function splitArguments(value: string): string[] {
-  return value.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((item) => item.replace(/^"|"$/g, "")) ?? [];
-}
-
 function sanitizeId(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 }
@@ -525,5 +649,7 @@ function providerColor(providerId: string): string {
   if (providerId.includes("ollama")) return "#5c6f8f";
   if (providerId.includes("openrouter")) return "#8a6dab";
   if (providerId.includes("openai")) return "#4d7a8c";
+  if (providerId.includes("qwen")) return "#4d7a8c";
+  if (providerId.includes("mistral")) return "#8a6dab";
   return "#7c634a";
 }
