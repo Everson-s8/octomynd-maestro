@@ -74,8 +74,16 @@ export class ProviderAuthBroker {
 
   private startTerminal(executable: string, preset: ProviderPreset, session: InternalSession) {
     session.detail = "Terminal de autenticacao aberto. Conclua o login nele.";
-    const command = [executable, ...(preset.authArgs ?? [])].map(quotePowerShell).join(" ");
-    const child = spawn("powershell.exe", ["-NoProfile", "-Command", `Start-Process powershell.exe -ArgumentList '-NoExit','-Command',${quotePowerShell(command)} -WindowStyle Normal -Wait`], { windowsHide: true });
+    // Build "<exe> <auth args>" — quote only the executable path (it may contain
+    // spaces); the bare auth args must NOT be individually quoted inside the
+    // Start-Process -ArgumentList string or PowerShell treats each quoted token
+    // as a separate command and fails (""auth"" é lido como token inválido).
+    const exeQuoted = /\s/.test(executable) ? `"${executable.replace(/"/g, "")}"` : executable;
+    const loginArgs = (preset.authArgs ?? []).join(" ");
+    const command = `${exeQuoted} ${loginArgs}`.trim();
+    // Open a visible PowerShell window that runs the login command and stays open.
+    const script = `Start-Process powershell.exe -ArgumentList '-NoExit','-Command',${quotePowerShell(command)} -WorkingDirectory ${quotePowerShell(process.cwd())} -WindowStyle Normal`;
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", script], { windowsHide: true });
     child.once("error", (error) => complete(session, "failed", error.message));
     child.once("close", async () => {
       const connected = await probeStatus(executable, preset.authStatusArgs);
