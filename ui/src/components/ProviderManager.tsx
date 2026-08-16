@@ -353,9 +353,11 @@ export function ProviderManager({
   const handleAccountPrimary = async () => {
     const preset = wizardPreset;
     if (!preset) return;
-    // Built-in providers still need auth (e.g. codex device-code login), but
-    // they don't get re-registered. Only block registration, not authentication.
-    if (preset.authFlow === "device_code" && (!authSession || authSession.state !== "connected")) {
+    // Providers with an auth flow (device-code or terminal) automate the login
+    // through the backend broker (spawns the CLI, opens the browser/terminal,
+    // returns a session we poll). Providers without a flow just need the CLI to
+    // already be logged in, so fall back to a probe + register.
+    if (preset.authFlow && preset.authFlow !== "none" && (!authSession || authSession.state !== "connected")) {
       if (authSession?.state === "waiting") return;
       setWizardBusy(true);
       setError("");
@@ -373,7 +375,7 @@ export function ProviderManager({
 
   const accountPrimaryLabel = () => {
     if (!wizardPreset) return "Ja fiz login";
-    if (wizardPreset.authFlow === "device_code") {
+    if (wizardPreset.authFlow && wizardPreset.authFlow !== "none") {
       if (!authSession) return wizardBusy ? "Abrindo..." : "Conectar conta";
       if (authSession.state === "waiting") return "Aguardando autorizacao...";
       if (authSession.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
