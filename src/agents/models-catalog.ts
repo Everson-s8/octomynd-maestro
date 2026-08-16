@@ -80,19 +80,17 @@ export async function fetchModelsCatalog(): Promise<ModelsCatalog> {
 }
 
 /**
- * Map a Maestro provider id / endpoint to a models.dev provider key.
- * Falls back to the provider id itself, then a search by endpoint host.
- */
-/** Map a Maestro provider id / endpoint to a models.dev provider key. */
-const PROVIDER_ID_TO_CATALOG: Record<string, string> = {
-  codex: "openai",
-  claude: "anthropic",
-  antigravity: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  mistral: "mistral",
-  openrouter: "openrouter"
-};
+ /** Map a Maestro provider id / endpoint to a models.dev provider key. 
+  * NOTE: antigravity/gemini are intentionally NOT mapped — the antigravity CLI
+  * lists its own account model ids (gemini-3.7-flash, etc.) which differ from
+  * models.dev's 'google' entry; keep its hardcoded/CLI discovery instead. */
+ const PROVIDER_ID_TO_CATALOG: Record<string, string> = {
+   codex: "openai",
+   claude: "anthropic",
+   deepseek: "deepseek",
+   mistral: "mistral",
+   openrouter: "openrouter"
+ };
 
 export function resolveCatalogProviderKey(providerId: string, endpointUrl?: string | null): string | null {
   const id = providerId.toLowerCase();

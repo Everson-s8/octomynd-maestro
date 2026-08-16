@@ -37,7 +37,7 @@ describe("models-catalog", () => {
     await fetchModelsCatalog();
     expect(resolveCatalogProviderKey("codex")).toBe("openai");
     expect(resolveCatalogProviderKey("claude")).toBe("anthropic");
-    expect(resolveCatalogProviderKey("antigravity")).toBe("google");
+    expect(resolveCatalogProviderKey("antigravity")).toBeNull();
     expect(resolveCatalogProviderKey("opencode-go")).toBe("opencode-go");
   });
 
@@ -51,7 +51,9 @@ describe("models-catalog", () => {
     expect(catalogModelsFor("codex")).toContain("gpt-4o");
     expect(catalogModelsFor("claude")).toContain("claude-sonnet-4-6");
     expect(catalogModelsFor("opencode-go")).toContain("deepseek-v4-pro");
-    expect(catalogModelsFor("antigravity")).toContain("gemini-3.7-flash");
+    // antigravity is intentionally NOT sourced from models.dev (its CLI/account
+    // lists its own gemini ids); the registry falls back to provider.models().
+    expect(catalogModelsFor("antigravity")).toEqual([]);
   });
 
   it("falls back to null for unknown providers (registry uses provider.models())", async () => {
