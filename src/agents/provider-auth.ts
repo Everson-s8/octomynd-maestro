@@ -1,0 +1,114 @@
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+
+import { prepareCliSpawn, resolveCustomCliExecutable } from "./custom-cli.js";
+import type { ProviderPreset } from "./provider-config.js";
+
+export type ProviderAuthState = "waiting" | "connected" | "failed" | "cancelled";
+export type ProviderAuthSession = {
+  id: string;
+  presetId: string;
+  state: ProviderAuthState;
+  verificationUrl: string | null;
+  userCode: string | null;
+  detail: string;
+  startedAt: string;
+  completedAt: string | null;
+};
+type InternalSession = ProviderAuthSession & { cancel?: () => void };
+
+export class ProviderAuthBroker {
+  private readonly sessions = new Map<string, InternalSession>();
+
+  start(preset: ProviderPreset): ProviderAuthSession {
+    if (!preset.authFlow || preset.authFlow === "none") throw new Error("provider_auth_flow_not_supported");
+    const executable = resolveCustomCliExecutable(preset.command);
+    if (!executable) throw new Error(`provider_cli_not_found:${preset.command}`);
+    const session: InternalSession = {
+      id: crypto.randomUUID(), presetId: preset.id, state: "waiting", verificationUrl: null,
+      userCode: null, detail: "Preparando autorizacao segura.", startedAt: new Date().toISOString(), completedAt: null
+    };
+    this.sessions.set(session.id, session);
+    if (preset.authFlow === "terminal") this.startTerminal(executable, preset, session);
+    else this.startDeviceCode(executable, preset, session);
+    return publicSession(session);
+  }
+
+  get(id: string): ProviderAuthSession | null {
+    const session = this.sessions.get(id);
+    return session ? publicSession(session) : null;
+  }
+
+  cancel(id: string): ProviderAuthSession | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    session.cancel?.();
+    complete(session, "cancelled", "Autorizacao cancelada.");
+    return publicSession(session);
+  }
+
+  private startDeviceCode(executable: string, preset: ProviderPreset, session: InternalSession) {
+    const invocation = prepareCliSpawn(executable, preset.authArgs ?? []);
+    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    let openedUrl = "";
+    const consume = (chunk: Buffer | string) => {
+      output = `${output}${chunk.toString()}`.slice(-20_000);
+      const parsed = parseDeviceAuthorization(output);
+      session.verificationUrl = parsed.verificationUrl ?? session.verificationUrl;
+      session.userCode = parsed.userCode ?? session.userCode;
+      session.detail = session.userCode ? "Aguardando voce autorizar no navegador." : "Preparando autorizacao segura.";
+      if (session.verificationUrl && openedUrl !== session.verificationUrl) {
+        openedUrl = session.verificationUrl;
+        openExternalUrl(openedUrl);
+      }
+    };
+    child.stdout.on("data", consume);
+    child.stderr.on("data", consume);
+    child.once("error", (error) => complete(session, "failed", error.message));
+    child.once("close", (code) => complete(session, code === 0 ? "connected" : "failed", code === 0 ? "Conta conectada." : cleanAuthError(output)));
+    session.cancel = () => child.kill();
+  }
+
+  private startTerminal(executable: string, preset: ProviderPreset, session: InternalSession) {
+    session.detail = "Terminal de autenticacao aberto. Conclua o login nele.";
+    const command = [executable, ...(preset.authArgs ?? [])].map(quotePowerShell).join(" ");
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", `Start-Process powershell.exe -ArgumentList '-NoExit','-Command',${quotePowerShell(command)} -WindowStyle Normal -Wait`], { windowsHide: true });
+    child.once("error", (error) => complete(session, "failed", error.message));
+    child.once("close", async () => {
+      const connected = await probeStatus(executable, preset.authStatusArgs);
+      complete(session, connected ? "connected" : "failed", connected ? "Conta conectada." : "O terminal foi fechado antes da conexao ser confirmada.");
+    });
+    session.cancel = () => child.kill();
+  }
+}
+
+export function parseDeviceAuthorization(output: string) {
+  const verificationUrl = output.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/, "") ?? null;
+  const labelledCode = output.match(/(?:code|codigo)\s*[:=-]?\s*([A-Z0-9]{3,}(?:-[A-Z0-9]{2,})+)/i)?.[1];
+  const standaloneCode = output.match(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4})+\b/)?.[0];
+  return { verificationUrl, userCode: labelledCode ?? standaloneCode ?? null };
+}
+
+function complete(session: InternalSession, state: ProviderAuthState, detail: string) {
+  if (session.state !== "waiting") return;
+  session.state = state; session.detail = detail; session.completedAt = new Date().toISOString(); session.cancel = undefined;
+}
+function publicSession(session: InternalSession): ProviderAuthSession { const { cancel: _cancel, ...result } = session; return result; }
+function quotePowerShell(value: string) { return `'${value.replace(/'/g, "''")}'`; }
+function openExternalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    spawn("powershell.exe", ["-NoProfile", "-Command", `Start-Process ${quotePowerShell(parsed.toString())}`], { windowsHide: true, stdio: "ignore" });
+  } catch { /* Ignore invalid provider output. */ }
+}
+async function probeStatus(command: string, args?: string[]): Promise<boolean> {
+  if (!args?.length) return true;
+  return new Promise((resolve) => {
+    const invocation = prepareCliSpawn(command, args);
+    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: "ignore", timeout: 15_000 });
+    child.once("error", () => resolve(false)); child.once("close", (code) => resolve(code === 0));
+  });
+}
+function cleanAuthError(output: string) { return output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" ") || "Autorizacao nao confirmada."; }

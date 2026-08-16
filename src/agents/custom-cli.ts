@@ -374,6 +374,17 @@ export function resolveCustomCliExecutable(command: string): string | null {
   return null;
 }
 
+export function prepareCliSpawn(executable: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(executable)) {
+    return { command: executable, args };
+  }
+
+  return {
+    command: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", "call", executable, ...args]
+  };
+}
+
 function failure(detail: string, category: FailureCategory = "offline"): AgentExecutionResult {
   return {
     outcome: "failed",

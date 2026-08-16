@@ -74,11 +74,40 @@ export class AgentRegistry {
     private readonly policyStore?: ProviderPolicyStore
   ) {
     for (const provider of providers) {
-      if (this.providers.has(provider.id)) {
-        throw new Error(`Duplicate agent provider: ${provider.id}`);
-      }
-      this.providers.set(provider.id, provider);
+      this.registerProvider(provider);
     }
+  }
+
+  registerProvider(provider: AgentProvider, limit = 1): void {
+    if (this.providers.has(provider.id)) {
+      throw new Error(`Duplicate agent provider: ${provider.id}`);
+    }
+    this.providers.set(provider.id, provider);
+    this.providerLimits[provider.id] = Math.max(1, limit);
+  }
+
+  replaceProvider(provider: AgentProvider, limit = 1): void {
+    if (!this.providers.has(provider.id)) {
+      throw new Error(`Provider ${provider.id} is not registered.`);
+    }
+    if ((this.activeLeases.get(provider.id) ?? 0) > 0) {
+      throw new Error(`Provider ${provider.id} has active work and cannot be updated.`);
+    }
+    this.providers.set(provider.id, provider);
+    this.providerLimits[provider.id] = Math.max(1, limit);
+    this.cooldowns.delete(provider.id);
+  }
+
+  unregisterProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
+    if ((this.activeLeases.get(providerId) ?? 0) > 0) {
+      throw new Error(`Provider ${providerId} has active work and cannot be removed.`);
+    }
+    if (!this.providers.delete(providerId)) {
+      throw new Error(`Provider ${providerId} is not registered.`);
+    }
+    this.cooldowns.delete(providerId);
+    delete this.providerLimits[providerId];
+    return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
   }
 
   list(): AgentProvider[] {

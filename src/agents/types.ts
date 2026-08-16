@@ -31,6 +31,13 @@ export type CustomCliProviderConfig = {
   healthProbe?: boolean;
   model?: string | null;
   models?: string[];
+  presetId?: string;
+  connectionMode?: "account" | "api_key" | "local" | "custom";
+  endpointUrl?: string | null;
+  apiKeyEnv?: string | null;
+  managedSecret?: boolean;
+  docsUrl?: string | null;
+  setupCommand?: string | null;
 };
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";

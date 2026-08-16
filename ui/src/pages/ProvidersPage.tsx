@@ -1,7 +1,6 @@
 import { DashboardData } from "../api";
 import { AgentDock } from "../components/AgentDock";
 import { ProviderManager } from "../components/ProviderManager";
-import { SectionHeader } from "../components/SectionHeader";
 
 export interface ProvidersPageProps {
   data: DashboardData;
@@ -9,16 +8,21 @@ export interface ProvidersPageProps {
 
 export function ProvidersPage({ data }: ProvidersPageProps) {
   return (
-    <div className="providers-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-      <div className="panel providers-header-banner" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow="AI Routing" title="Gestão de Providers e Modelos" meta="Governança Multi-Provider" />
-        <p style={{ color: "#a0a5b5", marginTop: "8px", marginBottom: 0, fontSize: "14px" }}>
-          Configure a ordem de prioridade de cada provider (Codex, Claude, Antigravity) para planejamento, coding, testes e review. Alterne entre modos ativas, pausadas ou fallback exclusivo.
-        </p>
+    <div className="providers-page">
+      <div className="top">
+        <div>
+          <div className="eyebrow">AI Routing</div>
+          <h1>Providers</h1>
+        </div>
       </div>
-
-      <AgentDock agents={data.agents} environments={data.environments} />
-      <ProviderManager />
+      <p className="desc">
+        Conecte quantos providers quiser — modelos de nuvem, locais ou endpoints customizados — e
+        defina a ordem de prioridade por função.
+      </p>
+      <div className="prov-grid">
+        <ProviderManager agents={data.agents} />
+        <AgentDock agents={data.agents} />
+      </div>
     </div>
   );
 }

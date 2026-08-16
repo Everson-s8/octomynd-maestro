@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addCustomProvider,
+  mergeCustomProviders,
   PROVIDER_PRESETS,
   readCustomProviders,
   removeCustomProvider
@@ -72,6 +73,16 @@ describe("provider-config", () => {
     expect(stored[0].command).toBe("p1v2");
   });
 
+  it("merges persisted providers over stale startup configuration", () => {
+    const configured = [{ id: "p1", label: "Old", command: "old", capabilities: ["coding"] as AgentCapability[] }];
+    const persisted = [
+      { id: "p1", label: "Current", command: "current", capabilities: ["coding"] as AgentCapability[] },
+      { id: "p2", label: "Second", command: "second", capabilities: ["testing"] as AgentCapability[] }
+    ];
+
+    expect(mergeCustomProviders(configured, persisted)).toEqual(persisted);
+  });
+
   it("removes a registered provider", () => {
     addCustomProvider({ id: "a", label: "A", command: "a", capabilities: ["coding"] as AgentCapability[], healthProbe: false }, dir);
     addCustomProvider({ id: "b", label: "B", command: "b", capabilities: ["coding"] as AgentCapability[], healthProbe: false }, dir);
@@ -79,6 +90,53 @@ describe("provider-config", () => {
     expect(removal.removed).toBe(true);
     const stored = readCustomProviders(dir);
     expect(stored.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("removes only Maestro-managed secrets that are no longer shared", () => {
+    fs.writeFileSync(envPath, "SHARED_KEY=shared\nPRIVATE_KEY=private\n", "utf8");
+    addCustomProvider({
+      id: "a",
+      label: "A",
+      command: "a",
+      capabilities: ["coding"] as AgentCapability[],
+      apiKeyEnv: "SHARED_KEY",
+      managedSecret: true
+    }, dir);
+    addCustomProvider({
+      id: "b",
+      label: "B",
+      command: "b",
+      capabilities: ["coding"] as AgentCapability[],
+      apiKeyEnv: "SHARED_KEY"
+    }, dir);
+    addCustomProvider({
+      id: "private",
+      label: "Private",
+      command: "private",
+      capabilities: ["coding"] as AgentCapability[],
+      apiKeyEnv: "PRIVATE_KEY",
+      managedSecret: true
+    }, dir);
+
+    removeCustomProvider("a", dir);
+    expect(fs.readFileSync(envPath, "utf8")).toContain("SHARED_KEY=shared");
+
+    removeCustomProvider("private", dir);
+    expect(fs.readFileSync(envPath, "utf8")).not.toContain("PRIVATE_KEY=private");
+  });
+
+  it("does not remove externally managed secrets", () => {
+    fs.writeFileSync(envPath, "EXTERNAL_KEY=keep\n", "utf8");
+    addCustomProvider({
+      id: "external",
+      label: "External",
+      command: "external",
+      capabilities: ["coding"] as AgentCapability[],
+      apiKeyEnv: "EXTERNAL_KEY"
+    }, dir);
+
+    removeCustomProvider("external", dir);
+    expect(fs.readFileSync(envPath, "utf8")).toContain("EXTERNAL_KEY=keep");
   });
 
   it("reports removed=false when the id is absent", () => {

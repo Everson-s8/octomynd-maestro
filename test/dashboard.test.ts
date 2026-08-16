@@ -193,8 +193,9 @@ describe("dashboard", () => {
         body: JSON.stringify({ command: "node", args: ["--version"] })
       });
       expect(connectResponse.status).toBe(200);
-      const connectPayload = await connectResponse.json() as { ok: boolean };
+      const connectPayload = await connectResponse.json() as { ok: boolean; models: string[] };
       expect(connectPayload.ok).toBe(true);
+      expect(connectPayload.models).toEqual([]);
 
       const blankResponse = await fetch(`http://127.0.0.1:${port}/api/providers/test-connection`, {
         method: "POST",

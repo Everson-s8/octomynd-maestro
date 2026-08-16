@@ -431,17 +431,25 @@ export interface ProviderConnectionResult {
   ok: boolean;
   detail: string;
   executable: string | null;
+  models?: string[];
 }
 
-/** Probe whether a custom provider CLI is reachable (read-only; does not persist). */
-export async function testProviderConnection(input: { command: string; args?: string[] }): Promise<ProviderConnectionResult> {
+/** Probe whether a provider CLI or endpoint is reachable without persisting it. */
+export async function testProviderConnection(input: {
+  command?: string;
+  args?: string[];
+  presetId?: string;
+  endpointUrl?: string;
+  apiKey?: string;
+  apiKeyEnv?: string;
+}): Promise<ProviderConnectionResult> {
   const response = await fetch("/api/providers/test-connection", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ command: input.command, args: input.args ?? [] })
+    body: JSON.stringify(input)
   });
   const payload = await response.json() as ProviderConnectionResult & { error?: string };
-  if (!response.ok) throw new Error(payload.error || "Nao foi possivel testar a conexao.");
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel testar a conexao.");
   return payload;
 }
 
@@ -459,7 +467,7 @@ export async function updateCapabilityRouting(
   return payload.routing;
 }
 
-export type ProviderConnectionMode = "account" | "api_key" | "local";
+export type ProviderConnectionMode = "account" | "api_key" | "local" | "custom";
 
 export type ProviderPreset = {
   id: string;
@@ -470,6 +478,25 @@ export type ProviderPreset = {
   description: string;
   models: string[];
   connectionHint: ProviderConnectionMode;
+  category: "account" | "api" | "local";
+  docsUrl: string;
+  setupCommand: string | null;
+  apiKeyEnv: string | null;
+  defaultEndpoint: string | null;
+  builtIn: boolean;
+  authFlow: "device_code" | "terminal" | "none";
+  modelDiscovery: "cli" | "endpoint" | "ollama" | "manual";
+};
+
+export type ProviderAuthSession = {
+  id: string;
+  presetId: string;
+  state: "waiting" | "connected" | "failed" | "cancelled";
+  verificationUrl: string | null;
+  userCode: string | null;
+  detail: string;
+  startedAt: string;
+  completedAt: string | null;
 };
 
 export type RegisteredCustomProvider = {
@@ -480,6 +507,12 @@ export type RegisteredCustomProvider = {
   envKeys?: string[];
   model?: string | null;
   models?: string[];
+  presetId?: string;
+  connectionMode?: ProviderConnectionMode;
+  endpointUrl?: string | null;
+  apiKeyEnv?: string | null;
+  docsUrl?: string | null;
+  setupCommand?: string | null;
 };
 
 export type RegisterProviderInput = {
@@ -491,6 +524,10 @@ export type RegisterProviderInput = {
   envKeys?: string[];
   presetId?: string;
   connectionMode?: ProviderConnectionMode;
+  endpointUrl?: string | null;
+  apiKey?: string;
+  apiKeyEnv?: string;
+  models?: string[];
 };
 
 export type RegisterProviderResult = {
@@ -530,6 +567,47 @@ export async function deleteProvider(providerId: string): Promise<RegisteredCust
   const payload = await response.json() as { removed?: boolean; providers?: RegisteredCustomProvider[]; error?: string };
   if (!response.ok) throw new Error(payload.error || "Nao foi possivel remover o provider.");
   return payload.providers ?? [];
+}
+
+export async function discoverProviderModels(input: {
+  presetId?: string;
+  endpointUrl?: string;
+  apiKey?: string;
+  apiKeyEnv?: string;
+}): Promise<string[]> {
+  const response = await fetch("/api/providers/discover-models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as { models?: string[]; error?: string; detail?: string };
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel descobrir os modelos.");
+  return payload.models ?? [];
+}
+
+export async function startProviderAuth(presetId: string): Promise<ProviderAuthSession> {
+  const response = await fetch("/api/providers/auth/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presetId })
+  });
+  const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
+  if (!response.ok || !payload.session) throw new Error(payload.error || "Nao foi possivel iniciar a autenticacao.");
+  return payload.session;
+}
+
+export async function fetchProviderAuth(sessionId: string): Promise<ProviderAuthSession> {
+  const response = await fetch(`/api/providers/auth/${encodeURIComponent(sessionId)}`);
+  const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
+  if (!response.ok || !payload.session) throw new Error(payload.error || "Sessao de autenticacao nao encontrada.");
+  return payload.session;
+}
+
+export async function cancelProviderAuth(sessionId: string): Promise<ProviderAuthSession> {
+  const response = await fetch(`/api/providers/auth/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
+  if (!response.ok || !payload.session) throw new Error(payload.error || "Nao foi possivel cancelar a autenticacao.");
+  return payload.session;
 }
 
 export type ConnectTelegramInput = {

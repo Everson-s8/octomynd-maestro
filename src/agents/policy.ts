@@ -36,6 +36,7 @@ export interface ProviderPolicyStore {
   updateProviderControl(input: ProviderControlUpdate): ProviderControl;
   updateProviderControls(inputs: ProviderControlUpdate[]): ProviderControl[];
   updateCapabilityRouting(input: CapabilityRoutingUpdate): CapabilityRoutingPolicy;
+  removeProvider(providerId: AgentProviderId): ProviderPolicySnapshot;
 }
 
 export const DEFAULT_ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {

@@ -60,6 +60,17 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
 }
 
 export function createProviderPolicyPersistence(db: Database.Database) {
+  const getProviderPolicySnapshot = (): ProviderPolicySnapshot => {
+    const defaults = defaultProviderPolicySnapshot();
+    const controls = db.prepare("SELECT * FROM provider_controls ORDER BY provider_id").all() as ProviderControlRow[];
+    const rows = db.prepare("SELECT * FROM provider_capability_routing ORDER BY capability").all() as CapabilityRoutingRow[];
+    const configured = new Map(rows.map((row) => [row.capability, mapRouting(row)]));
+    return {
+      controls: controls.map(mapControl),
+      capabilities: defaults.capabilities.map((item) => configured.get(item.capability) ?? item)
+    };
+  };
+
   const updateProviderControl = (input: ProviderControlUpdate): ProviderControl => {
     const now = new Date().toISOString();
     const existing = db.prepare("SELECT * FROM provider_controls WHERE provider_id = ?").get(input.providerId) as ProviderControlRow | undefined;
@@ -85,16 +96,7 @@ export function createProviderPolicyPersistence(db: Database.Database) {
   };
 
   return {
-    getProviderPolicySnapshot(): ProviderPolicySnapshot {
-      const defaults = defaultProviderPolicySnapshot();
-      const controls = db.prepare("SELECT * FROM provider_controls ORDER BY provider_id").all() as ProviderControlRow[];
-      const rows = db.prepare("SELECT * FROM provider_capability_routing ORDER BY capability").all() as CapabilityRoutingRow[];
-      const configured = new Map(rows.map((row) => [row.capability, mapRouting(row)]));
-      return {
-        controls: controls.map(mapControl),
-        capabilities: defaults.capabilities.map((item) => configured.get(item.capability) ?? item)
-      };
-    },
+    getProviderPolicySnapshot,
 
     updateProviderControl,
 
@@ -127,6 +129,26 @@ export function createProviderPolicyPersistence(db: Database.Database) {
       });
       return mapRouting(db.prepare("SELECT * FROM provider_capability_routing WHERE capability = ?")
         .get(input.capability) as CapabilityRoutingRow);
+    },
+
+    removeProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
+      return db.transaction(() => {
+        db.prepare("DELETE FROM provider_controls WHERE provider_id = ?").run(providerId);
+        const rows = db.prepare("SELECT * FROM provider_capability_routing").all() as CapabilityRoutingRow[];
+        const now = new Date().toISOString();
+        for (const row of rows) {
+          const order = (JSON.parse(row.provider_order_json) as AgentProviderId[])
+            .filter((item) => item !== providerId);
+          const requiredProviderId = row.required_provider_id === providerId ? null : row.required_provider_id;
+          const preferredModel = row.required_provider_id === providerId ? null : row.preferred_model;
+          db.prepare(`
+            UPDATE provider_capability_routing
+            SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, updated_at = ?
+            WHERE capability = ?
+          `).run(JSON.stringify(order), requiredProviderId, preferredModel, now, row.capability);
+        }
+        return getProviderPolicySnapshot();
+      })();
     }
   };
 }

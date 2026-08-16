@@ -2,20 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentCapability, CustomCliProviderConfig } from "./types.js";
 
-/**
- * Provider presets + `.env` persistence for custom CLI providers.
- *
- * The Maestro process reads custom providers at startup from
- * `MAESTRO_CUSTOM_PROVIDERS` (a JSON array in `.env.local`/`.env`). The
- * dashboard needs to let the user register a new provider and delete one at
- * runtime, so we persist the current set back into the env file using the same
- * file convention as `updateEnvTelegramConfig`.
- *
- * NOTE: a running Maestro instance applies custom providers at boot (index.ts).
- * Persisting + restarting applies the change; the endpoint here only writes the
- * env file so the next start (or a supervised self-update/restart) picks it up.
- */
-
 const ALL_CAPABILITIES: AgentCapability[] = [
   "planning",
   "coding",
@@ -33,102 +19,177 @@ export type ProviderPreset = {
   args?: string[];
   envKeys?: string[];
   description: string;
-  /** Provider model(s) the preset can point at; empty = whatever the CLI supports. */
   models?: string[];
-  /** Human hint about connection mode (account/oauth vs api key). */
   connectionHint: "account" | "api_key" | "local";
+  category: "account" | "api" | "local";
+  docsUrl: string;
+  setupCommand?: string;
+  apiKeyEnv?: string;
+  defaultEndpoint?: string;
+  builtIn?: boolean;
+  authFlow?: "device_code" | "terminal" | "none";
+  authArgs?: string[];
+  authStatusArgs?: string[];
+  modelDiscovery?: "cli" | "endpoint" | "ollama" | "manual";
+  modelDiscoveryArgs?: string[];
 };
 
-/**
- * Curated presets. These are templates the user can start from and tweak;
- * they are intentionally not exhaustive — users can type any command.
- */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "claude",
-    label: "Claude (Anthropic)",
+    label: "Claude Code",
     command: "claude",
-    args: ["-p"],
-    description: "Claude Code — CLI com acesso por conta (login) ou API key.",
-    models: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-3-7-sonnet", "claude-3-5-sonnet"],
-    connectionHint: "account"
+    args: ["-p", "{prompt}", "--output-format", "text"],
+    description: "Claude Code usando a assinatura ou credenciais já conectadas no CLI.",
+    models: [],
+    connectionHint: "account",
+    category: "account",
+    docsUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
+    setupCommand: "claude auth login",
+    authFlow: "terminal",
+    authArgs: ["auth", "login"],
+    authStatusArgs: ["auth", "status"],
+    modelDiscovery: "manual",
+    builtIn: true
   },
   {
     id: "anthropic-api",
-    label: "Anthropic via API",
+    label: "Anthropic API",
     command: "claude",
-    args: ["-p", "--api-key"],
+    args: ["-p", "{prompt}", "--output-format", "text"],
     envKeys: ["ANTHROPIC_API_KEY"],
-    description: "Claude Code via ANTHROPIC_API_KEY.",
-    models: ["claude-sonnet-4-6", "claude-opus-4-6"],
-    connectionHint: "api_key"
+    description: "Claude Code usando uma API key da Anthropic.",
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://console.anthropic.com/settings/keys",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    modelDiscovery: "manual"
   },
   {
     id: "codex",
-    label: "Codex (OpenAI)",
+    label: "Codex",
     command: "codex",
-    args: ["exec"],
-    description: "OpenAI Codex CLI (conta ou CODEX_API_KEY).",
-    models: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
-    connectionHint: "account"
+    args: ["exec", "{prompt}"],
+    description: "OpenAI Codex CLI usando a conta conectada.",
+    models: [],
+    connectionHint: "account",
+    category: "account",
+    docsUrl: "https://developers.openai.com/codex/cli",
+    setupCommand: "codex login",
+    authFlow: "device_code",
+    authArgs: ["login", "--device-auth"],
+    authStatusArgs: ["login", "status"],
+    modelDiscovery: "manual",
+    builtIn: true
   },
   {
     id: "openai-api",
-    label: "OpenAI / OpenRouter via API",
+    label: "OpenAI API",
     command: "opencode",
-    args: ["-m", "gpt-4o"],
-    envKeys: ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
-    description: "Modelos OpenAI-compatible via API key.",
-    models: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "deepseek-v4-flash"],
-    connectionHint: "api_key"
+    args: ["run", "{prompt}", "-m", "{model}"],
+    envKeys: ["OPENAI_API_KEY"],
+    description: "Modelos OpenAI pelo OpenCode usando uma API key.",
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://platform.openai.com/api-keys",
+    apiKeyEnv: "OPENAI_API_KEY",
+    defaultEndpoint: "https://api.openai.com/v1",
+    modelDiscovery: "endpoint"
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    command: "opencode",
+    args: ["run", "{prompt}", "-m", "{model}"],
+    envKeys: ["OPENROUTER_API_KEY"],
+    description: "Catálogo amplo de modelos por uma única API OpenAI-compatible.",
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://openrouter.ai/settings/keys",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    defaultEndpoint: "https://openrouter.ai/api/v1",
+    modelDiscovery: "endpoint"
   },
   {
     id: "opencode-go",
-    label: "OpenCode Go (deepseek-v4-flash)",
+    label: "OpenCode Go",
     command: "opencode",
-    args: ["-m", "opencode/deepseek-v4-flash"],
-    description: "OpenCode Go apontando para deepseek-v4-flash.",
-    models: ["opencode/deepseek-v4-flash", "deepseek-v4-flash"],
-    connectionHint: "api_key"
+    args: ["run", "{prompt}", "-m", "{model}"],
+    description: "Modelos disponíveis na conta conectada ao OpenCode.",
+    envKeys: ["OPENCODE_GO_API_KEY"],
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://opencode.ai/docs/zen/",
+    apiKeyEnv: "OPENCODE_GO_API_KEY",
+    defaultEndpoint: "https://opencode.ai/zen/go/v1",
+    modelDiscovery: "cli",
+    modelDiscoveryArgs: ["models", "opencode"]
   },
   {
     id: "deepseek",
-    label: "DeepSeek (API)",
+    label: "DeepSeek API",
     command: "opencode",
-    args: ["-m", "deepseek-chat"],
+    args: ["run", "{prompt}", "-m", "{model}"],
     envKeys: ["DEEPSEEK_API_KEY"],
-    description: "DeepSeek via API key (Opencode Go).",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-    connectionHint: "api_key"
+    description: "DeepSeek usando uma API key própria.",
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://platform.deepseek.com/api_keys",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    defaultEndpoint: "https://api.deepseek.com",
+    modelDiscovery: "endpoint"
   },
   {
     id: "gemini",
-    label: "Gemini (Antigravity)",
+    label: "Gemini Antigravity",
     command: "antigravity",
-    description: "Gemini Antigravity CLI — modelos dinâmicos por conta.",
-    models: ["gemini-3.7-flash-medium", "gemini-3.7-flash-high", "gemini-3.7-flash-low"],
-    connectionHint: "account"
+    description: "Gemini Antigravity usando a conta Google conectada.",
+    models: [],
+    connectionHint: "account",
+    category: "account",
+    docsUrl: "https://antigravity.google/",
+    setupCommand: "antigravity",
+    authFlow: "terminal",
+    authArgs: [],
+    modelDiscovery: "manual",
+    builtIn: true
   },
   {
     id: "ollama",
-    label: "Ollama (local)",
+    label: "Ollama",
     command: "ollama",
-    args: ["run"],
-    description: "Modelos locais via Ollama.",
-    models: ["llama3.1", "qwen2.5", "deepseek-r1"],
-    connectionHint: "local"
+    args: ["run", "{model}", "{prompt}"],
+    description: "Modelos locais executados pelo Ollama.",
+    models: [],
+    connectionHint: "local",
+    category: "local",
+    docsUrl: "https://ollama.com/download",
+    setupCommand: "ollama serve",
+    defaultEndpoint: "http://127.0.0.1:11434",
+    modelDiscovery: "ollama"
   },
   {
     id: "copilot",
-    label: "GitHub Copilot (CLI)",
+    label: "GitHub Copilot CLI",
     command: "gh",
-    args: ["copilot"],
-    description: "GitHub Copilot CLI (conta GitHub).",
-    connectionHint: "account"
+    args: ["copilot", "suggest", "{prompt}"],
+    description: "GitHub Copilot usando a conta autenticada no GitHub CLI.",
+    connectionHint: "account",
+    category: "account",
+    docsUrl: "https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli",
+    setupCommand: "gh auth login",
+    authFlow: "terminal",
+    authArgs: ["auth", "login"],
+    authStatusArgs: ["auth", "status"],
+    modelDiscovery: "manual"
   }
 ];
 
-/** Derive a CustomCliProviderConfig from a preset + user command/args. */
 export function configFromPreset(
   preset: ProviderPreset,
   options: {
@@ -138,6 +199,8 @@ export function configFromPreset(
     args?: string[];
     model?: string | null;
     capabilities?: AgentCapability[];
+    endpointUrl?: string | null;
+    connectionMode?: CustomCliProviderConfig["connectionMode"];
   } = {}
 ): CustomCliProviderConfig {
   return {
@@ -145,11 +208,17 @@ export function configFromPreset(
     label: options.label?.trim() || preset.label,
     command: options.command?.trim() || preset.command,
     args: options.args && options.args.length ? options.args : preset.args,
-    envKeys: options.args ? preset.envKeys : preset.envKeys,
+    envKeys: preset.envKeys,
     capabilities: options.capabilities ?? ALL_CAPABILITIES,
     healthProbe: false,
     model: options.model ?? null,
-    models: preset.models
+    models: preset.models,
+    presetId: preset.id,
+    connectionMode: options.connectionMode ?? preset.connectionHint,
+    endpointUrl: options.endpointUrl ?? preset.defaultEndpoint ?? null,
+    apiKeyEnv: preset.apiKeyEnv ?? null,
+    docsUrl: preset.docsUrl,
+    setupCommand: preset.setupCommand ?? null
   };
 }
 
@@ -174,54 +243,89 @@ export function readCustomProviders(cwd = process.cwd()): CustomCliProviderConfi
   }
 }
 
+export function mergeCustomProviders(
+  configured: CustomCliProviderConfig[] | undefined,
+  persisted: CustomCliProviderConfig[]
+): CustomCliProviderConfig[] {
+  const merged = new Map<string, CustomCliProviderConfig>();
+  for (const provider of configured ?? []) {
+    merged.set(provider.id, provider);
+  }
+  for (const provider of persisted) {
+    merged.set(provider.id, provider);
+  }
+  return [...merged.values()];
+}
+
 export function writeCustomProviders(providers: CustomCliProviderConfig[], cwd = process.cwd()): {
   success: boolean;
   envPath: string;
   count: number;
 } {
   const envPath = resolveEnvFilePath(cwd);
-  const json = JSON.stringify(providers);
-  const line = `MAESTRO_CUSTOM_PROVIDERS=${json}`;
-
-  if (!fs.existsSync(envPath)) {
-    fs.writeFileSync(envPath, line + "\n", "utf8");
-    return { success: true, envPath, count: providers.length };
-  }
-
-  const content = fs.readFileSync(envPath, "utf8");
-  let next: string;
-  if (/^MAESTRO_CUSTOM_PROVIDERS=.*$/m.test(content)) {
-    next = content.replace(/^MAESTRO_CUSTOM_PROVIDERS=.*$/m, line);
-  } else {
-    next = content + (content.endsWith("\n") || content === "" ? "" : "\n") + line + "\n";
-  }
+  const line = `MAESTRO_CUSTOM_PROVIDERS=${JSON.stringify(providers)}`;
+  const content = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
+  const next = /^MAESTRO_CUSTOM_PROVIDERS=.*$/m.test(content)
+    ? content.replace(/^MAESTRO_CUSTOM_PROVIDERS=.*$/m, line)
+    : `${content}${content && !content.endsWith("\n") ? "\n" : ""}${line}\n`;
   fs.writeFileSync(envPath, next, "utf8");
   return { success: true, envPath, count: providers.length };
 }
 
-export function addCustomProvider(provider: CustomCliProviderConfig, cwd = process.cwd()): {
-  success: boolean;
-  envPath: string;
-  providers: CustomCliProviderConfig[];
-} {
+export function addCustomProvider(provider: CustomCliProviderConfig, cwd = process.cwd()) {
   const current = readCustomProviders(cwd);
-  const next = current.filter((item) => item.id !== provider.id).concat(provider);
-  writeCustomProviders(next, cwd);
-  return { success: true, envPath: resolveEnvFilePath(cwd), providers: next };
+  const previous = current.find((item) => item.id === provider.id);
+  const providers = current.filter((item) => item.id !== provider.id).concat(provider);
+  writeCustomProviders(providers, cwd);
+  if (previous?.managedSecret && previous.apiKeyEnv !== provider.apiKeyEnv) {
+    removeManagedProviderSecret(previous, providers, cwd);
+  }
+  return { success: true, envPath: resolveEnvFilePath(cwd), providers };
 }
 
-export function removeCustomProvider(id: string, cwd = process.cwd()): {
-  success: boolean;
-  envPath: string;
-  providers: CustomCliProviderConfig[];
-  removed: boolean;
-} {
+export function removeCustomProvider(id: string, cwd = process.cwd()) {
   const current = readCustomProviders(cwd);
-  const before = current.length;
-  const next = current.filter((item) => item.id !== id);
-  if (next.length === before) return { success: true, envPath: resolveEnvFilePath(cwd), providers: current, removed: false };
-  writeCustomProviders(next, cwd);
-  return { success: true, envPath: resolveEnvFilePath(cwd), providers: next, removed: true };
+  const providers = current.filter((item) => item.id !== id);
+  if (providers.length === current.length) {
+    return { success: true, envPath: resolveEnvFilePath(cwd), providers: current, removed: false };
+  }
+  writeCustomProviders(providers, cwd);
+  const removedProvider = current.find((item) => item.id === id);
+  if (removedProvider) removeManagedProviderSecret(removedProvider, providers, cwd);
+  return { success: true, envPath: resolveEnvFilePath(cwd), providers, removed: true };
+}
+
+export function writeProviderSecret(envKey: string, value: string, cwd = process.cwd()): string {
+  const key = envKey.trim();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) throw new Error("invalid_provider_secret_key");
+  if (!value.trim()) throw new Error("provider_secret_is_required");
+  const envPath = resolveEnvFilePath(cwd);
+  const content = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
+  const line = `${key}=${value.trim()}`;
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  const next = pattern.test(content)
+    ? content.replace(pattern, line)
+    : `${content}${content && !content.endsWith("\n") ? "\n" : ""}${line}\n`;
+  fs.writeFileSync(envPath, next, "utf8");
+  process.env[key] = value.trim();
+  return envPath;
+}
+
+function removeManagedProviderSecret(
+  provider: CustomCliProviderConfig,
+  remainingProviders: CustomCliProviderConfig[],
+  cwd: string
+): void {
+  const key = provider.apiKeyEnv?.trim();
+  if (!provider.managedSecret || !key || !/^[A-Z][A-Z0-9_]*$/.test(key)) return;
+  if (remainingProviders.some((item) => item.apiKeyEnv === key)) return;
+  const envPath = resolveEnvFilePath(cwd);
+  if (!fs.existsSync(envPath)) return;
+  const content = fs.readFileSync(envPath, "utf8");
+  const pattern = new RegExp(`^${key}=.*(?:\\r?\\n|$)`, "m");
+  if (!pattern.test(content)) return;
+  fs.writeFileSync(envPath, content.replace(pattern, ""), "utf8");
+  delete process.env[key];
 }
 
 function envValue(content: string, key: string): string {

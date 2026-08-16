@@ -167,6 +167,45 @@ describe("agent registry leases", () => {
     const available = await registry.getAvailableModels();
     expect(available.codex).toEqual(["gpt-4o", "o3-mini"]);
   });
+
+  it("replaces an idle provider without discarding its routing policy", async () => {
+    const policy = policyStore();
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["custom", "codex"],
+      requiredProviderId: "custom"
+    });
+    const original = provider("custom", ["coding"], "model-a", ["model-a"]);
+    const replacement = {
+      ...provider("custom", ["coding"], "model-b", ["model-b"]),
+      label: "Custom updated"
+    };
+    const registry = new AgentRegistry([original], undefined, Date.now, policy);
+
+    registry.replaceProvider(replacement);
+
+    expect(registry.list()).toContainEqual(expect.objectContaining({
+      id: "custom",
+      label: "Custom updated",
+      model: "model-b"
+    }));
+    expect(registry.policySnapshot().capabilities.find((item) => item.capability === "coding")).toMatchObject({
+      order: ["custom", "codex"],
+      requiredProviderId: "custom"
+    });
+  });
+
+  it("blocks provider replacement while the provider has active work", async () => {
+    const registry = new AgentRegistry([provider("custom", ["coding"])]);
+    const lease = await registry.acquire("coding");
+
+    expect(() => registry.replaceProvider(provider("custom", ["coding"], "model-b"))).toThrow(
+      "Provider custom has active work and cannot be updated."
+    );
+
+    lease?.release();
+    expect(() => registry.replaceProvider(provider("custom", ["coding"], "model-b"))).not.toThrow();
+  });
 });
 
 function policyStore(): ProviderPolicyStore {
@@ -189,6 +228,18 @@ function policyStore(): ProviderPolicyStore {
       };
       return control;
     }),
+    removeProvider: (providerId) => {
+      snapshot = {
+        controls: snapshot.controls.filter((item) => item.providerId !== providerId),
+        capabilities: snapshot.capabilities.map((routing) => ({
+          ...routing,
+          order: routing.order.filter((item) => item !== providerId),
+          requiredProviderId: routing.requiredProviderId === providerId ? null : routing.requiredProviderId,
+          preferredModel: routing.requiredProviderId === providerId ? null : routing.preferredModel
+        }))
+      };
+      return snapshot;
+    },
     updateCapabilityRouting: (input) => {
       const routing = { ...input, updatedAt: new Date().toISOString() };
       snapshot = {

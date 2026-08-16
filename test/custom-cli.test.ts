@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CustomCliProvider,
   buildCustomCliArgs,
+  prepareCliSpawn,
   resolveCustomCliExecutable
 } from "../src/agents/custom-cli.js";
 import { AgentRegistry } from "../src/agents/registry.js";
@@ -235,6 +236,27 @@ describe("CustomCliProvider", () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.MY_CUSTOM_KEY).toBe("my-own-key");
+  });
+});
+
+describe("prepareCliSpawn", () => {
+  it("uses cmd.exe for Windows command shims and passes through elsewhere", () => {
+    const executable = process.platform === "win32" ? "C:\\Tools\\opencode.cmd" : "/usr/bin/opencode";
+    const invocation = prepareCliSpawn(executable, ["models", "opencode"]);
+
+    if (process.platform === "win32") {
+      expect(invocation.command).toBe(process.env.ComSpec || "cmd.exe");
+      expect(invocation.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(invocation.args.slice(3)).toEqual([
+        "call",
+        "C:\\Tools\\opencode.cmd",
+        "models",
+        "opencode"
+      ]);
+      return;
+    }
+
+    expect(invocation).toEqual({ command: executable, args: ["models", "opencode"] });
   });
 });
 

@@ -183,7 +183,13 @@ describe("config", () => {
           id: "custom-provider",
           command: "custom-cli",
           model: "custom-default",
-          models: ["custom-default", "custom-fast"]
+          models: ["custom-default", "custom-fast"],
+          presetId: "openrouter",
+          connectionMode: "api_key",
+          endpointUrl: "https://openrouter.ai/api/v1",
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          docsUrl: "https://openrouter.ai/settings/keys",
+          setupCommand: "opencode auth login"
         }
       ])
     });
@@ -201,7 +207,13 @@ describe("config", () => {
         capabilities: ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"],
         healthProbe: undefined,
         model: "custom-default",
-        models: ["custom-default", "custom-fast"]
+        models: ["custom-default", "custom-fast"],
+        presetId: "openrouter",
+        connectionMode: "api_key",
+        endpointUrl: "https://openrouter.ai/api/v1",
+        apiKeyEnv: "OPENROUTER_API_KEY",
+        docsUrl: "https://openrouter.ai/settings/keys",
+        setupCommand: "opencode auth login"
       }
     ]);
   });

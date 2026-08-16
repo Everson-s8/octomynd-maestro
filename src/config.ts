@@ -219,7 +219,16 @@ export function parseCustomProviders(raw?: string): CustomCliProviderConfig[] | 
             : ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"],
           healthProbe: typeof item.healthProbe === "boolean" ? item.healthProbe : undefined,
           model: typeof item.model === "string" && item.model.trim() ? item.model.trim() : undefined,
-          models: Array.isArray(item.models) ? item.models.filter((m: unknown): m is string => typeof m === "string" && Boolean(m.trim())) : undefined
+          models: Array.isArray(item.models) ? item.models.filter((m: unknown): m is string => typeof m === "string" && Boolean(m.trim())) : undefined,
+          ...(typeof item.presetId === "string" && item.presetId.trim() ? { presetId: item.presetId.trim() } : {}),
+          ...(["account", "api_key", "local", "custom"].includes(item.connectionMode)
+            ? { connectionMode: item.connectionMode as CustomCliProviderConfig["connectionMode"] }
+            : {}),
+          ...(typeof item.endpointUrl === "string" ? { endpointUrl: normalizeOptional(item.endpointUrl) } : {}),
+          ...(typeof item.apiKeyEnv === "string" ? { apiKeyEnv: normalizeOptional(item.apiKeyEnv) } : {}),
+          ...(typeof item.managedSecret === "boolean" ? { managedSecret: item.managedSecret } : {}),
+          ...(typeof item.docsUrl === "string" ? { docsUrl: normalizeOptional(item.docsUrl) } : {}),
+          ...(typeof item.setupCommand === "string" ? { setupCommand: normalizeOptional(item.setupCommand) } : {})
         });
       }
     }

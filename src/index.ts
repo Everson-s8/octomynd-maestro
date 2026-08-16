@@ -1,6 +1,7 @@
 import path from "node:path";
 import { AntigravityProvider } from "./agents/antigravity.js";
 import { CustomCliProvider } from "./agents/custom-cli.js";
+import { mergeCustomProviders, readCustomProviders } from "./agents/provider-config.js";
 import type { AgentProvider } from "./agents/types.js";
 import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
 import { ClaudeProvider } from "./agents/claude.js";
@@ -90,8 +91,9 @@ if (config.runtime.antigravityEnabled) {
     }
   }));
 }
-if (config.runtime.customProviders && config.runtime.customProviders.length > 0) {
-  for (const customConfig of config.runtime.customProviders) {
+const customProviders = mergeCustomProviders(config.runtime.customProviders, readCustomProviders());
+if (customProviders.length > 0) {
+  for (const customConfig of customProviders) {
     agentProviders.push(new CustomCliProvider(customConfig, {
       executionLimits: providerLimits,
       model: customConfig.model
