@@ -353,11 +353,13 @@ export function ProviderManager({
   const handleAccountPrimary = async () => {
     const preset = wizardPreset;
     if (!preset) return;
-    // Providers with an auth flow (device-code or terminal) automate the login
-    // through the backend broker (spawns the CLI, opens the browser/terminal,
-    // returns a session we poll). Providers without a flow just need the CLI to
-    // already be logged in, so fall back to a probe + register.
-    if (preset.authFlow && preset.authFlow !== "none" && (!authSession || authSession.state !== "connected")) {
+    // Providers with a real CLI login flow (device-code or terminal with auth
+    // args) automate the login through the backend broker: spawn the CLI, open
+    // the browser/terminal, poll until connected. Providers whose CLI has no
+    // login subcommand (e.g. gemini/antigravity, which authenticates on its own)
+    // skip the automated login and fall back to a probe + register.
+    const hasAutoLogin = preset.authFlow && preset.authFlow !== "none" && (preset.authArgs?.length ?? 0) > 0;
+    if (hasAutoLogin && (!authSession || authSession.state !== "connected")) {
       if (authSession?.state === "waiting") return;
       setWizardBusy(true);
       setError("");
@@ -375,7 +377,8 @@ export function ProviderManager({
 
   const accountPrimaryLabel = () => {
     if (!wizardPreset) return "Ja fiz login";
-    if (wizardPreset.authFlow && wizardPreset.authFlow !== "none") {
+    const hasAutoLogin = wizardPreset.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
+    if (hasAutoLogin) {
       if (!authSession) return wizardBusy ? "Abrindo..." : "Conectar conta";
       if (authSession.state === "waiting") return "Aguardando autorizacao...";
       if (authSession.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
