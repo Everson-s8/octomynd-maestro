@@ -355,23 +355,30 @@ export function buildAntigravityArgs(
   printTimeoutMs = 8 * 60 * 60_000
 ): string[] {
   const writable = isWritableExecution(request);
-  return [
+  // Account models encode the reasoning effort in the suffix (e.g.
+  // gemini-3.7-flash-high). Passing --effort alongside such a model conflicts
+  // ('--model X conflicts with --effort=Y'), so omit --effort when the model id
+  // already pins it; otherwise pass the configured effort for vanilla models.
+  const carriesEffort = /(?:^|-)high$|(?:^|-)medium$|(?:^|-)low$/i.test(model ?? "");
+  const args = [
     "--print",
     buildAgentGoalPrompt(request),
     "--output-format",
     "text",
     "--mode",
     writable ? "accept-edits" : "plan",
-    "--effort",
-    effort,
     "--sandbox",
     "--disable-slash-commands",
     "--add-dir",
     request.task.worktreePath || request.project.path,
     "--print-timeout",
-    `${Math.ceil(printTimeoutMs / 1_000)}s`,
-    ...(model ? ["--model", model] : [])
+    `${Math.ceil(printTimeoutMs / 1_000)}s`
   ];
+  if (!carriesEffort) {
+    args.push("--effort", effort);
+  }
+  if (model) args.push("--model", model);
+  return args;
 }
 
 export function resolveAntigravityExecutable(explicitPath?: string): string | null {
