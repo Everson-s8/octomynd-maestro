@@ -1,6 +1,7 @@
 import path from "node:path";
 import { AntigravityProvider } from "./agents/antigravity.js";
 import { CustomCliProvider } from "./agents/custom-cli.js";
+import { OpenAICompatibleProvider } from "./agents/openai-compatible.js";
 import { mergeCustomProviders, readCustomProviders } from "./agents/provider-config.js";
 import type { AgentProvider } from "./agents/types.js";
 import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
@@ -94,10 +95,16 @@ if (config.runtime.antigravityEnabled) {
 const customProviders = mergeCustomProviders(config.runtime.customProviders, readCustomProviders());
 if (customProviders.length > 0) {
   for (const customConfig of customProviders) {
-    agentProviders.push(new CustomCliProvider(customConfig, {
-      executionLimits: providerLimits,
-      model: customConfig.model
-    }));
+    // Providers with an OpenAI-compatible endpoint use the HTTP+key provider
+    // (mirrors Hermes's opencode-go usage) instead of spawning a local CLI.
+    if (customConfig.endpointUrl) {
+      agentProviders.push(new OpenAICompatibleProvider(customConfig));
+    } else {
+      agentProviders.push(new CustomCliProvider(customConfig, {
+        executionLimits: providerLimits,
+        model: customConfig.model
+      }));
+    }
   }
 }
 const agentRegistry = new AgentRegistry(agentProviders, undefined, Date.now, database);
