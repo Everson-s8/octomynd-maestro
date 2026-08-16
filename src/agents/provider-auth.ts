@@ -48,8 +48,10 @@ export class ProviderAuthBroker {
   }
 
   private startDeviceCode(executable: string, preset: ProviderPreset, session: InternalSession) {
+    // prepareCliSpawn already wraps .cmd/.bat shims via cmd.exe /c call <exe>.
+    // Passing a TTY-less spawn keeps the device-code output on stdout for parsing.
     const invocation = prepareCliSpawn(executable, preset.authArgs ?? []);
-    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], shell: invocation.command === "cmd.exe" });
+    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     let openedUrl = "";
     const consume = (chunk: Buffer | string) => {
@@ -84,11 +86,14 @@ export class ProviderAuthBroker {
 }
 
 export function parseDeviceAuthorization(output: string) {
-  const verificationUrl = output.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/, "") ?? null;
-  // Standalone <LETTERS/DIGITS>-<LETTERS/DIGITS> device codes (e.g. UE25-6H1EW)
+  // CLI device-code output often wraps the code/URL in ANSI color codes
+  // (e.g. <ESC>[94mUEJ0-ANCUR<ESC>[0m) that break naive word-boundary regexes.
+  const plain = output.replace(/\u001b\[[0-9;]*m/g, "");
+  const verificationUrl = plain.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/, "") ?? null;
+  // Standalone <LETTERS/DIGITS>-<LETTERS/DIGITS> device codes (e.g. UEJ0-ANCUR)
   // are the most reliable signal; prefer them over free-text "code:" labels.
-  const standaloneCode = output.match(/\b[A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+\b/)?.[0];
-  const labelledCode = output.match(/(?:code|codigo)\s*[:=]?\s*([A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+)/i)?.[1];
+  const standaloneCode = plain.match(/\b[A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+\b/)?.[0];
+  const labelledCode = plain.match(/(?:code|codigo)\s*[:=]?\s*([A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+)/i)?.[1];
   return { verificationUrl, userCode: standaloneCode ?? labelledCode ?? null };
 }
 
