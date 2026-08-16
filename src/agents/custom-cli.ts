@@ -69,7 +69,37 @@ export class CustomCliProvider implements AgentProvider {
     if (this.config.models && this.config.models.length > 0) {
       return this.config.models;
     }
+    // Discover models via the provider CLI when the preset declares it
+    // (e.g. `opencode models opencode`), instead of falling back to [id].
+    if (this.config.modelDiscovery === "cli") {
+      const discovered = this.discoverCliModels();
+      if (discovered.length > 0) return discovered;
+    }
     return this.model ? [this.model] : [this.id];
+  }
+
+  /** Run `command <modelDiscoveryArgs>` and parse stdout lines of `vendor/model` shape. */
+  private discoverCliModels(): string[] {
+    try {
+      const args = this.config.modelDiscoveryArgs ?? [];
+      const child = spawnSync(this.config.command, args, {
+        windowsHide: true,
+        encoding: "utf8",
+        timeout: 20_000,
+        maxBuffer: 4 * 1024 * 1024,
+        shell: true
+      });
+      if (child.status !== 0 || !child.stdout) return [];
+      const cleaned = [...new Set(
+        child.stdout
+          .split(/\n/)
+          .map((line) => line.trim())
+          .filter((line) => /^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(line))
+      )].sort();
+      return cleaned;
+    } catch {
+      return [];
+    }
   }
 
   async health(): Promise<AgentHealth> {

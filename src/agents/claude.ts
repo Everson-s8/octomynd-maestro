@@ -129,7 +129,23 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async models(): Promise<string[]> {
-    return ["claude-3-7-sonnet", "claude-3-5-sonnet", "claude-3-5-haiku", "claude"];
+    // Claude CLI does not expose a simple `models` subcommand; keep a current
+    // list of supported model IDs (kept in sync with Anthropic's lineup).
+    return [
+      "claude-3-7-sonnet",
+      "claude-3-5-sonnet",
+      "claude-3-5-haiku",
+      "claude-sonnet-4",
+      "claude-sonnet-4-5",
+      "claude-sonnet-4-6",
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-opus-5",
+      "claude-haiku-4-5",
+      "claude"
+    ];
   }
 
   async health(): Promise<AgentHealth> {

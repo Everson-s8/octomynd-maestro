@@ -38,6 +38,8 @@ export type CustomCliProviderConfig = {
   managedSecret?: boolean;
   docsUrl?: string | null;
   setupCommand?: string | null;
+  modelDiscovery?: "cli" | "endpoint" | "ollama" | "manual";
+  modelDiscoveryArgs?: string[];
 };
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";

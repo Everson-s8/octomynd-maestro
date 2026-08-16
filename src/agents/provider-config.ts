@@ -218,7 +218,9 @@ export function configFromPreset(
     endpointUrl: options.endpointUrl ?? preset.defaultEndpoint ?? null,
     apiKeyEnv: preset.apiKeyEnv ?? null,
     docsUrl: preset.docsUrl,
-    setupCommand: preset.setupCommand ?? null
+    setupCommand: preset.setupCommand ?? null,
+    modelDiscovery: preset.modelDiscovery,
+    modelDiscoveryArgs: preset.modelDiscoveryArgs
   };
 }
 

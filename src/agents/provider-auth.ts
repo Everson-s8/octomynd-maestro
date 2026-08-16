@@ -49,7 +49,7 @@ export class ProviderAuthBroker {
 
   private startDeviceCode(executable: string, preset: ProviderPreset, session: InternalSession) {
     const invocation = prepareCliSpawn(executable, preset.authArgs ?? []);
-    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], shell: invocation.command === "cmd.exe" });
     let output = "";
     let openedUrl = "";
     const consume = (chunk: Buffer | string) => {
@@ -85,9 +85,11 @@ export class ProviderAuthBroker {
 
 export function parseDeviceAuthorization(output: string) {
   const verificationUrl = output.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/, "") ?? null;
-  const labelledCode = output.match(/(?:code|codigo)\s*[:=-]?\s*([A-Z0-9]{3,}(?:-[A-Z0-9]{2,})+)/i)?.[1];
-  const standaloneCode = output.match(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4})+\b/)?.[0];
-  return { verificationUrl, userCode: labelledCode ?? standaloneCode ?? null };
+  // Standalone <LETTERS/DIGITS>-<LETTERS/DIGITS> device codes (e.g. UE25-6H1EW)
+  // are the most reliable signal; prefer them over free-text "code:" labels.
+  const standaloneCode = output.match(/\b[A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+\b/)?.[0];
+  const labelledCode = output.match(/(?:code|codigo)\s*[:=]?\s*([A-Z0-9]{3,}(?:-[A-Z0-9]{4,})+)/i)?.[1];
+  return { verificationUrl, userCode: standaloneCode ?? labelledCode ?? null };
 }
 
 function complete(session: InternalSession, state: ProviderAuthState, detail: string) {

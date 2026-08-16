@@ -81,7 +81,20 @@ export class CodexProvider implements AgentProvider {
   }
 
   async models(): Promise<string[]> {
-    return ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "codex"];
+    // Codex CLI does not expose a `models` subcommand; keep a current list of
+    // supported model IDs (kept in sync with the platform's lineup).
+    return [
+      "gpt-4o",
+      "gpt-4o-mini",
+      "o1",
+      "o3-mini",
+      "codex",
+      "gpt-5-codex",
+      "gpt-5.1-codex",
+      "gpt-5.2-codex",
+      "gpt-5.3-codex",
+      "gpt-5.4-codex"
+    ];
   }
 
   async health(): Promise<AgentHealth> {
