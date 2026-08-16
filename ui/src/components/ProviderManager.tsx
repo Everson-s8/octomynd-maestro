@@ -411,7 +411,11 @@ export function ProviderManager({
       }
       case "account": {
         const name = wizardPreset?.label ?? "este provider";
-        return { title: `Entrar com ${name}`, desc: `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".` };
+        const autoLogin = wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
+        const desc = autoLogin
+          ? `${name} sera autenticado automaticamente: clique em "Conectar conta", a CLI oficial sera iniciada e o navegador/terminal abrira para voce concluir o login.`
+          : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
+        return { title: `Entrar com ${name}`, desc };
       }
     }
   };
@@ -594,7 +598,7 @@ export function ProviderManager({
                     </button>
                   </div>
                 ) : null}
-                {wizardPreset?.authFlow === "device_code" && authSession ? <AuthSessionPanel session={authSession} /> : null}
+                {(wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0) && authSession ? <AuthSessionPanel session={authSession} /> : null}
                 {wizardPreset?.docsUrl ? (
                   <a href={wizardPreset.docsUrl} className="docs-link" target="_blank" rel="noreferrer">
                     <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" /></svg>
