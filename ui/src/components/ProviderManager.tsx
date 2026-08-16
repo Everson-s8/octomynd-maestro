@@ -99,7 +99,8 @@ export function ProviderManager({
 
   const connectedProviders = useMemo<ConnectedProvider[]>(() => {
     const builtIns = presets.filter((preset) => preset.builtIn).map((preset) => {
-      const runtimeId = preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
+      const runtimeId =
+        preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
       const agent = agents.find((item) => item.id === runtimeId);
       const control = policy?.controls.find((item) => item.providerId === runtimeId);
       const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
