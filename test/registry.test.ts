@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { defaultProviderPolicySnapshot, ProviderPolicyStore } from "../src/agents/policy.js";
 import { AgentCapability, AgentExecutionResult, AgentProvider, AgentProviderId } from "../src/agents/types.js";
+
+// Keep the models.dev catalog empty in unit tests so provider.models() is the
+// fallback (the catalog is otherwise the primary source).
+vi.mock("../src/agents/models-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/agents/models-catalog.js")>("../src/agents/models-catalog.js");
+  return {
+    ...actual,
+    availableModelsFor: async () => []
+  };
+});
 
 describe("agent registry leases", () => {
   it("prefers the subscription provider for general work and Claude for final review", async () => {

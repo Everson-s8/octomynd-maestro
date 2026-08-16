@@ -253,8 +253,33 @@ export class AgentRegistry {
 
   async getAvailableModels(): Promise<Record<AgentProviderId, string[]>> {
     const result: Record<string, string[]> = {};
+    let catalogModels: Record<string, string[]> | null = null;
     for (const provider of this.list()) {
-      result[provider.id] = provider.models ? await provider.models() : [];
+      // models.dev is the primary source of model ids per provider (mirrors
+      // Hermes); fall back to the provider's own discovery/curated list.
+      let models: string[] = [];
+      if (catalogModels === null) {
+        try {
+          const { availableModelsFor } = await import("./models-catalog.js");
+          catalogModels = {};
+          const seen = new Set<string>();
+          const list = this.list();
+          for (const p of list) {
+            const m = await availableModelsFor(p.id, (p as { defaultEndpoint?: string | null }).defaultEndpoint ?? (p as unknown as { config?: { endpointUrl?: string | null } }).config?.endpointUrl ?? null);
+            if (m.length > 0) {
+              catalogModels[p.id] = m;
+              seen.add(p.id);
+            }
+          }
+        } catch {
+          catalogModels = {};
+        }
+      }
+      models = catalogModels[provider.id] ?? [];
+      if (models.length === 0) {
+        models = provider.models ? await provider.models() : [];
+      }
+      result[provider.id] = models;
     }
     return result;
   }
