@@ -422,7 +422,9 @@ export function ProviderManager({
         const autoLogin = wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
         const desc = autoLogin
           ? `${name} sera autenticado automaticamente: clique em "Conectar conta", a CLI oficial sera iniciada e o navegador/terminal abrira para voce concluir o login.`
-          : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
+          : wizardPreset?.id === "gemini"
+            ? 'Autenticado pela sua conta Google conectada ao CLI agy. Clique em "Ja fiz login" para confirmar e ativar.'
+            : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
         return { title: `Entrar com ${name}`, desc };
       }
     }
