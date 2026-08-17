@@ -486,6 +486,7 @@ export type ProviderPreset = {
   builtIn: boolean;
   authFlow: "device_code" | "terminal" | "none";
   authArgs: string[];
+  authStatusArgs: string[];
   modelDiscovery: "cli" | "endpoint" | "ollama" | "manual";
 };
 

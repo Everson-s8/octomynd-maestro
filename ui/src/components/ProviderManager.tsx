@@ -326,7 +326,15 @@ export function ProviderManager({
     setWizardBusy(true);
     setError("");
     try {
-      const testResult = await testProviderConnection({ command: preset.command, args: preset.args, presetId: preset.id });
+      // Probe the CLI's authentication status, not its execution args. Using
+      // preset.args (e.g. copilot's ["copilot","suggest","{prompt}"]) would run a
+      // wrong command and fail with "Falha ao executar gh". Use authStatusArgs
+      // (e.g. gh auth status) which actually confirms the logged-in account.
+      const testResult = await testProviderConnection({
+        command: preset.command,
+        args: preset.authStatusArgs && preset.authStatusArgs.length > 0 ? preset.authStatusArgs : preset.args,
+        presetId: preset.id
+      });
       if (!testResult.ok) throw new Error(testResult.detail || "Login ainda nao detectado. Verifique o terminal e tente novamente.");
       const result = await registerProvider({
         id: preset.id,

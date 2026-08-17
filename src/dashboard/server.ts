@@ -259,11 +259,11 @@ async function routeRequest(
   // delete one. Registration updates the live runtime and future boots.
   if (request.method === "GET" && url.pathname === "/api/providers/presets") {
     sendJson(response, 200, {
-      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint, category, docsUrl, setupCommand, apiKeyEnv, defaultEndpoint, builtIn, authFlow, authArgs, modelDiscovery }) => ({
+      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint, category, docsUrl, setupCommand, apiKeyEnv, defaultEndpoint, builtIn, authFlow, authArgs, authStatusArgs, modelDiscovery }) => ({
         id, label, command, args: args ?? [], envKeys: envKeys ?? [], description, models: models ?? [], connectionHint,
         category, docsUrl, setupCommand: setupCommand ?? null, apiKeyEnv: apiKeyEnv ?? null,
         defaultEndpoint: defaultEndpoint ?? null, builtIn: Boolean(builtIn), authFlow: authFlow ?? "none",
-        authArgs: authArgs ?? [], modelDiscovery: modelDiscovery ?? "manual"
+        authArgs: authArgs ?? [], authStatusArgs: authStatusArgs ?? [], modelDiscovery: modelDiscovery ?? "manual"
       })),
       registered: readCustomProviders(process.cwd())
     });
