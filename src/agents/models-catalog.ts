@@ -89,7 +89,8 @@ export async function fetchModelsCatalog(): Promise<ModelsCatalog> {
    claude: "anthropic",
    deepseek: "deepseek",
    mistral: "mistral",
-   openrouter: "openrouter"
+   openrouter: "openrouter",
+   copilot: "github-copilot"
  };
 
 export function resolveCatalogProviderKey(providerId: string, endpointUrl?: string | null): string | null {
