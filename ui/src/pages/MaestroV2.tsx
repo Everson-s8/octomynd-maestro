@@ -132,6 +132,13 @@ function Settings({ data }: { data: DashboardData }) {
 
 export function MaestroV2({ data, onRefresh, onCreate, refreshing }: { data: DashboardData; onRefresh: () => void; onCreate: () => void; refreshing: boolean }) {
   const location = useLocation();
+  // Refetch fresh data whenever the user navigates between views (and on first
+  // mount) so a screen never renders against stale data (the periodic poll is a
+  // safety net; this makes navigation feel immediate instead of showing the last
+  // polled snapshot).
+  useEffect(() => {
+    onRefresh();
+  }, [location.pathname, onRefresh]);
   const pending = data.features.filter(f => ["reviewing", "waiting_checks", "changes_requested"].includes(f.status)).length;
   const page = location.pathname;
   return <div className="app"><AppSidebar pending={pending} /><main><div className="inner">{page === "/chat" ? <Chat data={data} /> : page === "/backlog" ? <FlowFiltered data={data} onCreate={onCreate} /> : page === "/reviews" ? <Reviews data={data} /> : page === "/projects" ? <Projects data={data} /> : page === "/providers" ? <ProvidersPage data={data} /> : page === "/analytics" ? <Analytics data={data} /> : page === "/settings" ? <Settings data={data} /> : <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />}</div></main></div>;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AgentProviderId,
   cancelProviderAuth,
   deleteProvider,
   fetchProviderAuth,
@@ -390,8 +391,9 @@ export function ProviderManager({
     const preset = wizardPreset;
     if (!preset) return;
     // Built-in providers (e.g. gemini/antigravity) can't be re-registered, but
-    // we still confirm the CLI is present/authenticated and show a success
-    // state — otherwise the button does nothing visible and confuses the user.
+    // "Já fiz login" should actually activate the provider: if it was paused/
+    // disabled, re-enable it so it shows up on the screen again. Otherwise the
+    // message would say "pronto" but the card would stay hidden (inconsistent).
     if (preset.builtIn) {
       setWizardBusy(true);
       setError("");
@@ -402,10 +404,19 @@ export function ProviderManager({
           presetId: preset.id
         });
         if (!testResult.ok) throw new Error(testResult.detail || "CLI nao encontrado ou nao autenticado.");
-        setNotice(`${preset.label} esta pronto. Use o painel de prioridade para definir a ordem (ja faz parte do runtime).`);
+        // Re-activate the built-in provider (it may have been paused/disabled).
+        const control = policy?.controls.find((item) => item.providerId === preset.id || item.providerId === "antigravity");
+        const targetId = preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
+        if (control?.mode !== "enabled") {
+          await updateProviderControl(targetId as AgentProviderId, {
+            mode: "enabled",
+            fallbackEnabled: control?.fallbackEnabled ?? false
+          });
+        }
+        setNotice(`${preset.label} foi ativado. Use o painel de prioridade para definir a ordem.`);
         await load();
         onChanged?.();
-      onPolicyChanged?.();
+        onPolicyChanged?.();
         closeWizard();
       } catch (cause) {
         setError(readError(cause, "Nao foi possivel confirmar a conexao."));
