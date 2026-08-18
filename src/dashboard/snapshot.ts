@@ -105,6 +105,15 @@ export function buildDashboardSnapshot(
     },
     summary: {
       projects: projects.length,
+      // Only count active (non-paused/non-disabled) execution providers so the
+      // overview metric matches the providers screen (both show "what is called").
+      providersConnected: (() => {
+        const policy = database.getProviderPolicySnapshot();
+        const modeBy = new Map(policy.controls.map((c) => [c.providerId, c.mode]));
+        return (agents ?? [])
+          .filter((a) => a.id !== "telegram")
+          .filter((a) => (modeBy.get(a.id) ?? "enabled") === "enabled").length;
+      })(),
       activeTasks: tasks.filter(isActiveTask).length,
       queuedTasks: counts.queued ?? 0,
       humanGates: reviewQueue.length + (counts.ready_to_merge ?? 0) + (improvementCounts.candidate ?? 0),

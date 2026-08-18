@@ -1,4 +1,5 @@
-import { DashboardData } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { DashboardData, fetchProviderPolicy, ProviderPolicySnapshot } from "../api";
 import { AgentDock } from "../components/AgentDock";
 import { ProviderManager } from "../components/ProviderManager";
 
@@ -7,6 +8,20 @@ export interface ProvidersPageProps {
 }
 
 export function ProvidersPage({ data }: ProvidersPageProps) {
+  const [policy, setPolicy] = useState<ProviderPolicySnapshot | null>(null);
+
+  const refreshPolicy = useCallback(async () => {
+    try {
+      setPolicy(await fetchProviderPolicy());
+    } catch {
+      // keep last known policy on transient failure
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPolicy();
+  }, [refreshPolicy]);
+
   return (
     <div className="providers-page">
       <div className="top">
@@ -20,8 +35,8 @@ export function ProvidersPage({ data }: ProvidersPageProps) {
         defina a ordem de prioridade por função.
       </p>
       <div className="prov-grid">
-        <ProviderManager agents={data.agents} />
-        <AgentDock agents={data.agents} />
+        <ProviderManager agents={data.agents} externalPolicy={policy} policyVersion={policy?.controls.map((c) => `${c.providerId}:${c.mode}`).join("|") ?? ""} setPolicy={setPolicy} onPolicyChanged={refreshPolicy} />
+        <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
       </div>
     </div>
   );

@@ -312,6 +312,7 @@ export type DashboardData = {
   };
   summary: {
     projects: number;
+    providersConnected: number;
     activeTasks: number;
     queuedTasks: number;
     humanGates: number;

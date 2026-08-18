@@ -9,10 +9,13 @@ import {
 } from "../api";
 import { capabilityLabel } from "../helpers";
 
-export function AgentDock({ agents }: {
+export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   agents: DashboardData["agents"];
+  policy?: ProviderPolicySnapshot | null;
+  onPolicyChanged?: () => void;
 }) {
-  const [policy, setPolicy] = useState<ProviderPolicySnapshot | null>(null);
+  const [localPolicy, setLocalPolicy] = useState<ProviderPolicySnapshot | null>(null);
+  const policy = externalPolicy !== undefined ? externalPolicy : localPolicy;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +32,7 @@ export function AgentDock({ agents }: {
   const loadPolicy = useCallback(async () => {
     try {
       const data = await fetchProviderPolicy();
-      setPolicy(data);
+      setLocalPolicy(data);
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Falha ao carregar providers.");
@@ -37,8 +40,8 @@ export function AgentDock({ agents }: {
   }, []);
 
   useEffect(() => {
-    void loadPolicy();
-  }, [loadPolicy]);
+    if (externalPolicy === undefined) void loadPolicy();
+  }, [loadPolicy, externalPolicy]);
 
   const changeRouting = async (
     capability: AgentCapability,
@@ -57,6 +60,7 @@ export function AgentDock({ agents }: {
         preferredModel: targetPreferredModel
       });
       await loadPolicy();
+      onPolicyChanged?.();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Falha ao atualizar roteamento.");
     } finally {

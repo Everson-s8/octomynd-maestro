@@ -35,14 +35,30 @@ type ConnectedProvider = {
 
 export function ProviderManager({
   agents,
+  externalPolicy,
+  policyVersion,
+  setPolicy,
+  onPolicyChanged,
   onChanged
 }: {
   agents: DashboardData["agents"];
+  externalPolicy?: (ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null;
+  policyVersion?: string;
+  setPolicy?: (p: (ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null) => void;
+  onPolicyChanged?: () => void;
   onChanged?: () => void;
 }) {
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [registered, setRegistered] = useState<RegisteredCustomProvider[]>([]);
-  const [policy, setPolicy] = useState<(ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null>(null);
+  // If a shared policy is provided via props (elevated state), use it; otherwise
+  // fall back to a local copy. This keeps ProviderManager reactive to changes made
+  // elsewhere (e.g. AgentDock) without needing a page reload.
+  const [localPolicy, setLocalPolicy] = useState<(ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null>(null);
+  const policy = externalPolicy !== undefined ? externalPolicy : localPolicy;
+  const updatePolicy = (p: (ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null) => {
+    if (setPolicy) setPolicy(p);
+    else setLocalPolicy(p);
+  };
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -69,13 +85,26 @@ export function ProviderManager({
       const [presetData, policyData] = await Promise.all([fetchProviderPresets(), fetchProviderPolicy()]);
       setPresets(presetData.presets);
       setRegistered(presetData.registered);
-      setPolicy(policyData);
+      updatePolicy(policyData);
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel carregar os providers."));
     }
   };
 
   useEffect(() => { void load(); }, []);
+
+  // When the shared policy changes externally (e.g. AgentDock paused a provider,
+  // or another tab), reload presets/registered so cards and the detail modal stay
+  // in sync without a page refresh.
+  useEffect(() => {
+    if (policy === undefined || policyVersion === undefined) return;
+    void fetchProviderPresets()
+      .then((presetData) => {
+        setPresets(presetData.presets);
+        setRegistered(presetData.registered);
+      })
+      .catch(() => {});
+  }, [policyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!authSession || authSession.state !== "waiting") return;
@@ -195,6 +224,7 @@ export function ProviderManager({
       });
       await load();
       onChanged?.();
+      onPolicyChanged?.();
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel atualizar o modelo."));
     } finally {
@@ -221,6 +251,7 @@ export function ProviderManager({
         await load();
       }
       onChanged?.();
+      onPolicyChanged?.();
       closeDetail();
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel desconectar o provider."));
@@ -246,6 +277,7 @@ export function ProviderManager({
       });
       await load();
       onChanged?.();
+      onPolicyChanged?.();
       setNotice(nextMode === "paused" ? `${provider.label} pausado (conectado, mas nao sera chamado).` : `${provider.label} ativado.`);
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel alternar o provider."));
@@ -345,6 +377,7 @@ export function ProviderManager({
       setNotice(`${label} foi conectado e ativado sem reiniciar o Maestro.`);
       await load();
       onChanged?.();
+      onPolicyChanged?.();
       closeWizard();
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel conectar o provider."));
@@ -372,6 +405,7 @@ export function ProviderManager({
         setNotice(`${preset.label} esta pronto. Use o painel de prioridade para definir a ordem (ja faz parte do runtime).`);
         await load();
         onChanged?.();
+      onPolicyChanged?.();
         closeWizard();
       } catch (cause) {
         setError(readError(cause, "Nao foi possivel confirmar a conexao."));
@@ -407,6 +441,7 @@ export function ProviderManager({
       setNotice(`${preset.label} foi conectado e ativado sem reiniciar o Maestro.`);
       await load();
       onChanged?.();
+      onPolicyChanged?.();
       closeWizard();
     } catch (cause) {
       setError(readError(cause, "Nao foi possivel confirmar o login."));
