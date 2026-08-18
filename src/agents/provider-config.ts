@@ -148,7 +148,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "gemini",
     label: "Gemini Antigravity",
     command: "agy",
-    description: "Gemini Antigravity usando a conta Google conectada. Instale o CLI 'agy' se ainda nao estiver presente.",
+    description: "Gemini via CLI agy (conta Google conectada). Preciso instalar o CLI 'agy' em https://antigravity.google/.",
     models: [],
     connectionHint: "account",
     category: "account",
@@ -156,8 +156,26 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     setupCommand: "agy install",
     authFlow: "terminal",
     authArgs: [],
+    // No stable auth-status command (agy models is flaky under non-interactive
+    // spawn); the account is confirmed implicitly when a goal actually runs.
+    authStatusArgs: [],
     modelDiscovery: "manual",
     builtIn: true
+  },
+  {
+    id: "gemini-api",
+    label: "Gemini API",
+    command: "opencode",
+    args: ["run", "{prompt}", "-m", "{model}"],
+    envKeys: ["GEMINI_API_KEY"],
+    description: "Modelos Gemini pela Google AI API usando uma API key (sem precisar do CLI agy).",
+    models: [],
+    connectionHint: "api_key",
+    category: "api",
+    docsUrl: "https://aistudio.google.com/app/apikey",
+    apiKeyEnv: "GEMINI_API_KEY",
+    defaultEndpoint: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    modelDiscovery: "endpoint"
   },
   {
     id: "ollama",

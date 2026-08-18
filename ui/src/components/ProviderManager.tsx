@@ -318,9 +318,28 @@ export function ProviderManager({
   const confirmAccountLogin = async () => {
     const preset = wizardPreset;
     if (!preset) return;
+    // Built-in providers (e.g. gemini/antigravity) can't be re-registered, but
+    // we still confirm the CLI is present/authenticated and show a success
+    // state — otherwise the button does nothing visible and confuses the user.
     if (preset.builtIn) {
-      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
-      closeWizard();
+      setWizardBusy(true);
+      setError("");
+      try {
+        const testResult = await testProviderConnection({
+          command: preset.command,
+          args: preset.authStatusArgs && preset.authStatusArgs.length > 0 ? preset.authStatusArgs : [],
+          presetId: preset.id
+        });
+        if (!testResult.ok) throw new Error(testResult.detail || "CLI nao encontrado ou nao autenticado.");
+        setNotice(`${preset.label} esta pronto. Use o painel de prioridade para definir a ordem (ja faz parte do runtime).`);
+        await load();
+        onChanged?.();
+        closeWizard();
+      } catch (cause) {
+        setError(readError(cause, "Nao foi possivel confirmar a conexao."));
+      } finally {
+        setWizardBusy(false);
+      }
       return;
     }
     setWizardBusy(true);
