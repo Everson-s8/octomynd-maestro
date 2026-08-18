@@ -189,7 +189,14 @@ const ALLOWED_PROVIDER_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "CLAUDE_API_KEY",
   "GEMINI_API_KEY",
-  "GOOGLE_API_KEY"
+  "GOOGLE_API_KEY",
+  // Custom/plugin providers (opencode-go, deepseek, etc.) register their own
+  // API-key env vars; without them the key is filtered out of the provider's
+  // child process and the call silently runs without credentials.
+  "OPENCODE_GO_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY"
 ]);
 
 export function buildRestrictedAgentEnvironment(

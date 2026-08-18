@@ -27,7 +27,18 @@ import { AgentRegistry } from "../agents/registry.js";
 import type { WorkGraphRuntimeCommands, WorkIntakeCommandInput } from "../commands/application-commands.js";
 import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
-import { resolveCustomCliExecutable } from "../agents/custom-cli.js";
+import { prepareCliSpawn, resolveCustomCliExecutable } from "../agents/custom-cli.js";
+import { CustomCliProvider } from "../agents/custom-cli.js";
+import {
+  PROVIDER_PRESETS,
+  addCustomProvider,
+  configFromPreset,
+  readCustomProviders,
+  removeCustomProvider,
+  writeProviderSecret
+} from "../agents/provider-config.js";
+import type { ProviderPreset } from "../agents/provider-config.js";
+import { ProviderAuthBroker } from "../agents/provider-auth.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
@@ -38,6 +49,8 @@ import {
   validateTelegramUserId
 } from "../telegram/connect.js";
 import type { TelegramSubsystemManager } from "../telegram/bot.js";
+
+const providerAuthBroker = new ProviderAuthBroker();
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -53,7 +66,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -144,19 +157,248 @@ async function routeRequest(
     return;
   }
 
-  // Test whether a custom provider can connect before the user commits to it.
-  // Only read-only probes (executable resolution + optional version probe); it
-  // does NOT persist anything.
+  // Test whether a provider can connect before the user commits to it. The
+  // probe is read-only and supports both CLIs and OpenAI-compatible endpoints.
   if (request.method === "POST" && url.pathname === "/api/providers/test-connection") {
     const body = await readJsonBody(request);
     const command = typeof body.command === "string" ? body.command.trim() : "";
     const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === "string") : [];
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const endpointUrl = typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : "";
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const apiKeyEnv = typeof body.apiKeyEnv === "string" ? body.apiKeyEnv.trim() : "";
+    const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
+    const endpoint = endpointUrl || preset?.defaultEndpoint || "";
+    if (endpoint) {
+      try {
+        const models = await discoverProviderModels(
+          endpoint,
+          apiKey || (apiKeyEnv ? process.env[apiKeyEnv] ?? "" : "")
+        );
+        sendJson(response, 200, {
+          ok: true,
+          detail: models.length
+            ? `Endpoint conectado. ${models.length} modelo(s) encontrado(s).`
+            : "Endpoint conectado, mas nenhum modelo foi anunciado.",
+          executable: null,
+          models
+        });
+      } catch (error) {
+        sendJson(response, 422, {
+          ok: false,
+          error: "provider_connection_failed",
+          detail: error instanceof Error ? error.message : "Falha ao testar o endpoint.",
+          executable: null,
+          models: []
+        });
+      }
+      return;
+    }
     if (!command) {
-      sendJson(response, 400, { error: "command_is_required" });
+      sendJson(response, 400, { error: "command_or_endpoint_is_required" });
       return;
     }
     const state = await testAgentConnection(command, args);
-    sendJson(response, 200, state);
+    sendJson(response, state.ok ? 200 : 422, { ...state, models: [] });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/discover-models") {
+    const body = await readJsonBody(request);
+    const endpointUrl = typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : "";
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const apiKeyEnv = typeof body.apiKeyEnv === "string" ? body.apiKeyEnv.trim() : "";
+    const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
+    try {
+      const models = await discoverModelsForPreset(
+        preset,
+        endpointUrl,
+        apiKey || (apiKeyEnv ? process.env[apiKeyEnv] ?? "" : "")
+      );
+      sendJson(response, 200, { models });
+    } catch (error) {
+      sendJson(response, 422, {
+        error: "model_discovery_failed",
+        detail: error instanceof Error ? error.message : "Unknown model discovery error."
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/auth/start") {
+    const body = await readJsonBody(request);
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
+    if (!preset) {
+      sendJson(response, 404, { error: "provider_preset_not_found" });
+      return;
+    }
+    try {
+      sendJson(response, 202, { session: providerAuthBroker.start(preset) });
+    } catch (error) {
+      sendJson(response, 422, { error: error instanceof Error ? error.message : "provider_auth_start_failed" });
+    }
+    return;
+  }
+
+  const authMatch = url.pathname.match(/^\/api\/providers\/auth\/([^/]+)$/);
+  if (authMatch && request.method === "GET") {
+    const session = providerAuthBroker.get(decodeURIComponent(authMatch[1]));
+    sendJson(response, session ? 200 : 404, session ? { session } : { error: "provider_auth_session_not_found" });
+    return;
+  }
+  if (authMatch && request.method === "DELETE") {
+    const session = providerAuthBroker.cancel(decodeURIComponent(authMatch[1]));
+    sendJson(response, session ? 200 : 404, session ? { session } : { error: "provider_auth_session_not_found" });
+    return;
+  }
+
+  // Provider management: curated presets, list registered custom providers,
+  // register a new provider (persists MAESTRO_CUSTOM_PROVIDERS to .env), and
+  // delete one. Registration updates the live runtime and future boots.
+  if (request.method === "GET" && url.pathname === "/api/providers/presets") {
+    sendJson(response, 200, {
+      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint, category, docsUrl, setupCommand, apiKeyEnv, defaultEndpoint, builtIn, authFlow, authArgs, authStatusArgs, modelDiscovery }) => ({
+        id, label, command, args: args ?? [], envKeys: envKeys ?? [], description, models: models ?? [], connectionHint,
+        category, docsUrl, setupCommand: setupCommand ?? null, apiKeyEnv: apiKeyEnv ?? null,
+        defaultEndpoint: defaultEndpoint ?? null, builtIn: Boolean(builtIn), authFlow: authFlow ?? "none",
+        authArgs: authArgs ?? [], authStatusArgs: authStatusArgs ?? [], modelDiscovery: modelDiscovery ?? "manual"
+      })),
+      registered: readCustomProviders(process.cwd())
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/providers/registered") {
+    sendJson(response, 200, { providers: readCustomProviders(process.cwd()) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/register") {
+    const body = await readJsonBody(request);
+    const id = typeof body.id === "string" ? body.id.trim().toLowerCase() : "";
+    const label = typeof body.label === "string" ? body.label.trim() : "";
+    const command = typeof body.command === "string" ? body.command.trim() : "";
+    const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === "string" && a.trim() !== "") : [];
+    const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    const envKeys = Array.isArray(body.envKeys) ? body.envKeys.filter((k): k is string => typeof k === "string" && k.trim() !== "") : [];
+    const presetId = typeof body.presetId === "string" ? body.presetId : id;
+    const connectionMode = readEnum(body.connectionMode, ["account", "api_key", "local", "custom"] as const) ?? "local";
+    const endpointUrl = typeof body.endpointUrl === "string" ? body.endpointUrl.trim() || null : null;
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const apiKeyEnv = typeof body.apiKeyEnv === "string" ? body.apiKeyEnv.trim() : "";
+    const preset = PROVIDER_PRESETS.find((p) => p.id === presetId);
+
+    if (!id || !command) {
+      sendJson(response, 400, { error: "id_and_command_are_required" });
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+      sendJson(response, 400, { error: "invalid_provider_id" });
+      return;
+    }
+    if (preset?.builtIn) {
+      sendJson(response, 409, { error: "built_in_provider_is_managed_by_runtime" });
+      return;
+    }
+
+    const resolvedApiKeyEnv = apiKeyEnv || preset?.apiKeyEnv || envKeys[0] || "";
+
+    const customPreset: ProviderPreset = {
+        id,
+        label: label || id,
+        command,
+        models: [],
+        connectionHint: connectionMode === "custom" ? "local" : connectionMode,
+        category: connectionMode === "api_key" ? "api" : connectionMode === "account" ? "account" : "local",
+        description: "Custom provider",
+        docsUrl: ""
+    };
+    const config = configFromPreset(
+      preset ?? customPreset,
+      {
+        id,
+        label: label || preset?.label || id,
+        command,
+        args: args.length ? args : undefined,
+        model,
+        endpointUrl,
+        connectionMode
+      }
+    );
+
+    const existing = readCustomProviders(process.cwd()).find((item) => item.id === id);
+    const nextConfig = {
+      ...config,
+      envKeys: resolvedApiKeyEnv ? [resolvedApiKeyEnv] : envKeys,
+      apiKeyEnv: resolvedApiKeyEnv || null,
+      managedSecret: apiKey
+        ? true
+        : existing?.apiKeyEnv === resolvedApiKeyEnv
+          ? existing.managedSecret
+          : false,
+      endpointUrl: endpointUrl ?? config.endpointUrl,
+      models: Array.isArray(body.models)
+        ? body.models.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+        : config.models
+    };
+
+    const provider = new CustomCliProvider(nextConfig, { model });
+    try {
+      if (existing) {
+        if (!options.agentRegistry?.replaceProvider) {
+          throw new Error("The running registry cannot replace providers safely.");
+        }
+        options.agentRegistry.replaceProvider(provider);
+      } else if (options.agentRegistry?.registerProvider) {
+        options.agentRegistry.registerProvider(provider);
+      }
+    } catch (error) {
+      sendJson(response, 409, {
+        error: existing ? "provider_update_blocked" : "provider_registration_failed",
+        detail: error instanceof Error ? error.message : "Provider runtime update failed."
+      });
+      return;
+    }
+
+    if (apiKey && resolvedApiKeyEnv) {
+      writeProviderSecret(resolvedApiKeyEnv, apiKey, process.cwd());
+    }
+
+    const result = addCustomProvider(nextConfig);
+    options.database.addEvent({
+      source: "maestro",
+      type: "provider.registered",
+      text: `Custom provider ${id} registered (${command}).`,
+      metadata: { providerId: id, command, model: model ?? null, envPath: result.envPath }
+    });
+    sendJson(response, 201, { provider: nextConfig, envPath: result.envPath, providers: result.providers });
+    return;
+  }
+
+  const deleteProviderMatch = url.pathname.match(/^\/api\/providers\/([a-zA-Z0-9._-]+)$/);
+  if (request.method === "DELETE" && deleteProviderMatch) {
+    const id = deleteProviderMatch[1];
+    if (options.agentRegistry?.unregisterProvider) {
+      try {
+        options.agentRegistry.unregisterProvider(id as AgentProviderId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "provider_removal_failed";
+        if (!message.includes("is not registered")) {
+          sendJson(response, 409, { error: "provider_is_in_use", detail: message });
+          return;
+        }
+      }
+    }
+    const result = removeCustomProvider(id, process.cwd());
+    options.database.addEvent({
+      source: "maestro",
+      type: result.removed ? "provider.removed" : "provider.remove_ignored",
+      text: result.removed ? `Custom provider ${id} removed.` : `Custom provider ${id} not found.`,
+      metadata: { providerId: id, removed: result.removed }
+    });
+    sendJson(response, result.removed ? 200 : 404, { removed: result.removed, providers: result.providers });
     return;
   }
 
@@ -165,7 +407,20 @@ async function routeRequest(
       sendJson(response, 503, { error: "provider_policy_unavailable" });
       return;
     }
-    sendJson(response, 200, { policy: options.agentRegistry.policySnapshot() });
+    const models = options.agentRegistry.getAvailableModels
+      ? await options.agentRegistry.getAvailableModels()
+      : {};
+    sendJson(response, 200, { policy: options.agentRegistry.policySnapshot(), models });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/provider-policy/models") {
+    if (!options.agentRegistry?.getAvailableModels) {
+      sendJson(response, 503, { error: "provider_policy_unavailable" });
+      return;
+    }
+    const models = await options.agentRegistry.getAvailableModels();
+    sendJson(response, 200, { models });
     return;
   }
 
@@ -177,13 +432,15 @@ async function routeRequest(
     const body = await readJsonBody(request);
     const controls = Array.isArray(body.controls) ? body.controls : [];
     const validControls: ProviderControlUpdate[] = controls.flatMap((item) => {
-      const providerId = readEnum(item?.providerId, ["codex", "claude", "antigravity"] as const);
+      const providerId = typeof item?.providerId === "string" ? item.providerId.trim() : "";
       const mode = readEnum(item?.mode, ["enabled", "paused", "disabled"] as const);
+      const model = typeof item?.model === "string" ? item.model.trim() || null : item?.model === null ? null : undefined;
       return providerId && mode && typeof item?.fallbackEnabled === "boolean"
         ? [{
             providerId: providerId as AgentProviderId,
             mode: mode as ProviderMode,
-            fallbackEnabled: item.fallbackEnabled as boolean
+            fallbackEnabled: item.fallbackEnabled as boolean,
+            model
           }]
         : [];
     });
@@ -274,10 +531,12 @@ async function routeRequest(
       sendJson(response, 400, { error: "valid_mode_and_fallbackEnabled_are_required" });
       return;
     }
+    const model = typeof body.model === "string" ? body.model.trim() || null : body.model === null ? null : undefined;
     const control = options.agentRegistry.updateProviderControl({
       providerId: providerControlMatch[1] as AgentProviderId,
       mode: mode as ProviderMode,
-      fallbackEnabled: body.fallbackEnabled
+      fallbackEnabled: body.fallbackEnabled,
+      model
     });
     options.database.addEvent({
       source: "dashboard",
@@ -300,16 +559,28 @@ async function routeRequest(
     ] as const) as AgentCapability | null;
     const body = await readJsonBody(request);
     const order = Array.isArray(body.order)
-      ? body.order.filter((item): item is AgentProviderId => ["codex", "claude", "antigravity"].includes(String(item)))
+      ? body.order.filter((item): item is AgentProviderId => typeof item === "string" && Boolean(item.trim()))
       : [];
     const requiredProviderId = body.requiredProviderId === null
       ? null
-      : readEnum(body.requiredProviderId, ["codex", "claude", "antigravity"] as const) as AgentProviderId | null;
-    if (!capability || order.length === 0 || (body.requiredProviderId !== null && !requiredProviderId)) {
+      : typeof body.requiredProviderId === "string" && body.requiredProviderId.trim()
+        ? body.requiredProviderId.trim() as AgentProviderId
+        : null;
+    const preferredModel = typeof body.preferredModel === "string"
+      ? body.preferredModel.trim() || null
+      : body.preferredModel === null
+        ? null
+        : undefined;
+    if (!capability || order.length === 0) {
       sendJson(response, 400, { error: "valid_capability_order_and_requiredProviderId_are_required" });
       return;
     }
-    const routing = options.agentRegistry.updateCapabilityRouting({ capability, order, requiredProviderId });
+    const routing = options.agentRegistry.updateCapabilityRouting({
+      capability,
+      order,
+      requiredProviderId,
+      preferredModel
+    });
     options.database.addEvent({
       source: "dashboard",
       type: "provider.routing_updated",
@@ -1212,8 +1483,8 @@ function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function readEnum(value: unknown, options: readonly string[]): string | null {
-  return typeof value === "string" && options.includes(value) ? value : null;
+function readEnum<const Option extends string>(value: unknown, options: readonly Option[]): Option | null {
+  return typeof value === "string" && options.includes(value as Option) ? value as Option : null;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -1320,6 +1591,56 @@ function contentType(filePath: string): string {
   }[extension] ?? "application/octet-stream";
 }
 
+async function discoverProviderModels(endpointUrl: string, apiKey: string): Promise<string[]> {
+  const endpoint = endpointUrl.replace(/\/+$/, "");
+  const isOllama = /(?:localhost|127\.0\.0\.1):11434/i.test(endpoint);
+  const response = await fetch(isOllama ? `${endpoint}/api/tags` : `${endpoint}/models`, {
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    signal: AbortSignal.timeout(8_000)
+  });
+  if (!response.ok) {
+    throw new Error(`O endpoint de modelos respondeu HTTP ${response.status}.`);
+  }
+  const payload = await response.json() as {
+    data?: Array<{ id?: string }>;
+    models?: Array<{ name?: string; model?: string }>;
+  };
+  const discovered = isOllama
+    ? (payload.models ?? []).map((item) => item.name || item.model || "")
+    : (payload.data ?? []).map((item) => item.id || "");
+  return [...new Set(discovered.map((item) => item.trim()).filter(Boolean))].sort();
+}
+
+async function discoverModelsForPreset(preset: ProviderPreset | undefined, endpointUrl: string, apiKey: string): Promise<string[]> {
+  if (preset?.modelDiscovery === "cli") {
+    const executable = resolveCustomCliExecutable(preset.command);
+    if (!executable) throw new Error(`CLI '${preset.command}' nao foi encontrado no PATH.`);
+    return discoverCliModels(executable, preset.modelDiscoveryArgs ?? []);
+  }
+  const endpoint = endpointUrl || preset?.defaultEndpoint || "";
+  if (!endpoint) throw new Error("Este provider nao publica um catalogo de modelos. Use Auto ou informe o ID manualmente.");
+  return discoverProviderModels(endpoint, apiKey);
+}
+
+function discoverCliModels(command: string, args: string[]): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const invocation = prepareCliSpawn(command, args);
+    const child = spawn(invocation.command, invocation.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout = `${stdout}${chunk}`.slice(-200_000); });
+    child.stderr.on("data", (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-20_000); });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code !== 0) return reject(new Error(stderr.trim() || `Catalog command exited with code ${code}.`));
+      const models = [...new Set(stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(line)))].sort();
+      resolve(models);
+    });
+  });
+}
+
 /**
  * Probe whether a custom provider CLI is reachable, without persisting anything.
  * Used by POST /api/providers/test-connection so the UI can show a real
@@ -1347,7 +1668,8 @@ async function testAgentConnection(command: string, args: string[]): Promise<{ o
 /** Runs `command args` asynchronously; resolves true only on exit 0. */
 function probeExecutable(command: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { timeout: 15_000, windowsHide: true });
+    const invocation = prepareCliSpawn(command, args);
+    const child = spawn(invocation.command, invocation.args, { timeout: 15_000, windowsHide: true });
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
   });

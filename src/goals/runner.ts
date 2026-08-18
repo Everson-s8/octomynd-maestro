@@ -648,7 +648,8 @@ export async function runTaskGoal(
           featureTaskContract: database.findFeaturePlanDetailsByTask(task.id)?.tasks
             .find((candidate) => candidate.taskId === task.id)?.contract,
           deadlineAt: goalDeadlineAt,
-          signal: options.signal
+          signal: options.signal,
+          model: routed.model
         });
       } catch (error) {
         result = {

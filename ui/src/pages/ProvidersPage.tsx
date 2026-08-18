@@ -1,22 +1,43 @@
-import { DashboardData } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { DashboardData, fetchProviderPolicy, ProviderPolicySnapshot } from "../api";
 import { AgentDock } from "../components/AgentDock";
-import { SectionHeader } from "../components/SectionHeader";
+import { ProviderManager } from "../components/ProviderManager";
 
 export interface ProvidersPageProps {
   data: DashboardData;
 }
 
 export function ProvidersPage({ data }: ProvidersPageProps) {
-  return (
-    <div className="providers-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-      <div className="panel providers-header-banner" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow="AI Routing" title="Gestão de Providers e Modelos" meta="Governança Multi-Provider" />
-        <p style={{ color: "#a0a5b5", marginTop: "8px", marginBottom: 0, fontSize: "14px" }}>
-          Configure a ordem de prioridade de cada provider (Codex, Claude, Antigravity) para planejamento, coding, testes e review. Alterne entre modos ativas, pausadas ou fallback exclusivo.
-        </p>
-      </div>
+  const [policy, setPolicy] = useState<ProviderPolicySnapshot | null>(null);
 
-      <AgentDock agents={data.agents} environments={data.environments} />
+  const refreshPolicy = useCallback(async () => {
+    try {
+      setPolicy(await fetchProviderPolicy());
+    } catch {
+      // keep last known policy on transient failure
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPolicy();
+  }, [refreshPolicy]);
+
+  return (
+    <div className="providers-page">
+      <div className="top">
+        <div>
+          <div className="eyebrow">AI Routing</div>
+          <h1>Providers</h1>
+        </div>
+      </div>
+      <p className="desc">
+        Conecte quantos providers quiser — modelos de nuvem, locais ou endpoints customizados — e
+        defina a ordem de prioridade por função.
+      </p>
+      <div className="prov-grid">
+        <ProviderManager agents={data.agents} externalPolicy={policy} policyVersion={policy?.controls.map((c) => `${c.providerId}:${c.mode}`).join("|") ?? ""} setPolicy={setPolicy} onPolicyChanged={refreshPolicy} />
+        <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
+      </div>
     </div>
   );
 }

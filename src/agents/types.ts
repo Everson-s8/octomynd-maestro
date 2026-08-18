@@ -29,6 +29,17 @@ export type CustomCliProviderConfig = {
   envKeys?: string[];
   capabilities: AgentCapability[];
   healthProbe?: boolean;
+  model?: string | null;
+  models?: string[];
+  presetId?: string;
+  connectionMode?: "account" | "api_key" | "local" | "custom";
+  endpointUrl?: string | null;
+  apiKeyEnv?: string | null;
+  managedSecret?: boolean;
+  docsUrl?: string | null;
+  setupCommand?: string | null;
+  modelDiscovery?: "cli" | "endpoint" | "ollama" | "manual";
+  modelDiscoveryArgs?: string[];
 };
 export type AgentHealthState = "ready" | "quota" | "auth_required" | "offline";
 export type AgentOutcome = "completed" | "changes_requested" | "blocked" | "failed" | "cancelled";
@@ -60,6 +71,7 @@ export type AgentExecutionRequest = {
   artifactsRoot: string;
   deadlineAt?: number;
   signal?: AbortSignal;
+  model?: string | null;
 };
 
 export type NormalizedResult = {
@@ -91,9 +103,11 @@ export interface ProviderAdapter {
   id: AgentProviderId;
   label: string;
   capabilities: ReadonlySet<AgentCapability>;
+  model?: string | null;
   health(): Promise<AgentHealth>;
   execute(request: AgentExecutionRequest): Promise<AgentExecutionResult>;
   reviewImprovements?(request: ImprovementReviewExecutionRequest): Promise<ImprovementReviewExecutionResult>;
+  models?(): Promise<string[]>;
 }
 
 export type AgentProvider = ProviderAdapter;

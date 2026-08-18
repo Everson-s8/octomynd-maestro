@@ -36,6 +36,7 @@ import type {
 import { redactSensitiveText } from "../security/redaction.js";
 
 export type CustomCliProviderOptions = {
+  model?: string | null;
   executionLimits?: number | Partial<ProviderExecutionLimits>;
 };
 
@@ -43,10 +44,14 @@ export class CustomCliProvider implements AgentProvider {
   readonly id: AgentProviderId;
   readonly label: string;
   readonly capabilities: ReadonlySet<AgentCapability>;
+  readonly model: string | null;
   private readonly config: CustomCliProviderConfig;
   private readonly executionLimits: ProviderExecutionLimits;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private cachedModels: string[] | null = null;
+  private modelsExpiresAt = 0;
+  private static readonly MODELS_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min
 
   constructor(
     config: CustomCliProviderConfig,
@@ -56,10 +61,56 @@ export class CustomCliProvider implements AgentProvider {
     this.id = config.id as AgentProviderId;
     this.label = config.label || config.id;
     this.capabilities = new Set(config.capabilities);
+    this.model = options.model?.trim() || config.model?.trim() || null;
     this.executionLimits = normalizeProviderExecutionLimits(
       options.executionLimits,
       DEFAULT_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS
     );
+  }
+
+  async models(): Promise<string[]> {
+    if (this.cachedModels && Date.now() < this.modelsExpiresAt) return this.cachedModels;
+    let result: string[];
+    if (this.config.models && this.config.models.length > 0) {
+      result = this.config.models;
+    } else if (this.config.modelDiscovery === "cli") {
+      const discovered = this.discoverCliModels();
+      result = discovered.length > 0 ? discovered : this.model ? [this.model] : [this.id];
+    } else {
+      result = this.model ? [this.model] : [this.id];
+    }
+    this.cachedModels = result;
+    this.modelsExpiresAt = Date.now() + CustomCliProvider.MODELS_CACHE_TTL_MS;
+    return result;
+  }
+
+  /** Run `command <modelDiscoveryArgs>` and parse stdout lines of `vendor/model` shape. */
+  private discoverCliModels(): string[] {
+    try {
+      // Resolve the executable to an absolute path and spawn it via argv (using
+      // prepareCliSpawn to handle .cmd/.bat shims) — never with `shell: true`,
+      // which would let a user-supplied `command` string inject shell commands.
+      const executable = resolveCustomCliExecutable(this.config.command);
+      if (!executable) return [];
+      const args = this.config.modelDiscoveryArgs ?? [];
+      const invocation = prepareCliSpawn(executable, args);
+      const child = spawnSync(invocation.command, invocation.args, {
+        windowsHide: true,
+        encoding: "utf8",
+        timeout: 20_000,
+        maxBuffer: 4 * 1024 * 1024
+      });
+      if (child.status !== 0 || !child.stdout) return [];
+      const cleaned = [...new Set(
+        child.stdout
+          .split(/\n/)
+          .map((line) => line.trim())
+          .filter((line) => /^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(line))
+      )].sort();
+      return cleaned;
+    } catch {
+      return [];
+    }
   }
 
   async health(): Promise<AgentHealth> {
@@ -108,12 +159,6 @@ export class CustomCliProvider implements AgentProvider {
         health = { state: "offline", detail: `${this.label} CLI probe indisponivel.`, checkedAt: new Date().toISOString() };
       }
     } else {
-      // No health probe. We still need a resolvable executable to ever run,
-      // because execute() spawns config.command. An env key alone does not make
-      // the provider usable — without a CLI there is nothing to spawn. Reporting
-      // "ready" here (as the original code did when only an env key existed)
-      // misled routing into a guaranteed ENOENT. Only report ready when the
-      // executable is actually resolvable.
       health = executable
         ? { state: "ready", detail: `${this.label} CLI disponivel`, checkedAt: new Date().toISOString() }
         : { state: "offline", detail: `${this.label} CLI nao encontrado.`, checkedAt: new Date().toISOString() };
@@ -126,11 +171,9 @@ export class CustomCliProvider implements AgentProvider {
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const executable = resolveCustomCliExecutable(this.config.command);
     const cwd = request.task.worktreePath || request.project.path;
+    const selectedModel = request.model ?? this.model;
 
     if (!executable) {
-      // Without a resolvable CLI there is nothing to spawn — execute() would
-      // hand an unresolvable command to the OS and get a raw ENOENT. Return a
-      // treated, non-retryable failure instead so routing/cooldown works.
       return failure(`${this.label} CLI nao encontrado: ${this.config.command}`);
     }
     const cmdToRun = executable;
@@ -141,7 +184,7 @@ export class CustomCliProvider implements AgentProvider {
 
     const processResult = await runAgentProcess({
       command: cmdToRun,
-      args: buildCustomCliArgs(request, this.config),
+      args: buildCustomCliArgs(request, this.config, undefined, selectedModel),
       cwd,
       provider: this.id,
       timeoutMs: this.executionLimits.maxRuntimeMs,
@@ -165,7 +208,7 @@ export class CustomCliProvider implements AgentProvider {
         retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.id
+        model: selectedModel ?? this.id
       };
     }
 
@@ -203,7 +246,7 @@ export class CustomCliProvider implements AgentProvider {
         durationMs: processResult.durationMs,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.id
+        model: selectedModel ?? this.id
       };
     }
 
@@ -234,7 +277,7 @@ export class CustomCliProvider implements AgentProvider {
       retryable: false,
       processRuntime: processRuntime(processResult),
       tokenUsage: processResult.tokenUsage,
-      model: this.id
+      model: selectedModel ?? this.id
     };
   }
 
@@ -262,7 +305,8 @@ export class CustomCliProvider implements AgentProvider {
         "--add-dir",
         request.workspacePath,
         "--print-timeout",
-        `${Math.ceil(request.timeoutMs / 1_000)}s`
+        `${Math.ceil(request.timeoutMs / 1_000)}s`,
+        ...(this.model ? ["--model", this.model] : [])
       ],
       cwd: request.workspacePath,
       timeoutMs: request.timeoutMs,
@@ -312,7 +356,8 @@ export class CustomCliProvider implements AgentProvider {
 export function buildCustomCliArgs(
   request: AgentExecutionRequest,
   config: CustomCliProviderConfig,
-  printTimeoutMs = 8 * 60 * 60_000
+  printTimeoutMs = 8 * 60 * 60_000,
+  model?: string | null
 ): string[] {
   const prompt = buildAgentGoalPrompt(request);
   const cwd = request.task.worktreePath || request.project.path;
@@ -320,11 +365,12 @@ export function buildCustomCliArgs(
 
   if (config.args && config.args.some((arg) => arg.includes("{prompt}"))) {
     return config.args.map((arg) =>
-      arg.replace("{prompt}", prompt).replace("{cwd}", cwd)
+      arg.replace("{prompt}", prompt).replace("{cwd}", cwd).replace("{model}", model ?? "")
     );
   }
 
-  const extraArgs = config.args ?? [];
+  const extraArgs = (config.args ?? []).map((arg) => arg.replace("{model}", model ?? ""));
+  const hasModelArg = extraArgs.some((arg) => arg === "--model" || arg === "-m");
   return [
     "--print",
     prompt,
@@ -338,7 +384,8 @@ export function buildCustomCliArgs(
     cwd,
     "--print-timeout",
     `${Math.ceil(printTimeoutMs / 1_000)}s`,
-    ...extraArgs
+    ...extraArgs,
+    ...(model && !hasModelArg ? ["--model", model] : [])
   ];
 }
 
@@ -366,6 +413,17 @@ export function resolveCustomCliExecutable(command: string): string | null {
     }
   } catch {}
   return null;
+}
+
+export function prepareCliSpawn(executable: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(executable)) {
+    return { command: executable, args };
+  }
+
+  return {
+    command: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", "call", executable, ...args]
+  };
 }
 
 function failure(detail: string, category: FailureCategory = "offline"): AgentExecutionResult {

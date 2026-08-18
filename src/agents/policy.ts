@@ -6,6 +6,7 @@ export type ProviderControl = {
   providerId: AgentProviderId;
   mode: ProviderMode;
   fallbackEnabled: boolean;
+  model?: string | null;
   updatedAt: string | null;
 };
 
@@ -13,22 +14,29 @@ export type CapabilityRoutingPolicy = {
   capability: AgentCapability;
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
+  preferredModel?: string | null;
   updatedAt: string | null;
 };
 
 export type ProviderPolicySnapshot = {
   controls: ProviderControl[];
   capabilities: CapabilityRoutingPolicy[];
+  models?: Record<AgentProviderId, string[]>;
 };
 
-export type ProviderControlUpdate = Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled">;
-export type CapabilityRoutingUpdate = Pick<CapabilityRoutingPolicy, "capability" | "order" | "requiredProviderId">;
+export type ProviderControlUpdate = Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled"> & {
+  model?: string | null;
+};
+export type CapabilityRoutingUpdate = Pick<CapabilityRoutingPolicy, "capability" | "order" | "requiredProviderId"> & {
+  preferredModel?: string | null;
+};
 
 export interface ProviderPolicyStore {
   getProviderPolicySnapshot(): ProviderPolicySnapshot;
   updateProviderControl(input: ProviderControlUpdate): ProviderControl;
   updateProviderControls(inputs: ProviderControlUpdate[]): ProviderControl[];
   updateCapabilityRouting(input: CapabilityRoutingUpdate): CapabilityRoutingPolicy;
+  removeProvider(providerId: AgentProviderId): ProviderPolicySnapshot;
 }
 
 export const DEFAULT_ROUTING_ORDER: Record<AgentCapability, AgentProviderId[]> = {
@@ -71,6 +79,7 @@ export function defaultProviderPolicySnapshot(): ProviderPolicySnapshot {
       capability: capability as AgentCapability,
       order,
       requiredProviderId: null,
+      preferredModel: null,
       updatedAt: null
     }))
   };

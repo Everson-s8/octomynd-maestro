@@ -98,20 +98,54 @@ const DISALLOWED_MUTATIONS = [
   "Bash(wget*)"
 ];
 
+export type ClaudeProviderOptions = Partial<ProviderExecutionLimits> & {
+  model?: string | null;
+  executionLimits?: number | Partial<ProviderExecutionLimits>;
+};
+
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
   readonly capabilities = CLAUDE_CAPABILITIES;
+  readonly model: string | null;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
-  private readonly executionLimits: ProviderExecutionLimits;
+  readonly executionLimits: ProviderExecutionLimits;
 
-  constructor(executionLimits?: number | Partial<ProviderExecutionLimits>) {
-    this.executionLimits = normalizeProviderExecutionLimits(
-      executionLimits,
-      DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS
-    );
+  constructor(options?: number | Partial<ProviderExecutionLimits> | ClaudeProviderOptions) {
+    if (typeof options === "number") {
+      this.model = null;
+      this.executionLimits = normalizeProviderExecutionLimits(options, DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS);
+    } else if (typeof options === "object" && options !== null) {
+      const opts = options as ClaudeProviderOptions;
+      this.model = opts.model?.trim() || null;
+      const limits = opts.executionLimits !== undefined ? opts.executionLimits : options;
+      this.executionLimits = normalizeProviderExecutionLimits(limits, DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS);
+    } else {
+      this.model = null;
+      this.executionLimits = normalizeProviderExecutionLimits(undefined, DEFAULT_CLAUDE_INACTIVITY_TIMEOUT_MS);
+    }
+  }
+
+  async models(): Promise<string[]> {
+    // Claude CLI does not expose a simple `models` subcommand; keep a current
+    // list of supported model IDs (kept in sync with Anthropic's lineup).
+    return [
+      "claude-3-7-sonnet",
+      "claude-3-5-sonnet",
+      "claude-3-5-haiku",
+      "claude-sonnet-4",
+      "claude-sonnet-4-5",
+      "claude-sonnet-4-6",
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-opus-5",
+      "claude-haiku-4-5",
+      "claude"
+    ];
   }
 
   async health(): Promise<AgentHealth> {
@@ -132,7 +166,8 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
-    const result = await executeClaudeGoal(request, this.executionLimits);
+    const selectedModel = request.model ?? this.model;
+    const result = await executeClaudeGoal(request, this.executionLimits, selectedModel);
     if (result.aborted || request.signal?.aborted) {
       return {
         outcome: "cancelled",
@@ -143,7 +178,8 @@ export class ClaudeProvider implements AgentProvider {
         error: null,
         durationMs: result.durationMs,
         retryable: false,
-        processRuntime: processRuntime(result)
+        processRuntime: processRuntime(result),
+        model: selectedModel ?? "claude"
       };
     }
     if (result.exitCode !== 0 || !result.stdout.trim()) {
@@ -195,7 +231,7 @@ export class ClaudeProvider implements AgentProvider {
         durationMs: result.durationMs,
         processRuntime: processRuntime(result),
         tokenUsage: result.tokenUsage,
-        model: "claude"
+        model: selectedModel ?? "claude"
       };
     }
 
@@ -222,7 +258,7 @@ export class ClaudeProvider implements AgentProvider {
       retryable: false,
       processRuntime: processRuntime(result),
       tokenUsage: result.tokenUsage,
-      model: "claude"
+      model: selectedModel ?? "claude"
     };
   }
 
@@ -237,7 +273,7 @@ export class ClaudeProvider implements AgentProvider {
     }
     const result = await runAgentProcess({
       command: cli.command,
-      args: buildClaudeImprovementReviewArgs(cli, request),
+      args: buildClaudeImprovementReviewArgs(cli, request, this.model),
       cwd: request.workspacePath,
       timeoutMs: request.timeoutMs,
       signal: request.signal,
@@ -364,7 +400,8 @@ export function buildClaudeGoalPrompt(request: AgentExecutionRequest): string {
 export function buildClaudeGoalArgs(
   cli: ClaudeCliCommand,
   request: AgentExecutionRequest,
-  cwd: string
+  cwd: string,
+  model?: string | null
 ): string[] {
   const writable = isWritableExecution(request);
   const testing = request.capability === "testing";
@@ -390,13 +427,15 @@ export function buildClaudeGoalArgs(
     "--add-dir",
     cwd,
     "--no-session-persistence",
+    ...(model ? ["--model", model] : []),
     buildClaudeGoalPrompt(request)
   ];
 }
 
 export function buildClaudeImprovementReviewArgs(
   cli: ClaudeCliCommand,
-  request: ImprovementReviewExecutionRequest
+  request: ImprovementReviewExecutionRequest,
+  model?: string | null
 ): string[] {
   return [
     ...cli.argsPrefix,
@@ -410,6 +449,7 @@ export function buildClaudeImprovementReviewArgs(
     "--add-dir",
     request.workspacePath,
     "--no-session-persistence",
+    ...(model ? ["--model", model] : []),
     request.prompt
   ];
 }
@@ -432,7 +472,11 @@ export function isClaudeQuotaError(errorText: string): boolean {
   return /session limit|usage limit|rate limit|quota|resets? at/i.test(errorText);
 }
 
-async function executeClaudeGoal(request: AgentExecutionRequest, limits: ProviderExecutionLimits) {
+async function executeClaudeGoal(
+  request: AgentExecutionRequest,
+  limits: ProviderExecutionLimits,
+  model?: string | null
+) {
   const cwd = request.task.worktreePath || request.project.path;
   const cli = resolveClaudeCliCommand();
   if (!cli || !fs.existsSync(cwd)) {
@@ -450,7 +494,7 @@ async function executeClaudeGoal(request: AgentExecutionRequest, limits: Provide
   }
   return runAgentProcess({
     command: cli.command,
-    args: buildClaudeGoalArgs(cli, request, cwd),
+    args: buildClaudeGoalArgs(cli, request, cwd, model),
     cwd,
     provider: "claude",
     timeoutMs: limits.maxRuntimeMs,

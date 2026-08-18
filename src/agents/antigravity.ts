@@ -56,12 +56,15 @@ export class AntigravityProvider implements AgentProvider {
   readonly label = "Gemini Antigravity";
   readonly capabilities = ANTIGRAVITY_CAPABILITIES;
   private readonly executionLimits: ProviderExecutionLimits;
-  private readonly model: string | null;
+  readonly model: string | null;
   private readonly effort: "low" | "medium" | "high";
   private readonly executablePath?: string;
   private readonly healthProbe: boolean;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private cachedModels: string[] | null = null;
+  private modelsExpiresAt = 0;
+  private static readonly MODELS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 
   constructor(options: AntigravityProviderOptions = {}) {
     this.executionLimits = normalizeProviderExecutionLimits(
@@ -72,6 +75,59 @@ export class AntigravityProvider implements AgentProvider {
     this.effort = options.effort ?? "medium";
     this.executablePath = options.executablePath;
     this.healthProbe = options.healthProbe ?? true;
+  }
+
+  async models(): Promise<string[]> {
+    // Cache the live probe result so we don't spawn `agy models` (~2s) on every
+    // policy/dashboard request — the account model list rarely changes.
+    if (this.cachedModels && Date.now() < this.modelsExpiresAt) return this.cachedModels;
+    const executable = resolveAntigravityExecutable(this.executablePath);
+    // Fallback only if the live `antigravity models` probe fails. Kept in sync
+    // with current account-available Gemini models (the dynamic probe is the
+    // authoritative list); these are just a reasonable default for the dropdown.
+    const fallbacks = [
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-low",
+      "gemini-3.6-flash-high",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-low",
+      "gemini-3.5-flash-high",
+      "gemini-3.5-flash-medium",
+      "gemini-3.5-flash-low",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-low"
+    ];
+    if (!executable) return fallbacks;
+    try {
+      const probe = await runAgentProcess({
+        command: executable,
+        args: ["models"],
+        cwd: process.cwd(),
+        timeoutMs: 10_000,
+        inactivityTimeoutMs: 10_000,
+        maxOutputChars: 10_000,
+        env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
+      });
+      if (probe.exitCode === 0 && probe.stdout.trim()) {
+        // `antigravity models` may output "<slug>\t<Description>" rows; extract the slug.
+        const lines = probe.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("Available"))
+          .map((line) => line.split(/\t| {2,}/)[0].trim())
+          .filter(Boolean);
+        if (lines.length > 0) {
+          const result = [...new Set(lines)];
+          this.cachedModels = result;
+          this.modelsExpiresAt = Date.now() + AntigravityProvider.MODELS_CACHE_TTL_MS;
+          return result;
+        }
+      }
+    } catch {}
+    this.cachedModels = fallbacks;
+    this.modelsExpiresAt = Date.now() + AntigravityProvider.MODELS_CACHE_TTL_MS;
+    return fallbacks;
   }
 
   async health(): Promise<AgentHealth> {
@@ -118,6 +174,7 @@ export class AntigravityProvider implements AgentProvider {
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const executable = resolveAntigravityExecutable(this.executablePath);
     const cwd = request.task.worktreePath || request.project.path;
+    const selectedModel = request.model ?? this.model;
     if (!executable || !fs.existsSync(cwd)) {
       const detail = !executable
         ? "Antigravity CLI nao encontrado."
@@ -129,7 +186,7 @@ export class AntigravityProvider implements AgentProvider {
       command: executable,
       args: buildAntigravityArgs(
         request,
-        this.model,
+        selectedModel,
         this.effort,
         this.executionLimits.maxRuntimeMs ?? 8 * 60 * 60_000
       ),
@@ -153,7 +210,7 @@ export class AntigravityProvider implements AgentProvider {
         retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.model ?? "antigravity"
+        model: selectedModel ?? "antigravity"
       };
     }
 
@@ -195,7 +252,7 @@ export class AntigravityProvider implements AgentProvider {
         durationMs: processResult.durationMs,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
-        model: this.model ?? "antigravity"
+        model: selectedModel ?? "antigravity"
       };
     }
 
@@ -224,7 +281,7 @@ export class AntigravityProvider implements AgentProvider {
       retryable: false,
       processRuntime: processRuntime(processResult),
       tokenUsage: processResult.tokenUsage,
-      model: this.model ?? "antigravity"
+      model: selectedModel ?? "antigravity"
     };
   }
 
@@ -232,6 +289,7 @@ export class AntigravityProvider implements AgentProvider {
     request: ImprovementReviewExecutionRequest
   ): Promise<ImprovementReviewExecutionResult> {
     const executable = resolveAntigravityExecutable(this.executablePath);
+    const selectedModel = this.model;
     if (!executable || !fs.existsSync(request.workspacePath)) {
       const error = !executable
         ? "Antigravity CLI nao encontrado."
@@ -255,7 +313,7 @@ export class AntigravityProvider implements AgentProvider {
         request.workspacePath,
         "--print-timeout",
         `${Math.ceil(request.timeoutMs / 1_000)}s`,
-        ...(this.model ? ["--model", this.model] : [])
+        ...(selectedModel ? ["--model", selectedModel] : [])
       ],
       cwd: request.workspacePath,
       timeoutMs: request.timeoutMs,
@@ -308,23 +366,30 @@ export function buildAntigravityArgs(
   printTimeoutMs = 8 * 60 * 60_000
 ): string[] {
   const writable = isWritableExecution(request);
-  return [
+  // Account models encode the reasoning effort in the suffix (e.g.
+  // gemini-3.7-flash-high). Passing --effort alongside such a model conflicts
+  // ('--model X conflicts with --effort=Y'), so omit --effort when the model id
+  // already pins it; otherwise pass the configured effort for vanilla models.
+  const carriesEffort = /(?:^|-)high$|(?:^|-)medium$|(?:^|-)low$/i.test(model ?? "");
+  const args = [
     "--print",
     buildAgentGoalPrompt(request),
     "--output-format",
     "text",
     "--mode",
     writable ? "accept-edits" : "plan",
-    "--effort",
-    effort,
     "--sandbox",
     "--disable-slash-commands",
     "--add-dir",
     request.task.worktreePath || request.project.path,
     "--print-timeout",
-    `${Math.ceil(printTimeoutMs / 1_000)}s`,
-    ...(model ? ["--model", model] : [])
+    `${Math.ceil(printTimeoutMs / 1_000)}s`
   ];
+  if (!carriesEffort) {
+    args.push("--effort", effort);
+  }
+  if (model) args.push("--model", model);
+  return args;
 }
 
 export function resolveAntigravityExecutable(explicitPath?: string): string | null {

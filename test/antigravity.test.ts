@@ -47,6 +47,19 @@ describe("Antigravity provider", () => {
     expect(codingArgs).not.toContain("--dangerously-skip-permissions");
   });
 
+  it("omits --effort when the model id already encodes the effort in its suffix", () => {
+    const coding = request("implementing", "coding");
+    // gemini-3.7-flash-high already pins the effort; --effort would conflict.
+    const withSuffix = buildAntigravityArgs(coding, "gemini-3.7-flash-high", "high");
+    expect(withSuffix).toContain("--model");
+    expect(withSuffix).toContain("gemini-3.7-flash-high");
+    expect(withSuffix).not.toContain("--effort");
+    // vanilla model keeps the explicit --effort.
+    const vanilla = buildAntigravityArgs(coding, "gemini-1.5-pro", "medium");
+    expect(vanilla).toContain("--effort");
+    expect(vanilla).toContain("medium");
+  });
+
   it("resolves an explicitly configured executable without relying on PATH", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-"));
     tempPaths.push(tempDir);

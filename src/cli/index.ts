@@ -8,6 +8,8 @@ import { runTelegramConnectWizard } from "../telegram/connect.js";
 import { createDatabase } from "../db.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { CommandOrigin } from "../commands/types.js";
+import { PROVIDER_PRESETS } from "../agents/provider-config.js";
+import { ProviderAuthBroker } from "../agents/provider-auth.js";
 import {
   resolveDesktopPaths,
   parseDesktopCliOptions,
@@ -55,6 +57,9 @@ Commands:
   desktop [--skip-build]
                         Launch Maestro as a native desktop app (Electron).
   status                Show what is installed, connected, and ready.
+  providers login <id>  Log in to an account provider (codex, claude, gemini, ...)
+                        via its official CLI; prints the verification code and
+                        opens the provider's page, then waits for you to finish.
 `);
 }
 
@@ -343,6 +348,76 @@ function statusCommand(): void {
   console.log(`    Banco local: ${dbExists ? dbPath : "nao inicializado"}`);
 }
 
+/** Sleep helper for polling. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * `maestro providers login <id>`
+ *
+ * Headless account login for a provider whose official CLI supports an
+ * auth flow (device-code or terminal). Reuses the same ProviderAuthBroker the
+ * dashboard uses, so a CLI-only user gets identical behaviour: start the flow,
+ * print the verification code (if any), open the provider's page, poll until
+ * the account is connected.
+ */
+async function providersLoginCommand(argv: string[]): Promise<void> {
+  const providerId = argv[0];
+  if (!providerId) {
+    console.error("Usage: maestro providers login <id>");
+    console.error("Providers com login por conta: codex, claude, gemini, copilot");
+    process.exit(1);
+  }
+  const preset = PROVIDER_PRESETS.find((item) => item.id === providerId);
+  if (!preset) {
+    console.error(`maestro: provider '${providerId}' nao encontrado.`);
+    console.error(`Disponiveis: ${PROVIDER_PRESETS.filter((p) => p.authFlow && p.authFlow !== "none").map((p) => p.id).join(", ")}`);
+    process.exit(1);
+  }
+  if (!preset.authFlow || preset.authFlow === "none") {
+    console.error(`maestro: o provider '${providerId}' nao usa login por conta (use o modo API key ou endpoint).`);
+    process.exit(1);
+  }
+
+  const broker = new ProviderAuthBroker();
+  console.log(`\n[maestro] Iniciando login de ${preset.label} (${preset.authFlow})...`);
+  let session;
+  try {
+    session = broker.start(preset);
+  } catch (error) {
+    console.error(`[!] Nao foi possivel iniciar o login: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+
+  // Poll until connected/failed/cancelled (up to ~10 min).
+  const deadline = Date.now() + 10 * 60_000;
+  let lastDetail = "";
+  while (Date.now() < deadline) {
+    await sleep(1_500);
+    const current = broker.get(session.id);
+    if (!current) break;
+    if (current.verificationUrl) console.log(`    Página de verificação: ${current.verificationUrl}`);
+    if (current.userCode) console.log(`    Código de verificação : ${current.userCode}`);
+    if (current.detail && current.detail !== lastDetail) {
+      console.log(`    ${current.detail}`);
+      lastDetail = current.detail;
+    }
+    if (current.state === "connected") {
+      console.log(`\n[ok] ${preset.label} conectado.`);
+      console.log("Dica: rode 'maestro start' e abra o dashboard em Providers para definir prioridades.");
+      process.exit(0);
+    }
+    if (current.state === "failed" || current.state === "cancelled") {
+      console.error(`\n[!] Login ${current.state}: ${current.detail}`);
+      process.exit(1);
+    }
+  }
+  console.error("\n[!] Login nao concluido dentro de 10 minutos. Tente novamente.");
+  try { broker.cancel(session.id); } catch { /* ignore */ }
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
   const [, , command, ...argv] = process.argv;
 
@@ -390,6 +465,10 @@ async function main(): Promise<void> {
       break;
     case "status":
       statusCommand();
+      break;
+    case "providers":
+      if (argv[0] === "login") await providersLoginCommand(argv.slice(1));
+      else { console.error("Usage: maestro providers login <id>"); process.exit(1); }
       break;
     default:
       console.error(`maestro: comando desconhecido '${command}'`);

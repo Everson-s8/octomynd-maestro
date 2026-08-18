@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { defaultProviderPolicySnapshot, ProviderPolicyStore } from "../src/agents/policy.js";
 import { AgentCapability, AgentExecutionResult, AgentProvider, AgentProviderId } from "../src/agents/types.js";
+
+// Keep the models.dev catalog empty in unit tests so provider.models() is the
+// fallback (the catalog is otherwise the primary source).
+vi.mock("../src/agents/models-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/agents/models-catalog.js")>("../src/agents/models-catalog.js");
+  return {
+    ...actual,
+    availableModelsFor: async () => []
+  };
+});
 
 describe("agent registry leases", () => {
   it("prefers the subscription provider for general work and Claude for final review", async () => {
@@ -131,6 +141,81 @@ describe("agent registry leases", () => {
     });
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
+
+  it("resolves model preference hierarchically: capability > provider control > provider default", async () => {
+    const policy = policyStore();
+    const codex = provider("codex", ["coding"], "codex-default", ["gpt-4o", "o3-mini"]);
+    const registry = new AgentRegistry([codex], undefined, Date.now, policy);
+
+    // 1. Provider default model
+    let lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("codex-default");
+    lease?.release();
+
+    // 2. Provider control override
+    policy.updateProviderControl({ providerId: "codex", mode: "enabled", fallbackEnabled: true, model: "gpt-4o" });
+    lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("gpt-4o");
+    lease?.release();
+
+    // 3. Capability preferred model override
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["codex"],
+      requiredProviderId: null,
+      preferredModel: "o3-mini"
+    });
+    lease = await registry.acquire("coding");
+    expect(lease?.model).toBe("o3-mini");
+    lease?.release();
+
+    // Check snapshot contains models and currentModel
+    const snapshot = await registry.snapshot();
+    expect(snapshot[0].models).toEqual(["gpt-4o", "o3-mini"]);
+    expect(snapshot[0].currentModel).toBe("gpt-4o");
+
+    const available = await registry.getAvailableModels();
+    expect(available.codex).toEqual(["gpt-4o", "o3-mini"]);
+  });
+
+  it("replaces an idle provider without discarding its routing policy", async () => {
+    const policy = policyStore();
+    policy.updateCapabilityRouting({
+      capability: "coding",
+      order: ["custom", "codex"],
+      requiredProviderId: "custom"
+    });
+    const original = provider("custom", ["coding"], "model-a", ["model-a"]);
+    const replacement = {
+      ...provider("custom", ["coding"], "model-b", ["model-b"]),
+      label: "Custom updated"
+    };
+    const registry = new AgentRegistry([original], undefined, Date.now, policy);
+
+    registry.replaceProvider(replacement);
+
+    expect(registry.list()).toContainEqual(expect.objectContaining({
+      id: "custom",
+      label: "Custom updated",
+      model: "model-b"
+    }));
+    expect(registry.policySnapshot().capabilities.find((item) => item.capability === "coding")).toMatchObject({
+      order: ["custom", "codex"],
+      requiredProviderId: "custom"
+    });
+  });
+
+  it("blocks provider replacement while the provider has active work", async () => {
+    const registry = new AgentRegistry([provider("custom", ["coding"])]);
+    const lease = await registry.acquire("coding");
+
+    expect(() => registry.replaceProvider(provider("custom", ["coding"], "model-b"))).toThrow(
+      "Provider custom has active work and cannot be updated."
+    );
+
+    lease?.release();
+    expect(() => registry.replaceProvider(provider("custom", ["coding"], "model-b"))).not.toThrow();
+  });
 });
 
 function policyStore(): ProviderPolicyStore {
@@ -153,6 +238,18 @@ function policyStore(): ProviderPolicyStore {
       };
       return control;
     }),
+    removeProvider: (providerId) => {
+      snapshot = {
+        controls: snapshot.controls.filter((item) => item.providerId !== providerId),
+        capabilities: snapshot.capabilities.map((routing) => ({
+          ...routing,
+          order: routing.order.filter((item) => item !== providerId),
+          requiredProviderId: routing.requiredProviderId === providerId ? null : routing.requiredProviderId,
+          preferredModel: routing.requiredProviderId === providerId ? null : routing.preferredModel
+        }))
+      };
+      return snapshot;
+    },
     updateCapabilityRouting: (input) => {
       const routing = { ...input, updatedAt: new Date().toISOString() };
       snapshot = {
@@ -164,7 +261,12 @@ function policyStore(): ProviderPolicyStore {
   };
 }
 
-function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentProvider {
+function provider(
+  id: AgentProviderId,
+  capabilities: AgentCapability[],
+  model?: string,
+  modelsList?: string[]
+): AgentProvider {
   const completed: AgentExecutionResult = {
     outcome: "completed",
     summary: "done",
@@ -177,6 +279,8 @@ function provider(id: AgentProviderId, capabilities: AgentCapability[]): AgentPr
     id,
     label: id,
     capabilities: new Set(capabilities),
+    ...(model !== undefined ? { model } : {}),
+    ...(modelsList ? { models: async () => modelsList } : {}),
     health: async () => ({ state: "ready", detail: "test", checkedAt: new Date().toISOString() }),
     execute: async () => completed
   };

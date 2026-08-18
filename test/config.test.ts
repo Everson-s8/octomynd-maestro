@@ -24,12 +24,15 @@ describe("config", () => {
       selfUpdatePollIntervalMs: 300_000,
       antigravityEnabled: true,
       antigravityModel: null,
+      codexModel: null,
+      claudeModel: null,
       antigravityEffort: "medium",
       antigravityInactivityTimeoutMs: 300_000,
       codexInactivityTimeoutMs: 600_000,
       claudeInactivityTimeoutMs: 1_800_000,
       providerMaxRuntimeMs: undefined,
-      goalDeadlineMs: undefined
+      goalDeadlineMs: undefined,
+      customProviders: undefined
     });
     expect(config.workGraph).toEqual({
       adoptionMode: "off"
@@ -168,5 +171,50 @@ describe("config", () => {
     expect(config.execution.rootPath).toBe(root);
     expect(config.worktreesPath).toBe(path.join(root, "worktrees"));
     expect(config.execution.expectedNodeVersion).toBe("20.17.2");
+  });
+
+  it("loads provider models and custom providers with models", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_CODEX_MODEL: "gpt-4o",
+      MAESTRO_CLAUDE_MODEL: "claude-3-7-sonnet",
+      MAESTRO_ANTIGRAVITY_MODEL: "gemini-2.5-pro",
+      MAESTRO_CUSTOM_PROVIDERS: JSON.stringify([
+        {
+          id: "custom-provider",
+          command: "custom-cli",
+          model: "custom-default",
+          models: ["custom-default", "custom-fast"],
+          presetId: "openrouter",
+          connectionMode: "api_key",
+          endpointUrl: "https://openrouter.ai/api/v1",
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          docsUrl: "https://openrouter.ai/settings/keys",
+          setupCommand: "opencode auth login"
+        }
+      ])
+    });
+
+    expect(config.runtime.codexModel).toBe("gpt-4o");
+    expect(config.runtime.claudeModel).toBe("claude-3-7-sonnet");
+    expect(config.runtime.antigravityModel).toBe("gemini-2.5-pro");
+    expect(config.runtime.customProviders).toEqual([
+      {
+        id: "custom-provider",
+        label: "custom-provider",
+        command: "custom-cli",
+        args: undefined,
+        envKeys: undefined,
+        capabilities: ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"],
+        healthProbe: undefined,
+        model: "custom-default",
+        models: ["custom-default", "custom-fast"],
+        presetId: "openrouter",
+        connectionMode: "api_key",
+        endpointUrl: "https://openrouter.ai/api/v1",
+        apiKeyEnv: "OPENROUTER_API_KEY",
+        docsUrl: "https://openrouter.ai/settings/keys",
+        setupCommand: "opencode auth login"
+      }
+    ]);
   });
 });

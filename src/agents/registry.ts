@@ -17,6 +17,7 @@ import {
 export type RoutedAgent = {
   provider: AgentProvider;
   health: AgentHealth;
+  model?: string | null;
 };
 
 export type AgentLease = RoutedAgent & {
@@ -42,9 +43,12 @@ export type AgentProviderSnapshot = {
   activeCount: number;
   cooldownUntil: string | null;
   detail: string;
+  models?: string[];
+  currentModel?: string | null;
   control: {
     mode: "enabled" | "paused" | "disabled";
     fallbackEnabled: boolean;
+    model?: string | null;
   };
 };
 
@@ -70,11 +74,40 @@ export class AgentRegistry {
     private readonly policyStore?: ProviderPolicyStore
   ) {
     for (const provider of providers) {
-      if (this.providers.has(provider.id)) {
-        throw new Error(`Duplicate agent provider: ${provider.id}`);
-      }
-      this.providers.set(provider.id, provider);
+      this.registerProvider(provider);
     }
+  }
+
+  registerProvider(provider: AgentProvider, limit = 1): void {
+    if (this.providers.has(provider.id)) {
+      throw new Error(`Duplicate agent provider: ${provider.id}`);
+    }
+    this.providers.set(provider.id, provider);
+    this.providerLimits[provider.id] = Math.max(1, limit);
+  }
+
+  replaceProvider(provider: AgentProvider, limit = 1): void {
+    if (!this.providers.has(provider.id)) {
+      throw new Error(`Provider ${provider.id} is not registered.`);
+    }
+    if ((this.activeLeases.get(provider.id) ?? 0) > 0) {
+      throw new Error(`Provider ${provider.id} has active work and cannot be updated.`);
+    }
+    this.providers.set(provider.id, provider);
+    this.providerLimits[provider.id] = Math.max(1, limit);
+    this.cooldowns.delete(provider.id);
+  }
+
+  unregisterProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
+    if ((this.activeLeases.get(providerId) ?? 0) > 0) {
+      throw new Error(`Provider ${providerId} has active work and cannot be removed.`);
+    }
+    if (!this.providers.delete(providerId)) {
+      throw new Error(`Provider ${providerId} is not registered.`);
+    }
+    this.cooldowns.delete(providerId);
+    delete this.providerLimits[providerId];
+    return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
   }
 
   list(): AgentProvider[] {
@@ -92,7 +125,8 @@ export class AgentRegistry {
       if (!provider || !provider.capabilities.has(capability)) continue;
       const health = await provider.health();
       if (health.state === "ready") {
-        return { provider, health };
+        const model = this.resolveModelForExecution(providerId, capability);
+        return { provider, health, model };
       }
     }
     return null;
@@ -114,9 +148,11 @@ export class AgentRegistry {
       if ((this.activeLeases.get(providerId) ?? 0) >= limit) continue;
       this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
       let released = false;
+      const model = this.resolveModelForExecution(providerId, capability);
       return {
         provider,
         health,
+        model,
         release: (feedback) => {
           if (released) return;
           released = true;
@@ -193,6 +229,8 @@ export class AgentRegistry {
           : cooldown
             ? "cooldown"
             : "ready";
+      const availableModels = provider.models ? await provider.models() : [];
+      const configuredModel = controls.get(provider.id)?.model ?? provider.model ?? null;
       return {
         id: provider.id,
         label: provider.label,
@@ -202,12 +240,48 @@ export class AgentRegistry {
         activeCount,
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
         detail: cooldown?.detail ?? health.detail,
+        models: availableModels,
+        currentModel: configuredModel,
         control: {
           mode: controls.get(provider.id)?.mode ?? "enabled",
-          fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true
+          fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true,
+          model: configuredModel
         }
       };
     }));
+  }
+
+  async getAvailableModels(): Promise<Record<AgentProviderId, string[]>> {
+    const result: Record<string, string[]> = {};
+    let catalogModels: Record<string, string[]> | null = null;
+    for (const provider of this.list()) {
+      // models.dev is the primary source of model ids per provider (mirrors
+      // Hermes); fall back to the provider's own discovery/curated list.
+      let models: string[] = [];
+      if (catalogModels === null) {
+        try {
+          const { availableModelsFor } = await import("./models-catalog.js");
+          catalogModels = {};
+          const seen = new Set<string>();
+          const list = this.list();
+          for (const p of list) {
+            const m = await availableModelsFor(p.id, (p as { defaultEndpoint?: string | null }).defaultEndpoint ?? (p as unknown as { config?: { endpointUrl?: string | null } }).config?.endpointUrl ?? null);
+            if (m.length > 0) {
+              catalogModels[p.id] = m;
+              seen.add(p.id);
+            }
+          }
+        } catch {
+          catalogModels = {};
+        }
+      }
+      models = catalogModels[provider.id] ?? [];
+      if (models.length === 0) {
+        models = provider.models ? await provider.models() : [];
+      }
+      result[provider.id] = models;
+    }
+    return result;
   }
 
   policySnapshot(): ProviderPolicySnapshot {
@@ -227,6 +301,26 @@ export class AgentRegistry {
   updateCapabilityRouting(...args: Parameters<ProviderPolicyStore["updateCapabilityRouting"]>) {
     if (!this.policyStore) throw new Error("Provider policy store is unavailable.");
     return this.policyStore.updateCapabilityRouting(...args);
+  }
+
+  private resolveModelForExecution(providerId: AgentProviderId, capability?: AgentCapability): string | null {
+    const policy = this.policySnapshot();
+    if (capability) {
+      const capabilityRouting = policy.capabilities.find((c) => c.capability === capability);
+      // preferredModel is per-capability, intended for the capability's primary
+      // provider. Only apply it when the resolved provider is that primary —
+      // otherwise a fallback provider would receive a model id that may not
+      // belong to it (e.g. a Codex model passed to Claude after a fallback).
+      if (capabilityRouting?.preferredModel && capabilityRouting.order[0] === providerId) {
+        return capabilityRouting.preferredModel;
+      }
+    }
+    const control = policy.controls.find((c) => c.providerId === providerId);
+    if (control?.model) {
+      return control.model;
+    }
+    const provider = this.providers.get(providerId);
+    return provider?.model ?? null;
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {

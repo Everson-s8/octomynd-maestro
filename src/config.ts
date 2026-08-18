@@ -37,6 +37,8 @@ export type MaestroConfig = {
     tokenEfficient: boolean;
     antigravityEnabled?: boolean;
     antigravityModel?: string | null;
+    codexModel?: string | null;
+    claudeModel?: string | null;
     antigravityEffort?: "low" | "medium" | "high";
     antigravityInactivityTimeoutMs?: number;
     codexInactivityTimeoutMs?: number;
@@ -97,6 +99,8 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
       ),
       antigravityEnabled: normalizeBoolean(env.MAESTRO_ANTIGRAVITY_ENABLED, true),
       antigravityModel: normalizeOptional(env.MAESTRO_ANTIGRAVITY_MODEL),
+      codexModel: normalizeOptional(env.MAESTRO_CODEX_MODEL),
+      claudeModel: normalizeOptional(env.MAESTRO_CLAUDE_MODEL),
       antigravityEffort: normalizeEffort(env.MAESTRO_ANTIGRAVITY_EFFORT),
       antigravityInactivityTimeoutMs: normalizePositiveInteger(
         env.MAESTRO_ANTIGRAVITY_INACTIVITY_TIMEOUT_MS,
@@ -213,7 +217,18 @@ export function parseCustomProviders(raw?: string): CustomCliProviderConfig[] | 
           capabilities: Array.isArray(item.capabilities)
             ? item.capabilities.filter((c: unknown): c is AgentCapability => typeof c === "string")
             : ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"],
-          healthProbe: typeof item.healthProbe === "boolean" ? item.healthProbe : undefined
+          healthProbe: typeof item.healthProbe === "boolean" ? item.healthProbe : undefined,
+          model: typeof item.model === "string" && item.model.trim() ? item.model.trim() : undefined,
+          models: Array.isArray(item.models) ? item.models.filter((m: unknown): m is string => typeof m === "string" && Boolean(m.trim())) : undefined,
+          ...(typeof item.presetId === "string" && item.presetId.trim() ? { presetId: item.presetId.trim() } : {}),
+          ...(["account", "api_key", "local", "custom"].includes(item.connectionMode)
+            ? { connectionMode: item.connectionMode as CustomCliProviderConfig["connectionMode"] }
+            : {}),
+          ...(typeof item.endpointUrl === "string" ? { endpointUrl: normalizeOptional(item.endpointUrl) } : {}),
+          ...(typeof item.apiKeyEnv === "string" ? { apiKeyEnv: normalizeOptional(item.apiKeyEnv) } : {}),
+          ...(typeof item.managedSecret === "boolean" ? { managedSecret: item.managedSecret } : {}),
+          ...(typeof item.docsUrl === "string" ? { docsUrl: normalizeOptional(item.docsUrl) } : {}),
+          ...(typeof item.setupCommand === "string" ? { setupCommand: normalizeOptional(item.setupCommand) } : {})
         });
       }
     }
