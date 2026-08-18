@@ -50,9 +50,19 @@ describe("config", () => {
     });
     expect(config.execution.expectedNodeVersion).toBe("20.17.0");
     expect(config.worktreesPath).toBe(config.execution.worktreesPath);
+    expect(config.projectsPath).toBe(path.join(config.execution.worktreesPath, "projects"));
     if (process.platform === "win32") {
       expect(config.execution.rootPath).toBe(path.resolve("C:\\MaestroRuntime\\octomynd-maestro"));
     }
+  });
+
+  it("allows configuring managed projects root via MAESTRO_PROJECTS_PATH", () => {
+    const customProjects = path.resolve("custom/managed/projects");
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_PROJECTS_PATH: "custom/managed/projects"
+    });
+
+    expect(config.projectsPath).toBe(customProjects);
   });
 
   it("validates missing token", () => {

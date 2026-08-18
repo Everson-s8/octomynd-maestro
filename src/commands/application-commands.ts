@@ -19,7 +19,14 @@ import {
 } from "../db.js";
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
-import { createGitWorktree, createWorktreePlan, validateGitProject } from "../git.js";
+import {
+  cloneGitRepository,
+  createGitWorktree,
+  createWorktreePlan,
+  detectGitDefaultBranch,
+  ensureGitRemoteOrigin,
+  validateGitProject
+} from "../git.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
 import { ApplicationCommandError, conflictError, notFoundError, validationError } from "./errors.js";
 import { CommandOrigin } from "./types.js";
@@ -46,9 +53,12 @@ import {
 
 export type RegisterProjectInput = {
   key: string;
-  path: string;
+  path?: string;
+  remoteUrl?: string;
   name?: string;
   defaultBranch?: string;
+  description?: string;
+  mode?: "github" | "localremote" | "local";
 };
 
 export type RegisterProjectOutcome = {
@@ -226,7 +236,8 @@ export class ApplicationCommands {
     private readonly featureGithub: FeatureGitHubGateway = new GhFeatureGateway(),
     private readonly workGraphRuntime?: WorkGraphRuntimeCommands,
     skillLifecycle?: SkillLifecycleRuntime,
-    private readonly featureCoordinator?: FeatureCoordinator
+    private readonly featureCoordinator?: FeatureCoordinator,
+    private readonly projectsRoot?: string
   ) {
     this.skillLifecycleService = skillLifecycle
       ? new SkillLifecycleService(database, skillLifecycle)
@@ -262,27 +273,87 @@ export class ApplicationCommands {
     return this.featureCoordinator.getReviewStatus(feature.id);
   }
 
-  registerProject(origin: CommandOrigin, input: RegisterProjectInput): RegisterProjectOutcome {
+  registerProject(
+    origin: CommandOrigin,
+    input: RegisterProjectInput,
+    overrideProjectsRoot?: string
+  ): RegisterProjectOutcome {
     const warnings: string[] = [];
-    const projectPath = path.resolve(input.path.trim());
 
-    if (!fs.existsSync(projectPath)) {
-      throw validationError(`Path does not exist: ${projectPath}`);
+    if (!input.key || typeof input.key !== "string") {
+      throw validationError("Project key is required.");
     }
-    if (!fs.statSync(projectPath).isDirectory()) {
-      throw validationError(`Path is not a directory: ${projectPath}`);
+
+    const rawKey = input.key.trim().replace(/^@+/, "");
+    const key = rawKey.toLowerCase();
+
+    if (!/^[a-z0-9][a-z0-9_-]{1,48}$/.test(key)) {
+      throw validationError("Project key must use 2-49 chars: lowercase letters, numbers, underscore or dash.");
     }
-    if (!fs.existsSync(path.join(projectPath, ".git"))) {
-      warnings.push("Path exists, but .git was not found. Future Git automation will be blocked.");
+
+    const remoteUrl = input.remoteUrl?.trim() || undefined;
+    const isRemoteClone = Boolean(remoteUrl && !input.path) || input.mode === "github";
+    let projectPath: string;
+
+    if (isRemoteClone) {
+      if (!remoteUrl) {
+        throw validationError("Remote repository URL is required for remote cloning.");
+      }
+      const root = overrideProjectsRoot ?? this.projectsRoot ?? path.resolve(process.cwd(), "worktrees", "projects");
+      projectPath = path.resolve(path.join(root, key));
+
+      if (!fs.existsSync(projectPath)) {
+        const cloneResult = cloneGitRepository(remoteUrl, projectPath, input.defaultBranch?.trim());
+        if (!cloneResult.ok) {
+          throw validationError(
+            `Failed to clone remote repository: ${cloneResult.stderr || cloneResult.stdout || "Unknown error"}`
+          );
+        }
+      } else if (!fs.existsSync(path.join(projectPath, ".git"))) {
+        throw validationError(`Path already exists and is not a Git repository: ${projectPath}`);
+      }
+    } else {
+      if (!input.path || !input.path.trim()) {
+        throw validationError("Path is required when not cloning from a remote repository.");
+      }
+      projectPath = path.resolve(input.path.trim());
+
+      if (!fs.existsSync(projectPath)) {
+        throw validationError(`Path does not exist: ${projectPath}`);
+      }
+      if (!fs.statSync(projectPath).isDirectory()) {
+        throw validationError(`Path is not a directory: ${projectPath}`);
+      }
+      if (!fs.existsSync(path.join(projectPath, ".git"))) {
+        warnings.push("Path exists, but .git was not found. Future Git automation will be blocked.");
+      } else if (remoteUrl) {
+        const remoteResult = ensureGitRemoteOrigin(projectPath, remoteUrl);
+        if (remoteResult.error) {
+          warnings.push(`Could not configure remote origin: ${remoteResult.error}`);
+        } else if (remoteResult.added) {
+          warnings.push(`Configured remote origin pointing to ${remoteUrl}.`);
+        }
+      }
     }
+
+    let defaultBranch = input.defaultBranch?.trim();
+    if (!defaultBranch) {
+      if (fs.existsSync(path.join(projectPath, ".git"))) {
+        defaultBranch = detectGitDefaultBranch(projectPath) ?? "main";
+      } else {
+        defaultBranch = "main";
+      }
+    }
+
+    const name = input.name?.trim() || key;
 
     let project: ProjectRecord;
     try {
       project = this.database.registerProject({
-        key: input.key,
-        name: input.name,
+        key,
+        name,
         path: projectPath,
-        defaultBranch: input.defaultBranch
+        defaultBranch
       });
     } catch (error) {
       throw validationError(error instanceof Error ? error.message : "Unknown project error.");
@@ -294,7 +365,13 @@ export class ApplicationCommands {
       text: project.key,
       userId: origin.userId ?? null,
       username: origin.username ?? null,
-      metadata: { projectKey: project.key, defaultBranch: project.defaultBranch, warnings }
+      metadata: {
+        projectKey: project.key,
+        defaultBranch: project.defaultBranch,
+        warnings,
+        remoteUrl: remoteUrl ?? null,
+        mode: input.mode ?? (isRemoteClone ? "github" : remoteUrl ? "localremote" : "local")
+      }
     });
 
     return { project, warnings };

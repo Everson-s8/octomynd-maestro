@@ -22,6 +22,7 @@ export type MaestroConfig = {
   projectName: string;
   databasePath: string;
   worktreesPath: string;
+  projectsPath?: string;
   execution: ExecutionContract;
   dashboard: {
     enabled: boolean;
@@ -79,6 +80,10 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     projectName,
     databasePath: path.resolve(cwd, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
     worktreesPath: execution.worktreesPath,
+    projectsPath: path.resolve(
+      cwd,
+      env.MAESTRO_PROJECTS_PATH?.trim() || path.join(execution.worktreesPath, "projects")
+    ),
     execution,
     dashboard: {
       enabled: normalizeBoolean(env.MAESTRO_DASHBOARD_ENABLED, true),

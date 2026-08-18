@@ -89,6 +89,58 @@ export function runGit(args: string[], cwd: string): GitCommandResult {
   };
 }
 
+export function cloneGitRepository(
+  remoteUrl: string,
+  targetPath: string,
+  defaultBranch?: string
+): GitCommandResult {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+  const args = ["clone"];
+  if (defaultBranch && defaultBranch.trim()) {
+    args.push("-b", defaultBranch.trim());
+  }
+  args.push(remoteUrl, targetPath);
+
+  return runGit(args, path.dirname(targetPath));
+}
+
+export function ensureGitRemoteOrigin(
+  repoPath: string,
+  remoteUrl: string
+): { added: boolean; existingUrl?: string; error?: string } {
+  const check = runGit(["remote", "get-url", "origin"], repoPath);
+  if (check.ok) {
+    return { added: false, existingUrl: check.stdout.trim() };
+  }
+
+  const add = runGit(["remote", "add", "origin", remoteUrl.trim()], repoPath);
+  if (!add.ok) {
+    return { added: false, error: add.stderr || add.stdout };
+  }
+
+  return { added: true };
+}
+
+export function detectGitDefaultBranch(repoPath: string): string | null {
+  const originHead = runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoPath);
+  if (originHead.ok && originHead.stdout.trim()) {
+    return originHead.stdout.trim().replace(/^origin\//, "");
+  }
+
+  const currentHead = runGit(["symbolic-ref", "--short", "HEAD"], repoPath);
+  if (currentHead.ok && currentHead.stdout.trim()) {
+    return currentHead.stdout.trim();
+  }
+
+  const showCurrent = runGit(["branch", "--show-current"], repoPath);
+  if (showCurrent.ok && showCurrent.stdout.trim()) {
+    return showCurrent.stdout.trim();
+  }
+
+  return null;
+}
+
 function slugify(text: string): string {
   const slug = text
     .normalize("NFD")

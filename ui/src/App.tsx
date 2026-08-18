@@ -4,6 +4,7 @@ import { DashboardData, fetchDashboard } from "./api";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { LoadingSpinner } from "./components/LoadingSpinner";
 import { TaskComposer } from "./components/TaskComposer";
+import { ProjectModal } from "./components/ProjectModal";
 import { MaestroV2 } from "./pages/MaestroV2";
 
 export default function App() {
@@ -11,6 +12,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
 
   const refresh = useCallback(async (activity = false) => {
     if (activity) setRefreshing(true);
@@ -33,7 +35,8 @@ export default function App() {
   if (!data && !error) return <LoadingSpinner />;
   return <BrowserRouter>
     {error ? <ErrorBanner message={error} onRetry={() => void refresh(true)} /> : null}
-    {data ? <MaestroV2 data={data} onRefresh={() => void refresh(true)} onCreate={() => setComposerOpen(true)} refreshing={refreshing} /> : null}
+    {data ? <MaestroV2 data={data} onRefresh={() => void refresh(true)} onCreate={() => setComposerOpen(true)} onRegisterProject={() => setProjectModalOpen(true)} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
+    <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
   </BrowserRouter>;
 }
