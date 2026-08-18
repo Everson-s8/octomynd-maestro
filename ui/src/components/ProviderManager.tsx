@@ -112,7 +112,9 @@ export function ProviderManager({
         detail: agent?.detail || (agent?.state === "offline" ? "indisponivel" : "CLI disponivel"),
         type: "cloud" as const,
         model: activeModel || "Padrao do provider",
-        active: agent?.state !== "offline",
+        // A provider is active only if the runtime has it enabled AND the CLI is
+        // reachable. Pausing (control.mode === "disabled") must reflect on the card.
+        active: control?.mode !== "disabled" && agent?.state !== "offline",
         connected: models.length > 0,
         color: providerColor(preset.id),
         models,
