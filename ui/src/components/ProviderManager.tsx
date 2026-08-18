@@ -442,7 +442,7 @@ export function ProviderManager({
         const desc = autoLogin
           ? `${name} sera autenticado automaticamente: clique em "Conectar conta", a CLI oficial sera iniciada e o navegador/terminal abrira para voce concluir o login.`
           : wizardPreset?.id === "gemini"
-            ? 'Autenticado pela sua conta Google conectada ao CLI agy. Clique em "Ja fiz login" para confirmar e ativar.'
+            ? 'Para usar o Antigravity no Maestro e necessario ter o CLI agy baixado e ja conectado com a sua conta Google no terminal. Se voce ja tem, clique em "Ja fiz login" para confirmar e ativar.'
             : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
         return { title: `Entrar com ${name}`, desc };
       }
