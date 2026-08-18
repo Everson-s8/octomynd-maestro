@@ -50,6 +50,7 @@ export function ProviderManager({
   const [modelQuery, setModelQuery] = useState("");
   const [dangerConfirm, setDangerConfirm] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState<ConnectStep>("method");
@@ -225,6 +226,31 @@ export function ProviderManager({
       setError(readError(cause, "Nao foi possivel desconectar o provider."));
     } finally {
       setDetailBusy(false);
+    }
+  };
+
+  // Quick toggle directly on the card: pause ("conectado mas nao chamado") or
+  // re-enable the provider without opening the detail modal. Uses stopPropagation
+  // so the card's openDetail click doesn't fire.
+  const toggleProvider = async (provider: ConnectedProvider, event: { stopPropagation: () => void; preventDefault: () => void }) => {
+    event.stopPropagation();
+    event.preventDefault();
+    const control = policy?.controls.find((item) => item.providerId === provider.providerId);
+    const nextMode = control?.mode === "enabled" ? "paused" : "enabled";
+    setBusyId(provider.providerId);
+    setError("");
+    try {
+      await updateProviderControl(provider.providerId, {
+        mode: nextMode,
+        fallbackEnabled: control?.fallbackEnabled ?? false
+      });
+      await load();
+      onChanged?.();
+      setNotice(nextMode === "paused" ? `${provider.label} pausado (conectado, mas nao sera chamado).` : `${provider.label} ativado.`);
+    } catch (cause) {
+      setError(readError(cause, "Nao foi possivel alternar o provider."));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -479,7 +505,27 @@ export function ProviderManager({
                 <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
               </div>
               <div className="prov-uso">
-                <div className="prov-uso-l"><div className={`toggle${provider.active ? " on" : ""}`}><i /></div><label>{provider.active ? "ativo" : "indisponivel"}</label></div>
+                <div className="prov-uso-l">
+                  {(() => {
+                    const control = policy?.controls.find((item) => item.providerId === provider.providerId);
+                    const mode = control?.mode ?? (provider.registeredProvider ? "enabled" : provider.active ? "enabled" : "paused");
+                    const on = mode === "enabled";
+                    return (
+                      <span
+                        className={`toggle${on ? " on" : ""}`}
+                        role="switch"
+                        aria-checked={on}
+                        tabIndex={0}
+                        onClick={(event) => void toggleProvider(provider, event)}
+                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); void toggleProvider(provider, event); } }}
+                        title={on ? `Pausar ${provider.label} (conectado, mas nao chamado)` : `Ativar ${provider.label}`}
+                      >
+                        <i />
+                      </span>
+                    );
+                  })()}
+                  <label>{provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? "ativo" : "pausado"}</label>
+                </div>
                 {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
               </div>
             </button>

@@ -15,7 +15,16 @@ export function AgentDock({ agents }: {
   const [policy, setPolicy] = useState<ProviderPolicySnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const providers = agents.filter((agent): agent is typeof agent & { id: AgentProviderId } => agent.id !== "telegram");
+
+  // Only route to connected providers: paused/disabled are excluded from the
+  // Control plane (they're connected but not routable) and don't appear as an
+  // option or the selected "first" for any capability.
+  const providers = (agents.filter((agent): agent is typeof agent & { id: AgentProviderId } => agent.id !== "telegram"))
+    .filter((agent) => {
+      if (!policy) return true; // policy not loaded yet — show all providers
+      const mode = policy.controls.find((c) => c.providerId === agent.id)?.mode ?? "enabled";
+      return mode === "enabled";
+    });
 
   const loadPolicy = useCallback(async () => {
     try {
@@ -64,7 +73,12 @@ export function AgentDock({ agents }: {
       {error ? <p className="provider-error">{error}</p> : null}
       <p className="provider-routing-copy">Escolha o primeiro provider, o modelo preferido e a regra de fallback.</p>
           {policy?.capabilities.map((routing) => {
-            const primaryProviderId = routing.order[0];
+            // Resolve the effective "first" to an actually-eligible provider (the
+            // configured order may still reference a paused/removed provider).
+            const eligible = providers.map((p) => String(p.id));
+            const firstStr = String(routing.order[0]);
+            const primaryProviderId: string =
+              eligible.includes(firstStr) ? firstStr : eligible[0] ?? "";
             return (
               <div className="routing-row" key={routing.capability}>
                 <div className="rname">{capabilityLabel(routing.capability)}</div>

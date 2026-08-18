@@ -67,6 +67,9 @@ export function createProviderPolicyPersistence(db: Database.Database) {
     const configured = new Map(rows.map((row) => [row.capability, mapRouting(row)]));
     return {
       controls: controls.map(mapControl),
+      // NOTE: the raw snapshot preserves the configured order (including paused/
+      // disabled providers) so persistence round-trips. The UI layer filters
+      // paused/disabled providers out for rendering the Control plane.
       capabilities: defaults.capabilities.map((item) => configured.get(item.capability) ?? item)
     };
   };
@@ -91,6 +94,25 @@ export function createProviderPolicyPersistence(db: Database.Database) {
       model: modelToSave,
       now
     });
+
+    // When a provider is paused (or disabled) it must stop being routable:
+    // remove it from every capability's order / required_provider_id so it no
+    // longer appears as an option or the selected "first" in the Control plane.
+    // (A paused provider stays connected/listed as a card, but isn't routed.)
+    if (input.mode === "paused" || input.mode === "disabled") {
+      const rows = db.prepare("SELECT * FROM provider_capability_routing").all() as CapabilityRoutingRow[];
+      for (const row of rows) {
+        const order = (JSON.parse(row.provider_order_json) as AgentProviderId[])
+          .filter((item) => item !== input.providerId);
+        const requiredProviderId = row.required_provider_id === input.providerId ? null : row.required_provider_id;
+        const preferredModel = row.required_provider_id === input.providerId ? null : row.preferred_model;
+        db.prepare(`
+          UPDATE provider_capability_routing
+          SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, updated_at = ?
+          WHERE capability = ?
+        `).run(JSON.stringify(order), requiredProviderId, preferredModel, now, row.capability);
+      }
+    }
     return mapControl(db.prepare("SELECT * FROM provider_controls WHERE provider_id = ?")
       .get(input.providerId) as ProviderControlRow);
   };

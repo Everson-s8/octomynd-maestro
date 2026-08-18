@@ -1,4 +1,5 @@
-import { DashboardData } from "../api";
+import { useEffect, useState } from "react";
+import { DashboardData, fetchProviderPolicy } from "../api";
 import { agentStateLabel } from "../agentPresentation";
 
 type AgentId = DashboardData["agents"][number]["id"];
@@ -38,8 +39,31 @@ interface NervousSystemProps {
  * fino + acinzentado = ocioso/pronto). Cada braço termina num ponto com label + estado.
  */
 export function NervousSystem({ agents }: NervousSystemProps) {
+  // Only show connected providers: hide any paused/disabled (mode !== "enabled").
+  const [modeByProvider, setModeByProvider] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let active = true;
+    fetchProviderPolicy()
+      .then((policy) => {
+        if (!active) return;
+        const m: Record<string, string> = {};
+        policy.controls.forEach((c) => (m[c.providerId] = c.mode));
+        setModeByProvider(m);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const tips = agents
-    .filter((agent) => agent.id !== "telegram" && agent.id !== "codex" || agent.id === "codex")
+    .filter(
+      (agent) =>
+        agent.id !== "telegram" &&
+        agent.id !== "codex" ||
+        agent.id === "codex"
+    )
+    .filter((agent) => (modeByProvider[agent.id] ?? "enabled") === "enabled")
     .slice(0, ARMS.length);
 
   return (
