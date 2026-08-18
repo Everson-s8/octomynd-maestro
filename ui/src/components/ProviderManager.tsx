@@ -23,10 +23,11 @@ type ConnectedProvider = {
   providerId: string;
   label: string;
   detail: string;
-  type: "cloud" | "local" | "custom";
+  type: "account" | "api" | "local";
   model: string;
   active: boolean;
   connected: boolean;
+  paused: boolean;
   color: string;
   models: string[];
   registeredProvider: RegisteredCustomProvider | null;
@@ -98,32 +99,39 @@ export function ProviderManager({
   }, [wizardOpen, detailKey]);
 
   const connectedProviders = useMemo<ConnectedProvider[]>(() => {
-    const builtIns = presets.filter((preset) => preset.builtIn).map((preset) => {
-      const runtimeId =
-        preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
-      const agent = agents.find((item) => item.id === runtimeId);
-      const control = policy?.controls.find((item) => item.providerId === runtimeId);
-      const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
-      const activeModel = control?.model || models[0] || "";
-      return {
-        key: `preset:${preset.id}`,
-        providerId: runtimeId,
-        label: preset.label,
-        detail: agent?.detail || (agent?.state === "offline" ? "indisponivel" : "CLI disponivel"),
-        type: "cloud" as const,
-        model: activeModel || "Padrao do provider",
-        // A provider is active only if the runtime has it enabled AND the CLI is
-        // reachable. Pausing (control.mode === "disabled") must reflect on the card.
-        active: control?.mode !== "disabled" && agent?.state !== "offline",
-        connected: models.length > 0,
-        color: providerColor(preset.id),
-        models,
-        registeredProvider: null
-      };
-    });
+    // Built-in providers that are paused (control.mode === "disabled") are hidden
+    // from the list — a removed/paused provider disappears instead of showing as
+    // "indisponivel". Paused built-ins can be re-enabled via "Conectar provider".
+    const builtIns = presets
+      .filter((preset) => preset.builtIn)
+      .map((preset) => {
+        const runtimeId =
+          preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
+        const agent = agents.find((item) => item.id === runtimeId);
+        const control = policy?.controls.find((item) => item.providerId === runtimeId);
+        const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
+        const activeModel = control?.model || models[0] || "";
+        const paused = control?.mode === "disabled";
+        return {
+          key: `preset:${preset.id}`,
+          providerId: runtimeId,
+          label: preset.label,
+          detail: agent?.detail || (agent?.state === "offline" ? "indisponivel" : "CLI disponivel"),
+          type: (preset.category === "api" ? "api" : preset.category === "local" ? "local" : "account") as "account" | "api" | "local",
+          model: activeModel || "Padrao do provider",
+          active: !paused && agent?.state !== "offline",
+          connected: models.length > 0,
+          paused,
+          color: providerColor(preset.id),
+          models,
+          registeredProvider: null
+        };
+      })
+      .filter((p) => !p.paused);
     const custom = registered.map((provider) => {
       const preset = presets.find((item) => item.id === provider.presetId);
       const local = preset?.category === "local" || provider.connectionMode === "local";
+      const category = preset?.category ?? (local ? "local" : "api");
       const control = policy?.controls.find((item) => item.providerId === provider.id);
       const models = policy?.availableModels?.[provider.id] ?? provider.models ?? [];
       const activeModel = control?.model || provider.model || models[0] || "";
@@ -132,10 +140,11 @@ export function ProviderManager({
         providerId: provider.id,
         label: provider.label,
         detail: local ? provider.endpointUrl || "endpoint local" : "conectado",
-        type: (local ? "local" : "custom") as "local" | "custom",
+        type: (category === "local" ? "local" : category === "account" ? "account" : "api") as "account" | "api" | "local",
         model: activeModel || "Padrao do provider",
         active: true,
         connected: models.length > 0,
+        paused: false,
         color: providerColor(provider.id),
         models,
         registeredProvider: provider
@@ -145,10 +154,11 @@ export function ProviderManager({
   }, [agents, presets, registered, policy]);
 
   const groupedProviders = {
-    Nuvem: connectedProviders.filter((provider) => provider.type === "cloud"),
-    Local: connectedProviders.filter((provider) => provider.type === "local"),
-    Personalizado: connectedProviders.filter((provider) => provider.type === "custom")
+    Conta: connectedProviders.filter((provider) => provider.type === "account"),
+    API: connectedProviders.filter((provider) => provider.type === "api"),
+    Local: connectedProviders.filter((provider) => provider.type === "local")
   };
+  const groupLabels: Record<string, "Conta" | "API" | "Local"> = { Conta: "Conta", API: "API", Local: "Local" };
 
   const detailProvider = connectedProviders.find((provider) => provider.key === detailKey) ?? null;
 
@@ -457,7 +467,7 @@ export function ProviderManager({
     <section className="provider-manager">
       {error ? <div className="provider-feedback error" role="alert">{error}</div> : null}
       {notice ? <div className="provider-feedback success">{notice}</div> : null}
-      {(["Nuvem", "Local", "Personalizado"] as const).map((group) => groupedProviders[group].length ? (
+      {(["Conta", "API", "Local"] as const).map((group) => groupedProviders[group].length ? (
         <div key={group}>
           <div className="prov-group-lbl">{group}</div>
           {groupedProviders[group].map((provider) => (
@@ -485,7 +495,7 @@ export function ProviderManager({
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <button type="button" className="modal-close" onClick={closeDetail} aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
             <div className="modal-head">
-              <div className="modal-eyebrow">{detailProvider.type === "cloud" ? "Cloud" : detailProvider.type === "local" ? "Local" : "Custom"}</div>
+              <div className="modal-eyebrow">{detailProvider.type === "account" ? "Conta" : detailProvider.type === "local" ? "Local" : "API"}</div>
               <div className="pd-head-row">
                 <div className="pd-av" style={{ background: detailProvider.color }}>{detailProvider.label.slice(0, 1).toUpperCase()}</div>
                 <div>
