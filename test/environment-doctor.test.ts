@@ -47,6 +47,29 @@ describe("Environment Doctor", () => {
     }));
   }, 15_000);
 
+  it("does not treat a partial node_modules (only .bin) as a prepared dependency root", () => {
+    // Regression for the environment-blocked issue: a worktree whose node_modules
+    // has a .bin but lacks the full toolchain (tsc, vitest, better-sqlite3 native)
+    // must NOT be reported as prepared — otherwise the doctor skips `npm ci` and
+    // the task blocks on native_runtime/typescript/test_runner being unavailable.
+    const partial = path.join(tempDir, "task-partial");
+    fs.mkdirSync(path.join(partial, "node_modules", ".bin"), { recursive: true });
+    fs.writeFileSync(path.join(partial, "package.json"), JSON.stringify({ dependencies: { "better-sqlite3": "^11.10.0" } }));
+    fs.writeFileSync(path.join(partial, "package-lock.json"), "{}");
+
+    const report = runEnvironmentDoctor({
+      config: doctorConfig(),
+      project: project(tempDir),
+      task: task(partial)
+    });
+
+    // A partial root must not be honored as prepared: the toolchain checks fail,
+    // which is what drives the `npm ci` path in the caller.
+    for (const name of ["native_runtime", "typescript", "test_runner"]) {
+      expect(report.checks).toContainEqual(expect.objectContaining({ name, status: "failed" }));
+    }
+  }, 15_000);
+
   it("blocks a legacy worktree before a long Goal", () => {
     const userProfile = process.env.USERPROFILE || "C:\\Users\\test";
     const legacyWorktree = path.join(userProfile, "Documents", "legacy-task");

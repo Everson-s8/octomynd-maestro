@@ -267,16 +267,39 @@ function recommendedAction(status: EnvironmentReadinessStatus, checks: Environme
 function findPreparedDependencyRoot(workspacePath: string, projectPath: string): string | null {
   const workspaceRoot = path.resolve(workspacePath);
   const projectRoot = path.resolve(projectPath);
-  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) return workspaceRoot;
+  // A node_modules/.bin can exist even when dependency preparation is INCOMPLETE
+  // (missing tsc, vitest, or native bindings such as better-sqlite3). Only treat a
+  // root as "prepared" when the deterministic build essentials are actually present;
+  // otherwise fall through so the caller runs `npm ci` to finish preparation.
+  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) {
+    return isDependencyRootComplete(workspaceRoot) ? workspaceRoot : null;
+  }
   if (workspaceRoot !== projectRoot && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
   let current = projectRoot;
   while (true) {
-    if (fs.existsSync(path.join(current, "node_modules", ".bin"))) return current;
+    if (fs.existsSync(path.join(current, "node_modules", ".bin"))) {
+      return isDependencyRootComplete(current) ? current : null;
+    }
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
   }
   return null;
+}
+
+/**
+ * A dependency root is only "prepared" if the deterministic toolchain is complete:
+ * the TypeScript compiler (tsc), the test runner (vitest), and the better-sqlite3
+ * native binding are all loadable. A partial install (e.g. a `.bin` present but the
+ * native binding never compiled) must NOT be treated as ready, or the environment
+ * doctor would skip the `npm ci` that would finish it.
+ */
+function isDependencyRootComplete(root: string): boolean {
+  const hasTsc = fs.existsSync(path.join(root, "node_modules", ".bin", executableName("tsc")));
+  const hasVitest = fs.existsSync(path.join(root, "node_modules", ".bin", executableName("vitest")));
+  const betterSqlite3 = path.join(root, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
+  const hasNative = fs.existsSync(betterSqlite3);
+  return hasTsc && hasVitest && hasNative;
 }
 
 function executableName(name: string): string {
