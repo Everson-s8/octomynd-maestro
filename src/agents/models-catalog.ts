@@ -32,12 +32,18 @@ function catalogDiskPath(): string {
   return path.join(process.cwd(), ".maestro", "models-dev-cache.json");
 }
 
-function loadCatalogFromDisk(): ModelsCatalog | null {
+function loadCatalogFromDisk(): { catalog: ModelsCatalog; savedAt: number } | null {
   try {
     const p = catalogDiskPath();
     if (!fs.existsSync(p)) return null;
     const data = JSON.parse(fs.readFileSync(p, "utf8"));
-    return data && typeof data === "object" ? (data as ModelsCatalog) : null;
+    if (!data) return null;
+    const savedAt = typeof data.savedAt === "number" ? data.savedAt : 0;
+    const raw =
+      typeof data.catalog === "object" && data.catalog !== null
+        ? data.catalog
+        : data;
+    return raw && typeof raw === "object" ? { catalog: raw as ModelsCatalog, savedAt } : null;
   } catch {
     return null;
   }
@@ -47,7 +53,7 @@ function saveCatalogToDisk(catalog: ModelsCatalog): void {
   try {
     const p = catalogDiskPath();
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(catalog), "utf8");
+    fs.writeFileSync(p, JSON.stringify({ catalog, savedAt: Date.now() }), "utf8");
   } catch {
     /* non-fatal */
   }
@@ -56,21 +62,30 @@ function saveCatalogToDisk(catalog: ModelsCatalog): void {
 /** Fetch the catalog (cached in-process for 1h + disk cache). Never throws. */
 export async function fetchModelsCatalog(): Promise<ModelsCatalog> {
   if (_catalog && Date.now() - _catalogTime < CATALOG_TTL_MS) return _catalog;
+
   const disk = loadCatalogFromDisk();
-  if (disk && Date.now() - _catalogTime >= CATALOG_TTL_MS) {
-    _catalog = disk;
-    _catalogTime = Date.now();
-    return disk;
+  const diskFresh = disk && disk.savedAt > 0 && Date.now() - disk.savedAt < CATALOG_TTL_MS;
+
+  // A fresh on-disk cache is authoritative for the current TTL window.
+  if (diskFresh) {
+    _catalog = disk.catalog;
+    _catalogTime = disk.savedAt;
+    return disk.catalog;
   }
-  if (disk) _catalog = disk;
+
+  // Warm memory from (possibly stale) disk as a fallback, then refresh from the
+  // network. A stale disk is served only if the refresh fails — never stamped
+  // as fresh on a cold start.
+  if (disk) _catalog = disk.catalog;
   try {
     const response = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(5_000) });
     if (response.ok) {
       const data = (await response.json()) as ModelsCatalog;
-      if (data && typeof data === "object") {
+      if (data && typeof data === "object" && Object.keys(data).length > 0) {
         _catalog = data;
         _catalogTime = Date.now();
         saveCatalogToDisk(data);
+        return data;
       }
     }
   } catch {

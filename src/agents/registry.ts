@@ -307,7 +307,11 @@ export class AgentRegistry {
     const policy = this.policySnapshot();
     if (capability) {
       const capabilityRouting = policy.capabilities.find((c) => c.capability === capability);
-      if (capabilityRouting?.preferredModel) {
+      // preferredModel is per-capability, intended for the capability's primary
+      // provider. Only apply it when the resolved provider is that primary —
+      // otherwise a fallback provider would receive a model id that may not
+      // belong to it (e.g. a Codex model passed to Claude after a fallback).
+      if (capabilityRouting?.preferredModel && capabilityRouting.order[0] === providerId) {
         return capabilityRouting.preferredModel;
       }
     }

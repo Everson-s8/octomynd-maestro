@@ -87,13 +87,18 @@ export class CustomCliProvider implements AgentProvider {
   /** Run `command <modelDiscoveryArgs>` and parse stdout lines of `vendor/model` shape. */
   private discoverCliModels(): string[] {
     try {
+      // Resolve the executable to an absolute path and spawn it via argv (using
+      // prepareCliSpawn to handle .cmd/.bat shims) — never with `shell: true`,
+      // which would let a user-supplied `command` string inject shell commands.
+      const executable = resolveCustomCliExecutable(this.config.command);
+      if (!executable) return [];
       const args = this.config.modelDiscoveryArgs ?? [];
-      const child = spawnSync(this.config.command, args, {
+      const invocation = prepareCliSpawn(executable, args);
+      const child = spawnSync(invocation.command, invocation.args, {
         windowsHide: true,
         encoding: "utf8",
         timeout: 20_000,
-        maxBuffer: 4 * 1024 * 1024,
-        shell: true
+        maxBuffer: 4 * 1024 * 1024
       });
       if (child.status !== 0 || !child.stdout) return [];
       const cleaned = [...new Set(
