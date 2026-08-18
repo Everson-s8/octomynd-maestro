@@ -62,6 +62,9 @@ export class AntigravityProvider implements AgentProvider {
   private readonly healthProbe: boolean;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private cachedModels: string[] | null = null;
+  private modelsExpiresAt = 0;
+  private static readonly MODELS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 
   constructor(options: AntigravityProviderOptions = {}) {
     this.executionLimits = normalizeProviderExecutionLimits(
@@ -75,6 +78,9 @@ export class AntigravityProvider implements AgentProvider {
   }
 
   async models(): Promise<string[]> {
+    // Cache the live probe result so we don't spawn `agy models` (~2s) on every
+    // policy/dashboard request — the account model list rarely changes.
+    if (this.cachedModels && Date.now() < this.modelsExpiresAt) return this.cachedModels;
     const executable = resolveAntigravityExecutable(this.executablePath);
     // Fallback only if the live `antigravity models` probe fails. Kept in sync
     // with current account-available Gemini models (the dynamic probe is the
@@ -112,10 +118,15 @@ export class AntigravityProvider implements AgentProvider {
           .map((line) => line.split(/\t| {2,}/)[0].trim())
           .filter(Boolean);
         if (lines.length > 0) {
-          return [...new Set(lines)];
+          const result = [...new Set(lines)];
+          this.cachedModels = result;
+          this.modelsExpiresAt = Date.now() + AntigravityProvider.MODELS_CACHE_TTL_MS;
+          return result;
         }
       }
     } catch {}
+    this.cachedModels = fallbacks;
+    this.modelsExpiresAt = Date.now() + AntigravityProvider.MODELS_CACHE_TTL_MS;
     return fallbacks;
   }
 

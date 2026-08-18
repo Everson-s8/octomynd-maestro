@@ -49,6 +49,9 @@ export class CustomCliProvider implements AgentProvider {
   private readonly executionLimits: ProviderExecutionLimits;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private cachedModels: string[] | null = null;
+  private modelsExpiresAt = 0;
+  private static readonly MODELS_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min
 
   constructor(
     config: CustomCliProviderConfig,
@@ -66,16 +69,19 @@ export class CustomCliProvider implements AgentProvider {
   }
 
   async models(): Promise<string[]> {
+    if (this.cachedModels && Date.now() < this.modelsExpiresAt) return this.cachedModels;
+    let result: string[];
     if (this.config.models && this.config.models.length > 0) {
-      return this.config.models;
-    }
-    // Discover models via the provider CLI when the preset declares it
-    // (e.g. `opencode models opencode`), instead of falling back to [id].
-    if (this.config.modelDiscovery === "cli") {
+      result = this.config.models;
+    } else if (this.config.modelDiscovery === "cli") {
       const discovered = this.discoverCliModels();
-      if (discovered.length > 0) return discovered;
+      result = discovered.length > 0 ? discovered : this.model ? [this.model] : [this.id];
+    } else {
+      result = this.model ? [this.model] : [this.id];
     }
-    return this.model ? [this.model] : [this.id];
+    this.cachedModels = result;
+    this.modelsExpiresAt = Date.now() + CustomCliProvider.MODELS_CACHE_TTL_MS;
+    return result;
   }
 
   /** Run `command <modelDiscoveryArgs>` and parse stdout lines of `vendor/model` shape. */
