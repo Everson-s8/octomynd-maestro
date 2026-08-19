@@ -354,7 +354,7 @@ function runCommand(command: string, args: string[], cwd: string, timeout = 15_0
   const invocation =
     process.platform === "win32"
       ? command === "npm"
-        ? { command: nodeBin, args: [require("node:path").join(require("node:path").dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
+        ? { command: nodeBin, args: [path.join(path.dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
         : command.endsWith(".cmd")
           ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", command, ...args] }
           : { command, args }
