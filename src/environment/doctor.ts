@@ -176,6 +176,28 @@ function nativeRuntimeCheck(dependencyRoot: string | null): EnvironmentCheck {
     ["-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
     dependencyRoot
   );
+  // A stale npm cache may deliver a prebuilt binary compiled against a different
+  // NODE_MODULE_VERSION (e.g. a Node 22 prebuild) than the runtime. Rebuild the
+  // native module under this process's node before failing, so an ABI mismatch
+  // is fixed rather than surfacing as a false environment_blocked.
+  if (!probe.ok && process.platform === "win32") {
+    const rebound = runCommand(
+      "npm",
+      ["rebuild", "better-sqlite3", "--no-audit", "--no-fund"],
+      dependencyRoot,
+      300_000
+    );
+    if (rebound.ok) {
+      const reProbe = runCommand(
+        process.execPath,
+        ["-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
+        dependencyRoot
+      );
+      if (reProbe.ok) {
+        return check("native_runtime", "passed", "better-sqlite3 native binding recomputed and loadable.");
+      }
+    }
+  }
   return check(
     "native_runtime",
     probe.ok ? "passed" : "failed",
