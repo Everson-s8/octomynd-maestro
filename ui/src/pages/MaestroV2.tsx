@@ -14,7 +14,7 @@ const routes = [
   { to: "/reviews", label: "Aguardando revisão", icon: "hand" },
   { to: "/projects", label: "Projetos", icon: "folder" },
   { to: "/providers", label: "Providers", icon: "spark" },
-  { to: "/analytics", label: "Analytics & Custo", icon: "timeline" },
+  { to: "/analytics", label: "Analytics & Consumo", icon: "timeline" },
   { to: "/settings", label: "Configurações", icon: "settings" }
 ];
 
@@ -130,21 +130,79 @@ function Analytics({ data }: { data: DashboardData }) {
       .catch(() => { if (!cancelled) setQuota([]); });
     return () => { cancelled = true; };
   }, []);
-  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Custo" /><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Custo hoje / tokens" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox"><PanelHead eyebrow="Consumo Disponível" title="Por provider" meta="% restante e próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Sem leitura de cota</h4><p>Conecte a conta de um provider (OAuth) para ver o % de uso.</p></div> : quota.map((b, i) => <QuotaRow key={b.provider + (b.modelId || "") + i} bucket={b} />)}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
+  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Sem leitura de cota</h4><p>Conecte a conta de um provider (OAuth) para ver o % de uso.</p></div> : <QuotaGroups buckets={quota} />}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
 }
-function QuotaRow({ bucket }: { bucket: QuotaBucket }) {
+
+// Provider display metadata (color + human label).
+const QUOTA_ALIASES: Record<string, { label: string; color: string }> = {
+  codex: { label: "Codex", color: "#7c634a" },
+  antigravity: { label: "Gemini Antigravity", color: "#6f8f6a" },
+  claude: { label: "Claude", color: "#c4622d" },
+  "opencode-go": { label: "OpenCode Go", color: "#4d7a8c" },
+  openrouter: { label: "OpenRouter", color: "#8a6dab" },
+  openai: { label: "OpenAI", color: "#4d7a8c" },
+  gemini: { label: "Gemini", color: "#6f8f6a" },
+  ollama: { label: "Ollama", color: "#5c6f8f" }
+};
+
+// Renders all buckets grouped by provider with the tentacle-bar design.
+function QuotaGroups({ buckets }: { buckets: QuotaBucket[] }) {
+  const byProvider = new Map<string, QuotaBucket[]>();
+  for (const b of buckets) {
+    if (!byProvider.has(b.provider)) byProvider.set(b.provider, []);
+    byProvider.get(b.provider)!.push(b);
+  }
+  return <>{Array.from(byProvider.entries()).map(([provider, bs]) => {
+    const meta = QUOTA_ALIASES[provider] ?? { label: provider, color: "#8a7c68" };
+    return (
+      <div className="quota-group" key={provider} style={byProvider.size > 1 ? undefined : undefined}>
+        <div className="quota-provider-head"><span className="epic-dot" style={{ background: meta.color }} /><b>{meta.label}</b></div>
+        {bs.length === 0
+          ? <div className="quota-row"><span className="quota-window">local</span><span className="quota-nolimit">sem limite · roda na sua máquina</span></div>
+          : bs.map((b, i) => <QuotaBar bucket={b} color={meta.color} key={provider + i} />
+          )}
+      </div>
+    );
+  })}</>;
+}
+
+const WINDOW_LABELS: Record<string, string> = {
+  "gemini-weekly": "gemini · semanal",
+  "gemini-5h": "gemini · 5h",
+  "claude_gpt-weekly": "claude (gpt) · semanal",
+  "claude_gpt-5h": "claude (gpt) · 5h",
+  "claude-weekly": "semanal",
+  "claude-5h": "5h",
+  "opencode-rolling": "janela rolante",
+  "opencode-weekly": "semanal",
+  "opencode-monthly": "mensal",
+  weekly: "semanal",
+  "5h": "5h"
+};
+
+function QuotaBar({ bucket, color }: { bucket: QuotaBucket; color: string }) {
   const remaining = bucket.remainingPercent;
-  const used = bucket.usedPercent;
-  const bar = remaining == null ? 0 : Math.max(0, Math.min(100, remaining));
-  const label = remaining == null ? "n/d" : `${remaining}% restante`;
-  const reset = bucket.resetsAt ? ` · ${resetLabel(bucket.resetsAt)}` : "";
-  return <div className="costrow" key={bucket.provider}><span className="dot" /><div className="lbl">{bucket.provider}{bucket.modelId ? <small>{bucket.modelId}</small> : null}</div><div className="track"><i style={{ width: `${bar}%` }} /></div><span className="amt">{label}{reset}</span></div>;
+  const pct = remaining == null ? 0 : Math.max(0, Math.min(100, remaining));
+  const pctClass = pct <= 10 ? "err" : pct <= 40 ? "warn" : "ok";
+  const reset = bucket.resetsAt ? `reset ${resetLabel(bucket.resetsAt)}` : "—";
+  const windowLabel = WINDOW_LABELS[bucket.modelId ?? ""] ?? bucket.modelId ?? "padrão";
+  return (
+    <div className="quota-row">
+      <span className="quota-window">{windowLabel}</span>
+      <svg className="tentacle-bar" viewBox="0 0 100 14" preserveAspectRatio="none">
+        <path d="M2,7 C2,2.8 8,2 20,2.5 C45,3 70,4.5 90,6 C95,6.5 98,7 98,7 C98,7 95,7.5 90,8 C70,9.5 45,11 20,11.5 C8,12 2,11.2 2,7 Z" fill="#2a2219" />
+        <rect x="0" y="0" width={pct} height="14" fill={color} clipPath="url(#tentClip)" />
+      </svg>
+      <span className={`quota-pct ${pctClass}`}>{remaining == null ? "n/d" : `${remaining}%`}</span>
+      <span className="quota-reset">{reset}</span>
+    </div>
+  );
 }
 function resetLabel(iso: string): string {
   const diffMs = new Date(iso).getTime() - Date.now();
   if (!Number.isFinite(diffMs)) return "";
   const mins = Math.max(0, Math.round(diffMs / 60000));
-  return mins >= 60 ? `reset ${Math.round(mins / 60)}h` : `reset ${mins}min`;
+  return mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}min`;
 }
 function Settings({ data }: { data: DashboardData }) {
   const [botToken, setBotToken] = useState("");

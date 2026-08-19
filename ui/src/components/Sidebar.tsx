@@ -20,7 +20,7 @@ export function Sidebar({ collapsed: externalCollapsed, onToggleCollapse }: Side
     { to: "/reviews", label: "Aguardando revisão", icon: "hand" },
     { to: "/projects", label: "Projetos", icon: "folder" },
     { to: "/providers", label: "Providers", icon: "spark" },
-    { to: "/analytics", label: "Analytics & Custo", icon: "timeline" },
+    { to: "/analytics", label: "Analytics & Consumo", icon: "timeline" },
     { to: "/settings", label: "Configurações", icon: "settings" }
   ];
 

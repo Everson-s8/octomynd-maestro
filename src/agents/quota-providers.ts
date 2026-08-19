@@ -384,7 +384,7 @@ async function claudeFetcher(): Promise<QuotaResult> {
         const mins = i === 0 ? 300 : 10080;
         return {
           provider: "claude",
-          modelId: null,
+          modelId: i === 0 ? "claude-5h" : "claude-weekly",
           usedPercent: usedPct == null ? null : Math.min(100, Math.max(0, Math.round(usedPct))),
           remainingPercent: usedPct == null ? null : Math.max(0, 100 - Math.min(100, Math.round(usedPct))),
           resetsAt: raw.resets_at == null ? null : new Date(resolveEpochMs(raw.resets_at)).toISOString(),
@@ -412,10 +412,175 @@ function resolveEpochMs(v: string | number): number {
   return Number.isNaN(parsed) ? Date.now() : parsed;
 }
 
+// ---- OpenRouter ------------------------------------------------------------
+// Uses an OpenRouter API key to read quota/usage. Requires OPENROUTER_API_KEY.
+const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
+
+async function openRouterFetcher(): Promise<QuotaResult> {
+  const key = process.env.OPENROUTER_API_KEY ?? process.env.OPENROUTER_KEY ?? null;
+  if (!key) return buildEmptyUnavailable("openrouter", "sem OPENROUTER_API_KEY");
+  try {
+    const res = await fetch(OPENROUTER_KEY_URL, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+    if (!res.ok) return buildError("openrouter", new Error(`openrouter key ${res.status}`));
+    const data = (await res.json()) as {
+      data?: { limit?: number | null; usage?: number; is_free_tier?: boolean; usage_limit?: number | null };
+    };
+    const usg = data.data;
+    if (!usg || typeof usg.usage !== "number") return buildEmptyUnavailable("openrouter", "sem uso de quota");
+    const limit = typeof usg.limit === "number" && usg.limit > 0 ? usg.limit : null;
+    const bucket = usedLimitToBucket({
+      provider: "openrouter",
+      modelId: null,
+      used: usg.usage,
+      limit,
+      resetsAt: null,
+      windowKind: "unknown",
+      windowMinutes: null,
+      planType: usg.is_free_tier ? "free" : null
+    });
+    return { provider: "openrouter", status: "ok", updatedAt: new Date().toISOString(), buckets: [bucket], error: null };
+  } catch (error) {
+    return buildError("openrouter", error);
+  }
+}
+
+// ---- OpenAI (API key) ------------------------------------------------------
+// Reads an OpenAI API key and reports usage against the monthly billed limit.
+const OPENAI_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
+
+async function openAIFetcher(): Promise<QuotaResult> {
+  const key = process.env.OPENAI_API_KEY ?? null;
+  if (!key) return buildEmptyUnavailable("openai", "sem OPENAI_API_KEY");
+  try {
+    const res = await fetch(`${OPENAI_USAGE_URL}?start_time=${Math.floor(Date.now() / 1000) - 30 * 86400}`, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+    if (!res.ok) return buildError("openai", new Error(`openai usage ${res.status}`));
+    // Best-effort: OpenAI usage endpoint requires admin; if it fails, report based on data.
+    const data = (await res.json()) as { data?: { total_usage?: number }[] };
+    const used = data?.data?.[0]?.total_usage ?? null;
+    if (used == null) return buildEmptyUnavailable("openai", "sem dados de uso (requer org admin)");
+    const bucket = usedLimitToBucket({
+      provider: "openai",
+      modelId: null,
+      used: used / 100, // OpenAI returns usage in cents
+      limit: null,
+      resetsAt: null,
+      windowKind: "unknown",
+      windowMinutes: null
+    });
+    return { provider: "openai", status: "ok", updatedAt: new Date().toISOString(), buckets: [bucket], error: null };
+  } catch (error) {
+    return buildError("openai", error);
+  }
+}
+
+// ---- Gemini API (API key) --------------------------------------------------
+const GEMINI_API_KEYED_MODELS =
+  "https://generativelanguage.googleapis.com/v1beta/models";
+
+async function geminiApiFetcher(): Promise<QuotaResult> {
+  const key = process.env.GEMINI_API_KEY ?? null;
+  if (!key) return buildEmptyUnavailable("gemini", "sem GEMINI_API_KEY");
+  // The Gemini Developer API key lists models with per-model limits; here we only
+  // prove connectivity rather than a real quota fraction, so mark unavailable.
+  try {
+    const res = await fetch(`${GEMINI_API_KEYED_MODELS}?key=${key}`);
+    if (!res.ok) return buildError("gemini", new Error(`gemini models ${res.status}`));
+    return buildEmptyUnavailable("gemini", "quota por API key indisponível (sem fração)");
+  } catch (error) {
+    return buildError("gemini", error);
+  }
+}
+
+// ---- OpenCode Go (API key) -------------------------------------------------
+// Uses OPENCODE_GO_API_KEY against the opencode.ai OpenAI-compatible endpoint,
+// whose /usage sub-resource reports rolling/weekly/monthly usage percentages.
+const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
+
+async function openCodeGoFetcher(): Promise<QuotaResult> {
+  const key = process.env.OPENCODE_GO_API_KEY ?? null;
+  if (!key) return buildEmptyUnavailable("opencode-go", "sem OPENCODE_GO_API_KEY");
+  try {
+    const res = await fetch(`${OPENCODE_GO_BASE}/usage`, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+    if (!res.ok) return buildError("opencode-go", new Error(`opencode usage ${res.status}`));
+    const data = (await res.json()) as {
+      usage?: {
+        rolling?: { status?: string; percent?: number; resetsAt?: string };
+        weekly?: { status?: string; percent?: number; resetsAt?: string };
+        monthly?: { status?: string; percent?: number; resetsAt?: string };
+      };
+    };
+    const u = data.usage;
+    if (!u) return buildEmptyUnavailable("opencode-go", "sem dados de uso");
+    const windows: Array<{ key: string; w: { percent?: number; resetsAt?: string } }> = [
+      { key: "rolling", w: u.rolling ?? {} },
+      { key: "weekly", w: u.weekly ?? {} },
+      { key: "monthly", w: u.monthly ?? {} }
+    ];
+    const buckets: QuotaBucket[] = [];
+    for (const { key, w } of windows) {
+      const usedPct = typeof w.percent === "number" ? w.percent : null;
+      if (usedPct == null) continue;
+      buckets.push({
+        provider: "opencode-go",
+        modelId: `opencode-${key}`,
+        usedPercent: usedPct,
+        remainingPercent: Math.max(0, 100 - usedPct),
+        resetsAt: w.resetsAt ?? null,
+        windowMinutes: key === "rolling" ? null : key === "weekly" ? 10080 : 43200,
+        windowKind: key === "monthly" ? "weekly" : key === "weekly" ? "weekly" : "5h",
+        planType: null
+      });
+    }
+    return {
+      provider: "opencode-go",
+      status: buckets.length ? "ok" : "unavailable",
+      updatedAt: new Date().toISOString(),
+      buckets,
+      error: buckets.length ? null : "sem janelas de uso"
+    };
+  } catch (error) {
+    return buildError("opencode-go", error);
+  }
+}
+
+// Detects whether a provider is LOGGED IN / connected, so we only fetch quota
+// for providers the user actually has. Returns a map of fetchers keyed by id.
 export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
-  return {
-    codex: codexFetcher,
-    antigravity: antigravityFetcher,
-    claude: claudeFetcher
-  };
+  const fetchers: Record<string, QuotaFetcher> = {};
+
+  // Codex: ~/.codex/auth.json present and has tokens.
+  if (fs.existsSync(homeFile(".codex", "auth.json"))) {
+    try {
+      const auth = readJson(homeFile(".codex", "auth.json")) as { tokens?: { access_token?: string } };
+      if (auth.tokens?.access_token) fetchers.codex = codexFetcher;
+    } catch {
+      /* skip */
+    }
+  }
+
+  // Antigravity: agy process running (has a live session).
+  if (findAgyLoopbackPort().length > 0) {
+    fetchers.antigravity = antigravityFetcher;
+  }
+
+  // Claude: ~/.claude/.credentials.json has claudeAiOauth.
+  if (fs.existsSync(homeFile(".claude", ".credentials.json"))) {
+    fetchers.claude = claudeFetcher;
+  }
+
+  // OpenRouter / OpenAI / Gemini API: by env API key presence.
+  if (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY) fetchers.openrouter = openRouterFetcher;
+  if (process.env.OPENAI_API_KEY) fetchers.openai = openAIFetcher;
+  if (process.env.GEMINI_API_KEY) fetchers.gemini = geminiApiFetcher;
+
+  // OpenCode Go: by OPENCODE_GO_API_KEY env.
+  if (process.env.OPENCODE_GO_API_KEY) fetchers["opencode-go"] = openCodeGoFetcher;
+
+  return fetchers;
 }
