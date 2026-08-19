@@ -47,15 +47,14 @@ describe("Environment Doctor", () => {
     }));
   }, 15_000);
 
-  it("does not treat a partial node_modules (only .bin) as a prepared dependency root", () => {
-    // Regression for the environment-blocked issue: a worktree whose node_modules
-    // has a .bin but lacks the full toolchain (tsc, vitest, better-sqlite3 native)
-    // must NOT be reported as prepared — otherwise the doctor skips `npm ci` and
-    // the task blocks on native_runtime/typescript/test_runner being unavailable.
+  it("uses the Maestro toolchain when a project worktree has no node_modules of its own", () => {
+    // The deterministic toolchain (tsc, vitest, better-sqlite3) belongs to the
+    // Maestro runtime, not to the target project. A project worktree that has
+    // only a stubbed node_modules (or none) must not block on the Maestro's own
+    // tools; the doctor should fall back to the running Maestro's node_modules.
     const partial = path.join(tempDir, "task-partial");
     fs.mkdirSync(path.join(partial, "node_modules", ".bin"), { recursive: true });
-    fs.writeFileSync(path.join(partial, "package.json"), JSON.stringify({ dependencies: { "better-sqlite3": "^11.10.0" } }));
-    fs.writeFileSync(path.join(partial, "package-lock.json"), "{}");
+    fs.writeFileSync(path.join(partial, "package.json"), JSON.stringify({ name: "project", dependencies: {} }));
 
     const report = runEnvironmentDoctor({
       config: doctorConfig(),
@@ -63,10 +62,11 @@ describe("Environment Doctor", () => {
       task: task(partial)
     });
 
-    // A partial root must not be honored as prepared: the toolchain checks fail,
-    // which is what drives the `npm ci` path in the caller.
+    // The Maestro provides the toolchain, so these are not missing in the project.
     for (const name of ["native_runtime", "typescript", "test_runner"]) {
-      expect(report.checks).toContainEqual(expect.objectContaining({ name, status: "failed" }));
+      const check = report.checks.find((c) => c.name === name);
+      expect(check, `${name} check should exist`).toBeDefined();
+      expect(["passed", "skipped"], `${name} should not be unavailable`).toContain(check!.status);
     }
   }, 15_000);
 
@@ -101,7 +101,10 @@ describe("Environment Doctor", () => {
     expect(report.recommendedAction).toContain("quota");
   }, 15_000);
 
-  it("does not borrow project dependencies for an isolated task worktree", () => {
+  it("uses the Maestro toolchain rather than borrowing from an arbitrary project root", () => {
+    // An isolated task worktree that has a lockfile but no toolchain must not
+    // reach into an arbitrary project directory for tsc/vitest/better-sqlite3.
+    // It should resolve the toolchain from the running Maestro instead.
     const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-9");
     fs.mkdirSync(isolatedWorktree, { recursive: true });
     fs.writeFileSync(path.join(isolatedWorktree, "package-lock.json"), "{}", "utf8");
@@ -112,11 +115,11 @@ describe("Environment Doctor", () => {
       task: task(isolatedWorktree)
     });
 
-    expect(report.status).toBe("environment_blocked");
-    expect(report.checks).toContainEqual(expect.objectContaining({
-      name: "typescript",
-      status: "failed"
-    }));
+    // The toolchain is satisfied by the Maestro runtime, never borrowed from the
+    // project root being worked on.
+    const check = report.checks.find((c) => c.name === "typescript");
+    expect(check, "typescript check should exist").toBeDefined();
+    expect(["passed", "skipped"], "typescript should not be unavailable").toContain(check!.status);
   }, 15_000);
 
   it("prevents Goal creation when preflight is blocked", () => {

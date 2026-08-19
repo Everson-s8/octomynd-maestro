@@ -266,16 +266,28 @@ function recommendedAction(status: EnvironmentReadinessStatus, checks: Environme
 
 function findPreparedDependencyRoot(workspacePath: string, projectPath: string): string | null {
   const workspaceRoot = path.resolve(workspacePath);
-  const projectRoot = path.resolve(projectPath);
-  // A node_modules/.bin can exist even when dependency preparation is INCOMPLETE
-  // (missing tsc, vitest, or native bindings such as better-sqlite3). Only treat a
-  // root as "prepared" when the deterministic build essentials are actually present;
-  // otherwise fall through so the caller runs `npm ci` to finish preparation.
+
+  // The deterministic toolchain (tsc, vitest, better-sqlite3) belongs to the
+  // Maestro runtime itself, not to the project it is working on. Prefer the
+  // node_modules of the running Maestro process as the dependency root, so the
+  // doctor validates the Maestro's own tools and never requires a project
+  // (any stack / monorepo layout) to ship those dependencies at its root.
+  const maestroRoot = process.cwd();
+  const maestroCandidates = [maestroRoot, path.dirname(maestroRoot), findMatchingAncestor(maestroRoot)];
+  for (const candidate of maestroCandidates) {
+    if (candidate && isDependencyRootComplete(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fall back to the workspace/project roots (Maestro itself lives there in
+  // self-development). A project that has its own complete node_modules is fine;
+  // otherwise return null so the caller can run `npm ci` when a lockfile exists.
   if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) {
     return isDependencyRootComplete(workspaceRoot) ? workspaceRoot : null;
   }
-  if (workspaceRoot !== projectRoot && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
-  let current = projectRoot;
+  if (workspaceRoot !== path.resolve(projectPath) && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
+  let current = path.resolve(projectPath);
   while (true) {
     if (fs.existsSync(path.join(current, "node_modules", ".bin"))) {
       return isDependencyRootComplete(current) ? current : null;
@@ -285,6 +297,23 @@ function findPreparedDependencyRoot(workspacePath: string, projectPath: string):
     current = parent;
   }
   return null;
+}
+
+/**
+ * Walk up from `start` and return the first ancestor that carries a complete
+ * Maestro node_modules (tsc + vitest + better-sqlite3). Used to locate the
+ * Maestro runtime toolchain when the process cwd sits inside a worktree.
+ */
+function findMatchingAncestor(start: string): string | null {
+  let current = path.dirname(start);
+  const root = path.parse(current).root;
+  while (true) {
+    if (current && isDependencyRootComplete(current)) return current;
+    if (current === root) return null;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 /**
