@@ -344,10 +344,21 @@ function executableName(name: string): string {
 }
 
 function runCommand(command: string, args: string[], cwd: string, timeout = 15_000): { ok: boolean; output: string } {
-  const executable = process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-  const invocation = process.platform === "win32" && executable.endsWith(".cmd")
-    ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", executable, ...args] }
-    : { command: executable, args };
+  // On Windows, `npm.cmd` resolves whatever `node` is first on the inherited PATH,
+  // which can be a different major version than the one this process runs (e.g. a
+  // Node 22 shipped with another tool). Compiling native deps (better-sqlite3)
+  // under the wrong node major fails or silently skips the binding, which then
+  // shows up as a false `environment_blocked`. Pin npm to this process's own node
+  // binary so the toolchain is always prepared under the supported runtime.
+  const nodeBin = process.execPath;
+  const invocation =
+    process.platform === "win32"
+      ? command === "npm"
+        ? { command: nodeBin, args: [require("node:path").join(require("node:path").dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
+        : command.endsWith(".cmd")
+          ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", command, ...args] }
+          : { command, args }
+      : { command, args };
   const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
