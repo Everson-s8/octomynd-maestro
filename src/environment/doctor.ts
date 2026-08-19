@@ -131,10 +131,17 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
       "npm",
       ["ci", "--no-audit", "--no-fund"],
       workspacePath,
-      180_000
+      600_000
     );
     if (!prepared.ok) {
       checks.push(check("npm", "failed", `Dependency preparation failed: ${compactFailure(prepared.output)}`, "environment_blocked"));
+    } else if (process.platform === "win32") {
+      // A stale npm cache can hand npm ci a better-sqlite3 prebuilt compiled against
+      // a different NODE_MODULE_VERSION than the running node (e.g. a Node 22
+      // prebuild), so the native probe below would fail. Force a rebuild of the
+      // native module under this process's node right after install so the binding
+      // always matches the supported runtime.
+      runCommand("npm", ["rebuild", "better-sqlite3", "--no-audit", "--no-fund"], workspacePath, 300_000);
     }
     dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
   }
@@ -176,6 +183,28 @@ function nativeRuntimeCheck(dependencyRoot: string | null): EnvironmentCheck {
     ["-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
     dependencyRoot
   );
+  // A stale npm cache may deliver a prebuilt binary compiled against a different
+  // NODE_MODULE_VERSION (e.g. a Node 22 prebuild) than the runtime. Rebuild the
+  // native module under this process's node before failing, so an ABI mismatch
+  // is fixed rather than surfacing as a false environment_blocked.
+  if (!probe.ok && process.platform === "win32") {
+    const rebound = runCommand(
+      "npm",
+      ["rebuild", "better-sqlite3", "--no-audit", "--no-fund"],
+      dependencyRoot,
+      300_000
+    );
+    if (rebound.ok) {
+      const reProbe = runCommand(
+        process.execPath,
+        ["-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
+        dependencyRoot
+      );
+      if (reProbe.ok) {
+        return check("native_runtime", "passed", "better-sqlite3 native binding recomputed and loadable.");
+      }
+    }
+  }
   return check(
     "native_runtime",
     probe.ok ? "passed" : "failed",
@@ -344,14 +373,28 @@ function executableName(name: string): string {
 }
 
 function runCommand(command: string, args: string[], cwd: string, timeout = 15_000): { ok: boolean; output: string } {
-  const executable = process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-  const invocation = process.platform === "win32" && executable.endsWith(".cmd")
-    ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", executable, ...args] }
-    : { command: executable, args };
+  // On Windows, `npm.cmd` resolves whatever `node` is first on the inherited PATH,
+  // which can be a different major version than the one this process runs (e.g. a
+  // Node 22 shipped with another tool). Compiling native deps (better-sqlite3)
+  // under the wrong node major fails or silently skips the binding, which then
+  // shows up as a false `environment_blocked`. Pin npm to this process's own node
+  // binary so the toolchain is always prepared under the supported runtime.
+  const nodeBin = process.execPath;
+  const invocation =
+    process.platform === "win32"
+      ? command === "npm"
+        ? { command: nodeBin, args: [path.join(path.dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
+        : command.endsWith(".cmd")
+          ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", command, ...args] }
+          : { command, args }
+      : { command, args };
   const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
-    env: process.env,
+    // Ensure this process's own node directory precedes any other on PATH, so
+    // child tooling (npm node-gyp scripts, prebuild-install) resolves the same
+    // supported node and does not pick up a different major from the host PATH.
+    env: { ...process.env, PATH: [path.dirname(nodeBin), process.env.PATH].filter(Boolean).join(path.delimiter) },
     windowsHide: true,
     timeout
   });
