@@ -131,7 +131,7 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
       "npm",
       ["ci", "--no-audit", "--no-fund"],
       workspacePath,
-      180_000
+      600_000
     );
     if (!prepared.ok) {
       checks.push(check("npm", "failed", `Dependency preparation failed: ${compactFailure(prepared.output)}`, "environment_blocked"));
