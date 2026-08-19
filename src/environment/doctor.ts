@@ -135,6 +135,13 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     );
     if (!prepared.ok) {
       checks.push(check("npm", "failed", `Dependency preparation failed: ${compactFailure(prepared.output)}`, "environment_blocked"));
+    } else if (process.platform === "win32") {
+      // A stale npm cache can hand npm ci a better-sqlite3 prebuilt compiled against
+      // a different NODE_MODULE_VERSION than the running node (e.g. a Node 22
+      // prebuild), so the native probe below would fail. Force a rebuild of the
+      // native module under this process's node right after install so the binding
+      // always matches the supported runtime.
+      runCommand("npm", ["rebuild", "better-sqlite3", "--no-audit", "--no-fund"], workspacePath, 300_000);
     }
     dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
   }
