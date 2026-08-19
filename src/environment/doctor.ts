@@ -267,18 +267,25 @@ function recommendedAction(status: EnvironmentReadinessStatus, checks: Environme
 function findPreparedDependencyRoot(workspacePath: string, projectPath: string): string | null {
   const workspaceRoot = path.resolve(workspacePath);
 
-  // A task worktree that has its own complete toolchain must win — this is how
-  // Maestro self-development works: a self task bumps tsc/vitest/better-sqlite3
-  // and runs `npm ci` inside its worktree, and the doctor must validate against
-  // that freshly-installed toolchain, not the daemon's older one. Only when the
-  // project has NO complete toolchain of its own (any-stack / monorepo target,
-  // e.g. a Next.js app in a subfolder) do we fall back to the running Maestro's
-  // node_modules so the goal is not blocked by a project that isn't the Maestro.
-  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) {
-    if (isDependencyRootComplete(workspaceRoot)) return workspaceRoot;
+  // A task worktree with its own complete toolchain wins — self-development.
+  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin")) && isDependencyRootComplete(workspaceRoot)) {
+    return workspaceRoot;
   }
 
-  // Fall back to the Maestro runtime toolchain (tsc, vitest, better-sqlite3).
+  // A Node project rooted at the worktree (has a lockfile at its root, e.g. the
+  // Maestro repo itself) must prepare ITS OWN toolchain via `npm ci` — return
+  // null so the caller runs npm ci and the freshly-installed toolchain is used.
+  // We must NOT silently fall back to the daemon's older toolchain here, or a
+  // self-development task that bumps tsc/vitest/better-sqlite3 would validate
+  // against the wrong versions forever.
+  if (fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) {
+    return null;
+  }
+
+  // Otherwise the worktree is a target project that is not a root-Node repo
+  // (monorepo with the app in a subfolder, a Java/other-stack backend, etc.).
+  // It does not need the Maestro toolchain installed in itself, so fall back to
+  // the running Maestro runtime's node_modules so the goal is not blocked.
   const maestroRoot = process.cwd();
   const maestroCandidates = [maestroRoot, path.dirname(maestroRoot), findMatchingAncestor(maestroRoot)];
   for (const candidate of maestroCandidates) {
@@ -287,9 +294,7 @@ function findPreparedDependencyRoot(workspacePath: string, projectPath: string):
     }
   }
 
-  // Walk project ancestors for a complete node_modules (a monorepo root that
-  // carries the toolchain), then give the caller the project root to run `npm ci`.
-  if (workspaceRoot !== path.resolve(projectPath) && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
+  // Last resort: a project ancestor with a complete toolchain, else null.
   let current = path.resolve(projectPath);
   while (true) {
     if (fs.existsSync(path.join(current, "node_modules", ".bin")) && isDependencyRootComplete(current)) {

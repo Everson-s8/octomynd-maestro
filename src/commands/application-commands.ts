@@ -359,6 +359,10 @@ export class ApplicationCommands {
           warnings.push(`Could not configure remote origin: ${remoteResult.error}`);
         } else if (remoteResult.added) {
           warnings.push(`Configured remote origin pointing to ${remoteUrl}.`);
+        } else if (remoteResult.existingUrl && normalizeRemoteUrl(remoteResult.existingUrl) !== normalizeRemoteUrl(remoteUrl)) {
+          warnings.push(
+            `Local repo at ${projectPath} already has origin ${remoteResult.existingUrl}, which differs from requested ${remoteUrl}; keeping the existing origin.`
+          );
         }
       }
     }

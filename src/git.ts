@@ -154,7 +154,6 @@ export function validateRemoteUrl(remoteUrl: string): string | null {
     // scp-like syntax (git@host:org/repo) or a plain path — reject to be safe.
     return "Remote URL must use http(s), git, ssh or file scheme.";
   }
-  if (value.startsWith("-")) return "Remote URL must not begin with '-'.";
   return null;
 }
 

@@ -128,13 +128,15 @@ describe("Environment Doctor", () => {
     expect(report.recommendedAction).toContain("quota");
   }, 15_000);
 
-  it("uses the Maestro toolchain rather than borrowing from an arbitrary project root", () => {
-    // An isolated task worktree that has a lockfile but no toolchain must not
-    // reach into an arbitrary project directory for tsc/vitest/better-sqlite3.
-    // It should resolve the toolchain from the running Maestro instead.
+  it("uses the Maestro toolchain for a non-root-Node worktree (monorepo target)", () => {
+    // A target project that is NOT a root-Node repo (e.g. Next.js in a
+    // subfolder, a Java backend at the root) has no lockfile at the worktree
+    // root, so the doctor must not demand a toolchain there — it falls back to
+    // the running Maestro runtime's node_modules instead of blocking.
     const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-9");
     fs.mkdirSync(isolatedWorktree, { recursive: true });
-    fs.writeFileSync(path.join(isolatedWorktree, "package-lock.json"), "{}", "utf8");
+    // No package-lock.json at root (a monorepo / non-root-Node target).
+    fs.writeFileSync(path.join(isolatedWorktree, "README.md"), "# target\n");
 
     const report = runEnvironmentDoctor({
       config: doctorConfig(),
@@ -143,7 +145,7 @@ describe("Environment Doctor", () => {
     });
 
     // The toolchain is satisfied by the Maestro runtime, never borrowed from the
-    // project root being worked on.
+    // target project root being worked on.
     const check = report.checks.find((c) => c.name === "typescript");
     expect(check, "typescript check should exist").toBeDefined();
     expect(["passed", "skipped"], "typescript should not be unavailable").toContain(check!.status);
