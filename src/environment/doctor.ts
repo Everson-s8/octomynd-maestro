@@ -391,7 +391,10 @@ function runCommand(command: string, args: string[], cwd: string, timeout = 15_0
   const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
-    env: process.env,
+    // Ensure this process's own node directory precedes any other on PATH, so
+    // child tooling (npm node-gyp scripts, prebuild-install) resolves the same
+    // supported node and does not pick up a different major from the host PATH.
+    env: { ...process.env, PATH: [path.dirname(nodeBin), process.env.PATH].filter(Boolean).join(path.delimiter) },
     windowsHide: true,
     timeout
   });
