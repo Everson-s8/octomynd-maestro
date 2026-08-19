@@ -123,7 +123,7 @@ function toWindowBucket(
 ): QuotaBucket {
   const used = num(win.used_percent);
   const windowSeconds = num(win.limit_window_seconds);
-  const isSession = windowSeconds != null && windowSeconds <= 3600; // ~5h
+  const isSession = windowSeconds != null && windowSeconds <= 18000; // ~5h (5*3600s)
   return {
     provider,
     modelId: null,
@@ -376,23 +376,31 @@ async function claudeFetcher(): Promise<QuotaResult> {
       five_hour?: { used_percentage?: number; utilization?: number; resets_at?: string | number };
       seven_day?: { used_percentage?: number; utilization?: number; resets_at?: string | number };
     };
-    const buckets: QuotaBucket[] = [data.five_hour, data.seven_day]
-      .filter(Boolean)
-      .map((w, i) => {
-        const raw = w as { used_percentage?: number; utilization?: number; resets_at?: string | number };
-        const usedPct = typeof raw.utilization === "number" ? raw.utilization : typeof raw.used_percentage === "number" ? raw.used_percentage : null;
-        const mins = i === 0 ? 300 : 10080;
-        return {
-          provider: "claude",
-          modelId: i === 0 ? "claude-5h" : "claude-weekly",
-          usedPercent: usedPct == null ? null : Math.min(100, Math.max(0, Math.round(usedPct))),
-          remainingPercent: usedPct == null ? null : Math.max(0, 100 - Math.min(100, Math.round(usedPct))),
-          resetsAt: raw.resets_at == null ? null : new Date(resolveEpochMs(raw.resets_at)).toISOString(),
-          windowMinutes: mins,
-          windowKind: i === 0 ? "5h" : "weekly",
-          planType
-        };
+    const windows: Array<{ kind: "5h" | "weekly"; raw?: { used_percentage?: number; utilization?: number; resets_at?: string | number } }> = [
+      { kind: "5h", raw: data.five_hour },
+      { kind: "weekly", raw: data.seven_day }
+    ];
+    const buckets: QuotaBucket[] = [];
+    for (const w of windows) {
+      if (!w.raw) continue;
+      const usedPct =
+        typeof w.raw.utilization === "number"
+          ? w.raw.utilization
+          : typeof w.raw.used_percentage === "number"
+            ? w.raw.used_percentage
+            : null;
+      const mins = w.kind === "5h" ? 300 : 10080;
+      buckets.push({
+        provider: "claude",
+        modelId: w.kind === "5h" ? "claude-5h" : "claude-weekly",
+        usedPercent: usedPct == null ? null : Math.min(100, Math.max(0, Math.round(usedPct))),
+        remainingPercent: usedPct == null ? null : Math.max(0, 100 - Math.min(100, Math.round(usedPct))),
+        resetsAt: w.raw.resets_at == null ? null : new Date(resolveEpochMs(w.raw.resets_at)).toISOString(),
+        windowMinutes: mins,
+        windowKind: w.kind,
+        planType
       });
+    }
     return {
       provider: "claude",
       status: buckets.some((b) => b.usedPercent != null) ? "ok" : "unavailable",
@@ -487,7 +495,9 @@ async function geminiApiFetcher(): Promise<QuotaResult> {
   // The Gemini Developer API key lists models with per-model limits; here we only
   // prove connectivity rather than a real quota fraction, so mark unavailable.
   try {
-    const res = await fetch(`${GEMINI_API_KEYED_MODELS}?key=${key}`);
+    const res = await fetch(GEMINI_API_KEYED_MODELS, {
+      headers: { "x-goog-api-key": key }
+    });
     if (!res.ok) return buildError("gemini", new Error(`gemini models ${res.status}`));
     return buildEmptyUnavailable("gemini", "quota por API key indisponível (sem fração)");
   } catch (error) {
