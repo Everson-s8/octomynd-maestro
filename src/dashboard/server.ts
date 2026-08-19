@@ -81,7 +81,9 @@ export function createDashboardServer(options: DashboardServerOptions) {
     options.database,
     options.featureGithub,
     options.workGraphRuntime,
-    options.skillLifecycle
+    options.skillLifecycle,
+    undefined,
+    options.config.projectsPath
   );
   const chatService = options.chatService ?? new OperationalChatService({
     database: options.database,
@@ -1168,6 +1170,51 @@ async function routeRequest(
     } catch (error) {
       sendCommandError(response, error, "work_intake_submit_failed");
     }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/projects") {
+    const body = await readJsonBody(request);
+    const key = typeof body.key === "string" ? body.key.trim() : "";
+    const name = typeof body.name === "string" ? body.name.trim() : undefined;
+    const pathValue = typeof body.path === "string" ? body.path.trim() : undefined;
+    const remoteUrl = typeof body.remoteUrl === "string" ? body.remoteUrl.trim() : undefined;
+    const defaultBranch = typeof body.defaultBranch === "string" ? body.defaultBranch.trim() : undefined;
+    const description = typeof body.description === "string" ? body.description.trim() : undefined;
+    const mode = (body.mode === "github" || body.mode === "localremote" || body.mode === "local")
+      ? body.mode
+      : undefined;
+
+    if (!key) {
+      sendJson(response, 400, { error: "project_register_failed", details: ["Project key is required."] });
+      return;
+    }
+
+    try {
+      const result = commands.registerProject(
+        { channel: "dashboard" },
+        {
+          key,
+          name,
+          path: pathValue,
+          remoteUrl,
+          defaultBranch,
+          description,
+          mode
+        },
+        options.config.projectsPath
+      );
+      sendJson(response, 201, result);
+    } catch (error) {
+      sendCommandError(response, error, "project_register_failed");
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/projects") {
+    const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 100;
+    const projects = options.database.listProjects(Number.isFinite(limit) && limit > 0 ? limit : 100);
+    sendJson(response, 200, { projects });
     return;
   }
 

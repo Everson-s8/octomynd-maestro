@@ -148,10 +148,64 @@ describe("ApplicationCommands.registerProject", () => {
     expect(event?.source).toBe("telegram");
   });
 
+  it("registers a project by cloning from a remote repository into managed projects root", () => {
+    const upstreamDir = path.join(tempDir, "upstream-repo");
+    fs.mkdirSync(upstreamDir);
+    runGit(["init", "-b", "main"], upstreamDir);
+    fs.writeFileSync(path.join(upstreamDir, "index.js"), "console.log('upstream');\n");
+    runGit(["add", "index.js"], upstreamDir);
+    runGit(["-c", "user.name=Maestro Test", "-c", "user.email=maestro@test.local", "commit", "-m", "init upstream"], upstreamDir);
+
+    const projectsRoot = path.join(tempDir, "managed-projects");
+    const result = commands.registerProject(
+      { channel: "dashboard" },
+      {
+        key: "@cloned-app",
+        remoteUrl: "file://" + upstreamDir.replace(/\\/g, "/"),
+        mode: "github"
+      },
+      projectsRoot
+    );
+
+    expect(result.project.key).toBe("cloned-app");
+    expect(result.project.path).toBe(path.join(projectsRoot, "cloned-app"));
+    expect(fs.existsSync(path.join(projectsRoot, "cloned-app", "index.js"))).toBe(true);
+    expect(result.project.defaultBranch).toBe("main");
+  });
+
+  it("links a local repository to a remote origin if origin is missing", () => {
+    const localDir = path.join(tempDir, "local-to-link");
+    fs.mkdirSync(localDir);
+    runGit(["init", "-b", "main"], localDir);
+
+    const result = commands.registerProject(
+      { channel: "dashboard" },
+      {
+        key: "linked-app",
+        path: localDir,
+        remoteUrl: "https://github.com/octomynd/linked-app.git",
+        mode: "localremote"
+      }
+    );
+
+    expect(result.project.key).toBe("linked-app");
+    expect(result.warnings.some((w) => w.includes("Configured remote origin"))).toBe(true);
+  });
+
   it("throws a typed validation error for a missing path", () => {
     expect.assertions(2);
     try {
       commands.registerProject({ channel: "dashboard" }, { key: "missing", path: path.join(tempDir, "nope") });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApplicationCommandError);
+      expect((error as ApplicationCommandError).code).toBe("validation");
+    }
+  });
+
+  it("throws a typed validation error for an invalid project key", () => {
+    expect.assertions(2);
+    try {
+      commands.registerProject({ channel: "dashboard" }, { key: "X", path: projectDir });
     } catch (error) {
       expect(error).toBeInstanceOf(ApplicationCommandError);
       expect((error as ApplicationCommandError).code).toBe("validation");

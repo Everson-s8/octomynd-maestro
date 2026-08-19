@@ -1194,3 +1194,42 @@ export async function executeChatAction(projectKey: string, action: GovernedChat
   }
   return payload;
 }
+
+export type RegisterProjectInput = {
+  key: string;
+  path?: string;
+  remoteUrl?: string;
+  name?: string;
+  defaultBranch?: string;
+  description?: string;
+  mode?: "github" | "localremote" | "local";
+};
+
+export type RegisterProjectResult = {
+  project: {
+    id: number;
+    key: string;
+    name: string;
+    path: string;
+    defaultBranch: string;
+    createdAt: string;
+    updatedAt: string;
+  };
+  warnings: string[];
+};
+
+export async function registerProject(input: RegisterProjectInput): Promise<RegisterProjectResult> {
+  const response = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const payload = await response.json() as RegisterProjectResult & { error?: string; details?: string[] | string };
+  if (!response.ok || !payload.project) {
+    const detailMsg = Array.isArray(payload.details)
+      ? payload.details.join(", ")
+      : payload.details || payload.error || "Falha ao registrar projeto.";
+    throw new Error(detailMsg);
+  }
+  return payload;
+}

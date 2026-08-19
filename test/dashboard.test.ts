@@ -868,6 +868,61 @@ describe("dashboard", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
+
+  it("registers a new project via POST /api/projects and lists it via GET /api/projects", async () => {
+    const newProjectDir = path.join(tempDir, "api-project");
+    fs.mkdirSync(newProjectDir);
+    runGit(["init", "-b", "main"], newProjectDir);
+
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const registerRes = await fetch(`http://127.0.0.1:${port}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: "api-proj",
+          name: "API Project",
+          path: newProjectDir,
+          defaultBranch: "main"
+        })
+      });
+
+      expect(registerRes.status).toBe(201);
+      const registerData = await registerRes.json() as any;
+      expect(registerData.project.key).toBe("api-proj");
+      expect(registerData.project.name).toBe("API Project");
+
+      const listRes = await fetch(`http://127.0.0.1:${port}/api/projects`);
+      expect(listRes.status).toBe(200);
+      const listData = await listRes.json() as any;
+      expect(listData.projects.some((p: any) => p.key === "api-proj")).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("rejects project registration with 400 when key is missing or invalid", async () => {
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "" })
+      });
+
+      expect(res.status).toBe(400);
+      const data = await res.json() as any;
+      expect(data.error).toBe("project_register_failed");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
 });
 
 function runGit(args: string[], cwd: string) {

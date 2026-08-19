@@ -89,6 +89,93 @@ export function runGit(args: string[], cwd: string): GitCommandResult {
   };
 }
 
+export function cloneGitRepository(
+  remoteUrl: string,
+  targetPath: string,
+  defaultBranch?: string
+): GitCommandResult {
+  const urlError = validateRemoteUrl(remoteUrl);
+  if (urlError) {
+    return { ok: false, stdout: "", stderr: urlError, exitCode: 1 };
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+  const args = ["clone"];
+  if (defaultBranch && defaultBranch.trim()) {
+    args.push("-b", defaultBranch.trim());
+  }
+  // `--` stops git from parsing a user-controlled value (e.g. one starting with
+  // `-`) as an option, closing the git argument-injection class. Scheme is also
+  // allow-listed above so only https/git/ssh URLs are accepted.
+  args.push("--", remoteUrl.trim(), targetPath);
+
+  return runGit(args, path.dirname(targetPath));
+}
+
+export function ensureGitRemoteOrigin(
+  repoPath: string,
+  remoteUrl: string
+): { added: boolean; existingUrl?: string; error?: string } {
+  const urlError = validateRemoteUrl(remoteUrl);
+  if (urlError) {
+    return { added: false, error: urlError };
+  }
+
+  const check = runGit(["remote", "get-url", "origin"], repoPath);
+  if (check.ok) {
+    return { added: false, existingUrl: check.stdout.trim() };
+  }
+
+  const add = runGit(["remote", "add", "origin", "--", remoteUrl.trim()], repoPath);
+  if (!add.ok) {
+    return { added: false, error: add.stderr || add.stdout };
+  }
+
+  return { added: true };
+}
+
+/**
+ * Validate a remote repository URL before it is passed to git. Only allow
+ * https, git and ssh schemes so a user-controlled value can never be parsed by
+ * git as an option (e.g. `--upload-pack=...`). Returns an error message, or
+ * null when the URL is acceptable.
+ */
+export function validateRemoteUrl(remoteUrl: string): string | null {
+  const value = (remoteUrl || "").trim();
+  if (!value) return "Remote repository URL is required.";
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(value);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    if (!["https", "git", "ssh", "file"].includes(scheme)) {
+      return `Unsupported remote URL scheme "${scheme}". Allowed: https, git, ssh, file.`;
+    }
+  } else {
+    // scp-like syntax (git@host:org/repo) or a plain path — reject to be safe.
+    return "Remote URL must use http(s), git, ssh or file scheme.";
+  }
+  return null;
+}
+
+export function detectGitDefaultBranch(repoPath: string): string | null {
+  const originHead = runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoPath);
+  if (originHead.ok && originHead.stdout.trim()) {
+    return originHead.stdout.trim().replace(/^origin\//, "");
+  }
+
+  const currentHead = runGit(["symbolic-ref", "--short", "HEAD"], repoPath);
+  if (currentHead.ok && currentHead.stdout.trim()) {
+    return currentHead.stdout.trim();
+  }
+
+  const showCurrent = runGit(["branch", "--show-current"], repoPath);
+  if (showCurrent.ok && showCurrent.stdout.trim()) {
+    return showCurrent.stdout.trim();
+  }
+
+  return null;
+}
+
 function slugify(text: string): string {
   const slug = text
     .normalize("NFD")
