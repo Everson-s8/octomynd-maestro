@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync, spawn } from "node:child_process";
 import {
   QuotaBucket,
   QuotaFetcher,
@@ -144,113 +145,231 @@ function str(v: unknown): string | null {
 
 // ---- Build ------------------------------------------------------------------
 
-// ---- Gemini / Antigravity -------------------------------------------------
-// Reads ~/.gemini/oauth_creds.json (same creds the agy/Gemini CLI use) and hits
-// the Code Assist retrieveUserQuota endpoint. Antigravity mirrors Gemini.
-const GEMINI_RETRIEVE_QUOTA = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-// The OAuth client the Gemini CLI / antigravity uses to refresh tokens.
-const GEMINI_OAUTH_CLIENT_ID = "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com";
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+// ---- Antigravity (agy local language server) -------------------------------
+// The gemini-cli OAuth flow that Orca used (retrieveUserQuota on
+// cloudcode-pa.googleapis.com) was migrated to Antigravity, so the old path
+// returns 401/IneligibleTier. The current mechanism (mirrors CodexBar): query
+// the agy CLI's local HTTPS language server while agy is alive. It exposes
+// RetrieveUserQuotaSummary with two pools (Gemini and Claude+GPT) each with a
+// weekly and a 5-hour bucket.
+const ANTIGRAVITY_SUMMARY_PATH =
+  "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const ANTIGRAVITY_USER_STATUS_PATH =
+  "/exa.language_server_pb.LanguageServerService/GetUserStatus";
+const ANTIGRAVITY_QUOTA_BODY = JSON.stringify({
+  ideName: "antigravity",
+  extensionName: "antigravity",
+  locale: "en",
+  ideVersion: "unknown"
+});
 
-async function geminiToken(): Promise<string | null> {
+// Finds a loopback port owned by a running agy (language server). Returns null
+// when agy is not running.
+function findAgyLoopbackPort(): number[] {
   try {
-    const creds = readJson(homeFile(".gemini", "oauth_creds.json")) as {
-      access_token?: string;
-      refresh_token?: string;
-      expiry_date?: number;
-    };
-    if (!creds.access_token) return null;
-    const now = Date.now();
-    // If expired and we have a refresh token, try a lightweight refresh.
-    if (creds.expiry_date && now > creds.expiry_date && creds.refresh_token) {
-      const form = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: creds.refresh_token,
-        client_id: GEMINI_OAUTH_CLIENT_ID
-      });
-      try {
-        const res = await fetch(GOOGLE_TOKEN_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: form
-        });
-        if (res.ok) {
-          const tok = (await res.json()) as { access_token?: string };
-          if (tok.access_token) return tok.access_token;
-        }
-      } catch {
-        // fall through to using the stored (possibly expired) token
+    const sbin = execFileSync("netstat", ["-ano"], { encoding: "utf8", windowsHide: true })
+      .toString();
+    const byPid = new Map<number, number[]>(); // pid -> loopback ports
+    for (const line of sbin.split(/\r?\n/)) {
+      const m = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/);
+      if (m) {
+        const pid = Number(m[2]);
+        if (!byPid.has(pid)) byPid.set(pid, []);
+        byPid.get(pid)!.push(Number(m[1]));
       }
     }
-    return creds.access_token;
+    // Find the agy pid then its loopback ports.
+    const task = execFileSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true })
+      .toString();
+    for (const line of task.split(/\r?\n/)) {
+      if (!/agy\.exe/i.test(line)) continue;
+      const pidMatch = line.match(/"(\d+)"/);
+      if (pidMatch && byPid.has(Number(pidMatch[1]))) return byPid.get(Number(pidMatch[1]))!;
+    }
   } catch {
-    return null;
+    return [];
   }
+  return [];
 }
 
-async function geminiFetcher(): Promise<QuotaResult> {
-  const token = await geminiToken();
-  if (!token) return buildEmptyUnavailable("antigravity", "credenciais do Gemini não encontradas (~/.gemini/oauth_creds.json)");
-  const project = (() => {
-    try {
-      const p = readJson(homeFile(".gemini", "projects.json")) as { projects?: Record<string, string> };
-      const first = Object.values(p.projects ?? {})[0];
-      return first ?? "";
-    } catch {
-      return "";
-    }
-  })();
-  try {
-    const res = await fetch(GEMINI_RETRIEVE_QUOTA, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ project })
+// Fetches a language-server RPC over the agy local port. The agy exposes the
+// language server over HTTPS (self-signed cert) on one loopback port and over
+// plain HTTP on another, so try HTTPS then HTTP. Returns the decoded JSON.
+async function postAgyRpc(port: number, servicePath: string): Promise<unknown> {
+  const body = ANTIGRAVITY_QUOTA_BODY;
+  const tryProtocol = (mod: typeof import("node:https") | typeof import("node:http"), tls: boolean) =>
+    new Promise<unknown>((resolve) => {
+      const req = (mod as any).request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: servicePath,
+          method: "POST",
+          rejectUnauthorized: false,
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+        } as any,
+        (res: any) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: any) => chunks.push(Buffer.from(c)));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            const m = text.match(/\{"response":\s*\{/);
+            if (!m || res.statusCode !== 200) {
+              resolve(null);
+              return;
+            }
+            try {
+              resolve(JSON.parse(text.slice(m.index!)));
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+      req.on("error", () => resolve(null));
+      req.end(body);
     });
-    if (!res.ok) return buildError("antigravity", new Error(`gemini retrieveUserQuota ${res.status}`));
-    const data = (await res.json()) as { buckets?: { remainingFraction?: number; resetTime?: string; modelId?: string }[] };
-    const buckets: QuotaBucket[] = (data.buckets ?? [])
-      .filter((b) => typeof b.remainingFraction === "number")
-      .map((b) => remainingFractionToBucket({
-        provider: "antigravity",
-        modelId: b.modelId ?? null,
-        remainingFraction: b.remainingFraction ?? null,
-        resetTime: b.resetTime ?? null,
-        windowKind: "unknown",
-        windowMinutes: null
-      }));
-    return {
-      provider: "antigravity",
-      status: buckets.length ? "ok" : "unavailable",
-      updatedAt: new Date().toISOString(),
-      buckets,
-      error: buckets.length ? null : "gemini sem buckets de quota"
-    };
-  } catch (error) {
-    return buildError("antigravity", error);
+
+  const https = await import("node:https");
+  const httpM = await import("node:http");
+  const overHttps = await tryProtocol(https, true);
+  if (overHttps) return overHttps;
+  return tryProtocol(httpM, false);
+}
+
+type AntigravityBucket = {
+  bucketId?: string;
+  window?: string;
+  remainingFraction?: number;
+  resetTime?: string;
+  displayName?: string;
+};
+type AntigravityGroup = { displayName?: string; buckets?: AntigravityBucket[] };
+
+async function antigravityFetcher(): Promise<QuotaResult> {
+  let ports = findAgyLoopbackPort();
+  // If agy is not running, try to launch it briefly so its language server is up.
+  if (ports.length === 0) {
+    const spawned = spawn("agy", [], { stdio: "ignore", detached: true });
+    spawned.unref();
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 500));
+      ports = findAgyLoopbackPort();
+      if (ports.length) break;
+    }
   }
+  if (ports.length === 0) {
+    return buildEmptyUnavailable("antigravity", "agy não está rodando (sem sessão Antigravity)");
+  }
+
+  // Try each loopback port; the agy exposes the language server over HTTPS on
+  // one port and plain HTTP on another, so attempt both per port.
+  let data: unknown = null;
+  for (const p of ports) {
+    data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
+    if (data && Array.isArray((data as any)?.response?.groups)) break;
+  }
+  const groups: AntigravityGroup[] = Array.isArray((data as any)?.response?.groups)
+    ? (data as any).response.groups
+    : [];
+  if (groups.length === 0) return buildError("antigravity", new Error("RetrieveUserQuotaSummary sem groups"));
+
+  const buckets: QuotaBucket[] = [];
+  for (const g of groups) {
+    const label = g.displayName ?? "Antigravity";
+    const pool = /claude|gpt/i.test(label) ? "claude_gpt" : "gemini";
+    for (const b of g.buckets ?? []) {
+      const remFrac = typeof b.remainingFraction === "number" ? b.remainingFraction : null;
+      const isWeekly = /weekly/i.test(b.window ?? b.bucketId ?? "");
+      buckets.push({
+        provider: "antigravity",
+        modelId: `${pool}${isWeekly ? "-weekly" : "-5h"}`,
+        usedPercent: remFrac == null ? null : Math.round((1 - remFrac) * 100),
+        remainingPercent: remFrac == null ? null : Math.round(remFrac * 100),
+        resetsAt: b.resetTime ?? null,
+        windowMinutes: isWeekly ? 10080 : 300,
+        windowKind: isWeekly ? "weekly" : "5h",
+        planType: "pro",
+        detail: label
+      });
+    }
+  }
+  return {
+    provider: "antigravity",
+    status: buckets.length ? "ok" : "unavailable",
+    updatedAt: new Date().toISOString(),
+    buckets,
+    error: buckets.length ? null : "sem buckets de quota do antigravity"
+  };
 }
 
 // ---- Claude (OAuth subscription) -------------------------------------------
 // Reads the OAuth access token from the Claude CLI config if present, else
 // unavailable. Endpoint mirrors Orca's claude-fetcher.
 const ANTHROPIC_OAUTH_USAGE = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
-async function claudeToken(): Promise<string | null> {
-  // Claude Code stores OAuth tokens in the config directory/service.
-  const candidates = [
-    process.env.CLAUDE_CODE_OAUTH_TOKEN,
-    (() => { try { return (readJson(homeFile(".claude", "oauth_accounts.json")) as { active?: string })?.active; } catch { return null; } })(),
-    (() => { try { return (readJson(homeFile(".claude", "credentials.json")) as { access_token?: string })?.access_token; } catch { return null; } })()
-  ];
-  return candidates.find((c) => typeof c === "string" && c.length > 0) ?? null;
+// Reads the Claude Code OAuth credentials from ~/.claude/.credentials.json
+// (claudeAiOauth block) and refreshes the access token when it is expired.
+async function claudeCredentials(): Promise<{
+  token: string | null;
+  planType: string | null;
+  refreshToken: string | null;
+} | null> {
+  const credsPath = homeFile(".claude", ".credentials.json");
+  if (!fs.existsSync(credsPath)) return null;
+  try {
+    const data = readJson(credsPath) as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        refreshToken?: string;
+        expiresAt?: number;
+        subscriptionType?: string;
+      };
+    };
+    const oauth = data.claudeAiOauth;
+    if (!oauth) return null;
+    const planType = oauth.subscriptionType ?? null;
+    let token = oauth.accessToken ?? null;
+    const expiresAt = oauth.expiresAt ?? 0;
+    const refreshToken = oauth.refreshToken ?? null;
+    // If expired and we have a refresh token, try to rotate at the Claude token endpoint.
+    if (refreshToken && (!expiresAt || Date.now() > expiresAt)) {
+      try {
+        const form = new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: CLAUDE_OAUTH_CLIENT_ID
+        });
+        const res = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form
+        });
+        if (res.ok) {
+          const tok = (await res.json()) as { access_token?: string };
+          if (tok.access_token) token = tok.access_token;
+        }
+      } catch {
+        // keep the stored token
+      }
+    }
+    return { token, planType, refreshToken };
+  } catch {
+    return null;
+  }
 }
 
 async function claudeFetcher(): Promise<QuotaResult> {
-  const token = await claudeToken();
+  const creds = await claudeCredentials();
+  const token = creds?.token ?? null;
   if (!token) return buildEmptyUnavailable("claude", "OAuth token do Claude não encontrado (subscription)");
+  const planType = creds?.planType ?? null;
   try {
     const res = await fetch(ANTHROPIC_OAUTH_USAGE, {
-      headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2024-10-01", "User-Agent": "claude-code/2.1.0" }
+      headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0" }
     });
     if (!res.ok) return buildError("claude", new Error(`anthropic oauth usage ${res.status}`));
     const data = (await res.json()) as {
@@ -271,7 +390,7 @@ async function claudeFetcher(): Promise<QuotaResult> {
           resetsAt: raw.resets_at == null ? null : new Date(resolveEpochMs(raw.resets_at)).toISOString(),
           windowMinutes: mins,
           windowKind: i === 0 ? "5h" : "weekly",
-          planType: null
+          planType
         };
       });
     return {
@@ -296,7 +415,7 @@ function resolveEpochMs(v: string | number): number {
 export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
   return {
     codex: codexFetcher,
-    antigravity: geminiFetcher,
+    antigravity: antigravityFetcher,
     claude: claudeFetcher
   };
 }

@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult } from "../api";
+import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
@@ -116,7 +116,36 @@ function Providers({ data }: { data: DashboardData }) {
 }
 function agentState(state: string) { return state === "working" ? "trabalhando" : state === "ready" ? "pronto" : state; }
 
-function Analytics({ data }: { data: DashboardData }) { return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Custo" /><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Custo hoje / tokens" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox"><PanelHead eyebrow="Distribuição de custos" title="Por provider" meta="USD" />{data.agents.map(a => <div className="costrow" key={a.id}><span className="dot" /><div className="lbl">{a.label}</div><div className="track"><i style={{ width: "30%" }} /></div><span className="amt">$0.00</span></div>)}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>; }
+function Analytics({ data }: { data: DashboardData }) {
+  const [quota, setQuota] = useState<QuotaBucket[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchQuota()
+      .then((results) => {
+        if (!cancelled) {
+          const buckets = results.filter((r) => r.status === "ok").flatMap((r) => r.buckets);
+          setQuota(buckets.length ? buckets : []);
+        }
+      })
+      .catch(() => { if (!cancelled) setQuota([]); });
+    return () => { cancelled = true; };
+  }, []);
+  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Custo" /><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Custo hoje / tokens" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox"><PanelHead eyebrow="Consumo Disponível" title="Por provider" meta="% restante e próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Sem leitura de cota</h4><p>Conecte a conta de um provider (OAuth) para ver o % de uso.</p></div> : quota.map((b, i) => <QuotaRow key={b.provider + (b.modelId || "") + i} bucket={b} />)}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
+}
+function QuotaRow({ bucket }: { bucket: QuotaBucket }) {
+  const remaining = bucket.remainingPercent;
+  const used = bucket.usedPercent;
+  const bar = remaining == null ? 0 : Math.max(0, Math.min(100, remaining));
+  const label = remaining == null ? "n/d" : `${remaining}% restante`;
+  const reset = bucket.resetsAt ? ` · ${resetLabel(bucket.resetsAt)}` : "";
+  return <div className="costrow" key={bucket.provider}><span className="dot" /><div className="lbl">{bucket.provider}{bucket.modelId ? <small>{bucket.modelId}</small> : null}</div><div className="track"><i style={{ width: `${bar}%` }} /></div><span className="amt">{label}{reset}</span></div>;
+}
+function resetLabel(iso: string): string {
+  const diffMs = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(diffMs)) return "";
+  const mins = Math.max(0, Math.round(diffMs / 60000));
+  return mins >= 60 ? `reset ${Math.round(mins / 60)}h` : `reset ${mins}min`;
+}
 function Settings({ data }: { data: DashboardData }) {
   const [botToken, setBotToken] = useState("");
   const [allowedUserId, setAllowedUserId] = useState("");
