@@ -1233,3 +1233,36 @@ export async function registerProject(input: RegisterProjectInput): Promise<Regi
   }
   return payload;
 }
+
+// ---- Quota / rate-limit usage indicator ----
+
+export type QuotaWindowKind = "5h" | "weekly" | "daily" | "unknown";
+
+export type QuotaBucket = {
+  provider: string;
+  modelId: string | null;
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  resetsAt: string | null;
+  windowMinutes: number | null;
+  windowKind: QuotaWindowKind;
+  planType: string | null;
+  detail?: string;
+};
+
+export type QuotaResult = {
+  provider: string;
+  status: "ok" | "unavailable" | "error";
+  updatedAt: string;
+  buckets: QuotaBucket[];
+  error: string | null;
+};
+
+export async function fetchQuota(): Promise<QuotaResult[]> {
+  const response = await fetch("/api/quota");
+  if (!response.ok) {
+    throw new Error(`Quota indisponível (${response.status}).`);
+  }
+  const payload = (await response.json()) as { quota?: QuotaResult[] };
+  return payload.quota ?? [];
+}

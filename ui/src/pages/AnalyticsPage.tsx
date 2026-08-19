@@ -1,9 +1,10 @@
-import { DashboardData } from "../api";
+import { DashboardData, QuotaBucket, QuotaResult, fetchQuota } from "../api";
 import { calculateDashboardCost, CostDisplay } from "../components/CostDisplay";
 import { EventStream } from "../components/EventStream";
 import { WorkGraphBoard } from "../components/WorkGraphBoard";
 import { SectionHeader } from "../components/SectionHeader";
 import { Icon } from "../components/Icon";
+import { useEffect, useState } from "react";
 
 export interface AnalyticsPageProps {
   data: DashboardData;
@@ -12,6 +13,18 @@ export interface AnalyticsPageProps {
 
 export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
   const { costToday, totalTokens } = calculateDashboardCost(data);
+  const [quota, setQuota] = useState<QuotaResult[] | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setQuotaLoading(true);
+    fetchQuota()
+      .then((q) => { if (!cancelled) setQuota(q); })
+      .catch(() => { if (!cancelled) setQuota([]); })
+      .finally(() => { if (!cancelled) setQuotaLoading(false); });
+    return () => { cancelled = true; };
+  }, [onRefresh]);
 
   const completedCount = data.tasks.filter((t) => t.status === "done").length;
   const totalTasks = data.tasks.length;
@@ -33,17 +46,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
         { provider: "antigravity", costUsd: costSummary.todayTotalUsd * 0.15, inputTokens: Math.round(costSummary.todayInputTokens * 0.15), outputTokens: Math.round(costSummary.todayOutputTokens * 0.15) }
       ];
 
-  const projects = costSummary.byProject.length > 0
-    ? costSummary.byProject
-    : data.projects.map((p) => ({
-        projectKey: p.key,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0
-      }));
-
   const maxProviderTokens = Math.max(1, ...providers.map((p) => p.inputTokens + p.outputTokens));
-  const maxProviderCost = Math.max(0.001, ...providers.map((p) => p.costUsd));
 
   const providerColors: Record<string, string> = {
     codex: "#38bdf8",
@@ -162,62 +165,30 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
           </div>
         </div>
 
-        {/* Cost Distribution Chart */}
+        {/* Consumo Disponível (Quota) per Provider */}
         <div className="panel cost-chart-panel" style={{ padding: "20px" }}>
-          <SectionHeader eyebrow="Distribuição de Custos" title="Cost Distribution Chart" meta="Custo estimado em USD" />
+          <SectionHeader eyebrow="Consumo Disponível" title="Quota Usage Chart" meta="% restante de cota por provider e próximo reset" />
           <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            {providers.map((p) => {
-              const pct = Math.min(100, Math.round((p.costUsd / maxProviderCost) * 100));
-              const color = providerColors[p.provider] || "#a0a5b5";
-
-              return (
-                <div key={p.provider} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                    <span style={{ fontWeight: 600, color: "#e2e8f0", textTransform: "capitalize" }}>
-                      <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: color, marginRight: "8px" }} />
-                      {p.provider}
-                    </span>
-                    <strong style={{ color: "#38bdf8" }}>${p.costUsd.toFixed(4)}</strong>
-                  </div>
-                  <div style={{ height: "12px", background: "rgba(255,255,255,0.06)", borderRadius: "6px", overflow: "hidden" }}>
-                    <div
-                      style={{
-                        width: `${pct}%`,
-                        background: `linear-gradient(90deg, ${color}, #38bdf8)`,
-                        height: "100%",
-                        borderRadius: "6px",
-                        transition: "width 0.3s ease"
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-
-            {projects.length > 0 && (
-              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#64748b", display: "block", marginBottom: "8px" }}>
-                  Por Projeto
-                </span>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                  {projects.map((proj) => (
-                    <span
-                      key={proj.projectKey}
-                      style={{
-                        fontSize: "12px",
-                        background: "rgba(255,255,255,0.04)",
-                        border: "1px solid rgba(255,255,255,0.08)",
-                        padding: "4px 10px",
-                        borderRadius: "6px",
-                        color: "#cbd5e1"
-                      }}
-                    >
-                      @{proj.projectKey}: <strong style={{ color: "#38bdf8" }}>${proj.costUsd.toFixed(4)}</strong>
-                    </span>
-                  ))}
-                </div>
-              </div>
+            {quotaLoading && <span style={{ color: "#94a3b8", fontSize: "13px" }}>Carregando cotas…</span>}
+            {!quotaLoading && quota !== null && quota.length === 0 && (
+              <span style={{ color: "#64748b", fontSize: "13px" }}>
+                Nenhuma leitura de cota disponível. Conecte a conta de um provider (OAuth) para ver o % de uso.
+              </span>
             )}
+            {quota !== null &&
+              quota
+                .filter((q) => q.status === "ok" && q.buckets.length > 0)
+                .map((q) => q.buckets.map((b) => (
+                  <QuotaBar key={q.provider + (b.modelId || "")} bucket={b} color={providerColors[q.provider] || "#a0a5b5"} />
+                )))}
+            {quota !== null &&
+              quota
+                .filter((q) => q.status !== "ok" || q.buckets.length === 0)
+                .map((q) => (
+                  <div key={q.provider} style={{ color: "#64748b", fontSize: "13px", textTransform: "capitalize" }}>
+                    {q.provider}: {q.status === "unavailable" ? "— (sem credencial)" : q.error || "indisponível"}
+                  </div>
+                ))}
           </div>
         </div>
       </div>
@@ -227,4 +198,53 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
       <EventStream events={data.events} />
     </div>
   );
+}
+
+// Renders the "consumo disponível" bar for one quota bucket (provider/model).
+function QuotaBar({ bucket, color }: { bucket: QuotaBucket; color: string }) {
+  const remaining = bucket.remainingPercent;
+  const used = bucket.usedPercent;
+  // Show the remaining fraction as the filled bar.
+  const barPct = remaining == null ? 0 : Math.max(0, Math.min(100, remaining));
+  const label = remaining == null ? "n/d" : `${remaining}% restante`;
+  const sub = [
+    bucket.planType ? bucket.planType : null,
+    bucket.modelId ? `modelo ${bucket.modelId}` : null,
+    resetLabel(bucket)
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+        <span style={{ fontWeight: 600, color: "#e2e8f0", textTransform: "capitalize" }}>
+          <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: color, marginRight: "8px" }} />
+          {bucket.provider}
+        </span>
+        <span style={{ color: "#94a3b8" }}>{label}{used != null ? ` (${used}% usado)` : ""}</span>
+      </div>
+      <div style={{ height: "12px", background: "rgba(255,255,255,0.06)", borderRadius: "6px", overflow: "hidden", display: "flex" }}>
+        <div
+          style={{
+            width: `${barPct}%`,
+            background: `linear-gradient(90deg, ${color}, #38bdf8)`,
+            height: "100%",
+            borderRadius: "6px",
+            transition: "width 0.3s ease"
+          }}
+        />
+      </div>
+      {sub && <span style={{ fontSize: "12px", color: "#64748b" }}>{sub}</span>}
+    </div>
+  );
+}
+
+function resetLabel(bucket: QuotaBucket): string | null {
+  if (!bucket.resetsAt) return null;
+  const diffMs = new Date(bucket.resetsAt).getTime() - Date.now();
+  if (!Number.isFinite(diffMs)) return null;
+  const mins = Math.max(0, Math.round(diffMs / 60_000));
+  if (mins >= 60) return `reset em ${Math.round(mins / 60)}h`;
+  return `reset em ${mins}min`;
 }

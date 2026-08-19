@@ -39,6 +39,7 @@ import {
 } from "../agents/provider-config.js";
 import type { ProviderPreset } from "../agents/provider-config.js";
 import { ProviderAuthBroker } from "../agents/provider-auth.js";
+import { fetchAllQuota, buildQuotaFetchers } from "../agents/quota-providers.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
@@ -413,6 +414,13 @@ async function routeRequest(
       ? await options.agentRegistry.getAvailableModels()
       : {};
     sendJson(response, 200, { policy: options.agentRegistry.policySnapshot(), models });
+    return;
+  }
+
+  // Quota / rate-limit usage indicator (consumo disponível per provider).
+  if (request.method === "GET" && url.pathname === "/api/quota") {
+    const quota = await fetchAllQuota(buildQuotaFetchers());
+    sendJson(response, 200, { quota });
     return;
   }
 
