@@ -217,6 +217,21 @@ function publicArtifactKey(value: string): string {
     : publicText(normalized);
 }
 
+/**
+ * Normalize a remote git URL for comparison (strip trailing slash, scheme case,
+ * and any `git@`/`ssh://` prefix differences) so two strings that denote the
+ * same repository compare equal.
+ */
+function normalizeRemoteUrl(value: string): string {
+  return (value || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .toLowerCase()
+    .replace(/^ssh:\/\//, "")
+    .replace(/^git@/, "")
+    .replace(/^https?:\/\//, "");
+}
+
 function adoptionView(metadata: Record<string, unknown>): WorkGraphAdoptionView {
   return {
     mode: String(metadata.mode ?? "unknown"),
@@ -311,6 +326,18 @@ export class ApplicationCommands {
         }
       } else if (!fs.existsSync(path.join(projectPath, ".git"))) {
         throw validationError(`Path already exists and is not a Git repository: ${projectPath}`);
+      } else {
+        // The clone already exists; verify its origin matches the requested URL so
+        // re-registration does not silently point at a different repository.
+        const existing = ensureGitRemoteOrigin(projectPath, remoteUrl);
+        if (existing.error) {
+          throw validationError(`Could not confirm remote origin: ${existing.error}`);
+        }
+        if (existing.existingUrl && normalizeRemoteUrl(existing.existingUrl) !== normalizeRemoteUrl(remoteUrl)) {
+          warnings.push(
+            `Existing clone at ${projectPath} uses origin ${existing.existingUrl}, which differs from requested ${remoteUrl}; reusing the existing clone.`
+          );
+        }
       }
     } else {
       if (!input.path || !input.path.trim()) {

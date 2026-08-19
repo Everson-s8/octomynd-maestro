@@ -267,30 +267,33 @@ function recommendedAction(status: EnvironmentReadinessStatus, checks: Environme
 function findPreparedDependencyRoot(workspacePath: string, projectPath: string): string | null {
   const workspaceRoot = path.resolve(workspacePath);
 
-  // The deterministic toolchain (tsc, vitest, better-sqlite3) belongs to the
-  // Maestro runtime itself, not to the project it is working on. Prefer the
-  // node_modules of the running Maestro process as the dependency root, so the
-  // doctor validates the Maestro's own tools and never requires a project
-  // (any stack / monorepo layout) to ship those dependencies at its root.
+  // A task worktree that has its own complete toolchain must win — this is how
+  // Maestro self-development works: a self task bumps tsc/vitest/better-sqlite3
+  // and runs `npm ci` inside its worktree, and the doctor must validate against
+  // that freshly-installed toolchain, not the daemon's older one. Only when the
+  // project has NO complete toolchain of its own (any-stack / monorepo target,
+  // e.g. a Next.js app in a subfolder) do we fall back to the running Maestro's
+  // node_modules so the goal is not blocked by a project that isn't the Maestro.
+  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) {
+    if (isDependencyRootComplete(workspaceRoot)) return workspaceRoot;
+  }
+
+  // Fall back to the Maestro runtime toolchain (tsc, vitest, better-sqlite3).
   const maestroRoot = process.cwd();
   const maestroCandidates = [maestroRoot, path.dirname(maestroRoot), findMatchingAncestor(maestroRoot)];
   for (const candidate of maestroCandidates) {
-    if (candidate && isDependencyRootComplete(candidate)) {
+    if (candidate && fs.existsSync(path.join(candidate, "node_modules", ".bin")) && isDependencyRootComplete(candidate)) {
       return candidate;
     }
   }
 
-  // Fall back to the workspace/project roots (Maestro itself lives there in
-  // self-development). A project that has its own complete node_modules is fine;
-  // otherwise return null so the caller can run `npm ci` when a lockfile exists.
-  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin"))) {
-    return isDependencyRootComplete(workspaceRoot) ? workspaceRoot : null;
-  }
+  // Walk project ancestors for a complete node_modules (a monorepo root that
+  // carries the toolchain), then give the caller the project root to run `npm ci`.
   if (workspaceRoot !== path.resolve(projectPath) && fs.existsSync(path.join(workspaceRoot, "package-lock.json"))) return null;
   let current = path.resolve(projectPath);
   while (true) {
-    if (fs.existsSync(path.join(current, "node_modules", ".bin"))) {
-      return isDependencyRootComplete(current) ? current : null;
+    if (fs.existsSync(path.join(current, "node_modules", ".bin")) && isDependencyRootComplete(current)) {
+      return current;
     }
     const parent = path.dirname(current);
     if (parent === current) break;

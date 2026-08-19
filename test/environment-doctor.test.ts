@@ -70,6 +70,33 @@ describe("Environment Doctor", () => {
     }
   }, 15_000);
 
+  it("prefers the task worktree's own complete toolchain (self-development)", () => {
+    // Maestro self-development: a task worktree that installs its own toolchain
+    // (e.g. a bump of tsc/vitest/better-sqlite3 followed by `npm ci`) must be
+    // validated against that freshly-installed toolchain, NOT the daemon's older
+    // one. Build a worktree with a complete node_modules and confirm the doctor
+    // reports ready against it (native_runtime/typescript/test_runner not blocked).
+    const selfWorktree = path.join(tempDir, "task-self");
+    fs.mkdirSync(path.join(selfWorktree, "node_modules", ".bin"), { recursive: true });
+    // Windows shims: tsc.cmd / vitest.cmd; on POSIX the bare names are checked.
+    const tscBin = process.platform === "win32" ? "tsc.cmd" : "tsc";
+    const vitestBin = process.platform === "win32" ? "vitest.cmd" : "vitest";
+    fs.writeFileSync(path.join(selfWorktree, "node_modules", ".bin", tscBin), "#!/bin/sh\n");
+    fs.writeFileSync(path.join(selfWorktree, "node_modules", ".bin", vitestBin), "#!/bin/sh\n");
+    fs.mkdirSync(path.join(selfWorktree, "node_modules", "better-sqlite3", "build", "Release"), { recursive: true });
+    fs.writeFileSync(path.join(selfWorktree, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"), "x");
+    fs.writeFileSync(path.join(selfWorktree, "package.json"), JSON.stringify({ name: "self" }));
+
+    const report = runEnvironmentDoctor({
+      config: doctorConfig(),
+      project: project(tempDir),
+      task: task(selfWorktree)
+    });
+
+    // The worktree's own toolchain is honored; no dependency-path block for it.
+    expect(report.checks).toContainEqual(expect.objectContaining({ name: "typescript", status: "passed" }));
+  }, 15_000);
+
   it("blocks a legacy worktree before a long Goal", () => {
     const userProfile = process.env.USERPROFILE || "C:\\Users\\test";
     const legacyWorktree = path.join(userProfile, "Documents", "legacy-task");

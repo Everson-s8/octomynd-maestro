@@ -76,7 +76,8 @@ describe("git helpers", () => {
     runGit(["-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "-m", "init"], sourceDir);
 
     const cloneTarget = path.join(tempDir, "cloned-repo");
-    const result = cloneGitRepository(sourceDir, cloneTarget);
+    const sourceUrl = "file://" + sourceDir.replace(/\\/g, "/");
+    const result = cloneGitRepository(sourceUrl, cloneTarget);
 
     expect(result.ok).toBe(true);
     expect(fs.existsSync(path.join(cloneTarget, "file.txt"))).toBe(true);

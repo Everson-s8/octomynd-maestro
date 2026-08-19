@@ -161,7 +161,7 @@ describe("ApplicationCommands.registerProject", () => {
       { channel: "dashboard" },
       {
         key: "@cloned-app",
-        remoteUrl: upstreamDir,
+        remoteUrl: "file://" + upstreamDir.replace(/\\/g, "/"),
         mode: "github"
       },
       projectsRoot
