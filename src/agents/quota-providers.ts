@@ -35,10 +35,28 @@ function homeFile(...parts: string[]): string {
 const CHATGPT_WHAM_USAGE = "https://chatgpt.com/backend-api/wham/usage";
 const CHATGPT_WHAM_RATE_LIMIT_RESET = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
-async function fetchJson(url: string, token: string): Promise<unknown> {
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
-  });
+// Codex (ChatGPT) wham usage, mirrored from Orca: primary/secondary rate-limit
+// windows each carry { used_percent, limit_window_seconds, reset_at } and
+// plan_type is on the root object.
+type CodexWindow = { used_percent?: number; limit_window_seconds?: number; reset_at?: number };
+type CodexUsage = {
+  plan_type?: string;
+  rate_limit?: {
+    primary_window?: CodexWindow;
+    secondary_window?: CodexWindow;
+  };
+};
+
+async function fetchWham(url: string, token: string, accountId: string | null): Promise<unknown> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "User-Agent": "codex-cli",
+    "OpenAI-Beta": "codex-1",
+    originator: "Codex Desktop",
+    "Content-Type": "application/json"
+  };
+  if (accountId) headers["ChatGPT-Account-Id"] = accountId;
+  const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`codex wham ${res.status}`);
   return res.json();
 }
@@ -48,32 +66,25 @@ async function codexFetcher(): Promise<QuotaResult> {
   if (!fs.existsSync(authPath)) {
     return buildEmptyUnavailable("codex", "~/.codex/auth.json não encontrado");
   }
-  const auth = readJson(authPath) as { tokens?: { access_token?: string } };
+  const auth = readJson(authPath) as { tokens?: { access_token?: string; account_id?: string } };
   const token = auth.tokens?.access_token;
+  const accountId = auth.tokens?.account_id ?? null;
   if (!token) return buildEmptyUnavailable("codex", "codex sem access_token");
 
   try {
     // Primary windows (used/limit for 5h & weekly) come from the usage endpoint.
-    const usage = (await fetchJson(CHATGPT_WHAM_USAGE, token)) as {
-      primary?: Record<string, unknown>;
-      secondary?: Record<string, unknown>[];
-    };
+    const data = (await fetchWham(CHATGPT_WHAM_USAGE, token, accountId)) as CodexUsage;
     const buckets: QuotaBucket[] = [];
-
-    if (usage?.primary && typeof usage.primary === "object") {
-      const p = usage.primary as Record<string, unknown>;
-      buckets.push(toBucket("codex", p, null));
+    const planType = data.plan_type ?? null;
+    if (data.rate_limit?.primary_window) {
+      buckets.push(toWindowBucket("codex", data.rate_limit.primary_window, "primary", planType));
     }
-    if (Array.isArray(usage?.secondary)) {
-      for (const s of usage.secondary) {
-        if (s && typeof s === "object") {
-          buckets.push(toBucket("codex", s as Record<string, unknown>, null));
-        }
-      }
+    if (data.rate_limit?.secondary_window) {
+      buckets.push(toWindowBucket("codex", data.rate_limit.secondary_window, "secondary", planType));
     }
     if (buckets.length === 0) {
       // Fallback: reset-credits (credits / available) if usage was empty.
-      const reset = (await fetchJson(CHATGPT_WHAM_RATE_LIMIT_RESET, token)) as {
+      const reset = (await fetchWham(CHATGPT_WHAM_RATE_LIMIT_RESET, token, accountId)) as {
         credits?: number;
         available_count?: number;
       };
@@ -86,7 +97,7 @@ async function codexFetcher(): Promise<QuotaResult> {
           resetsAt: null,
           windowMinutes: null,
           windowKind: "weekly",
-          planType: null
+          planType
         });
       }
     }
@@ -102,21 +113,26 @@ async function codexFetcher(): Promise<QuotaResult> {
   }
 }
 
-// Maps a wham primary/secondary window object into a normalized bucket.
-function toBucket(provider: string, win: Record<string, unknown>, model: string | null): QuotaBucket {
-  const used = num(win.used_5h) ?? num(win.used);
-  const limit = num(win.limit_5h) ?? num(win.limit);
-  const isDaily = win.used_daily !== undefined || win.limit_daily !== undefined;
-  return usedLimitToBucket({
+// Maps a wham window into a normalized bucket (300min = 5h session, else weekly).
+function toWindowBucket(
+  provider: string,
+  win: CodexWindow,
+  kind: "primary" | "secondary",
+  planType: string | null
+): QuotaBucket {
+  const used = num(win.used_percent);
+  const windowSeconds = num(win.limit_window_seconds);
+  const isSession = windowSeconds != null && windowSeconds <= 3600; // ~5h
+  return {
     provider,
-    modelId: str(win.model) ?? model,
-    used,
-    limit,
-    resetsAt: str(win.reset_time_5h) ?? str(win.reset_time) ?? null,
-    windowKind: isDaily ? "daily" : "5h",
-    windowMinutes: isDaily ? 1440 : 300,
-    planType: str(win.plan_type) ?? null
-  });
+    modelId: null,
+    usedPercent: used == null ? null : Math.min(100, Math.max(0, Math.round(used))),
+    remainingPercent: used == null ? null : Math.max(0, 100 - Math.min(100, Math.round(used))),
+    resetsAt: num(win.reset_at) ? new Date(Math.round(num(win.reset_at)! * 1000)).toISOString() : null,
+    windowMinutes: isSession ? 300 : 10080,
+    windowKind: isSession ? "5h" : "weekly",
+    planType
+  };
 }
 
 function num(v: unknown): number | null {
