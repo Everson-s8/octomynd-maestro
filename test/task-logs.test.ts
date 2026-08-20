@@ -202,12 +202,12 @@ describe("Task Logs & Telemetry Persistence", () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/logs`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as any;
-      expect(data.task.id).toBe(task.id);
-      expect(data.runs).toHaveLength(1);
-      expect(data.runs[0].steps).toHaveLength(1);
-      expect(data.runs[0].steps[0].summary).toBe("Definindo arquitetura dos logs");
-      expect(data.telemetry.totalSteps).toBe(1);
-      expect(data.telemetry.totalDurationMs).toBe(850);
+      expect(data.logs.task.id).toBe(task.id);
+      expect(data.logs.runs).toHaveLength(1);
+      expect(data.logs.runs[0].steps).toHaveLength(1);
+      expect(data.logs.runs[0].steps[0].summary).toBe("Definindo arquitetura dos logs");
+      expect(data.logs.telemetry.totalSteps).toBe(1);
+      expect(data.logs.telemetry.totalDurationMs).toBe(850);
 
       // Non-existent task logs request
       const notFoundRes = await fetch(`http://127.0.0.1:${port}/api/tasks/99999/logs`);
