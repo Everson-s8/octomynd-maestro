@@ -135,6 +135,7 @@ export type TaskRecord = {
   branchName: string | null;
   worktreePath: string | null;
   baseBranch?: string | null;
+  parentTaskId?: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -736,8 +737,8 @@ export function createDatabase(databasePath: string) {
   const chatPersistence = createOperationalChatPersistence(db);
 
   const createTaskStatement = db.prepare(`
-    INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
-    VALUES (@projectId, @text, 'queued', @source, NULL, NULL, @now, @now)
+    INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, parent_task_id, created_at, updated_at)
+    VALUES (@projectId, @text, 'queued', @source, NULL, NULL, @parentTaskId, @now, @now)
   `);
   const addEventStatement = db.prepare(`
     INSERT INTO events (source, type, text, user_id, username, task_id, created_at, metadata_json)
@@ -1118,10 +1119,21 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapProject);
     },
 
-    createTask(text: string, source = "telegram", projectKey?: string | null): TaskRecord {
+    createTask(
+      text: string,
+      source = "telegram",
+      projectKey?: string | null,
+      parentTaskId?: number | null
+    ): TaskRecord {
       const now = new Date().toISOString();
       const project = projectKey ? this.getProjectByKey(projectKey) : this.getDefaultProject();
-      const result = createTaskStatement.run({ projectId: project?.id ?? null, text, source, now });
+      const result = createTaskStatement.run({
+        projectId: project?.id ?? null,
+        text,
+        source,
+        parentTaskId: parentTaskId ?? null,
+        now
+      });
       return this.getTask(Number(result.lastInsertRowid));
     },
 
@@ -3052,9 +3064,11 @@ function migrate(db: Database.Database) {
       branch_name TEXT,
       worktree_path TEXT,
       base_branch TEXT,
+      parent_task_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id)
+      FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -3402,6 +3416,7 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
   addColumnIfMissing(db, "tasks", "base_branch", "TEXT");
+  addColumnIfMissing(db, "tasks", "parent_task_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
   addColumnIfMissing(db, "goal_runs", "wait_reason", "TEXT");
@@ -3465,6 +3480,7 @@ type TaskRow = {
   branch_name: string | null;
   worktree_path: string | null;
   base_branch: string | null;
+  parent_task_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -4111,6 +4127,7 @@ function mapTask(row: TaskRow): TaskRecord {
     branchName: row.branch_name,
     worktreePath: row.worktree_path,
     baseBranch: row.base_branch,
+    parentTaskId: row.parent_task_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

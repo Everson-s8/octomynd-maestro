@@ -25,6 +25,7 @@ export type DashboardTask = {
   source: string;
   branchName: string | null;
   worktreePrepared: boolean;
+  parentTaskId: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -852,6 +853,20 @@ export async function createTask(input: { projectKey: string; text: string }) {
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(payload.error || `Não foi possível criar a task (${response.status}).`);
+  }
+  return response.json() as Promise<{ task: DashboardTask }>;
+}
+
+export async function createFollowUpTask(taskId: number, text: string) {
+  const response = await fetch(`/api/tasks/${taskId}/follow-up`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string; details?: string[] | string };
+    const details = Array.isArray(payload.details) ? payload.details.join(" ") : payload.details;
+    throw new Error(details || payload.error || "Não foi possível criar a task de continuidade.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }

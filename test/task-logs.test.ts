@@ -216,4 +216,34 @@ describe("Task Logs & Telemetry Persistence", () => {
       server.close();
     }
   });
+
+  it("creates a follow-up task linked to the original task", async () => {
+    const parent = database.createTask("Task original para receber revisão", "dashboard", "testproj");
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${parent.id}/follow-up`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Corrigir os pontos encontrados na revisão" })
+      });
+
+      expect(response.status).toBe(201);
+      const data = (await response.json()) as {
+        task: { id: number; parentTaskId: number; status: string; projectKey: string };
+      };
+      expect(data.task.id).not.toBe(parent.id);
+      expect(data.task.parentTaskId).toBe(parent.id);
+      expect(data.task.status).toBe("queued");
+      expect(data.task.projectKey).toBe("testproj");
+
+      const logs = database.getTaskLogs(data.task.id);
+      expect(logs.task.parentTaskId).toBe(parent.id);
+      expect(logs.events.some((event) => event.type === "task.follow_up_created")).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
 });

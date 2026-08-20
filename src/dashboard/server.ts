@@ -1245,6 +1245,26 @@ async function routeRequest(
     return;
   }
 
+  const followUpTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/follow-up$/);
+  if (request.method === "POST" && followUpTaskMatch) {
+    const body = await readJsonBody(request);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text) {
+      sendJson(response, 400, { error: "follow_up_text_is_required" });
+      return;
+    }
+    try {
+      const task = commands.createFollowUpTask(
+        { channel: "dashboard" },
+        { parentTaskId: Number(followUpTaskMatch[1]), text }
+      );
+      sendJson(response, 201, { task });
+    } catch (error) {
+      sendCommandError(response, error, "task_follow_up_failed");
+    }
+    return;
+  }
+
   const cancelTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/cancel$/);
   if (request.method === "POST" && cancelTaskMatch) {
     if (!options.goalCoordinator) {

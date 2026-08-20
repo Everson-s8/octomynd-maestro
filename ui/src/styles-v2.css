@@ -1764,3 +1764,61 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   justify-content: center;
   gap: 12px;
 }
+
+/* Task Continuity */
+.task-follow-up {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 16px;
+  background: #17120f;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.task-follow-up > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-follow-up span,
+.task-follow-up small {
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.task-follow-up strong {
+  color: var(--ivory);
+  font-family: 'Fraunces', serif;
+  font-size: 17px;
+}
+.task-follow-up p {
+  margin: 0;
+  color: var(--ivory-dim);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.task-follow-up textarea {
+  width: 100%;
+  min-height: 78px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 10px 12px;
+  color: var(--ivory);
+  background: #09080b;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  font: inherit;
+  line-height: 1.5;
+}
+.task-follow-up textarea:focus {
+  outline: none;
+  border-color: var(--coral);
+  box-shadow: 0 0 0 2px rgb(240 112 50 / 16%);
+}
+.task-follow-up small {
+  letter-spacing: normal;
+  text-transform: none;
+}
