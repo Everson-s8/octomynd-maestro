@@ -1403,7 +1403,7 @@ async function routeRequest(
     const taskId = Number(taskLogsMatch[1]);
     try {
       const logs = commands.getTaskLogs({ channel: "dashboard" }, taskId);
-      sendJson(response, 200, { logs, ...logs });
+      sendJson(response, 200, { logs });
     } catch (error) {
       sendCommandError(response, error, "task_logs_failed");
     }

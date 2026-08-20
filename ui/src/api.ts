@@ -1398,6 +1398,6 @@ export async function fetchTaskLogs(taskId: number): Promise<TaskLogs> {
     }
     throw new Error(`Falha ao carregar logs da task #${taskId} (${response.status}).`);
   }
-  const payload = (await response.json()) as { logs?: TaskLogs } & TaskLogs;
-  return payload.logs ?? payload;
+  const payload = await response.json() as { logs: TaskLogs };
+    return payload.logs;
 }

@@ -948,9 +948,17 @@ function StepAccordionCard({ step, index }: { step: TaskLogStep; index: number }
 
 function formatDuration(ms: number): string {
   if (!ms || ms <= 0) return "0s";
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSecs = seconds % 60;
-  return `${minutes}m ${remainingSecs}s`;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const remainingAfterHours = totalSeconds % 3600;
+  const minutes = Math.floor(remainingAfterHours / 60);
+  const seconds = remainingAfterHours % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
