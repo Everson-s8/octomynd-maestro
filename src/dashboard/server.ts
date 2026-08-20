@@ -1398,6 +1398,18 @@ async function routeRequest(
     return;
   }
 
+  const taskLogsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/logs$/);
+  if (request.method === "GET" && taskLogsMatch) {
+    const taskId = Number(taskLogsMatch[1]);
+    try {
+      const logs = commands.getTaskLogs({ channel: "dashboard" }, taskId);
+      sendJson(response, 200, { logs, ...logs });
+    } catch (error) {
+      sendCommandError(response, error, "task_logs_failed");
+    }
+    return;
+  }
+
   const goalStartMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/goal$/);
   if (request.method === "POST" && goalStartMatch) {
     if (!options.goalCoordinator) {

@@ -665,10 +665,12 @@ export type GoalObservability = {
   nextAction: string;
 };
 
+export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
+
 export type GoalRun = {
   id: number;
   taskId: number;
-  status: "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
+  status: GoalRunStatus;
   currentPhase: "planning" | "implementing" | "testing" | "reviewing";
   stepCount: number;
   maxSteps: number;
@@ -1265,4 +1267,137 @@ export async function fetchQuota(): Promise<QuotaResult[]> {
   }
   const payload = (await response.json()) as { quota?: QuotaResult[] };
   return payload.quota ?? [];
+}
+
+// ---- Task Logs ----
+
+export type TaskLogStep = {
+  id: number;
+  runId: number;
+  phase: string;
+  provider: string;
+  status: "running" | "completed" | "changes_requested" | "failed" | "cancelled";
+  summary: string;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    model: string;
+  } | null;
+  checkpoint?: {
+    id: number;
+    runId: number;
+    stepId: number;
+    phase: string;
+    provider: string;
+    status: string;
+    summary: string;
+    objective?: string;
+    done?: string[];
+    decisions?: string[];
+    testsRun?: Array<{ command: string; result: string }>;
+    knownFailures?: string[];
+    remaining?: string[];
+    workspaceFingerprint: string | null;
+    changedFiles: string[];
+    artifactKeys: string[];
+    createdAt: string;
+  } | null;
+};
+
+export type TaskLogRun = {
+  id: number;
+  taskId: number;
+  status: GoalRunStatus;
+  currentPhase: string;
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  failureCategory?: string | null;
+  waitReason?: string | null;
+  nextRetryAt?: string | null;
+  lastProvider?: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  steps: TaskLogStep[];
+  checkpoints: Array<{
+    id: number;
+    runId: number;
+    stepId: number;
+    phase: string;
+    provider: string;
+    status: string;
+    summary: string;
+    objective?: string;
+    done?: string[];
+    decisions?: string[];
+    testsRun?: Array<{ command: string; result: string }>;
+    knownFailures?: string[];
+    remaining?: string[];
+    workspaceFingerprint: string | null;
+    changedFiles: string[];
+    artifactKeys: string[];
+    createdAt: string;
+  }>;
+  tokenUsage: Array<{
+    id: number;
+    runId: number;
+    stepId: number;
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    createdAt: string;
+  }>;
+  skillPins: Array<{
+    id: number;
+    runId: number;
+    skillVersionRecordId: number;
+    triggerReason: string;
+    pinnedAt: string;
+    unpinnedAt: string | null;
+  }>;
+  workGraph?: DashboardWorkGraph | null;
+};
+
+export type TaskLogsTelemetry = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalDurationMs: number;
+  totalSteps: number;
+  changedFiles: string[];
+  activeRunId: number | null;
+  isRunning: boolean;
+  isFinished: boolean;
+};
+
+export type TaskLogs = {
+  task: DashboardTask;
+  runs: TaskLogRun[];
+  events: DashboardEvent[];
+  reviews: TaskReview[];
+  workGraphs: DashboardWorkGraph[];
+  telemetry: TaskLogsTelemetry;
+};
+
+export async function fetchTaskLogs(taskId: number): Promise<TaskLogs> {
+  const response = await fetch(`/api/tasks/${taskId}/logs`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Task #${taskId} não encontrada.`);
+    }
+    throw new Error(`Falha ao carregar logs da task #${taskId} (${response.status}).`);
+  }
+  const payload = (await response.json()) as { logs?: TaskLogs } & TaskLogs;
+  return payload.logs ?? payload;
 }

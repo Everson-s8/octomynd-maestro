@@ -51,5 +51,8 @@
     "typescript": "^5.8.2",
     "vite": "^6.2.7",
     "vitest": "^3.0.8"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true
   }
 }

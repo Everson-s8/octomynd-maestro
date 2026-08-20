@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   cancelTask,
   deleteTask,
@@ -214,6 +215,28 @@ export function TaskDetail({
             O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem
             atualizar a task manualmente.
           </p>
+          <Link
+            to={`/tasks/${task.id}/logs`}
+            className="detail-logs-link-btn"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              padding: "10px 14px",
+              marginBottom: "12px",
+              borderRadius: "10px",
+              background: "#1c1712",
+              border: "1px solid #372c20",
+              color: "#f3ece1",
+              textDecoration: "none",
+              fontSize: "13px",
+              fontWeight: 600
+            }}
+          >
+            <span>Ver logs detalhados de execução</span>
+            <Icon name="arrow" />
+          </Link>
           <button
             className="goal-action"
             disabled={

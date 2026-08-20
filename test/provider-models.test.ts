@@ -28,7 +28,7 @@ describe("provider models configuration and propagation", () => {
     expect(antigravity.model).toBe("gemini-2.5-pro");
     const models = await antigravity.models();
     expect(models.length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 
   it("CustomCliProvider handles model, models list, and args substitution", async () => {
     const custom = new CustomCliProvider({

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { DashboardTask } from "../api";
 import { statusProgress, taskStatusLabels, formatRelative } from "../helpers";
 import { StatusBadge } from "./StatusBadge";
@@ -34,9 +35,21 @@ export function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => 
         </span>
         <small>{statusProgress(task.status)}%</small>
       </div>
-      <button className="row-action" aria-label={`Abrir task ${task.id}`} onClick={onOpen}>
-        <Icon name="arrow" />
-      </button>
+      <div className="task-row-actions-group" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <Link
+          to={`/tasks/${task.id}/logs`}
+          className="task-log-badge-action"
+          title={`Ver logs da task #${task.id}`}
+          aria-label={`Ver logs da task #${task.id}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icon name="timeline" />
+          <span>Logs</span>
+        </Link>
+        <button className="row-action" aria-label={`Abrir task ${task.id}`} onClick={onOpen}>
+          <Icon name="arrow" />
+        </button>
+      </div>
     </article>
   );
 }

@@ -62,6 +62,7 @@ import {
   legacyFeatureTaskContract,
   normalizeFeatureTaskContracts
 } from "./features/task-graph.js";
+import type { GoalSkillPinRecord } from "./skills/persistence.js";
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
@@ -650,6 +651,72 @@ export type FeaturePlanIntegrationItemUpdate = {
   lastError?: string | null;
 };
 
+export type TaskLogStep = {
+  id: number;
+  runId: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalStepStatus;
+  summary: string;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    model: string;
+  } | null;
+  checkpoint?: GoalCheckpointRecord | null;
+};
+
+export type TaskLogRun = {
+  id: number;
+  taskId: number;
+  status: GoalRunStatus;
+  currentPhase: GoalPhase;
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  failureCategory?: GoalFailureCategory | null;
+  waitReason?: GoalWaitReason | null;
+  nextRetryAt?: string | null;
+  lastProvider?: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  steps: TaskLogStep[];
+  checkpoints: GoalCheckpointRecord[];
+  tokenUsage: TokenUsageRecord[];
+  skillPins: GoalSkillPinRecord[];
+  workGraph?: any | null;
+};
+
+export type TaskLogsTelemetry = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalDurationMs: number;
+  totalSteps: number;
+  changedFiles: string[];
+  activeRunId: number | null;
+  isRunning: boolean;
+  isFinished: boolean;
+};
+
+export type TaskLogs = {
+  task: TaskRecord;
+  runs: TaskLogRun[];
+  events: EventRecord[];
+  reviews: TaskReviewRecord[];
+  workGraphs: any[];
+  telemetry: TaskLogsTelemetry;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -1169,6 +1236,20 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    listEventsForTask(taskId: number, limit = 500): EventRecord[] {
+      const rows = db
+        .prepare(`
+          SELECT * FROM events
+          WHERE task_id = ?
+             OR CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
+             OR CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+          ORDER BY id ASC
+          LIMIT ?
+        `)
+        .all(taskId, taskId, taskId, limit) as EventRow[];
+      return rows.map(mapEvent);
+    },
+
     findLatestEventByType(type: string): EventRecord | null {
       const row = db
         .prepare("SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1")
@@ -1352,6 +1433,162 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM goal_runs WHERE status IN ('running', 'waiting_provider') ORDER BY id ASC")
         .all() as GoalRunRow[];
       return rows.map(mapGoalRun);
+    },
+
+    listGoalRunsForTask(taskId: number): GoalRunRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM goal_runs WHERE task_id = ? ORDER BY id ASC")
+        .all(taskId) as GoalRunRow[];
+      return rows.map(mapGoalRun);
+    },
+
+    getTaskLogs(taskId: number): TaskLogs {
+      const task = this.getTask(taskId);
+      const runs = this.listGoalRunsForTask(taskId);
+      const events = this.listEventsForTask(taskId);
+      const reviews = this.listTaskReviews(taskId, 100).reverse();
+
+      let totalDurationMs = 0;
+      let totalCostUsd = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalSteps = 0;
+      const changedFilesSet = new Set<string>();
+      let activeRunId: number | null = null;
+      const taskWorkGraphs: any[] = [];
+
+      const mappedRuns: TaskLogRun[] = runs.map((run) => {
+        if (["running", "waiting_provider"].includes(run.status)) {
+          activeRunId = run.id;
+        }
+        const rawSteps = this.listGoalSteps(run.id);
+        const checkpoints = this.listGoalCheckpoints(run.id);
+        const tokenUsage = this.getTokenUsageByRun(run.id);
+        const skillPins = this.listGoalSkillPins(run.id);
+
+        let workGraph: any = null;
+        try {
+          const wg = this.findWorkGraphByRunId(run.id);
+          if (wg) {
+            workGraph = this.getWorkGraphDetails(wg.id);
+            taskWorkGraphs.push(workGraph);
+          }
+        } catch {
+          workGraph = null;
+        }
+
+        for (const token of tokenUsage) {
+          totalCostUsd += token.costUsd ?? 0;
+          totalInputTokens += token.inputTokens ?? 0;
+          totalOutputTokens += token.outputTokens ?? 0;
+        }
+
+        for (const cp of checkpoints) {
+          if (Array.isArray(cp.changedFiles)) {
+            for (const file of cp.changedFiles) {
+              if (file && typeof file === "string") changedFilesSet.add(file);
+            }
+          }
+        }
+
+        const steps: TaskLogStep[] = rawSteps.map((step) => {
+          totalSteps += 1;
+          if (typeof step.durationMs === "number") {
+            totalDurationMs += step.durationMs;
+          }
+          const stepTokens = tokenUsage.find((t) => t.stepId === step.id);
+          const stepCheckpoint = checkpoints.find((cp) => cp.stepId === step.id);
+
+          return {
+            id: step.id,
+            runId: step.runId,
+            phase: step.phase,
+            provider: step.provider,
+            status: step.status,
+            summary: redactSensitiveText(step.summary),
+            output: redactSensitiveText(step.output),
+            error: step.error ? redactSensitiveText(step.error) : null,
+            durationMs: step.durationMs,
+            createdAt: step.createdAt,
+            finishedAt: step.finishedAt,
+            tokenUsage: stepTokens ? {
+              inputTokens: stepTokens.inputTokens,
+              outputTokens: stepTokens.outputTokens,
+              costUsd: stepTokens.costUsd,
+              model: stepTokens.model
+            } : null,
+            checkpoint: stepCheckpoint ? {
+              ...stepCheckpoint,
+              summary: redactSensitiveText(stepCheckpoint.summary),
+              objective: stepCheckpoint.objective ? redactSensitiveText(stepCheckpoint.objective) : undefined
+            } : null
+          };
+        });
+
+        return {
+          id: run.id,
+          taskId: run.taskId,
+          status: run.status,
+          currentPhase: run.currentPhase,
+          stepCount: run.stepCount,
+          maxSteps: run.maxSteps,
+          lastError: run.lastError ? redactSensitiveText(run.lastError) : null,
+          failureCategory: run.failureCategory ?? null,
+          waitReason: run.waitReason ?? null,
+          nextRetryAt: run.nextRetryAt ?? null,
+          lastProvider: run.lastProvider ?? null,
+          commitSha: run.commitSha ?? null,
+          pullRequestUrl: run.pullRequestUrl ?? null,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+          finishedAt: run.finishedAt ?? null,
+          steps,
+          checkpoints: checkpoints.map((cp) => ({
+            ...cp,
+            summary: redactSensitiveText(cp.summary),
+            objective: cp.objective ? redactSensitiveText(cp.objective) : undefined
+          })),
+          tokenUsage,
+          skillPins: skillPins.map((pin) => ({
+            ...pin,
+            triggerReason: redactSensitiveText(pin.triggerReason)
+          })),
+          workGraph
+        };
+      });
+
+      const isRunning = ["planning", "implementing", "testing", "reviewing", "waiting_provider", "waiting_quota", "waiting_dependency"].includes(task.status) || activeRunId !== null;
+      const isFinished = ["done", "failed", "rejected", "cancelled"].includes(task.status);
+
+      return {
+        task: {
+          ...task,
+          text: redactSensitiveText(task.text)
+        },
+        runs: mappedRuns,
+        events: events.map((event) => ({
+          ...event,
+          text: redactSensitiveText(event.text),
+          metadata: (sanitizePublicMetadata(event.metadata) ?? {}) as Record<string, unknown>
+        })),
+        reviews: reviews.map((rev) => ({
+          ...rev,
+          content: redactSensitiveText(rev.content),
+          error: rev.error ? redactSensitiveText(rev.error) : null
+        })),
+        workGraphs: taskWorkGraphs,
+        telemetry: {
+          totalCostUsd: Number(totalCostUsd.toFixed(6)),
+          totalInputTokens,
+          totalOutputTokens,
+          totalDurationMs,
+          totalSteps,
+          changedFiles: Array.from(changedFilesSet),
+          activeRunId,
+          isRunning,
+          isFinished
+        }
+      };
     },
 
     updateGoalRun(input: {

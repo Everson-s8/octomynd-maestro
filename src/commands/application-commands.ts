@@ -15,7 +15,8 @@ import {
   SkillVersionRecord,
   SkillCuratorCandidateRecord,
   SkillCuratorCandidateStatus,
-  TaskRecord
+  TaskRecord,
+  TaskLogs
 } from "../db.js";
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
@@ -437,6 +438,14 @@ export class ApplicationCommands {
     });
 
     return task;
+  }
+
+  getTaskLogs(origin: CommandOrigin, taskId: number): TaskLogs {
+    try {
+      return this.database.getTaskLogs(taskId);
+    } catch (error) {
+      throw notFoundError(error instanceof Error ? error.message : `Task not found: ${taskId}`);
+    }
   }
 
   previewWorkIntake(

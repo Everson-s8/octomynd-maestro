@@ -6,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels, statusProgress, formatRelative } from "../helpers";
 import { ProvidersPage } from "./ProvidersPage";
+import { TaskLogViewerPage } from "./TaskLogViewerPage";
 
 const routes = [
   { to: "/", label: "Visão geral", icon: "grid", end: true },
@@ -58,7 +59,41 @@ function Metric({ label, value, icon, onClick }: { label: string; value: number;
 function PanelHead({ eyebrow, title, meta }: { eyebrow: string; title: string; meta: string }) { return <div className="panel-head"><div><div className="lbl">{eyebrow}</div><h3>{title}</h3></div><div className="count">{meta}</div></div>; }
 function InlineEmpty({ text }: { text: string }) { return <div className="inline-empty">{text}</div>; }
 function FeatureLine({ feature }: { feature: DashboardData["features"][number] }) { const status = feature.status === "completed" ? "ok" : feature.status === "failed" ? "err" : "run"; const label = feature.status === "completed" ? "concluída" : feature.status === "failed" ? "falhou" : "rodando"; return <div className="task"><span className="id">#{String(feature.id).padStart(2, "0")}</span><span className={`st ${status}`}>{label}</span><div className="body"><b>{feature.name}</b><span>{feature.branchName}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${feature.status === "completed" ? 76 : feature.status === "failed" ? 50 : 38}`} stroke={feature.status === "failed" ? "#b1503c" : feature.status === "completed" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={feature.status === "completed" ? 78 : feature.status === "failed" ? 52 : 40} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
-function TaskLine({ task }: { task: DashboardData["tasks"][number] }) { return <div className="task"><span className="id">#{String(task.id).padStart(2, "0")}</span><span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>{taskStatusLabels[task.status]}</span><div className="body"><b>{task.text}</b><span>{task.branchName ?? `criada ${formatRelative(task.createdAt)}`}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${Math.max(8, statusProgress(task.status) * .76)}`} stroke={task.status === "failed" ? "#b1503c" : task.status === "done" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={Math.max(8, statusProgress(task.status) * .76)} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
+function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
+  const navigate = useNavigate();
+  return (
+    <div className="task" role="button" tabIndex={0} onClick={() => navigate(`/tasks/${task.id}/logs`)}>
+      <span className="id">#{String(task.id).padStart(2, "0")}</span>
+      <span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>
+        {taskStatusLabels[task.status]}
+      </span>
+      <div className="body">
+        <b>{task.text}</b>
+        <span>{task.branchName ?? `criada ${formatRelative(task.createdAt)}`}</span>
+      </div>
+      <div className="fiber">
+        <svg viewBox="0 0 80 14">
+          <path d="M2 7h76" stroke="#372c20" strokeWidth="2" />
+          <path
+            d={`M2 7h${Math.max(8, statusProgress(task.status) * 0.76)}`}
+            stroke={task.status === "failed" ? "#b1503c" : task.status === "done" ? "#6f8f6a" : "#c4622d"}
+            strokeWidth="2"
+          />
+          <circle cx={Math.max(8, statusProgress(task.status) * 0.76)} cy="7" r="3" fill="#e8967a" />
+        </svg>
+      </div>
+      <NavLink
+        to={`/tasks/${task.id}/logs`}
+        className="task-log-btn-link"
+        title="Ver logs da task"
+        onClick={(e) => e.stopPropagation()}
+      >
+        Logs
+      </NavLink>
+      <span className="arr">→</span>
+    </div>
+  );
+}
 
 function Chat({ data }: { data: DashboardData }) {
   const [projectKey, setProjectKey] = useState(data.projects[0]?.key ?? "maestro");
@@ -228,5 +263,34 @@ export function MaestroV2({ data, onRefresh, onCreate, onRegisterProject, refres
   }, [location.pathname, onRefresh]);
   const pending = data.features.filter(f => ["reviewing", "waiting_checks", "changes_requested"].includes(f.status)).length;
   const page = location.pathname;
-  return <div className="app"><AppSidebar pending={pending} /><main><div className="inner">{page === "/chat" ? <Chat data={data} /> : page === "/backlog" ? <FlowFiltered data={data} onCreate={onCreate} /> : page === "/reviews" ? <Reviews data={data} /> : page === "/projects" ? <Projects data={data} onRegisterProject={onRegisterProject} /> : page === "/providers" ? <ProvidersPage data={data} /> : page === "/analytics" ? <Analytics data={data} /> : page === "/settings" ? <Settings data={data} /> : <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />}</div></main></div>;
+  const taskLogsMatch = location.pathname.match(/^\/tasks\/(\d+)\/logs\/?$/);
+
+  return (
+    <div className="app">
+      <AppSidebar pending={pending} />
+      <main>
+        <div className="inner">
+          {taskLogsMatch ? (
+            <TaskLogViewerPage taskIdParam={taskLogsMatch[1]} onBack={() => window.history.back()} />
+          ) : page === "/chat" ? (
+            <Chat data={data} />
+          ) : page === "/backlog" ? (
+            <FlowFiltered data={data} onCreate={onCreate} />
+          ) : page === "/reviews" ? (
+            <Reviews data={data} />
+          ) : page === "/projects" ? (
+            <Projects data={data} onRegisterProject={onRegisterProject} />
+          ) : page === "/providers" ? (
+            <ProvidersPage data={data} />
+          ) : page === "/analytics" ? (
+            <Analytics data={data} />
+          ) : page === "/settings" ? (
+            <Settings data={data} />
+          ) : (
+            <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />
+          )}
+        </div>
+      </main>
+    </div>
+  );
 }
