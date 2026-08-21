@@ -258,6 +258,22 @@
   .bar-chart{display:flex;align-items:flex-end;gap:6px;height:120px;margin-top:14px}
   .bar-chart i{flex:1;border-radius:3px 3px 0 0;background:var(--rust);opacity:.8;transition:.2s}
   .bar-chart i:hover{opacity:1}
+  .token-usage-chart{height:150px;gap:14px;border-bottom:1px solid var(--line-soft);padding:0 8px}
+  .token-bar-column{height:100%;min-width:0;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px}
+  .token-bar-value{font-family:'IBM Plex Mono';font-size:9px;color:var(--muted);white-space:nowrap}
+  .token-bar-stack{width:100%;max-width:44px;min-height:7px;display:flex;flex-direction:column;justify-content:flex-start;border-radius:4px 4px 0 0;overflow:hidden;background:var(--line-soft)}
+  .token-bar-stack i{display:block;flex:none;width:100%;border-radius:0;opacity:1}
+  .token-bar-stack .token-bar-input{opacity:.9}
+  .token-bar-stack .token-bar-output{opacity:.38}
+  .token-bar-column>span{font-family:'IBM Plex Mono';font-size:9px;color:var(--faint);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .token-chart-legend{display:flex;gap:14px;margin-top:10px;font-family:'IBM Plex Mono';font-size:10px;color:var(--muted)}
+  .token-chart-legend span{display:inline-flex;align-items:center;gap:5px}
+  .token-chart-legend i{width:8px;height:8px;border-radius:2px;background:var(--rust);display:inline-block}
+  .token-chart-legend .legend-output{opacity:.38}
+  .token-empty{min-height:150px}
+  .quota-status{display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--line-soft);padding:10px 0 0;margin-top:10px;font-size:11px;color:var(--muted)}
+  .quota-status b{font-family:'Fraunces';font-size:13px;color:var(--ivory);font-weight:600}
+  .quota-status span{font-family:'IBM Plex Mono';line-height:1.45}
 
   /* ============ CONSUMO POR PROVIDER — barras-tentáculo ============ */
   .quota-group{border-top:1px solid var(--line-soft);padding-top:14px;margin-top:14px}

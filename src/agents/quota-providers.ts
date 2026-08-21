@@ -306,7 +306,10 @@ async function antigravityFetcher(): Promise<QuotaResult> {
 
 async function antigravityQuotaFetcher(): Promise<QuotaResult> {
   if (findAgyLoopbackPort().length === 0) {
-    return buildEmptyUnavailable("antigravity", "Antigravity não está conectado nesta sessão");
+    return buildEmptyUnavailable(
+      "antigravity",
+      "CLI Antigravity autenticada, mas a sessão local do agy não está ativa; a cota só fica disponível enquanto o servidor local está em execução"
+    );
   }
   return antigravityFetcher();
 }
@@ -498,17 +501,20 @@ const GEMINI_API_KEYED_MODELS =
 
 async function geminiApiFetcher(): Promise<QuotaResult> {
   const key = process.env.GEMINI_API_KEY ?? null;
-  if (!key) return buildEmptyUnavailable("gemini", "sem GEMINI_API_KEY");
+  if (!key) return buildEmptyUnavailable("gemini-api", "sem GEMINI_API_KEY");
   // The Gemini Developer API key lists models with per-model limits; here we only
   // prove connectivity rather than a real quota fraction, so mark unavailable.
   try {
     const res = await fetch(GEMINI_API_KEYED_MODELS, {
       headers: { "x-goog-api-key": key }
     });
-    if (!res.ok) return buildError("gemini", new Error(`gemini models ${res.status}`));
-    return buildEmptyUnavailable("gemini", "quota por API key indisponível (sem fração)");
+    if (!res.ok) return buildError("gemini-api", new Error(`gemini models ${res.status}`));
+    return buildEmptyUnavailable(
+      "gemini-api",
+      "API key válida; a API Gemini não expõe uma fração de cota utilizável neste endpoint"
+    );
   } catch (error) {
-    return buildError("gemini", error);
+    return buildError("gemini-api", error);
   }
 }
 
@@ -541,7 +547,7 @@ async function openCodeGoFetcher(): Promise<QuotaResult> {
     ];
     const buckets: QuotaBucket[] = [];
     for (const { key, w } of windows) {
-      const usedPct = typeof w.percent === "number" ? w.percent : null;
+      const usedPct = typeof w.percent === "number" ? Math.max(0, Math.min(100, w.percent)) : null;
       if (usedPct == null) continue;
       buckets.push({
         provider: "opencode-go",
@@ -591,7 +597,7 @@ export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
   // OpenRouter / OpenAI / Gemini API: by env API key presence.
   if (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY) fetchers.openrouter = openRouterFetcher;
   if (process.env.OPENAI_API_KEY) fetchers.openai = openAIFetcher;
-  if (process.env.GEMINI_API_KEY) fetchers.gemini = geminiApiFetcher;
+  if (process.env.GEMINI_API_KEY) fetchers["gemini-api"] = geminiApiFetcher;
 
   // OpenCode Go: by OPENCODE_GO_API_KEY env.
   if (process.env.OPENCODE_GO_API_KEY) fetchers["opencode-go"] = openCodeGoFetcher;

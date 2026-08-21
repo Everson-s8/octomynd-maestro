@@ -280,6 +280,8 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   const { task, telemetry, runs, events, reviews } = logs;
   const isRunning = runs.length > 0 && telemetry.isRunning;
   const activeRun = runs.find((r) => r.id === telemetry.activeRunId) ?? runs[runs.length - 1] ?? null;
+  const measuredTokens = telemetry.totalInputTokens + telemetry.totalOutputTokens;
+  const hasMeasuredUsage = measuredTokens > 0 || telemetry.totalCostUsd > 0;
 
   return (
     <div className="task-log-page view active">
@@ -459,8 +461,8 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="metric-card-v2">
           <div className="metric-icon-v2">$</div>
           <div className="metric-k">Consumo & Tokens</div>
-          <div className="metric-v-v2">${telemetry.totalCostUsd.toFixed(4)}</div>
-          <span className="metric-sub">{(telemetry.totalInputTokens + telemetry.totalOutputTokens).toLocaleString()} tokens</span>
+          <div className="metric-v-v2">{hasMeasuredUsage ? `$${telemetry.totalCostUsd.toFixed(4)}` : "Não informado"}</div>
+          <span className="metric-sub">{hasMeasuredUsage ? `${measuredTokens.toLocaleString()} tokens` : "provider não reportou tokens"}</span>
         </div>
 
         <div className="metric-card-v2">
@@ -914,11 +916,11 @@ function StepAccordionCard({ step, index }: { step: TaskLogStep; index: number }
         <strong className="step-summary-title">{step.summary}</strong>
         <div className="step-header-meta">
           {step.durationMs ? <span className="step-duration">{step.durationMs}ms</span> : null}
-          {step.tokenUsage ? (
+          {step.tokenUsage && (step.tokenUsage.inputTokens + step.tokenUsage.outputTokens > 0 || step.tokenUsage.costUsd > 0) ? (
             <span className="step-cost" title={`Model: ${step.tokenUsage.model}`}>
               ${step.tokenUsage.costUsd.toFixed(4)}
             </span>
-          ) : null}
+          ) : step.tokenUsage ? <span className="step-cost" title={`Model: ${step.tokenUsage.model}`}>uso n/d</span> : null}
           <span className="accordion-arrow">{open ? "▾" : "▸"}</span>
         </div>
       </header>

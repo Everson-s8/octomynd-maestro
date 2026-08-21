@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket } from "../api";
+import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket, QuotaResult } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
@@ -171,7 +171,7 @@ function Providers({ data }: { data: DashboardData }) {
 function agentState(state: string) { return state === "working" ? "trabalhando" : state === "ready" ? "pronto" : state; }
 
 function Analytics({ data }: { data: DashboardData }) {
-  const [quota, setQuota] = useState<QuotaBucket[] | null>(null);
+  const [quota, setQuota] = useState<QuotaResult[] | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -180,8 +180,7 @@ function Analytics({ data }: { data: DashboardData }) {
         if (!cancelled) {
           const stale = results.find((result) => result.stale);
           setQuotaError(stale ? `Exibindo a última leitura estável. Atualização: ${stale.error ?? "provider temporariamente indisponível"}.` : null);
-          const buckets = results.filter((r) => r.status === "ok").flatMap((r) => r.buckets);
-          setQuota(buckets.length ? buckets : []);
+          setQuota(results);
         }
       })
       .catch((error) => {
@@ -189,10 +188,16 @@ function Analytics({ data }: { data: DashboardData }) {
           setQuota([]);
           setQuotaError(error instanceof Error ? error.message : "Não foi possível atualizar as cotas.");
         }
-      });
+    });
     return () => { cancelled = true; };
   }, []);
-  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Nenhuma leitura disponível</h4><p>{quotaError ?? "Os providers conectados ainda não retornaram dados de cota. Isso não significa que a conexão OAuth caiu."}</p></div> : <><div className="quota-refresh-warning">{quotaError ?? ""}</div><QuotaGroups buckets={quota} /></>}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
+  const tokenProviders = (data.costSummary?.byProvider ?? []).filter((provider) => provider.inputTokens + provider.outputTokens > 0);
+  const totalTokens = tokenProviders.reduce((sum, provider) => sum + provider.inputTokens + provider.outputTokens, 0);
+  const maxProviderTokens = Math.max(...tokenProviders.map((provider) => provider.inputTokens + provider.outputTokens), 1);
+  const quotaBuckets = quota?.filter((result) => result.status === "ok").flatMap((result) => result.buckets) ?? [];
+  const quotaStatus = quota?.filter((result) => result.status !== "ok" || result.buckets.length === 0) ?? [];
+
+  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={totalTokens} icon="⌁" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="✓" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta={totalTokens ? `${totalTokens.toLocaleString()} tokens registrados hoje` : "sem leitura real do provider"} />{tokenProviders.length ? <><div className="bar-chart token-usage-chart">{tokenProviders.map((provider) => { const total = provider.inputTokens + provider.outputTokens; const height = Math.max(5, Math.round((total / maxProviderTokens) * 100)); const inputHeight = Math.round((provider.inputTokens / total) * 100); const color = QUOTA_ALIASES[provider.provider]?.color ?? "#c4622d"; return <div className="token-bar-column" key={provider.provider}><div className="token-bar-value">{total.toLocaleString()}</div><div className="token-bar-stack" style={{ height: `${height}%` }}><i className="token-bar-input" style={{ height: `${inputHeight}%`, background: color }} title={`${provider.provider}: ${provider.inputTokens.toLocaleString()} input`} /><i className="token-bar-output" style={{ height: `${100 - inputHeight}%`, background: color }} title={`${provider.provider}: ${provider.outputTokens.toLocaleString()} output`} /></div><span>{provider.provider}</span></div>; })}</div><div className="token-chart-legend"><span><i className="legend-input" /> input</span><span><i className="legend-output" /> output</span></div></> : <div className="empty token-empty"><div className="ico">◌</div><h4>Nenhum token medido hoje</h4><p>Os providers CLI conectados não retornaram contadores de input/output. O Maestro não estima nem inventa esses valores.</p></div>}</section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : <><div className="quota-refresh-warning">{quotaError ?? ""}</div>{quotaBuckets.length ? <QuotaGroups buckets={quotaBuckets} /> : <div className="empty"><div className="ico">◌</div><h4>Nenhuma leitura de cota disponível</h4><p>O provider pode estar conectado sem expor uma cota legível, ou a sessão local necessária pode estar inativa.</p></div>}{quotaStatus.map((result) => <div className="quota-status" key={result.provider}><b>{quotaLabel(result.provider)}</b><span>{quotaStatusMessage(result)}</span></div>)}</>}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
 }
 
 // Provider display metadata (color + human label).
@@ -204,8 +209,24 @@ const QUOTA_ALIASES: Record<string, { label: string; color: string }> = {
   openrouter: { label: "OpenRouter", color: "#8a6dab" },
   openai: { label: "OpenAI", color: "#4d7a8c" },
   gemini: { label: "Gemini", color: "#6f8f6a" },
+  "gemini-api": { label: "Gemini API", color: "#6f8f6a" },
   ollama: { label: "Ollama", color: "#5c6f8f" }
 };
+
+function quotaLabel(provider: string): string {
+  return QUOTA_ALIASES[provider]?.label ?? provider;
+}
+
+function quotaStatusMessage(result: QuotaResult): string {
+  const detail = result.error ?? "sem leitura disponível";
+  if (/sessão local|servidor local|agy|RetrieveUserQuotaSummary|grupos de cota/i.test(detail)) {
+    return "CLI autenticada, mas a sessão local do Antigravity não está ativa para consultar o RPC de cota.";
+  }
+  if (/API key válida|API key indisponível|fração de cota/i.test(detail)) {
+    return "Conexão validada; este provider não expõe uma fração de cota por API key.";
+  }
+  return detail;
+}
 
 // Renders all buckets grouped by provider with the tentacle-bar design.
 function QuotaGroups({ buckets }: { buckets: QuotaBucket[] }) {

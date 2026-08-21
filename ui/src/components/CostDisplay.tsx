@@ -4,12 +4,15 @@ import { Icon } from "./Icon";
 export function CostDisplay({
   costToday = 0,
   estimatedTokens = 0,
+  measured = false,
   currency = "$"
 }: {
   costToday?: number;
   estimatedTokens?: number;
+  measured?: boolean;
   currency?: string;
 }) {
+  const hasUsage = costToday > 0 || estimatedTokens > 0;
   const formattedCost = `${currency}${costToday.toFixed(2)}`;
   const formattedTokens = estimatedTokens > 1000000
     ? `${(estimatedTokens / 1000000).toFixed(1)}M`
@@ -23,10 +26,11 @@ export function CostDisplay({
         <Icon name="dollar" />
       </div>
       <div>
-        <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>Custo Hoje / Tokens</span>
+        <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>{measured ? "Uso registrado hoje" : "Custo Hoje / Tokens"}</span>
         <strong style={{ fontSize: "20px", color: "#ffffff", fontWeight: 700 }}>
-          {formattedCost} <small style={{ fontSize: "13px", color: "#808595", fontWeight: 500 }}>({formattedTokens} tokens)</small>
+          {measured && !hasUsage ? "Não informado" : <>{formattedCost} <small style={{ fontSize: "13px", color: "#808595", fontWeight: 500 }}>({formattedTokens} tokens)</small></>}
         </strong>
+        {measured && !hasUsage ? <small style={{ display: "block", marginTop: "4px", color: "#808595" }}>O provider não retornou métricas de uso.</small> : null}
       </div>
     </div>
   );
