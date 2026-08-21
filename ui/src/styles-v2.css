@@ -707,22 +707,53 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 100px 20px;
-  gap: 20px;
+  min-height: 420px;
+  padding: 72px 20px;
+  gap: 16px;
+  text-align: center;
+}
+.task-log-loading .octo-mark.is-large {
+  width: 104px;
+  height: 104px;
+  animation: loading-breathe 2.2s ease-in-out infinite;
 }
 .task-log-loading-text {
   text-align: center;
 }
 .task-log-loading-text b {
   font-family: 'Fraunces', serif;
-  font-size: 18px;
+  font-size: 17px;
   color: var(--ivory);
   display: block;
 }
 .task-log-loading-text span {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
+}
+.task-log-loading-rail {
+  width: 120px;
+  height: 3px;
+  overflow: hidden;
+  margin-top: 2px;
+  background: rgba(243, 236, 225, .12);
+  border-radius: 999px;
+}
+.task-log-loading-rail i {
+  display: block;
+  width: 36%;
+  height: 100%;
+  background: var(--rust);
+  border-radius: inherit;
+  animation: loading 1.8s ease-in-out infinite;
+}
+.quota-refresh-warning {
+  min-height: 1.2em;
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .task-log-error-card {

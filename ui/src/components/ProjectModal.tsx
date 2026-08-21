@@ -14,7 +14,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
   const [name, setName] = useState("");
   const [remoteUrl, setRemoteUrl] = useState("");
   const [localPath, setLocalPath] = useState("");
-  const [defaultBranch, setDefaultBranch] = useState("main");
+  const [defaultBranch, setDefaultBranch] = useState("");
   const [key, setKey] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
       setName("");
       setRemoteUrl("");
       setLocalPath("");
-      setDefaultBranch("main");
+      setDefaultBranch("");
       setKey("");
       setDescription("");
       setError(null);
@@ -118,7 +118,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
         name: name.trim() || cleanKey,
         path: (mode === "localremote" || mode === "local") ? localPath.trim() : undefined,
         remoteUrl: (mode === "github" || (mode === "localremote" && remoteUrl.trim())) ? remoteUrl.trim() : undefined,
-        defaultBranch: defaultBranch.trim() || "main",
+        defaultBranch: defaultBranch.trim() || undefined,
         description: description.trim() || undefined,
         mode
       });
@@ -323,11 +323,11 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
 
           <div className="mfield-row">
             <div className="mfield">
-              <label htmlFor="field-default-branch">Branch padrão</label>
+              <label htmlFor="field-default-branch">Branch padrão <span className="opt">opcional</span></label>
               <input
                 id="field-default-branch"
                 type="text"
-                placeholder="main"
+                placeholder="Detectar automaticamente (main, master...)"
                 value={defaultBranch}
                 onChange={(e) => setDefaultBranch(e.target.value)}
                 disabled={loading}

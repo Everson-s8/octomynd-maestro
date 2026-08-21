@@ -29,6 +29,10 @@ export type QuotaResult = {
   updatedAt: string;
   buckets: QuotaBucket[];
   error: string | null;
+  /** True when the values are the last successful reading, not this poll. */
+  stale?: boolean;
+  /** Timestamp of the last successful reading when this result is stale. */
+  lastSuccessfulAt?: string;
 };
 
 // What a quota provider's fetcher must produce: a list of normalized buckets.
@@ -85,22 +89,101 @@ export function usedLimitToBucket(raw: {
 // Orchestration: run the fetchers for the providers the Maestro has (returns a
 // result per provider, best-effort; a failed/unavailable provider yields a
 // status bucket rather than throwing).
+const QUOTA_CACHE_TTL_MS = 10_000;
+const QUOTA_FETCH_TIMEOUT_MS = 3_000;
+
+type QuotaCache = {
+  fetchedAt: number;
+  results: QuotaResult[];
+  lastSuccessfulByProvider: Map<string, QuotaResult>;
+  inFlight: Promise<QuotaResult[]> | null;
+};
+
+// Keep this cache in the process, rather than in the UI. It prevents a fast
+// dashboard poll (and a route refresh) from starting the same external OAuth
+// calls over and over, while still allowing a fresh reading every few seconds.
+const quotaCaches = new Map<string, QuotaCache>();
+
+function cloneResults(results: QuotaResult[]): QuotaResult[] {
+  return results.map((result) => ({ ...result, buckets: result.buckets.map((bucket) => ({ ...bucket })) }));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("quota_fetch_timeout")), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 export async function fetchAllQuota(fetchers: Record<string, QuotaFetcher>): Promise<QuotaResult[]> {
   const providers = Object.keys(fetchers);
-  const results = await Promise.allSettled(
-    providers.map(async (provider) => await fetchers[provider]())
-  );
-  return providers.map((provider, i) => {
-    const r = results[i];
-    if (r.status === "fulfilled") return r.value;
-    return {
-      provider,
-      status: "error" as const,
-      updatedAt: new Date().toISOString(),
-      buckets: [],
-      error: r.reason instanceof Error ? r.reason.message : "quota_fetch_failed"
-    };
-  });
+  const cacheKey = providers.slice().sort().join(",") || "none";
+  const cache = quotaCaches.get(cacheKey) ?? {
+    fetchedAt: 0,
+    results: [],
+    lastSuccessfulByProvider: new Map<string, QuotaResult>(),
+    inFlight: null
+  } satisfies QuotaCache;
+  quotaCaches.set(cacheKey, cache);
+
+  if (cache.results.length > 0 && Date.now() - cache.fetchedAt < QUOTA_CACHE_TTL_MS) {
+    return cloneResults(cache.results);
+  }
+  if (cache.inFlight) {
+    return cache.results.length > 0 ? cloneResults(cache.results) : cache.inFlight;
+  }
+
+  cache.inFlight = (async () => {
+    const results = await Promise.allSettled(
+      providers.map((provider) => withTimeout(fetchers[provider](), QUOTA_FETCH_TIMEOUT_MS))
+    );
+    return providers.map((provider, i) => {
+      const outcome = results[i];
+      const current: QuotaResult = outcome.status === "fulfilled"
+        ? outcome.value
+        : {
+            provider,
+            status: "error",
+            updatedAt: new Date().toISOString(),
+            buckets: [],
+            error: outcome.reason instanceof Error ? outcome.reason.message : "quota_fetch_failed"
+          };
+      const isUsable = current.status === "ok" && current.buckets.length > 0;
+      if (isUsable) {
+        cache.lastSuccessfulByProvider.set(provider, current);
+        return { ...current, stale: false, lastSuccessfulAt: current.updatedAt };
+      }
+
+      const lastSuccessful = cache.lastSuccessfulByProvider.get(provider);
+      if (lastSuccessful) {
+        return {
+          ...lastSuccessful,
+          stale: true,
+          error: current.error || "quota_refresh_unavailable",
+          lastSuccessfulAt: lastSuccessful.lastSuccessfulAt ?? lastSuccessful.updatedAt
+        };
+      }
+      return current;
+    });
+  })();
+
+  try {
+    const results = await cache.inFlight;
+    cache.results = results;
+    cache.fetchedAt = Date.now();
+    return cloneResults(results);
+  } finally {
+    cache.inFlight = null;
+  }
 }
 
 // Convenience: a provider with no usable credentials -> status unavailable.

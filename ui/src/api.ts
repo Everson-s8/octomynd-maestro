@@ -771,7 +771,23 @@ export type ReviewQueueItem = {
 };
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
-  const response = await fetch("/api/dashboard", { signal });
+  let response: Response | null = null;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      response = await fetch("/api/dashboard", { signal, cache: "no-store" });
+      if (response.ok || (response.status < 500 && response.status !== 429)) break;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error("Dashboard indisponível.");
+  }
   if (!response.ok) {
     throw new Error(`Dashboard indisponível (${response.status}).`);
   }
@@ -1305,12 +1321,25 @@ export type RegisterProjectResult = {
 };
 
 export async function registerProject(input: RegisterProjectInput): Promise<RegisterProjectResult> {
-  const response = await fetch("/api/projects", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  });
-  const payload = await response.json() as RegisterProjectResult & { error?: string; details?: string[] | string };
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 120_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("O registro do projeto demorou mais de 2 minutos. Verifique o Git e tente novamente.");
+    }
+    throw new Error("Não foi possível manter a conexão com o Maestro. Confirme que o HG está ativo e tente novamente.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  const payload = await response.json().catch(() => ({})) as RegisterProjectResult & { error?: string; details?: string[] | string };
   if (!response.ok || !payload.project) {
     const detailMsg = Array.isArray(payload.details)
       ? payload.details.join(", ")
@@ -1342,10 +1371,24 @@ export type QuotaResult = {
   updatedAt: string;
   buckets: QuotaBucket[];
   error: string | null;
+  stale?: boolean;
+  lastSuccessfulAt?: string;
 };
 
 export async function fetchQuota(): Promise<QuotaResult[]> {
-  const response = await fetch("/api/quota");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/quota", { signal: controller.signal, cache: "no-store" });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("A leitura de cotas demorou demais; exibindo a última leitura disponível.");
+    }
+    throw error instanceof Error ? error : new Error("Quota indisponível.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`Quota indisponível (${response.status}).`);
   }

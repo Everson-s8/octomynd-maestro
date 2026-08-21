@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   QuotaResult,
   buildError,
@@ -66,6 +66,52 @@ describe("fetchAllQuota orchestration", () => {
     const boom = results.find((r) => r.provider === "boom");
     expect(boom?.status).toBe("error");
     expect(boom?.error).toBe("boom");
+  });
+
+  it("serves the last successful reading when a later refresh fails", async () => {
+    vi.useFakeTimers();
+    const provider = `quota-stale-${Date.now()}`;
+    let calls = 0;
+
+    try {
+      const first = await fetchAllQuota({
+        [provider]: async (): Promise<QuotaResult> => {
+          calls += 1;
+          return {
+            provider,
+            status: "ok",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+            buckets: [{
+              provider,
+              modelId: "test-model",
+              windowKind: "5h",
+              windowMinutes: 300,
+              usedPercent: 20,
+              remainingPercent: 80,
+              resetsAt: null,
+              planType: null
+            }],
+            error: null
+          };
+        }
+      });
+      expect(first[0]?.stale).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_001);
+      const second = await fetchAllQuota({
+        [provider]: async (): Promise<QuotaResult> => {
+          calls += 1;
+          throw new Error("provider offline");
+        }
+      });
+
+      expect(calls).toBe(2);
+      expect(second[0]?.stale).toBe(true);
+      expect(second[0]?.buckets[0]?.remainingPercent).toBe(80);
+      expect(second[0]?.error).toBe("provider offline");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("buildError and buildEmptyUnavailable produce the expected shapes", () => {

@@ -32,10 +32,14 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
+  const handleRefresh = useCallback(() => { void refresh(true); }, [refresh]);
+  const handleCreate = useCallback(() => setComposerOpen(true), []);
+  const handleRegisterProject = useCallback(() => setProjectModalOpen(true), []);
+
   if (!data && !error) return <LoadingSpinner />;
   return <BrowserRouter>
     {error ? <ErrorBanner message={error} onRetry={() => void refresh(true)} /> : null}
-    {data ? <MaestroV2 data={data} onRefresh={() => void refresh(true)} onCreate={() => setComposerOpen(true)} onRegisterProject={() => setProjectModalOpen(true)} refreshing={refreshing} /> : null}
+    {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
     <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
   </BrowserRouter>;

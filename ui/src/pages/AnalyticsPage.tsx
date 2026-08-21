@@ -209,6 +209,7 @@ function QuotaBar({ bucket, color }: { bucket: QuotaBucket; color: string }) {
   const label = remaining == null ? "n/d" : `${remaining}% restante`;
   const sub = [
     bucket.planType ? bucket.planType : null,
+    bucket.detail ? bucket.detail : null,
     bucket.modelId ? `modelo ${bucket.modelId}` : null,
     resetLabel(bucket)
   ]

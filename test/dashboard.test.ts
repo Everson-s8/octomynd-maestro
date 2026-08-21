@@ -138,6 +138,32 @@ describe("dashboard", () => {
     }
   });
 
+  it("serves the dashboard when a provider snapshot does not finish", async () => {
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full",
+      agentRegistry: {
+        snapshot: () => new Promise(() => {})
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const startedAt = performance.now();
+      const response = await fetch(`http://127.0.0.1:${port}/api/dashboard`);
+      expect(response.status).toBe(200);
+      expect(performance.now() - startedAt).toBeLessThan(3_000);
+      expect((await response.json()).generatedAt).toEqual(expect.any(String));
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
   it("persists provider controls and capability routing through the dashboard API", async () => {
     const registry = new AgentRegistry([successfulGoalProvider], undefined, Date.now, database);
     const server = createDashboardServer({

@@ -64,7 +64,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   // Polling when active
   useEffect(() => {
     if (!autoRefresh) return;
-    const isRunning = logs?.telemetry.isRunning ?? true;
+    const isRunning = logs?.telemetry.isRunning ?? false;
     if (!isRunning && logs !== null) return;
 
     const interval = setInterval(() => {
@@ -157,6 +157,11 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
     return tools;
   }, [activeRuns]);
 
+  const filteredTools = useMemo(() => {
+    if (phaseFilter === "all") return extractedTools;
+    return extractedTools.filter((tool) => tool.phase === phaseFilter);
+  }, [extractedTools, phaseFilter]);
+
   const allCheckpoints = useMemo(() => {
     return activeRuns.flatMap((r) => r.checkpoints);
   }, [activeRuns]);
@@ -238,12 +243,13 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   if (loading) {
     return (
       <div className="task-log-page">
-        <div className="task-log-loading">
+        <div className="task-log-loading" role="status" aria-live="polite">
           <OctoMark large />
           <div className="task-log-loading-text">
-            <b>Carregando telemetria e logs da task #{taskId}...</b>
-            <span>Sincronizando com o SQLite local</span>
+            <b>Sincronizando task #{taskId}</b>
+            <span>Buscando telemetria e eventos locais…</span>
           </div>
+          <div className="task-log-loading-rail" aria-hidden="true"><i /></div>
         </div>
       </div>
     );
@@ -272,7 +278,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   if (!logs) return null;
 
   const { task, telemetry, runs, events, reviews } = logs;
-  const isRunning = telemetry.isRunning;
+  const isRunning = runs.length > 0 && telemetry.isRunning;
   const activeRun = runs.find((r) => r.id === telemetry.activeRunId) ?? runs[runs.length - 1] ?? null;
 
   return (
@@ -515,7 +521,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           onClick={() => setActiveTab("tools")}
         >
           <Icon name="spark" />
-          <span>Tool Calls & Comandos ({extractedTools.length})</span>
+          <span>Tool Calls & Comandos ({filteredTools.length})</span>
         </button>
         <button
           type="button"
@@ -560,18 +566,20 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           )}
         </div>
 
-        <div className="task-log-phase-filters">
-          {["all", "planning", "implementing", "testing", "reviewing"].map((phase) => (
-            <button
-              key={phase}
-              type="button"
-              className={`phase-chip ${phaseFilter === phase ? "active" : ""}`}
-              onClick={() => setPhaseFilter(phase)}
-            >
-              {phase === "all" ? "Todas as fases" : phase}
-            </button>
-          ))}
-        </div>
+        {(activeTab === "stream" || activeTab === "terminal" || activeTab === "tools") && (
+          <div className="task-log-phase-filters">
+            {["all", "planning", "implementing", "testing", "reviewing"].map((phase) => (
+              <button
+                key={phase}
+                type="button"
+                className={`phase-chip ${phaseFilter === phase ? "active" : ""}`}
+                onClick={() => setPhaseFilter(phase)}
+              >
+                {phase === "all" ? "Todas as fases" : phase}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Tab 1: Execution Stream */}
@@ -682,16 +690,20 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               <div className="lbl">Execução de Ferramentas</div>
               <h3>Tool Calls & Comandos Executados</h3>
             </div>
-            <div className="count">{extractedTools.length} chamadas capturadas</div>
+            <div className="count">{filteredTools.length} chamadas capturadas</div>
           </div>
 
-          {extractedTools.length === 0 ? (
+          {filteredTools.length === 0 ? (
             <div className="empty compact">
-              <p>Nenhuma chamada de ferramenta explícita registrada nesta task.</p>
+              <p>
+                {extractedTools.length === 0
+                  ? "Nenhuma chamada de ferramenta explícita registrada nesta task."
+                  : "Nenhuma chamada de ferramenta corresponde à fase selecionada."}
+              </p>
             </div>
           ) : (
             <div className="tools-grid">
-              {extractedTools.map((tool, i) => (
+              {filteredTools.map((tool, i) => (
                 <div className={`tool-card tool-${tool.status}`} key={`${tool.stepId}-${i}`}>
                   <div className="tool-card-head">
                     <span className="tool-name">⚡ {tool.toolName}</span>

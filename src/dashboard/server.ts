@@ -52,6 +52,40 @@ import {
 import type { TelegramSubsystemManager } from "../telegram/bot.js";
 
 const providerAuthBroker = new ProviderAuthBroker();
+const DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS = 1_500;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(undefined), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function readDashboardAgents(
+  options: DashboardServerOptions
+): Promise<ReturnType<typeof providerAgentPresence> | undefined> {
+  if (!options.agentRegistry) return undefined;
+  try {
+    const snapshot = await withTimeout(
+      options.agentRegistry.snapshot(),
+      DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS
+    );
+    return snapshot
+      ? providerAgentPresence(options.config, options.database, snapshot)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -148,9 +182,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    const agents = options.agentRegistry
-      ? providerAgentPresence(options.config, options.database, await options.agentRegistry.snapshot())
-      : undefined;
+    const agents = await readDashboardAgents(options);
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,

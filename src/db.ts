@@ -1251,10 +1251,17 @@ export function createDatabase(databasePath: string) {
     listEventsForTask(taskId: number, limit = 500): EventRecord[] {
       const rows = db
         .prepare(`
-          SELECT * FROM events
-          WHERE task_id = ?
-             OR CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
-             OR CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+          SELECT * FROM (
+            SELECT * FROM events WHERE task_id = ?
+            UNION
+            SELECT * FROM events
+            WHERE task_id IS NULL
+              AND CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
+            UNION
+            SELECT * FROM events
+            WHERE task_id IS NULL
+              AND CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+          )
           ORDER BY id ASC
           LIMIT ?
         `)
@@ -1569,7 +1576,7 @@ export function createDatabase(databasePath: string) {
         };
       });
 
-      const isRunning = ["planning", "implementing", "testing", "reviewing", "waiting_provider", "waiting_quota", "waiting_dependency"].includes(task.status) || activeRunId !== null;
+      const isRunning = activeRunId !== null;
       const isFinished = ["done", "failed", "rejected", "cancelled"].includes(task.status);
 
       return {
@@ -3083,6 +3090,13 @@ function migrate(db: Database.Database) {
       metadata_json TEXT NOT NULL DEFAULT '{}',
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_events_task_id
+      ON events(task_id);
+    CREATE INDEX IF NOT EXISTS idx_events_metadata_task_id
+      ON events(CAST(json_extract(metadata_json, '$.taskId') AS INTEGER));
+    CREATE INDEX IF NOT EXISTS idx_events_metadata_deleted_task_id
+      ON events(CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER));
 
     CREATE TABLE IF NOT EXISTS task_reviews (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

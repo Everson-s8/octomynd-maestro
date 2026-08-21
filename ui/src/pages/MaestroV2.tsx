@@ -62,7 +62,18 @@ function FeatureLine({ feature }: { feature: DashboardData["features"][number] }
 function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
   const navigate = useNavigate();
   return (
-    <div className="task" role="button" tabIndex={0} onClick={() => navigate(`/tasks/${task.id}/logs`)}>
+    <div
+      className="task"
+      role="button"
+      tabIndex={0}
+      onClick={() => navigate(`/tasks/${task.id}/logs`)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          navigate(`/tasks/${task.id}/logs`);
+        }
+      }}
+    >
       <span className="id">#{String(task.id).padStart(2, "0")}</span>
       <span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>
         {taskStatusLabels[task.status]}
@@ -90,7 +101,15 @@ function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
       >
         Logs
       </NavLink>
-      <span className="arr">→</span>
+      <NavLink
+        to={`/tasks/${task.id}/logs`}
+        className="arr task-log-arrow"
+        aria-label={`Abrir logs da task ${task.id}`}
+        title="Abrir logs da task"
+        onClick={(event) => event.stopPropagation()}
+      >
+        →
+      </NavLink>
     </div>
   );
 }
@@ -153,19 +172,27 @@ function agentState(state: string) { return state === "working" ? "trabalhando" 
 
 function Analytics({ data }: { data: DashboardData }) {
   const [quota, setQuota] = useState<QuotaBucket[] | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetchQuota()
       .then((results) => {
         if (!cancelled) {
+          const stale = results.find((result) => result.stale);
+          setQuotaError(stale ? `Exibindo a última leitura estável. Atualização: ${stale.error ?? "provider temporariamente indisponível"}.` : null);
           const buckets = results.filter((r) => r.status === "ok").flatMap((r) => r.buckets);
           setQuota(buckets.length ? buckets : []);
         }
       })
-      .catch(() => { if (!cancelled) setQuota([]); });
+      .catch((error) => {
+        if (!cancelled) {
+          setQuota([]);
+          setQuotaError(error instanceof Error ? error.message : "Não foi possível atualizar as cotas.");
+        }
+      });
     return () => { cancelled = true; };
   }, []);
-  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Sem leitura de cota</h4><p>Conecte a conta de um provider (OAuth) para ver o % de uso.</p></div> : <QuotaGroups buckets={quota} />}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
+  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Nenhuma leitura disponível</h4><p>{quotaError ?? "Os providers conectados ainda não retornaram dados de cota. Isso não significa que a conexão OAuth caiu."}</p></div> : <><div className="quota-refresh-warning">{quotaError ?? ""}</div><QuotaGroups buckets={quota} /></>}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
 }
 
 // Provider display metadata (color + human label).

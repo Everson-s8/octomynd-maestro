@@ -18,6 +18,7 @@ import {
   checkApiHealth
 } from "../desktop/launcher.js";
 import { findProcessOnPort, killProcessGracefully } from "../runtime/port-process.js";
+import { detectGitDefaultBranch } from "../git.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
@@ -98,11 +99,12 @@ async function projectAddCommand(argv: string[]): Promise<void> {
   const commands = new ApplicationCommands(database);
 
   try {
-    const result = commands.registerProject(cliOrigin(), {
-      key,
-      path: projectPath,
-      defaultBranch: "main"
-    });
+      const detectedBranch = detectGitDefaultBranch(projectPath);
+      const result = commands.registerProject(cliOrigin(), {
+        key,
+        path: projectPath,
+        defaultBranch: detectedBranch ?? undefined
+      });
     for (const warning of result.warnings) console.log(`[~] ${warning}`);
     console.log(`[ok] Projeto @${key} registrado em ${result.project.path}`);
   } catch (error) {

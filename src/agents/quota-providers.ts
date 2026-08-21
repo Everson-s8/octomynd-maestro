@@ -304,6 +304,13 @@ async function antigravityFetcher(): Promise<QuotaResult> {
   };
 }
 
+async function antigravityQuotaFetcher(): Promise<QuotaResult> {
+  if (findAgyLoopbackPort().length === 0) {
+    return buildEmptyUnavailable("antigravity", "Antigravity não está conectado nesta sessão");
+  }
+  return antigravityFetcher();
+}
+
 // ---- Claude (OAuth subscription) -------------------------------------------
 // Reads the OAuth access token from the Claude CLI config if present, else
 // unavailable. Endpoint mirrors Orca's claude-fetcher.
@@ -574,10 +581,7 @@ export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
     }
   }
 
-  // Antigravity: agy process running (has a live session).
-  if (findAgyLoopbackPort().length > 0) {
-    fetchers.antigravity = antigravityFetcher;
-  }
+  fetchers.antigravity = antigravityQuotaFetcher;
 
   // Claude: ~/.claude/.credentials.json has claudeAiOauth.
   if (fs.existsSync(homeFile(".claude", ".credentials.json"))) {
