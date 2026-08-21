@@ -1,11 +1,12 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket } from "../api";
+import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket, QuotaResult } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels, statusProgress, formatRelative } from "../helpers";
 import { ProvidersPage } from "./ProvidersPage";
+import { TaskLogViewerPage } from "./TaskLogViewerPage";
 
 const routes = [
   { to: "/", label: "Visão geral", icon: "grid", end: true },
@@ -58,7 +59,42 @@ function Metric({ label, value, icon, onClick }: { label: string; value: number;
 function PanelHead({ eyebrow, title, meta }: { eyebrow: string; title: string; meta: string }) { return <div className="panel-head"><div><div className="lbl">{eyebrow}</div><h3>{title}</h3></div><div className="count">{meta}</div></div>; }
 function InlineEmpty({ text }: { text: string }) { return <div className="inline-empty">{text}</div>; }
 function FeatureLine({ feature }: { feature: DashboardData["features"][number] }) { const status = feature.status === "completed" ? "ok" : feature.status === "failed" ? "err" : "run"; const label = feature.status === "completed" ? "concluída" : feature.status === "failed" ? "falhou" : "rodando"; return <div className="task"><span className="id">#{String(feature.id).padStart(2, "0")}</span><span className={`st ${status}`}>{label}</span><div className="body"><b>{feature.name}</b><span>{feature.branchName}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${feature.status === "completed" ? 76 : feature.status === "failed" ? 50 : 38}`} stroke={feature.status === "failed" ? "#b1503c" : feature.status === "completed" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={feature.status === "completed" ? 78 : feature.status === "failed" ? 52 : 40} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
-function TaskLine({ task }: { task: DashboardData["tasks"][number] }) { return <div className="task"><span className="id">#{String(task.id).padStart(2, "0")}</span><span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>{taskStatusLabels[task.status]}</span><div className="body"><b>{task.text}</b><span>{task.branchName ?? `criada ${formatRelative(task.createdAt)}`}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${Math.max(8, statusProgress(task.status) * .76)}`} stroke={task.status === "failed" ? "#b1503c" : task.status === "done" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={Math.max(8, statusProgress(task.status) * .76)} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
+function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
+  return (
+    <div
+      className="task"
+    >
+      <span className="id">#{String(task.id).padStart(2, "0")}</span>
+      <span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>
+        {taskStatusLabels[task.status]}
+      </span>
+      <div className="body">
+        <b>{task.text}</b>
+        <span>{task.branchName ?? `criada ${formatRelative(task.createdAt)}`}</span>
+      </div>
+      <div className="fiber">
+        <svg viewBox="0 0 80 14">
+          <path d="M2 7h76" stroke="#372c20" strokeWidth="2" />
+          <path
+            d={`M2 7h${Math.max(8, statusProgress(task.status) * 0.76)}`}
+            stroke={task.status === "failed" ? "#b1503c" : task.status === "done" ? "#6f8f6a" : "#c4622d"}
+            strokeWidth="2"
+          />
+          <circle cx={Math.max(8, statusProgress(task.status) * 0.76)} cy="7" r="3" fill="#e8967a" />
+        </svg>
+      </div>
+      <NavLink
+        to={`/tasks/${task.id}/logs`}
+        className="task-log-btn-link"
+        title="Ver logs da task"
+        onClick={(e) => e.stopPropagation()}
+      >
+        Logs
+      </NavLink>
+      <span className="arr task-log-arrow" aria-hidden="true">→</span>
+    </div>
+  );
+}
 
 function Chat({ data }: { data: DashboardData }) {
   const [projectKey, setProjectKey] = useState(data.projects[0]?.key ?? "maestro");
@@ -110,27 +146,51 @@ function Providers({ data }: { data: DashboardData }) {
   async function changeControl(providerId: AgentProviderId, mode: ProviderMode, fallbackEnabled: boolean) { setBusy(providerId); setError(""); try { const control = await updateProviderControl(providerId, { mode, fallbackEnabled }); setPolicy(current => current ? { ...current, controls: current.controls.map(item => item.providerId === providerId ? control : item) } : current); } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível atualizar o provider."); } finally { setBusy(null); } }
   async function useOnly(providerId: AgentProviderId) { setBusy(providerId); setError(""); try { const next = controls.map(control => ({ providerId: control.providerId, mode: control.providerId === providerId ? "enabled" as const : "paused" as const, fallbackEnabled: control.providerId === providerId })); const updated = await updateProviderControls(next); setPolicy(current => current ? { ...current, controls: updated } : current); } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível aplicar o provider exclusivo."); } finally { setBusy(null); } }
   const capabilities: Array<[string, "planning" | "coding" | "testing" | "reviewing" | "conversation"]> = [["Planejamento", "planning"], ["Implementação", "coding"], ["Testes", "testing"], ["Review final", "reviewing"], ["Conversa", "conversation"]];
-  async function changeRouting(capability: typeof capabilities[number][1], providerId: AgentProviderId) { const current = policy?.capabilities.find(item => item.capability === capability); if (!current) return; setBusy(capability); try { const updated = await updateCapabilityRouting(capability, { order: [providerId, ...current.order.filter(item => item !== providerId)], requiredProviderId: current.requiredProviderId }); setPolicy(state => state ? { ...state, capabilities: state.capabilities.map(item => item.capability === capability ? updated : item) } : state); } finally { setBusy(null); } }
-  async function changeRequired(capability: typeof capabilities[number][1], value: string) { const current = policy?.capabilities.find(item => item.capability === capability); if (!current) return; setBusy(capability); setError(""); try { const updated = await updateCapabilityRouting(capability, { order: current.order, requiredProviderId: value === "fallback" ? null : value as AgentProviderId }); setPolicy(state => state ? { ...state, capabilities: state.capabilities.map(item => item.capability === capability ? updated : item) } : state); } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível atualizar a regra."); } finally { setBusy(null); } }
-  return <div className="view active"><PageTop eyebrow="AI Routing" title="Providers" /><p className="desc">Conecte providers de nuvem, locais ou endpoints customizados e defina a prioridade por função.</p>{error ? <div className="action-error" role="alert">{error}</div> : null}<div className="prov-grid"><div><div className="prov-group-lbl">Conectados</div>{providerAgents.map(agent => { const control = controls.find(item => item.providerId === agent.id); const mode = control?.mode ?? "enabled"; const fallback = control?.fallbackEnabled ?? false; const toggle = () => void changeControl(agent.id, mode === "enabled" ? "paused" : "enabled", fallback); return <div className="prov-card" key={agent.id}><div className="head"><div className="av">{agent.label[0]}</div><div><b>{agent.label}</b><span><span className="st-dot" />{agentState(agent.state)}</span></div><span className="type-tag">cloud</span></div><div className="prov-uso"><div className="prov-uso-l"><div className={`toggle ${mode === "enabled" ? "on" : ""}`} role="switch" aria-label={`${mode === "enabled" ? "Pausar" : "Ativar"} ${agent.label}`} aria-checked={mode === "enabled"} tabIndex={0} onClick={toggle} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }}><i /></div><label>{mode === "enabled" ? "ativo" : mode === "paused" ? "pausado" : "desativado"}</label></div><label className="provider-fallback"><input type="checkbox" checked={fallback} disabled={busy === agent.id} onChange={event => void changeControl(agent.id, mode, event.target.checked)} /> fallback</label><button className="btn-ghost provider-only" disabled={busy === agent.id} onClick={() => void useOnly(agent.id)}>usar somente este</button></div></div>; })}<button type="button" className="add-provider" onClick={() => setConnResult({ ok: false, detail: "", executable: null })}><div className="plus">+</div><b>Conectar provider</b><span>Local, OpenAI-compatible, ou endpoint próprio — digite o comando abaixo e teste a conexão</span></button>{connBusy || connResult ? <form className="provider-connect-form" onSubmit={testConn}><div className="field"><label>Comando do provider (CLI)</label><input value={connCommand} onChange={event => setConnCommand(event.target.value)} placeholder="Ex: opencode, claude, codex, ollama, node meu-provider.js" disabled={connBusy} /></div><div className="field"><label>Argumentos (ex: -m modelo) — opcional</label><input value={connArgs} onChange={event => setConnArgs(event.target.value)} placeholder="Ex: -m opencode/deepseek-v4-flash" disabled={connBusy} /></div><button className="btn-new" type="submit" disabled={connBusy || !connCommand.trim()}>{connBusy ? "Testando conexão..." : "Testar conexão"}</button>{connResult ? <div className={`conn-badge ${connResult.ok ? "ok" : "fail"}`}>{connResult.ok ? "✓ Conectado" : "✗ Falha na conexão"}<span>{connResult.detail}</span></div> : null}</form> : null}</div><section className="panel provider-routing"><PanelHead eyebrow="Control plane" title="Prioridade por função" meta="persistente" />{capabilities.map(([name, capability]) => { const route = policy?.capabilities.find(item => item.capability === capability); const first = route?.order[0]; return <div className="routing-row" key={capability}><div className="rname">{name}</div><div><div className="field-lbl">Primeiro</div><select className="sel" value={first ?? ""} disabled={!route || busy === capability} onChange={event => void changeRouting(capability, event.target.value as AgentProviderId)}>{providerAgents.map(agent => <option value={agent.id} key={agent.id}>{agent.label}</option>)}</select></div><div><div className="field-lbl">Regra</div><select className="sel" value={route?.requiredProviderId ?? "fallback"} disabled={!route || busy === capability} onChange={event => void changeRequired(capability, event.target.value)}><option value="fallback">Fallback automático</option>{providerAgents.map(agent => <option value={agent.id} key={agent.id}>Somente {agent.label}</option>)}</select></div></div>; })}</section></div></div>;
+  async function changeRouting(capability: typeof capabilities[number][1], providerId: AgentProviderId) { const current = (policy?.capabilities ?? []).find(item => item.capability === capability); if (!current) return; setBusy(capability); try { const updated = await updateCapabilityRouting(capability, { order: [providerId, ...current.order.filter(item => item !== providerId)], requiredProviderId: current.requiredProviderId }); setPolicy(state => state ? { ...state, capabilities: state.capabilities.map(item => item.capability === capability ? updated : item) } : state); } finally { setBusy(null); } }
+  async function changeRequired(capability: typeof capabilities[number][1], value: string) { const current = (policy?.capabilities ?? []).find(item => item.capability === capability); if (!current) return; setBusy(capability); setError(""); try { const updated = await updateCapabilityRouting(capability, { order: current.order, requiredProviderId: value === "fallback" ? null : value as AgentProviderId }); setPolicy(state => state ? { ...state, capabilities: state.capabilities.map(item => item.capability === capability ? updated : item) } : state); } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível atualizar a regra."); } finally { setBusy(null); } }
+  return <div className="view active"><PageTop eyebrow="AI Routing" title="Providers" /><p className="desc">Conecte providers de nuvem, locais ou endpoints customizados e defina a prioridade por função.</p>{error ? <div className="action-error" role="alert">{error}</div> : null}<div className="prov-grid"><div><div className="prov-group-lbl">Conectados</div>{providerAgents.map(agent => { const control = controls.find(item => item.providerId === agent.id); const mode = control?.mode ?? "enabled"; const fallback = control?.fallbackEnabled ?? false; const toggle = () => void changeControl(agent.id, mode === "enabled" ? "paused" : "enabled", fallback); return <div className="prov-card" key={agent.id}><div className="head"><div className="av">{agent.label[0]}</div><div><b>{agent.label}</b><span><span className="st-dot" />{agentState(agent.state)}</span></div><span className="type-tag">cloud</span></div><div className="prov-uso"><div className="prov-uso-l"><div className={`toggle ${mode === "enabled" ? "on" : ""}`} role="switch" aria-label={`${mode === "enabled" ? "Pausar" : "Ativar"} ${agent.label}`} aria-checked={mode === "enabled"} tabIndex={0} onClick={toggle} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }}><i /></div><label>{mode === "enabled" ? "ativo" : mode === "paused" ? "pausado" : "desativado"}</label></div><label className="provider-fallback"><input type="checkbox" checked={fallback} disabled={busy === agent.id} onChange={event => void changeControl(agent.id, mode, event.target.checked)} /> fallback</label><button className="btn-ghost provider-only" disabled={busy === agent.id} onClick={() => void useOnly(agent.id)}>usar somente este</button></div></div>; })}<button type="button" className="add-provider" onClick={() => setConnResult({ ok: false, detail: "", executable: null })}><div className="plus">+</div><b>Conectar provider</b><span>Local, OpenAI-compatible, ou endpoint próprio — digite o comando abaixo e teste a conexão</span></button>{connBusy || connResult ? <form className="provider-connect-form" onSubmit={testConn}><div className="field"><label>Comando do provider (CLI)</label><input value={connCommand} onChange={event => setConnCommand(event.target.value)} placeholder="Ex: opencode, claude, codex, ollama, node meu-provider.js" disabled={connBusy} /></div><div className="field"><label>Argumentos (ex: -m modelo) — opcional</label><input value={connArgs} onChange={event => setConnArgs(event.target.value)} placeholder="Ex: -m opencode/deepseek-v4-flash" disabled={connBusy} /></div><button className="btn-new" type="submit" disabled={connBusy || !connCommand.trim()}>{connBusy ? "Testando conexão..." : "Testar conexão"}</button>{connResult ? <div className={`conn-badge ${connResult.ok ? "ok" : "fail"}`}>{connResult.ok ? "✓ Conectado" : "✗ Falha na conexão"}<span>{connResult.detail}</span></div> : null}</form> : null}</div><section className="panel provider-routing"><PanelHead eyebrow="Control plane" title="Prioridade por função" meta="persistente" />{capabilities.map(([name, capability]) => { const route = (policy?.capabilities ?? []).find(item => item.capability === capability); const first = route?.order[0]; return <div className="routing-row" key={capability}><div className="rname">{name}</div><div><div className="field-lbl">Primeiro</div><select className="sel" value={first ?? ""} disabled={!route || busy === capability} onChange={event => void changeRouting(capability, event.target.value as AgentProviderId)}>{providerAgents.map(agent => <option value={agent.id} key={agent.id}>{agent.label}</option>)}</select></div><div><div className="field-lbl">Regra</div><select className="sel" value={route?.requiredProviderId ?? "fallback"} disabled={!route || busy === capability} onChange={event => void changeRequired(capability, event.target.value)}><option value="fallback">Fallback automático</option>{providerAgents.map(agent => <option value={agent.id} key={agent.id}>Somente {agent.label}</option>)}</select></div></div>; })}</section></div></div>;
 }
 function agentState(state: string) { return state === "working" ? "trabalhando" : state === "ready" ? "pronto" : state; }
 
 function Analytics({ data }: { data: DashboardData }) {
-  const [quota, setQuota] = useState<QuotaBucket[] | null>(null);
+  const [quota, setQuota] = useState<QuotaResult[] | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetchQuota()
-      .then((results) => {
+    let inFlight = false;
+    const refreshQuota = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const results = await fetchQuota();
         if (!cancelled) {
-          const buckets = results.filter((r) => r.status === "ok").flatMap((r) => r.buckets);
-          setQuota(buckets.length ? buckets : []);
+          const stale = results.find((result) => result.stale);
+          setQuotaError(stale ? `Exibindo a última leitura estável. Atualização: ${stale.error ?? "provider temporariamente indisponível"}.` : null);
+          setQuota(results);
         }
-      })
-      .catch(() => { if (!cancelled) setQuota([]); });
-    return () => { cancelled = true; };
+      } catch (error) {
+        if (!cancelled) {
+          setQuota((current) => current ?? []);
+          setQuotaError(error instanceof Error ? error.message : "Não foi possível atualizar as cotas.");
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refreshQuota();
+    const timer = window.setInterval(() => void refreshQuota(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
-  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={0} icon="$" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="⌁" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta="input vs output" /><div className="bar-chart">{[40,65,30,80,55,90,45,70,35,60,50,75].map((h, i) => <i key={i} style={{ height: `${h}%` }} />)}</div></section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : quota.length === 0 ? <div className="empty"><div className="ico">◌</div><h4>Sem leitura de cota</h4><p>Conecte a conta de um provider (OAuth) para ver o % de uso.</p></div> : <QuotaGroups buckets={quota} />}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
+  const tokenProviders = (data.costSummary?.byProvider ?? []).filter((provider) => provider.inputTokens + provider.outputTokens > 0);
+  const totalTokens = tokenProviders.reduce((sum, provider) => sum + provider.inputTokens + provider.outputTokens, 0);
+  const maxProviderTokens = Math.max(...tokenProviders.map((provider) => provider.inputTokens + provider.outputTokens), 1);
+  const quotaBuckets = quota?.filter((result) => result.status === "ok").flatMap((result) => result.buckets) ?? [];
+  const quotaStatus = quota?.filter((result) => result.status !== "ok" || result.buckets.length === 0) ?? [];
+
+  return <div className="view active"><PageTop eyebrow="Métricas operacionais" title="Analytics & Consumo" /><svg width="0" height="0" style={{ position: "absolute" }}><defs><clipPath id="tentClip" clipPathUnits="objectBoundingBox"><path d="M0.02,0.5 C0.02,0.2 0.08,0.14 0.2,0.18 C0.45,0.22 0.7,0.32 0.9,0.43 C0.96,0.46 0.98,0.5 0.98,0.5 C0.98,0.5 0.96,0.54 0.9,0.57 C0.7,0.68 0.45,0.78 0.2,0.82 C0.08,0.86 0.02,0.8 0.02,0.5 Z" /></clipPath></defs></svg><div className="metrics" style={{ gridTemplateColumns: "repeat(3,1fr)" }}><Metric label="Tokens hoje" value={totalTokens} icon="⌁" /><Metric label="Taxa de conclusão" value={data.summary.completedTasks} icon="✓" /><Metric label="Work graphs executados" value={data.workGraphs?.length ?? 0} icon="⌘" /></div><div className="cols"><section className="chartbox"><PanelHead eyebrow="Consumo de tokens" title="Token Usage" meta={totalTokens ? `${totalTokens.toLocaleString()} tokens registrados hoje` : "sem leitura real do provider"} />{tokenProviders.length ? <><div className="bar-chart token-usage-chart">{tokenProviders.map((provider) => { const total = provider.inputTokens + provider.outputTokens; const height = Math.max(5, Math.round((total / maxProviderTokens) * 100)); const inputHeight = Math.round((provider.inputTokens / total) * 100); const color = QUOTA_ALIASES[provider.provider]?.color ?? "#c4622d"; return <div className="token-bar-column" key={provider.provider}><div className="token-bar-value">{total.toLocaleString()}</div><div className="token-bar-stack" style={{ height: `${height}%` }}><i className="token-bar-input" style={{ height: `${inputHeight}%`, background: color }} title={`${provider.provider}: ${provider.inputTokens.toLocaleString()} input`} /><i className="token-bar-output" style={{ height: `${100 - inputHeight}%`, background: color }} title={`${provider.provider}: ${provider.outputTokens.toLocaleString()} output`} /></div><span>{provider.provider}</span></div>; })}</div><div className="token-chart-legend"><span><i className="legend-input" /> input</span><span><i className="legend-output" /> output</span></div></> : <div className="empty token-empty"><div className="ico">◌</div><h4>Nenhum token medido hoje</h4><p>Os providers CLI conectados não retornaram contadores de input/output. O Maestro não estima nem inventa esses valores.</p></div>}</section><section className="chartbox" style={{ marginBottom: 0 }}><PanelHead eyebrow="Consumo disponível" title="Por provider" meta="% restante · próximo reset" />{quota === null ? <div className="empty"><div className="ico">…</div><h4>Carregando cotas…</h4></div> : <><div className="quota-refresh-warning">{quotaError ?? ""}</div>{quotaBuckets.length ? <QuotaGroups buckets={quotaBuckets} /> : <div className="empty"><div className="ico">◌</div><h4>Nenhuma leitura de cota disponível</h4><p>O provider pode estar conectado sem expor uma cota legível, ou a sessão local necessária pode estar inativa.</p></div>}{quotaStatus.map((result) => <div className="quota-status" key={result.provider}><b>{quotaLabel(result.provider)}</b><span>{quotaStatusMessage(result)}</span></div>)}</>}</section></div><section className="panel" style={{ marginTop: 20 }}><PanelHead eyebrow="Multi-agent" title="Work Graphs" meta={`${data.workGraphs?.length ?? 0} ativo(s)`} />{data.workGraphs?.length ? data.workGraphs.map(graph => <div className="work-graph-card" key={graph.id}><header><div><strong>{graph.objective}</strong><span>{graph.projectKey ?? "sem projeto"}</span></div><small>{graph.status}</small></header><p>{graph.artifactCount} artifacts · até {graph.maxParallelReaders} readers</p></div>) : <div className="empty"><div className="ico">⌘</div><h4>Nenhum Work Graph</h4><p>Tasks complexas aparecem aqui como DAGs governados.</p></div>}</section></div>;
 }
 
 // Provider display metadata (color + human label).
@@ -142,8 +202,24 @@ const QUOTA_ALIASES: Record<string, { label: string; color: string }> = {
   openrouter: { label: "OpenRouter", color: "#8a6dab" },
   openai: { label: "OpenAI", color: "#4d7a8c" },
   gemini: { label: "Gemini", color: "#6f8f6a" },
+  "gemini-api": { label: "Gemini API", color: "#6f8f6a" },
   ollama: { label: "Ollama", color: "#5c6f8f" }
 };
+
+function quotaLabel(provider: string): string {
+  return QUOTA_ALIASES[provider]?.label ?? provider;
+}
+
+function quotaStatusMessage(result: QuotaResult): string {
+  const detail = result.error ?? "sem leitura disponível";
+  if (/sessão local|servidor local|agy|RetrieveUserQuotaSummary|grupos de cota/i.test(detail)) {
+    return "CLI autenticada, mas a sessão local do Antigravity não está ativa para consultar o RPC de cota.";
+  }
+  if (/API key válida|API key indisponível|fração de cota/i.test(detail)) {
+    return "Conexão validada; este provider não expõe uma fração de cota por API key.";
+  }
+  return detail;
+}
 
 // Renders all buckets grouped by provider with the tentacle-bar design.
 function QuotaGroups({ buckets }: { buckets: QuotaBucket[] }) {
@@ -228,5 +304,34 @@ export function MaestroV2({ data, onRefresh, onCreate, onRegisterProject, refres
   }, [location.pathname, onRefresh]);
   const pending = data.features.filter(f => ["reviewing", "waiting_checks", "changes_requested"].includes(f.status)).length;
   const page = location.pathname;
-  return <div className="app"><AppSidebar pending={pending} /><main><div className="inner">{page === "/chat" ? <Chat data={data} /> : page === "/backlog" ? <FlowFiltered data={data} onCreate={onCreate} /> : page === "/reviews" ? <Reviews data={data} /> : page === "/projects" ? <Projects data={data} onRegisterProject={onRegisterProject} /> : page === "/providers" ? <ProvidersPage data={data} /> : page === "/analytics" ? <Analytics data={data} /> : page === "/settings" ? <Settings data={data} /> : <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />}</div></main></div>;
+  const taskLogsMatch = location.pathname.match(/^\/tasks\/(\d+)\/logs\/?$/);
+
+  return (
+    <div className="app">
+      <AppSidebar pending={pending} />
+      <main>
+        <div className="inner">
+          {taskLogsMatch ? (
+            <TaskLogViewerPage taskIdParam={taskLogsMatch[1]} onBack={() => window.history.back()} />
+          ) : page === "/chat" ? (
+            <Chat data={data} />
+          ) : page === "/backlog" ? (
+            <FlowFiltered data={data} onCreate={onCreate} />
+          ) : page === "/reviews" ? (
+            <Reviews data={data} />
+          ) : page === "/projects" ? (
+            <Projects data={data} onRegisterProject={onRegisterProject} />
+          ) : page === "/providers" ? (
+            <ProvidersPage data={data} />
+          ) : page === "/analytics" ? (
+            <Analytics data={data} />
+          ) : page === "/settings" ? (
+            <Settings data={data} />
+          ) : (
+            <Overview data={data} onCreate={onCreate} onRefresh={onRefresh} refreshing={refreshing} />
+          )}
+        </div>
+      </main>
+    </div>
+  );
 }

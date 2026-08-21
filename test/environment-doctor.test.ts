@@ -178,7 +178,7 @@ function doctorConfig() {
   return loadConfig(process.cwd(), {
     TELEGRAM_BOT_TOKEN: "configured",
     MAESTRO_EXECUTION_ROOT: runtimeRoot,
-    MAESTRO_NODE_VERSION: "20.17.0",
+    MAESTRO_NODE_VERSION: process.version.replace(/^v/, ""),
     PATH: process.env.PATH,
     PATHEXT: process.env.PATHEXT,
     USERPROFILE: process.env.USERPROFILE,

@@ -100,6 +100,7 @@ export function cloneGitRepository(
   }
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const targetExisted = fs.existsSync(targetPath);
 
   const args = ["clone"];
   if (defaultBranch && defaultBranch.trim()) {
@@ -110,7 +111,22 @@ export function cloneGitRepository(
   // allow-listed above so only https/git/ssh URLs are accepted.
   args.push("--", remoteUrl.trim(), targetPath);
 
-  return runGit(args, path.dirname(targetPath));
+  const result = runGit(args, path.dirname(targetPath));
+  if (
+    result.ok ||
+    !defaultBranch?.trim() ||
+    targetExisted ||
+    !/remote branch .* not found|couldn't find remote ref/i.test(`${result.stderr}\n${result.stdout}`)
+  ) {
+    return result;
+  }
+
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  } catch {
+    return result;
+  }
+  return runGit(["clone", "--", remoteUrl.trim(), targetPath], path.dirname(targetPath));
 }
 
 export function ensureGitRemoteOrigin(

@@ -52,6 +52,40 @@ import {
 import type { TelegramSubsystemManager } from "../telegram/bot.js";
 
 const providerAuthBroker = new ProviderAuthBroker();
+const DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS = 1_500;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(undefined), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function readDashboardAgents(
+  options: DashboardServerOptions
+): Promise<ReturnType<typeof providerAgentPresence> | undefined> {
+  if (!options.agentRegistry) return undefined;
+  try {
+    const snapshot = await withTimeout(
+      options.agentRegistry.snapshot(),
+      DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS
+    );
+    return snapshot
+      ? providerAgentPresence(options.config, options.database, snapshot)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type DashboardServerOptions = {
   config: MaestroConfig;
@@ -148,9 +182,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    const agents = options.agentRegistry
-      ? providerAgentPresence(options.config, options.database, await options.agentRegistry.snapshot())
-      : undefined;
+    const agents = await readDashboardAgents(options);
     sendJson(response, 200, buildDashboardSnapshot(
       options.config,
       options.database,
@@ -1245,6 +1277,26 @@ async function routeRequest(
     return;
   }
 
+  const followUpTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/follow-up$/);
+  if (request.method === "POST" && followUpTaskMatch) {
+    const body = await readJsonBody(request);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text) {
+      sendJson(response, 400, { error: "follow_up_text_is_required" });
+      return;
+    }
+    try {
+      const task = commands.createFollowUpTask(
+        { channel: "dashboard" },
+        { parentTaskId: Number(followUpTaskMatch[1]), text }
+      );
+      sendJson(response, 201, { task });
+    } catch (error) {
+      sendCommandError(response, error, "task_follow_up_failed");
+    }
+    return;
+  }
+
   const cancelTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/cancel$/);
   if (request.method === "POST" && cancelTaskMatch) {
     if (!options.goalCoordinator) {
@@ -1395,6 +1447,18 @@ async function routeRequest(
       return;
     }
     sendJson(response, 200, { reviews: options.database.listTaskReviews(taskId) });
+    return;
+  }
+
+  const taskLogsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/logs$/);
+  if (request.method === "GET" && taskLogsMatch) {
+    const taskId = Number(taskLogsMatch[1]);
+    try {
+      const logs = commands.getTaskLogs({ channel: "dashboard" }, taskId);
+      sendJson(response, 200, { logs });
+    } catch (error) {
+      sendCommandError(response, error, "task_logs_failed");
+    }
     return;
   }
 

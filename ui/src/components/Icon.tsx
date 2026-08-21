@@ -72,6 +72,7 @@ export function Icon({ name, className = "" }: { name: string; className?: strin
         <path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
       </>
     ),
+    code: <path d="m9 7-5 5 5 5M15 7l5 5-5 5" />,
     settings: (
       <>
         <circle cx="12" cy="12" r="3" />

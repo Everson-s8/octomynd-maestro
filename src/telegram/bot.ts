@@ -399,6 +399,29 @@ export function createTelegramBot(
     }
   });
 
+  bot.command("followup", async (ctx) => {
+    const raw = (ctx.message?.text ?? "").replace(/^\/followup(?:@\w+)?\s*/i, "").trim();
+    const match = /^(\d+)\s+([\s\S]+)$/.exec(raw);
+    if (!match) {
+      await ctx.reply("Use: /followup task-id descrever o ajuste ou melhoria");
+      return;
+    }
+    try {
+      const task = commands.createFollowUpTask(telegramOrigin(ctx), {
+        parentTaskId: Number(match[1]),
+        text: match[2].trim()
+      });
+      await ctx.reply([
+        `Task #${task.id} criada como continuidade da Task #${match[1]}.`,
+        `Projeto: ${task.projectKey}`,
+        `Estado: ${task.status}`,
+        `Demanda: ${task.text}`
+      ].join("\n"));
+    } catch (error) {
+      await ctx.reply(["Task de continuidade não criada.", ...commandErrorDetails(error)].join("\n"));
+    }
+  });
+
   bot.command(["feature", "feature_create"], async (ctx) => {
     const rawText = (ctx.message?.text ?? "").replace(/^\/(?:feature|feature_create)(?:@\w+)?\s*/i, "").trim();
     const taskInput = parseProjectTaskInput(rawText);
@@ -1193,6 +1216,7 @@ function formatHelp(): string {
     "/intake @projeto texto - classificar e submeter demanda",
     "/intake_preview @projeto texto - analisar classificacao de demanda",
     "/task @projeto texto - criar task",
+    "/followup task-id texto - criar task de ajuste vinculada",
     "/prepare id - criar branch/worktree local",
     "/cancel id - cancelar task ativa ou queued",
     "/queue - listar tasks recentes",

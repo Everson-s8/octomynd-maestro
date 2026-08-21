@@ -25,6 +25,7 @@ export type DashboardTask = {
   source: string;
   branchName: string | null;
   worktreePrepared: boolean;
+  parentTaskId: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -394,8 +395,12 @@ export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { 
   const response = await fetch("/api/provider-policy");
   const payload = await response.json() as { policy?: ProviderPolicySnapshot; models?: Record<string, string[]>; error?: string };
   if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
+  const controls = Array.isArray(payload.policy.controls) ? payload.policy.controls : [];
+  const capabilities = Array.isArray(payload.policy.capabilities) ? payload.policy.capabilities : [];
   return {
     ...payload.policy,
+    controls,
+    capabilities,
     models: payload.models ?? payload.policy.models,
     availableModels: payload.models ?? payload.policy.models
   };
@@ -665,10 +670,12 @@ export type GoalObservability = {
   nextAction: string;
 };
 
+export type GoalRunStatus = "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
+
 export type GoalRun = {
   id: number;
   taskId: number;
-  status: "running" | "waiting_provider" | "completed" | "blocked" | "failed" | "cancelled";
+  status: GoalRunStatus;
   currentPhase: "planning" | "implementing" | "testing" | "reviewing";
   stepCount: number;
   maxSteps: number;
@@ -764,11 +771,92 @@ export type ReviewQueueItem = {
 };
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
-  const response = await fetch("/api/dashboard", { signal });
+  let response: Response | null = null;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      response = await fetch("/api/dashboard", { signal, cache: "no-store" });
+      if (response.ok || (response.status < 500 && response.status !== 429)) break;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error("Dashboard indisponível.");
+  }
   if (!response.ok) {
     throw new Error(`Dashboard indisponível (${response.status}).`);
   }
-  return response.json() as Promise<DashboardData>;
+  const payload = await response.json() as Partial<DashboardData> | null;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("O dashboard retornou uma resposta inválida.");
+  }
+
+  const costSummary = payload.costSummary;
+  return {
+    ...payload,
+    generatedAt: payload.generatedAt ?? new Date().toISOString(),
+    daemon: payload.daemon ?? {
+      name: "octomynd-maestro",
+      state: "online",
+      access: "restricted",
+      dashboardHost: "127.0.0.1"
+    },
+    autopilot: payload.autopilot ?? {
+      enabled: false,
+      state: "disabled",
+      maxConcurrentGoals: 0,
+      pollIntervalMs: 0,
+      runningGoals: 0,
+      waitingProviderGoals: 0,
+      queuedTasks: 0,
+      lastAction: "",
+      lastTickAt: null
+    },
+    summary: payload.summary ?? {
+      projects: 0,
+      providersConnected: 0,
+      activeTasks: 0,
+      queuedTasks: 0,
+      humanGates: 0,
+      improvementCandidates: 0,
+      plannedFeaturePlans: 0,
+      activeGoals: 0,
+      completedTasks: 0
+    },
+    costSummary: {
+      todayTotalUsd: costSummary?.todayTotalUsd ?? 0,
+      todayInputTokens: costSummary?.todayInputTokens ?? 0,
+      todayOutputTokens: costSummary?.todayOutputTokens ?? 0,
+      byProvider: Array.isArray(costSummary?.byProvider) ? costSummary.byProvider : [],
+      byProject: Array.isArray(costSummary?.byProject) ? costSummary.byProject : []
+    },
+    projects: Array.isArray(payload.projects) ? payload.projects : [],
+    tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+    events: Array.isArray(payload.events) ? payload.events : [],
+    improvements: Array.isArray(payload.improvements) ? payload.improvements : [],
+    goals: Array.isArray(payload.goals) ? payload.goals : [],
+    features: Array.isArray(payload.features) ? payload.features : [],
+    featurePlans: Array.isArray(payload.featurePlans)
+      ? payload.featurePlans.map((plan) => ({
+          ...plan,
+          taskIds: Array.isArray(plan.taskIds) ? plan.taskIds : [],
+          tasks: Array.isArray(plan.tasks) ? plan.tasks : [],
+          blockers: Array.isArray(plan.blockers) ? plan.blockers : [],
+          dependsOnFeaturePlanIds: Array.isArray(plan.dependsOnFeaturePlanIds)
+            ? plan.dependsOnFeaturePlanIds
+            : []
+        }))
+      : [],
+    workGraphs: Array.isArray(payload.workGraphs) ? payload.workGraphs : [],
+    environments: Array.isArray(payload.environments) ? payload.environments : [],
+    reviewQueue: Array.isArray(payload.reviewQueue) ? payload.reviewQueue : [],
+    agents: Array.isArray(payload.agents) ? payload.agents : []
+  } as DashboardData;
 }
 
 export type PreviewWorkIntakeInput = {
@@ -850,6 +938,20 @@ export async function createTask(input: { projectKey: string; text: string }) {
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(payload.error || `Não foi possível criar a task (${response.status}).`);
+  }
+  return response.json() as Promise<{ task: DashboardTask }>;
+}
+
+export async function createFollowUpTask(taskId: number, text: string) {
+  const response = await fetch(`/api/tasks/${taskId}/follow-up`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string; details?: string[] | string };
+    const details = Array.isArray(payload.details) ? payload.details.join(" ") : payload.details;
+    throw new Error(details || payload.error || "Não foi possível criar a task de continuidade.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }
@@ -1219,12 +1321,25 @@ export type RegisterProjectResult = {
 };
 
 export async function registerProject(input: RegisterProjectInput): Promise<RegisterProjectResult> {
-  const response = await fetch("/api/projects", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  });
-  const payload = await response.json() as RegisterProjectResult & { error?: string; details?: string[] | string };
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 120_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("O registro do projeto demorou mais de 2 minutos. Verifique o Git e tente novamente.");
+    }
+    throw new Error("Não foi possível manter a conexão com o Maestro. Confirme que o HG está ativo e tente novamente.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  const payload = await response.json().catch(() => ({})) as RegisterProjectResult & { error?: string; details?: string[] | string };
   if (!response.ok || !payload.project) {
     const detailMsg = Array.isArray(payload.details)
       ? payload.details.join(", ")
@@ -1256,13 +1371,160 @@ export type QuotaResult = {
   updatedAt: string;
   buckets: QuotaBucket[];
   error: string | null;
+  stale?: boolean;
+  lastSuccessfulAt?: string;
 };
 
 export async function fetchQuota(): Promise<QuotaResult[]> {
-  const response = await fetch("/api/quota");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 20_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/quota", { signal: controller.signal, cache: "no-store" });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("A leitura de cotas demorou demais; exibindo a última leitura disponível.");
+    }
+    throw error instanceof Error ? error : new Error("Quota indisponível.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`Quota indisponível (${response.status}).`);
   }
   const payload = (await response.json()) as { quota?: QuotaResult[] };
   return payload.quota ?? [];
+}
+
+// ---- Task Logs ----
+
+export type TaskLogStep = {
+  id: number;
+  runId: number;
+  phase: string;
+  provider: string;
+  status: "running" | "completed" | "changes_requested" | "failed" | "cancelled";
+  summary: string;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    model: string;
+  } | null;
+  checkpoint?: {
+    id: number;
+    runId: number;
+    stepId: number;
+    phase: string;
+    provider: string;
+    status: string;
+    summary: string;
+    objective?: string;
+    done?: string[];
+    decisions?: string[];
+    testsRun?: Array<{ command: string; result: string }>;
+    knownFailures?: string[];
+    remaining?: string[];
+    workspaceFingerprint: string | null;
+    changedFiles: string[];
+    artifactKeys: string[];
+    createdAt: string;
+  } | null;
+};
+
+export type TaskLogRun = {
+  id: number;
+  taskId: number;
+  status: GoalRunStatus;
+  currentPhase: string;
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  failureCategory?: string | null;
+  waitReason?: string | null;
+  nextRetryAt?: string | null;
+  lastProvider?: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  steps: TaskLogStep[];
+  checkpoints: Array<{
+    id: number;
+    runId: number;
+    stepId: number;
+    phase: string;
+    provider: string;
+    status: string;
+    summary: string;
+    objective?: string;
+    done?: string[];
+    decisions?: string[];
+    testsRun?: Array<{ command: string; result: string }>;
+    knownFailures?: string[];
+    remaining?: string[];
+    workspaceFingerprint: string | null;
+    changedFiles: string[];
+    artifactKeys: string[];
+    createdAt: string;
+  }>;
+  tokenUsage: Array<{
+    id: number;
+    runId: number;
+    stepId: number;
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    createdAt: string;
+  }>;
+  skillPins: Array<{
+    id: number;
+    runId: number;
+    skillVersionRecordId: number;
+    triggerReason: string;
+    pinnedAt: string;
+    unpinnedAt: string | null;
+  }>;
+  workGraph?: DashboardWorkGraph | null;
+};
+
+export type TaskLogsTelemetry = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalDurationMs: number;
+  totalSteps: number;
+  changedFiles: string[];
+  activeRunId: number | null;
+  isRunning: boolean;
+  isFinished: boolean;
+};
+
+export type TaskLogs = {
+  task: DashboardTask;
+  runs: TaskLogRun[];
+  events: DashboardEvent[];
+  reviews: TaskReview[];
+  workGraphs: DashboardWorkGraph[];
+  telemetry: TaskLogsTelemetry;
+};
+
+export async function fetchTaskLogs(taskId: number): Promise<TaskLogs> {
+  const response = await fetch(`/api/tasks/${taskId}/logs`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Task #${taskId} não encontrada.`);
+    }
+    throw new Error(`Falha ao carregar logs da task #${taskId} (${response.status}).`);
+  }
+  const payload = await response.json() as { logs: TaskLogs };
+    return payload.logs;
 }

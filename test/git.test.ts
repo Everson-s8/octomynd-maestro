@@ -83,6 +83,23 @@ describe("git helpers", () => {
     expect(fs.existsSync(path.join(cloneTarget, "file.txt"))).toBe(true);
   });
 
+  it("falls back to the remote default branch when the configured branch is missing", () => {
+    const sourceDir = path.join(tempDir, "develop-repo");
+    fs.mkdirSync(sourceDir);
+    runGit(["init", "-b", "develop"], sourceDir);
+    fs.writeFileSync(path.join(sourceDir, "branch.txt"), "develop\n");
+    runGit(["add", "branch.txt"], sourceDir);
+    runGit(["-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "-m", "init"], sourceDir);
+
+    const cloneTarget = path.join(tempDir, "fallback-clone");
+    const sourceUrl = "file://" + sourceDir.replace(/\\/g, "/");
+    const result = cloneGitRepository(sourceUrl, cloneTarget, "main");
+
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(path.join(cloneTarget, "branch.txt"), "utf8").trim()).toBe("develop");
+    expect(detectGitDefaultBranch(cloneTarget)).toBe("develop");
+  });
+
   it("adds origin remote to a local repo without origin, and detects existing origin", () => {
     const repoDir = path.join(tempDir, "local-repo");
     fs.mkdirSync(repoDir);

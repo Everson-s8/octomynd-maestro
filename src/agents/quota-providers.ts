@@ -7,7 +7,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
 import {
   QuotaBucket,
   QuotaFetcher,
@@ -17,6 +16,12 @@ import {
   remainingFractionToBucket,
   usedLimitToBucket,
 } from "./quota-fetcher.js";
+import {
+  ensureAntigravitySession,
+  findAgyLoopbackPort,
+  stopAntigravitySession,
+  touchAntigravitySession
+} from "./antigravity-session.js";
 
 export { fetchAllQuota } from "./quota-fetcher.js";
 
@@ -154,6 +159,7 @@ function str(v: unknown): string | null {
 // weekly and a 5-hour bucket.
 const ANTIGRAVITY_SUMMARY_PATH =
   "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const ANTIGRAVITY_QUOTA_BUDGET_MS = 14_000;
 const ANTIGRAVITY_USER_STATUS_PATH =
   "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const ANTIGRAVITY_QUOTA_BODY = JSON.stringify({
@@ -163,42 +169,18 @@ const ANTIGRAVITY_QUOTA_BODY = JSON.stringify({
   ideVersion: "unknown"
 });
 
-// Finds a loopback port owned by a running agy (language server). Returns null
-// when agy is not running.
-function findAgyLoopbackPort(): number[] {
-  try {
-    const sbin = execFileSync("netstat", ["-ano"], { encoding: "utf8", windowsHide: true })
-      .toString();
-    const byPid = new Map<number, number[]>(); // pid -> loopback ports
-    for (const line of sbin.split(/\r?\n/)) {
-      const m = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/);
-      if (m) {
-        const pid = Number(m[2]);
-        if (!byPid.has(pid)) byPid.set(pid, []);
-        byPid.get(pid)!.push(Number(m[1]));
-      }
-    }
-    // Find the agy pid then its loopback ports.
-    const task = execFileSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true })
-      .toString();
-    for (const line of task.split(/\r?\n/)) {
-      if (!/agy\.exe/i.test(line)) continue;
-      const pidMatch = line.match(/"(\d+)"/);
-      if (pidMatch && byPid.has(Number(pidMatch[1]))) return byPid.get(Number(pidMatch[1]))!;
-    }
-  } catch {
-    return [];
-  }
-  return [];
-}
-
 // Fetches a language-server RPC over the agy local port. The agy exposes the
 // language server over HTTPS (self-signed cert) on one loopback port and over
 // plain HTTP on another, so try HTTPS then HTTP. Returns the decoded JSON.
-async function postAgyRpc(port: number, servicePath: string): Promise<unknown> {
+async function postAgyRpc(port: number, servicePath: string, deadlineAt: number): Promise<unknown> {
   const body = ANTIGRAVITY_QUOTA_BODY;
-  const tryProtocol = (mod: typeof import("node:https") | typeof import("node:http"), tls: boolean) =>
+  const tryProtocol = (mod: typeof import("node:https") | typeof import("node:http")) =>
     new Promise<unknown>((resolve) => {
+      const remainingMs = Math.min(1_500, deadlineAt - Date.now());
+      if (remainingMs <= 0) {
+        resolve(null);
+        return;
+      }
       const req = (mod as any).request(
         {
           hostname: "127.0.0.1",
@@ -227,14 +209,18 @@ async function postAgyRpc(port: number, servicePath: string): Promise<unknown> {
         }
       );
       req.on("error", () => resolve(null));
+      req.setTimeout(remainingMs, () => {
+        req.destroy();
+        resolve(null);
+      });
       req.end(body);
     });
 
   const https = await import("node:https");
   const httpM = await import("node:http");
-  const overHttps = await tryProtocol(https, true);
+  const overHttps = await tryProtocol(https);
   if (overHttps) return overHttps;
-  return tryProtocol(httpM, false);
+  return tryProtocol(httpM);
 }
 
 type AntigravityBucket = {
@@ -246,19 +232,8 @@ type AntigravityBucket = {
 };
 type AntigravityGroup = { displayName?: string; buckets?: AntigravityBucket[] };
 
-async function antigravityFetcher(): Promise<QuotaResult> {
-  let ports = findAgyLoopbackPort();
-  // If agy is not running, try to launch it briefly so its language server is up.
-  if (ports.length === 0) {
-    const spawned = spawn("agy", [], { stdio: "ignore", detached: true });
-    spawned.unref();
-    const deadline = Date.now() + 8000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 500));
-      ports = findAgyLoopbackPort();
-      if (ports.length) break;
-    }
-  }
+async function antigravityFetcher(deadlineAt: number): Promise<QuotaResult> {
+  const ports = findAgyLoopbackPort();
   if (ports.length === 0) {
     return buildEmptyUnavailable("antigravity", "agy não está rodando (sem sessão Antigravity)");
   }
@@ -266,9 +241,23 @@ async function antigravityFetcher(): Promise<QuotaResult> {
   // Try each loopback port; the agy exposes the language server over HTTPS on
   // one port and plain HTTP on another, so attempt both per port.
   let data: unknown = null;
-  for (const p of ports) {
-    data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
-    if (data && Array.isArray((data as any)?.response?.groups)) break;
+  // The CLI can report an empty groups list for a few seconds while its
+  // background quota refresh completes. Stay inside the bounded request
+  // timeout and retry that initialization window instead of exposing a false
+  // provider error to the first dashboard render.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (Date.now() >= deadlineAt) break;
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500, Math.max(1, deadlineAt - Date.now()))));
+    }
+    for (const p of ports) {
+      if (Date.now() >= deadlineAt) break;
+      data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH, deadlineAt);
+      const groups = (data as any)?.response?.groups;
+      if (Array.isArray(groups) && groups.length > 0) break;
+    }
+    const groups = (data as any)?.response?.groups;
+    if (Array.isArray(groups) && groups.length > 0) break;
   }
   const groups: AntigravityGroup[] = Array.isArray((data as any)?.response?.groups)
     ? (data as any).response.groups
@@ -303,6 +292,24 @@ async function antigravityFetcher(): Promise<QuotaResult> {
     error: buckets.length ? null : "sem buckets de quota do antigravity"
   };
 }
+
+async function antigravityQuotaFetcher(): Promise<QuotaResult> {
+  // Authentication alone does not create the local language-server session.
+  // Start one resumable, prompt-less CLI session on demand for the dashboard.
+  // It is singleton-managed and automatically stopped after idle timeout.
+  const deadlineAt = Date.now() + ANTIGRAVITY_QUOTA_BUDGET_MS;
+  if (!(await ensureAntigravitySession(deadlineAt))) {
+    return buildEmptyUnavailable(
+      "antigravity",
+      "CLI Antigravity autenticada, mas o Maestro não conseguiu manter a sessão local do agy ativa; tente abrir o Antigravity CLI uma vez e atualize a leitura"
+    );
+  }
+  const result = await antigravityFetcher(deadlineAt);
+  touchAntigravitySession();
+  return result;
+}
+
+export { stopAntigravitySession };
 
 // ---- Claude (OAuth subscription) -------------------------------------------
 // Reads the OAuth access token from the Claude CLI config if present, else
@@ -491,17 +498,20 @@ const GEMINI_API_KEYED_MODELS =
 
 async function geminiApiFetcher(): Promise<QuotaResult> {
   const key = process.env.GEMINI_API_KEY ?? null;
-  if (!key) return buildEmptyUnavailable("gemini", "sem GEMINI_API_KEY");
+  if (!key) return buildEmptyUnavailable("gemini-api", "sem GEMINI_API_KEY");
   // The Gemini Developer API key lists models with per-model limits; here we only
   // prove connectivity rather than a real quota fraction, so mark unavailable.
   try {
     const res = await fetch(GEMINI_API_KEYED_MODELS, {
       headers: { "x-goog-api-key": key }
     });
-    if (!res.ok) return buildError("gemini", new Error(`gemini models ${res.status}`));
-    return buildEmptyUnavailable("gemini", "quota por API key indisponível (sem fração)");
+    if (!res.ok) return buildError("gemini-api", new Error(`gemini models ${res.status}`));
+    return buildEmptyUnavailable(
+      "gemini-api",
+      "API key válida; a API Gemini não expõe uma fração de cota utilizável neste endpoint"
+    );
   } catch (error) {
-    return buildError("gemini", error);
+    return buildError("gemini-api", error);
   }
 }
 
@@ -534,7 +544,7 @@ async function openCodeGoFetcher(): Promise<QuotaResult> {
     ];
     const buckets: QuotaBucket[] = [];
     for (const { key, w } of windows) {
-      const usedPct = typeof w.percent === "number" ? w.percent : null;
+      const usedPct = typeof w.percent === "number" ? Math.max(0, Math.min(100, w.percent)) : null;
       if (usedPct == null) continue;
       buckets.push({
         provider: "opencode-go",
@@ -574,10 +584,7 @@ export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
     }
   }
 
-  // Antigravity: agy process running (has a live session).
-  if (findAgyLoopbackPort().length > 0) {
-    fetchers.antigravity = antigravityFetcher;
-  }
+  fetchers.antigravity = antigravityQuotaFetcher;
 
   // Claude: ~/.claude/.credentials.json has claudeAiOauth.
   if (fs.existsSync(homeFile(".claude", ".credentials.json"))) {
@@ -587,7 +594,7 @@ export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
   // OpenRouter / OpenAI / Gemini API: by env API key presence.
   if (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY) fetchers.openrouter = openRouterFetcher;
   if (process.env.OPENAI_API_KEY) fetchers.openai = openAIFetcher;
-  if (process.env.GEMINI_API_KEY) fetchers.gemini = geminiApiFetcher;
+  if (process.env.GEMINI_API_KEY) fetchers["gemini-api"] = geminiApiFetcher;
 
   // OpenCode Go: by OPENCODE_GO_API_KEY env.
   if (process.env.OPENCODE_GO_API_KEY) fetchers["opencode-go"] = openCodeGoFetcher;

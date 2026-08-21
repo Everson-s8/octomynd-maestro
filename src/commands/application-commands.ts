@@ -15,7 +15,8 @@ import {
   SkillVersionRecord,
   SkillCuratorCandidateRecord,
   SkillCuratorCandidateStatus,
-  TaskRecord
+  TaskRecord,
+  TaskLogs
 } from "../db.js";
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
@@ -69,6 +70,11 @@ export type RegisterProjectOutcome = {
 export type CreateTaskInput = {
   text: string;
   projectKey?: string | null;
+};
+
+export type CreateFollowUpTaskInput = {
+  parentTaskId: number;
+  text: string;
 };
 
 export type WorkIntakeCommandInput = {
@@ -437,6 +443,48 @@ export class ApplicationCommands {
     });
 
     return task;
+  }
+
+  createFollowUpTask(origin: CommandOrigin, input: CreateFollowUpTaskInput): TaskRecord {
+    const text = input.text.trim();
+    if (!text) {
+      throw validationError("Follow-up task text is required.");
+    }
+
+    let parent: TaskRecord;
+    try {
+      parent = this.database.getTask(input.parentTaskId);
+    } catch {
+      throw notFoundError(`Task not found: ${input.parentTaskId}`);
+    }
+    if (!parent.projectKey) {
+      throw conflictError(`Task #${parent.id} is not attached to a project.`);
+    }
+
+    const task = this.database.createTask(text, origin.channel, parent.projectKey, parent.id);
+    this.database.addEvent({
+      source: origin.channel,
+      type: "task.follow_up_created",
+      text,
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      taskId: task.id,
+      metadata: {
+        projectKey: parent.projectKey,
+        parentTaskId: parent.id,
+        sourceTaskId: parent.id
+      }
+    });
+    return task;
+  }
+
+  getTaskLogs(origin: CommandOrigin, taskId: number): TaskLogs {
+    try {
+      this.database.getTask(taskId);
+    } catch (error) {
+      throw notFoundError(error instanceof Error ? error.message : `Task not found: ${taskId}`);
+    }
+    return this.database.getTaskLogs(taskId);
   }
 
   previewWorkIntake(

@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   cancelTask,
+  createFollowUpTask,
   deleteTask,
   DashboardTask,
   fetchTaskReviews,
@@ -33,6 +35,8 @@ export function TaskDetail({
   const [lifecycleBusy, setLifecycleBusy] = useState<"cancel" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviews, setReviews] = useState<TaskReview[]>([]);
+  const [followUpText, setFollowUpText] = useState("");
+  const [followUpBusy, setFollowUpBusy] = useState(false);
   const open = task !== null;
 
   useEffect(() => {
@@ -100,6 +104,23 @@ export function TaskDetail({
       setError(requestError instanceof Error ? requestError.message : "A goal nao pode ser iniciada.");
     } finally {
       setStartingGoal(false);
+    }
+  }
+
+  async function handleFollowUpSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = followUpText.trim();
+    if (!text) return;
+    setFollowUpBusy(true);
+    setError(null);
+    try {
+      await createFollowUpTask(taskId, text);
+      setFollowUpText("");
+      await onPrepared();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Não foi possível criar a continuidade.");
+    } finally {
+      setFollowUpBusy(false);
     }
   }
 
@@ -214,6 +235,49 @@ export function TaskDetail({
             O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem
             atualizar a task manualmente.
           </p>
+          <Link
+            to={`/tasks/${task.id}/logs`}
+            className="detail-logs-link-btn"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              padding: "10px 14px",
+              marginBottom: "12px",
+              borderRadius: "10px",
+              background: "#1c1712",
+              border: "1px solid #372c20",
+              color: "#f3ece1",
+              textDecoration: "none",
+              fontSize: "13px",
+              fontWeight: 600
+            }}
+          >
+            <span>Ver logs detalhados de execução</span>
+            <Icon name="arrow" />
+          </Link>
+          <form className="task-follow-up" onSubmit={(event) => void handleFollowUpSubmit(event)}>
+            <div>
+              <span>Continuidade da task</span>
+              <strong>Criar um ajuste vinculado</strong>
+            </div>
+            <p>
+              Registre uma melhoria ou correção sem alterar a evidência da task original. A nova task permanece ligada a
+              esta execução.
+            </p>
+            {task.parentTaskId ? <small>Esta task é continuidade da Task #{task.parentTaskId}.</small> : null}
+            <textarea
+              value={followUpText}
+              onChange={(event) => setFollowUpText(event.target.value)}
+              placeholder="Ex.: Corrigir os pontos encontrados na revisão..."
+              rows={3}
+              aria-label="Descreva o ajuste da task de continuidade"
+            />
+            <button type="submit" className="goal-action" disabled={!followUpText.trim() || followUpBusy}>
+              {followUpBusy ? "Criando continuidade..." : "Criar task de continuidade"}
+            </button>
+          </form>
           <button
             className="goal-action"
             disabled={

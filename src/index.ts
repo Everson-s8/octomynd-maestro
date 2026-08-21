@@ -43,6 +43,7 @@ import { SkillEvaluationHarness } from "./skills/evaluation.js";
 import { SkillVersionStore } from "./skills/store.js";
 import type { SkillLifecycleRuntime } from "./skills/lifecycle.js";
 import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
+import { stopAntigravitySession } from "./agents/antigravity-session.js";
 
 if (process.argv.includes("telegram") && process.argv.includes("connect")) {
   const { runTelegramConnectWizard } = await import("./telegram/connect.js");
@@ -363,6 +364,7 @@ async function shutdown() {
   if (shutdownStarted) return;
   shutdownStarted = true;
   console.log("Stopping Maestro.");
+  stopAntigravitySession();
   await telegramManager.stop();
   backlogAutopilot.shutdown();
   reviewCoordinator.shutdown();

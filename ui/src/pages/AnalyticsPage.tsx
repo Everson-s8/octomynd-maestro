@@ -1,5 +1,5 @@
 import { DashboardData, QuotaBucket, QuotaResult, fetchQuota } from "../api";
-import { calculateDashboardCost, CostDisplay } from "../components/CostDisplay";
+import { CostDisplay } from "../components/CostDisplay";
 import { EventStream } from "../components/EventStream";
 import { WorkGraphBoard } from "../components/WorkGraphBoard";
 import { SectionHeader } from "../components/SectionHeader";
@@ -12,7 +12,6 @@ export interface AnalyticsPageProps {
 }
 
 export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
-  const { costToday, totalTokens } = calculateDashboardCost(data);
   const [quota, setQuota] = useState<QuotaResult[] | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(true);
 
@@ -30,21 +29,10 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
   const totalTasks = data.tasks.length;
   const completionRate = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 100;
 
-  const costSummary = data.costSummary ?? {
-    todayTotalUsd: costToday,
-    todayInputTokens: Math.round(totalTokens * 0.7),
-    todayOutputTokens: Math.round(totalTokens * 0.3),
-    byProvider: [],
-    byProject: []
-  };
-
-  const providers = costSummary.byProvider.length > 0
-    ? costSummary.byProvider
-    : [
-        { provider: "codex", costUsd: costSummary.todayTotalUsd * 0.5, inputTokens: Math.round(costSummary.todayInputTokens * 0.5), outputTokens: Math.round(costSummary.todayOutputTokens * 0.5) },
-        { provider: "claude", costUsd: costSummary.todayTotalUsd * 0.35, inputTokens: Math.round(costSummary.todayInputTokens * 0.35), outputTokens: Math.round(costSummary.todayOutputTokens * 0.35) },
-        { provider: "antigravity", costUsd: costSummary.todayTotalUsd * 0.15, inputTokens: Math.round(costSummary.todayInputTokens * 0.15), outputTokens: Math.round(costSummary.todayOutputTokens * 0.15) }
-      ];
+  const costSummary = data.costSummary ?? { todayTotalUsd: 0, todayInputTokens: 0, todayOutputTokens: 0, byProvider: [], byProject: [] };
+  const costToday = costSummary.todayTotalUsd;
+  const totalTokens = costSummary.todayInputTokens + costSummary.todayOutputTokens;
+  const providers = costSummary.byProvider.filter((provider) => provider.inputTokens + provider.outputTokens > 0);
 
   const maxProviderTokens = Math.max(1, ...providers.map((p) => p.inputTokens + p.outputTokens));
 
@@ -60,7 +48,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
       <div className="panel analytics-overview" style={{ padding: "20px" }}>
         <SectionHeader eyebrow="Telemetria & Custos" title="Analytics & Métricas Operacionais" meta="Métricas em tempo real" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginTop: "20px" }}>
-          <CostDisplay costToday={costToday} estimatedTokens={totalTokens} />
+          <CostDisplay costToday={costToday} estimatedTokens={totalTokens} measured />
 
           <div
             className="metric-card tone-lime"
@@ -120,7 +108,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
         <div className="panel token-chart-panel" style={{ padding: "20px" }}>
           <SectionHeader eyebrow="Consumo de Tokens" title="Token Usage Chart" meta="Input vs Output tokens por Provider" />
           <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            {providers.map((p) => {
+            {providers.length === 0 ? <div style={{ color: "#64748b", fontSize: "13px" }}>Nenhum token medido hoje. O provider não retornou contadores de input/output.</div> : providers.map((p) => {
               const total = p.inputTokens + p.outputTokens;
               const pct = Math.min(100, Math.round((total / maxProviderTokens) * 100));
               const inputPct = total > 0 ? Math.round((p.inputTokens / total) * 100) : 70;
@@ -172,7 +160,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
             {quotaLoading && <span style={{ color: "#94a3b8", fontSize: "13px" }}>Carregando cotas…</span>}
             {!quotaLoading && quota !== null && quota.length === 0 && (
               <span style={{ color: "#64748b", fontSize: "13px" }}>
-                Nenhuma leitura de cota disponível. Conecte a conta de um provider (OAuth) para ver o % de uso.
+                Nenhuma leitura de cota disponível. A conexão pode estar válida, mas o provider pode não expor uma fração de cota ou exigir uma sessão local ativa.
               </span>
             )}
             {quota !== null &&
@@ -186,7 +174,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                 .filter((q) => q.status !== "ok" || q.buckets.length === 0)
                 .map((q) => (
                   <div key={q.provider} style={{ color: "#64748b", fontSize: "13px", textTransform: "capitalize" }}>
-                    {q.provider}: {q.status === "unavailable" ? "— (sem credencial)" : q.error || "indisponível"}
+                    {q.provider}: {q.error || "indisponível"}
                   </div>
                 ))}
           </div>
@@ -209,6 +197,7 @@ function QuotaBar({ bucket, color }: { bucket: QuotaBucket; color: string }) {
   const label = remaining == null ? "n/d" : `${remaining}% restante`;
   const sub = [
     bucket.planType ? bucket.planType : null,
+    bucket.detail ? bucket.detail : null,
     bucket.modelId ? `modelo ${bucket.modelId}` : null,
     resetLabel(bucket)
   ]

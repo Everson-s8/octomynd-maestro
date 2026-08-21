@@ -62,6 +62,7 @@ import {
   legacyFeatureTaskContract,
   normalizeFeatureTaskContracts
 } from "./features/task-graph.js";
+import type { GoalSkillPinRecord } from "./skills/persistence.js";
 export type {
   GoalSkillInvocationMode,
   GoalSkillPinRecord,
@@ -134,6 +135,7 @@ export type TaskRecord = {
   branchName: string | null;
   worktreePath: string | null;
   baseBranch?: string | null;
+  parentTaskId?: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -650,6 +652,72 @@ export type FeaturePlanIntegrationItemUpdate = {
   lastError?: string | null;
 };
 
+export type TaskLogStep = {
+  id: number;
+  runId: number;
+  phase: GoalPhase;
+  provider: string;
+  status: GoalStepStatus;
+  summary: string;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    model: string;
+  } | null;
+  checkpoint?: GoalCheckpointRecord | null;
+};
+
+export type TaskLogRun = {
+  id: number;
+  taskId: number;
+  status: GoalRunStatus;
+  currentPhase: GoalPhase;
+  stepCount: number;
+  maxSteps: number;
+  lastError: string | null;
+  failureCategory?: GoalFailureCategory | null;
+  waitReason?: GoalWaitReason | null;
+  nextRetryAt?: string | null;
+  lastProvider?: string | null;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  steps: TaskLogStep[];
+  checkpoints: GoalCheckpointRecord[];
+  tokenUsage: TokenUsageRecord[];
+  skillPins: GoalSkillPinRecord[];
+  workGraph?: any | null;
+};
+
+export type TaskLogsTelemetry = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalDurationMs: number;
+  totalSteps: number;
+  changedFiles: string[];
+  activeRunId: number | null;
+  isRunning: boolean;
+  isFinished: boolean;
+};
+
+export type TaskLogs = {
+  task: TaskRecord;
+  runs: TaskLogRun[];
+  events: EventRecord[];
+  reviews: TaskReviewRecord[];
+  workGraphs: any[];
+  telemetry: TaskLogsTelemetry;
+};
+
 export type MaestroDatabase = ReturnType<typeof createDatabase>;
 
 export function createDatabase(databasePath: string) {
@@ -669,8 +737,8 @@ export function createDatabase(databasePath: string) {
   const chatPersistence = createOperationalChatPersistence(db);
 
   const createTaskStatement = db.prepare(`
-    INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, created_at, updated_at)
-    VALUES (@projectId, @text, 'queued', @source, NULL, NULL, @now, @now)
+    INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, parent_task_id, created_at, updated_at)
+    VALUES (@projectId, @text, 'queued', @source, NULL, NULL, @parentTaskId, @now, @now)
   `);
   const addEventStatement = db.prepare(`
     INSERT INTO events (source, type, text, user_id, username, task_id, created_at, metadata_json)
@@ -1051,10 +1119,21 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapProject);
     },
 
-    createTask(text: string, source = "telegram", projectKey?: string | null): TaskRecord {
+    createTask(
+      text: string,
+      source = "telegram",
+      projectKey?: string | null,
+      parentTaskId?: number | null
+    ): TaskRecord {
       const now = new Date().toISOString();
       const project = projectKey ? this.getProjectByKey(projectKey) : this.getDefaultProject();
-      const result = createTaskStatement.run({ projectId: project?.id ?? null, text, source, now });
+      const result = createTaskStatement.run({
+        projectId: project?.id ?? null,
+        text,
+        source,
+        parentTaskId: parentTaskId ?? null,
+        now
+      });
       return this.getTask(Number(result.lastInsertRowid));
     },
 
@@ -1166,6 +1245,30 @@ export function createDatabase(databasePath: string) {
       const rows = db
         .prepare("SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT ?")
         .all(id, limit) as EventRow[];
+      return rows.map(mapEvent);
+    },
+
+    listEventsForTask(taskId: number, limit = 500): EventRecord[] {
+      const rows = db
+        .prepare(`
+          SELECT * FROM (
+            SELECT * FROM (
+              SELECT * FROM events WHERE task_id = ?
+              UNION
+              SELECT * FROM events
+              WHERE task_id IS NULL
+                AND CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
+              UNION
+              SELECT * FROM events
+              WHERE task_id IS NULL
+                AND CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+            )
+            ORDER BY id DESC
+            LIMIT ?
+          )
+          ORDER BY id ASC
+        `)
+        .all(taskId, taskId, taskId, limit) as EventRow[];
       return rows.map(mapEvent);
     },
 
@@ -1352,6 +1455,162 @@ export function createDatabase(databasePath: string) {
         .prepare("SELECT * FROM goal_runs WHERE status IN ('running', 'waiting_provider') ORDER BY id ASC")
         .all() as GoalRunRow[];
       return rows.map(mapGoalRun);
+    },
+
+    listGoalRunsForTask(taskId: number): GoalRunRecord[] {
+      const rows = db
+        .prepare("SELECT * FROM goal_runs WHERE task_id = ? ORDER BY id ASC")
+        .all(taskId) as GoalRunRow[];
+      return rows.map(mapGoalRun);
+    },
+
+    getTaskLogs(taskId: number): TaskLogs {
+      const task = this.getTask(taskId);
+      const runs = this.listGoalRunsForTask(taskId);
+      const events = this.listEventsForTask(taskId);
+      const reviews = this.listTaskReviews(taskId, 100).reverse();
+
+      let totalDurationMs = 0;
+      let totalCostUsd = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalSteps = 0;
+      const changedFilesSet = new Set<string>();
+      let activeRunId: number | null = null;
+      const taskWorkGraphs: any[] = [];
+
+      const mappedRuns: TaskLogRun[] = runs.map((run) => {
+        if (["running", "waiting_provider"].includes(run.status)) {
+          activeRunId = run.id;
+        }
+        const rawSteps = this.listGoalSteps(run.id);
+        const checkpoints = this.listGoalCheckpoints(run.id);
+        const tokenUsage = this.getTokenUsageByRun(run.id);
+        const skillPins = this.listGoalSkillPins(run.id);
+
+        let workGraph: any = null;
+        try {
+          const wg = this.findWorkGraphByRunId(run.id);
+          if (wg) {
+            workGraph = this.getWorkGraphDetails(wg.id);
+            taskWorkGraphs.push(workGraph);
+          }
+        } catch {
+          workGraph = null;
+        }
+
+        for (const token of tokenUsage) {
+          totalCostUsd += token.costUsd ?? 0;
+          totalInputTokens += token.inputTokens ?? 0;
+          totalOutputTokens += token.outputTokens ?? 0;
+        }
+
+        for (const cp of checkpoints) {
+          if (Array.isArray(cp.changedFiles)) {
+            for (const file of cp.changedFiles) {
+              if (file && typeof file === "string") changedFilesSet.add(file);
+            }
+          }
+        }
+
+        const steps: TaskLogStep[] = rawSteps.map((step) => {
+          totalSteps += 1;
+          if (typeof step.durationMs === "number") {
+            totalDurationMs += step.durationMs;
+          }
+          const stepTokens = tokenUsage.find((t) => t.stepId === step.id);
+          const stepCheckpoint = checkpoints.find((cp) => cp.stepId === step.id);
+
+          return {
+            id: step.id,
+            runId: step.runId,
+            phase: step.phase,
+            provider: step.provider,
+            status: step.status,
+            summary: redactSensitiveText(step.summary),
+            output: redactSensitiveText(step.output),
+            error: step.error ? redactSensitiveText(step.error) : null,
+            durationMs: step.durationMs,
+            createdAt: step.createdAt,
+            finishedAt: step.finishedAt,
+            tokenUsage: stepTokens ? {
+              inputTokens: stepTokens.inputTokens,
+              outputTokens: stepTokens.outputTokens,
+              costUsd: stepTokens.costUsd,
+              model: stepTokens.model
+            } : null,
+            checkpoint: stepCheckpoint ? {
+              ...stepCheckpoint,
+              summary: redactSensitiveText(stepCheckpoint.summary),
+              objective: stepCheckpoint.objective ? redactSensitiveText(stepCheckpoint.objective) : undefined
+            } : null
+          };
+        });
+
+        return {
+          id: run.id,
+          taskId: run.taskId,
+          status: run.status,
+          currentPhase: run.currentPhase,
+          stepCount: run.stepCount,
+          maxSteps: run.maxSteps,
+          lastError: run.lastError ? redactSensitiveText(run.lastError) : null,
+          failureCategory: run.failureCategory ?? null,
+          waitReason: run.waitReason ?? null,
+          nextRetryAt: run.nextRetryAt ?? null,
+          lastProvider: run.lastProvider ?? null,
+          commitSha: run.commitSha ?? null,
+          pullRequestUrl: run.pullRequestUrl ?? null,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+          finishedAt: run.finishedAt ?? null,
+          steps,
+          checkpoints: checkpoints.map((cp) => ({
+            ...cp,
+            summary: redactSensitiveText(cp.summary),
+            objective: cp.objective ? redactSensitiveText(cp.objective) : undefined
+          })),
+          tokenUsage,
+          skillPins: skillPins.map((pin) => ({
+            ...pin,
+            triggerReason: redactSensitiveText(pin.triggerReason)
+          })),
+          workGraph
+        };
+      });
+
+      const isRunning = activeRunId !== null;
+      const isFinished = ["done", "failed", "rejected", "cancelled"].includes(task.status);
+
+      return {
+        task: {
+          ...task,
+          text: redactSensitiveText(task.text)
+        },
+        runs: mappedRuns,
+        events: events.map((event) => ({
+          ...event,
+          text: redactSensitiveText(event.text),
+          metadata: (sanitizePublicMetadata(event.metadata) ?? {}) as Record<string, unknown>
+        })),
+        reviews: reviews.map((rev) => ({
+          ...rev,
+          content: redactSensitiveText(rev.content),
+          error: rev.error ? redactSensitiveText(rev.error) : null
+        })),
+        workGraphs: taskWorkGraphs,
+        telemetry: {
+          totalCostUsd: Number(totalCostUsd.toFixed(6)),
+          totalInputTokens,
+          totalOutputTokens,
+          totalDurationMs,
+          totalSteps,
+          changedFiles: Array.from(changedFilesSet),
+          activeRunId,
+          isRunning,
+          isFinished
+        }
+      };
     },
 
     updateGoalRun(input: {
@@ -2815,9 +3074,11 @@ function migrate(db: Database.Database) {
       branch_name TEXT,
       worktree_path TEXT,
       base_branch TEXT,
+      parent_task_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id)
+      FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -2832,6 +3093,13 @@ function migrate(db: Database.Database) {
       metadata_json TEXT NOT NULL DEFAULT '{}',
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_events_task_id
+      ON events(task_id);
+    CREATE INDEX IF NOT EXISTS idx_events_metadata_task_id
+      ON events(CAST(json_extract(metadata_json, '$.taskId') AS INTEGER));
+    CREATE INDEX IF NOT EXISTS idx_events_metadata_deleted_task_id
+      ON events(CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER));
 
     CREATE TABLE IF NOT EXISTS task_reviews (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3165,6 +3433,7 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
   addColumnIfMissing(db, "tasks", "base_branch", "TEXT");
+  addColumnIfMissing(db, "tasks", "parent_task_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
   addColumnIfMissing(db, "goal_runs", "wait_reason", "TEXT");
@@ -3228,6 +3497,7 @@ type TaskRow = {
   branch_name: string | null;
   worktree_path: string | null;
   base_branch: string | null;
+  parent_task_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -3874,6 +4144,7 @@ function mapTask(row: TaskRow): TaskRecord {
     branchName: row.branch_name,
     worktreePath: row.worktree_path,
     baseBranch: row.base_branch,
+    parentTaskId: row.parent_task_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

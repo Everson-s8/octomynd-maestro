@@ -1,9 +1,10 @@
 import { loadConfig, validateRuntimeConfig } from "../config.js";
 import { createDatabase } from "../db.js";
 import { startDashboardServer } from "./server.js";
+import { stopAntigravitySession } from "../agents/antigravity-session.js";
 
 const config = loadConfig();
-const errors = validateRuntimeConfig(config);
+const errors = validateRuntimeConfig(config, process.env, { requireTelegram: false });
 if (errors.length > 0) {
   errors.forEach((error) => console.error(error));
   process.exit(1);
@@ -15,6 +16,7 @@ const server = await startDashboardServer({ config, database, runtimeMode: "dash
 console.log(`Maestro dashboard API: http://${config.dashboard.host}:${config.dashboard.port}`);
 
 function shutdown() {
+  stopAntigravitySession();
   server.close(() => database.close());
 }
 

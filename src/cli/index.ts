@@ -18,6 +18,7 @@ import {
   checkApiHealth
 } from "../desktop/launcher.js";
 import { findProcessOnPort, killProcessGracefully } from "../runtime/port-process.js";
+import { detectGitDefaultBranch } from "../git.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
@@ -54,6 +55,10 @@ Commands:
   restart [--port N] [--host H]
                         Restart a running Maestro process on the current code.
   dashboard             Launch the web dashboard UI (http://127.0.0.1:4788).
+  logs <task-id> [--follow] [--limit N]
+                        Inspect persisted task activity in the terminal.
+  followup <task-id> <text>
+                        Create a queued follow-up task linked to an existing task.
   desktop [--skip-build]
                         Launch Maestro as a native desktop app (Electron).
   status                Show what is installed, connected, and ready.
@@ -94,11 +99,12 @@ async function projectAddCommand(argv: string[]): Promise<void> {
   const commands = new ApplicationCommands(database);
 
   try {
-    const result = commands.registerProject(cliOrigin(), {
-      key,
-      path: projectPath,
-      defaultBranch: "main"
-    });
+      const detectedBranch = detectGitDefaultBranch(projectPath);
+      const result = commands.registerProject(cliOrigin(), {
+        key,
+        path: projectPath,
+        defaultBranch: detectedBranch ?? undefined
+      });
     for (const warning of result.warnings) console.log(`[~] ${warning}`);
     console.log(`[ok] Projeto @${key} registrado em ${result.project.path}`);
   } catch (error) {
@@ -348,6 +354,81 @@ function statusCommand(): void {
   console.log(`    Banco local: ${dbExists ? dbPath : "nao inicializado"}`);
 }
 
+function renderTaskLogs(taskId: number, limit: number): void {
+  const database = createDatabase(envDbPath());
+  const logs = database.getTaskLogs(taskId);
+  console.clear();
+  console.log(`maestro logs — Task #${logs.task.id}`);
+  console.log(`  Projeto : @${logs.task.projectKey ?? "inbox"}`);
+  console.log(`  Status  : ${logs.task.status}`);
+  console.log(`  Demanda : ${logs.task.text}`);
+  if (logs.task.parentTaskId) console.log(`  Origem  : continuidade da Task #${logs.task.parentTaskId}`);
+  console.log("\nEventos:");
+  for (const event of logs.events.slice(-limit)) {
+    console.log(`  ${event.createdAt}  ${event.type}  ${event.text}`);
+  }
+  console.log("\nExecuções:");
+  for (const run of logs.runs.slice(-limit)) {
+    const outcome = run.lastError
+      ?? (run.pullRequestUrl ? `PR ${run.pullRequestUrl}` : null)
+      ?? (run.commitSha ? `commit ${run.commitSha}` : "sem resultado registrado");
+    console.log(`  #${run.id} ${run.status} ${run.currentPhase ?? ""} — ${outcome}`);
+  }
+  database.close();
+}
+
+async function followUpCommand(argv: string[]): Promise<void> {
+  const parentTaskId = Number(argv[0]);
+  const text = argv.slice(1).join(" ").trim();
+  if (!Number.isInteger(parentTaskId) || parentTaskId <= 0 || !text) {
+    console.error("Usage: maestro followup <task-id> <text>");
+    process.exit(1);
+  }
+
+  const database = createDatabase(envDbPath());
+  try {
+    const task = new ApplicationCommands(database).createFollowUpTask(cliOrigin(), {
+      parentTaskId,
+      text
+    });
+    console.log(`[ok] Task #${task.id} criada como continuidade da Task #${parentTaskId}.`);
+    console.log(`    Projeto : @${task.projectKey ?? "inbox"}`);
+    console.log(`    Estado  : ${task.status}`);
+    console.log(`    Demanda : ${task.text}`);
+  } catch (error) {
+    console.error(`[!] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  } finally {
+    database.close();
+  }
+}
+
+async function logsCommand(argv: string[]): Promise<void> {
+  const taskId = Number(argv[0]);
+  if (!Number.isInteger(taskId) || taskId <= 0) {
+    console.error("Usage: maestro logs <task-id> [--follow] [--limit N]");
+    process.exit(1);
+  }
+  const limitIndex = argv.indexOf("--limit");
+  const requestedLimit = limitIndex >= 0 ? Number(argv[limitIndex + 1]) : 20;
+  const limit = Number.isInteger(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 20;
+  const follow = argv.includes("--follow");
+  if (!follow) {
+    renderTaskLogs(taskId, limit);
+    return;
+  }
+  console.log("Acompanhando logs; pressione Ctrl+C para sair.");
+  while (true) {
+    try {
+      renderTaskLogs(taskId, limit);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    await sleep(3000);
+  }
+}
+
 /** Sleep helper for polling. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -465,6 +546,12 @@ async function main(): Promise<void> {
       break;
     case "status":
       statusCommand();
+      break;
+    case "logs":
+      await logsCommand(argv);
+      break;
+    case "followup":
+      await followUpCommand(argv);
       break;
     case "providers":
       if (argv[0] === "login") await providersLoginCommand(argv.slice(1));
