@@ -154,6 +154,25 @@ describe("Task Logs & Telemetry Persistence", () => {
     expect(taskLogs.events.some((e) => e.text.includes(`Etapa 2 concluída`))).toBe(true);
   });
 
+  it("keeps the most recent events when a task exceeds the log limit", () => {
+    const task = database.createTask("Task com muitos eventos", "dashboard", "testproj");
+
+    for (let index = 0; index < 505; index += 1) {
+      database.addEvent({
+        source: "test",
+        type: "task.progress",
+        text: `event-${index}`,
+        taskId: task.id,
+        metadata: { taskId: task.id, index }
+      });
+    }
+
+    const events = database.listEventsForTask(task.id, 500);
+    expect(events).toHaveLength(500);
+    expect(events[0]?.text).toBe("event-5");
+    expect(events.at(-1)?.text).toBe("event-504");
+  });
+
   it("redacts sensitive data in task logs output and summaries", () => {
     const fakeAnthropicKey = `${["sk", "ant"].join("-")}-${"a".repeat(24)}`;
     const fakeGithubToken = ["ghp", "c".repeat(24)].join("_");

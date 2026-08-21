@@ -1252,18 +1252,21 @@ export function createDatabase(databasePath: string) {
       const rows = db
         .prepare(`
           SELECT * FROM (
-            SELECT * FROM events WHERE task_id = ?
-            UNION
-            SELECT * FROM events
-            WHERE task_id IS NULL
-              AND CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
-            UNION
-            SELECT * FROM events
-            WHERE task_id IS NULL
-              AND CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+            SELECT * FROM (
+              SELECT * FROM events WHERE task_id = ?
+              UNION
+              SELECT * FROM events
+              WHERE task_id IS NULL
+                AND CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
+              UNION
+              SELECT * FROM events
+              WHERE task_id IS NULL
+                AND CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+            )
+            ORDER BY id DESC
+            LIMIT ?
           )
           ORDER BY id ASC
-          LIMIT ?
         `)
         .all(taskId, taskId, taskId, limit) as EventRow[];
       return rows.map(mapEvent);

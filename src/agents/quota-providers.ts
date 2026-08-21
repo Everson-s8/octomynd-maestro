@@ -243,9 +243,11 @@ async function antigravityFetcher(): Promise<QuotaResult> {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
     for (const p of findAgyLoopbackPort()) {
       data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
-      if (data && Array.isArray((data as any)?.response?.groups)) break;
+      const groups = (data as any)?.response?.groups;
+      if (Array.isArray(groups) && groups.length > 0) break;
     }
-    if (Array.isArray((data as any)?.response?.groups)) break;
+    const groups = (data as any)?.response?.groups;
+    if (Array.isArray(groups) && groups.length > 0) break;
   }
   const groups: AntigravityGroup[] = Array.isArray((data as any)?.response?.groups)
     ? (data as any).response.groups
