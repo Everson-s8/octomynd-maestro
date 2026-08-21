@@ -1377,7 +1377,7 @@ export type QuotaResult = {
 
 export async function fetchQuota(): Promise<QuotaResult[]> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8_000);
+  const timeout = window.setTimeout(() => controller.abort(), 20_000);
   let response: Response;
   try {
     response = await fetch("/api/quota", { signal: controller.signal, cache: "no-store" });

@@ -90,7 +90,10 @@ export function usedLimitToBucket(raw: {
 // result per provider, best-effort; a failed/unavailable provider yields a
 // status bucket rather than throwing).
 const QUOTA_CACHE_TTL_MS = 10_000;
-const QUOTA_FETCH_TIMEOUT_MS = 3_000;
+// Antigravity may need to restore its local language-server session once per
+// dashboard lifetime. Keep the request bounded, but allow that one startup to
+// complete instead of turning a healthy provider into a transient empty card.
+const QUOTA_FETCH_TIMEOUT_MS = 15_000;
 
 type QuotaCache = {
   fetchedAt: number;

@@ -7,7 +7,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
 import {
   QuotaBucket,
   QuotaFetcher,
@@ -17,6 +16,12 @@ import {
   remainingFractionToBucket,
   usedLimitToBucket,
 } from "./quota-fetcher.js";
+import {
+  ensureAntigravitySession,
+  findAgyLoopbackPort,
+  stopAntigravitySession,
+  touchAntigravitySession
+} from "./antigravity-session.js";
 
 export { fetchAllQuota } from "./quota-fetcher.js";
 
@@ -163,41 +168,12 @@ const ANTIGRAVITY_QUOTA_BODY = JSON.stringify({
   ideVersion: "unknown"
 });
 
-// Finds a loopback port owned by a running agy (language server). Returns null
-// when agy is not running.
-function findAgyLoopbackPort(): number[] {
-  try {
-    const sbin = execFileSync("netstat", ["-ano"], { encoding: "utf8", windowsHide: true })
-      .toString();
-    const byPid = new Map<number, number[]>(); // pid -> loopback ports
-    for (const line of sbin.split(/\r?\n/)) {
-      const m = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/);
-      if (m) {
-        const pid = Number(m[2]);
-        if (!byPid.has(pid)) byPid.set(pid, []);
-        byPid.get(pid)!.push(Number(m[1]));
-      }
-    }
-    // Find the agy pid then its loopback ports.
-    const task = execFileSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true })
-      .toString();
-    for (const line of task.split(/\r?\n/)) {
-      if (!/agy\.exe/i.test(line)) continue;
-      const pidMatch = line.match(/"(\d+)"/);
-      if (pidMatch && byPid.has(Number(pidMatch[1]))) return byPid.get(Number(pidMatch[1]))!;
-    }
-  } catch {
-    return [];
-  }
-  return [];
-}
-
 // Fetches a language-server RPC over the agy local port. The agy exposes the
 // language server over HTTPS (self-signed cert) on one loopback port and over
 // plain HTTP on another, so try HTTPS then HTTP. Returns the decoded JSON.
 async function postAgyRpc(port: number, servicePath: string): Promise<unknown> {
   const body = ANTIGRAVITY_QUOTA_BODY;
-  const tryProtocol = (mod: typeof import("node:https") | typeof import("node:http"), tls: boolean) =>
+  const tryProtocol = (mod: typeof import("node:https") | typeof import("node:http")) =>
     new Promise<unknown>((resolve) => {
       const req = (mod as any).request(
         {
@@ -227,14 +203,18 @@ async function postAgyRpc(port: number, servicePath: string): Promise<unknown> {
         }
       );
       req.on("error", () => resolve(null));
+      req.setTimeout(1_500, () => {
+        req.destroy();
+        resolve(null);
+      });
       req.end(body);
     });
 
   const https = await import("node:https");
   const httpM = await import("node:http");
-  const overHttps = await tryProtocol(https, true);
+  const overHttps = await tryProtocol(https);
   if (overHttps) return overHttps;
-  return tryProtocol(httpM, false);
+  return tryProtocol(httpM);
 }
 
 type AntigravityBucket = {
@@ -247,18 +227,7 @@ type AntigravityBucket = {
 type AntigravityGroup = { displayName?: string; buckets?: AntigravityBucket[] };
 
 async function antigravityFetcher(): Promise<QuotaResult> {
-  let ports = findAgyLoopbackPort();
-  // If agy is not running, try to launch it briefly so its language server is up.
-  if (ports.length === 0) {
-    const spawned = spawn("agy", [], { stdio: "ignore", detached: true });
-    spawned.unref();
-    const deadline = Date.now() + 8000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 500));
-      ports = findAgyLoopbackPort();
-      if (ports.length) break;
-    }
-  }
+  const ports = findAgyLoopbackPort();
   if (ports.length === 0) {
     return buildEmptyUnavailable("antigravity", "agy não está rodando (sem sessão Antigravity)");
   }
@@ -266,9 +235,17 @@ async function antigravityFetcher(): Promise<QuotaResult> {
   // Try each loopback port; the agy exposes the language server over HTTPS on
   // one port and plain HTTP on another, so attempt both per port.
   let data: unknown = null;
-  for (const p of ports) {
-    data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
-    if (data && Array.isArray((data as any)?.response?.groups)) break;
+  // The CLI can report an empty groups list for a few seconds while its
+  // background quota refresh completes. Stay inside the bounded request
+  // timeout and retry that initialization window instead of exposing a false
+  // provider error to the first dashboard render.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    for (const p of findAgyLoopbackPort()) {
+      data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
+      if (data && Array.isArray((data as any)?.response?.groups)) break;
+    }
+    if (Array.isArray((data as any)?.response?.groups)) break;
   }
   const groups: AntigravityGroup[] = Array.isArray((data as any)?.response?.groups)
     ? (data as any).response.groups
@@ -305,14 +282,21 @@ async function antigravityFetcher(): Promise<QuotaResult> {
 }
 
 async function antigravityQuotaFetcher(): Promise<QuotaResult> {
-  if (findAgyLoopbackPort().length === 0) {
+  // Authentication alone does not create the local language-server session.
+  // Start one resumable, prompt-less CLI session on demand for the dashboard.
+  // It is singleton-managed and automatically stopped after idle timeout.
+  if (!(await ensureAntigravitySession())) {
     return buildEmptyUnavailable(
       "antigravity",
-      "CLI Antigravity autenticada, mas a sessão local do agy não está ativa; a cota só fica disponível enquanto o servidor local está em execução"
+      "CLI Antigravity autenticada, mas o Maestro não conseguiu manter a sessão local do agy ativa; tente abrir o Antigravity CLI uma vez e atualize a leitura"
     );
   }
-  return antigravityFetcher();
+  const result = await antigravityFetcher();
+  touchAntigravitySession();
+  return result;
 }
+
+export { stopAntigravitySession };
 
 // ---- Claude (OAuth subscription) -------------------------------------------
 // Reads the OAuth access token from the Claude CLI config if present, else

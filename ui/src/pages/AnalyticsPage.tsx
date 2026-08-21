@@ -17,12 +17,31 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
 
   useEffect(() => {
     let cancelled = false;
-    setQuotaLoading(true);
-    fetchQuota()
-      .then((q) => { if (!cancelled) setQuota(q); })
-      .catch(() => { if (!cancelled) setQuota([]); })
-      .finally(() => { if (!cancelled) setQuotaLoading(false); });
-    return () => { cancelled = true; };
+    let inFlight = false;
+
+    const refreshQuota = async (initial: boolean) => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      if (initial) setQuotaLoading(true);
+      try {
+        const next = await fetchQuota();
+        if (!cancelled) setQuota(next);
+      } catch {
+        // Keep the last successful reading on transient network failures. The
+        // backend already marks stale provider values explicitly.
+        if (!cancelled) setQuota((current) => current ?? []);
+      } finally {
+        inFlight = false;
+        if (initial && !cancelled) setQuotaLoading(false);
+      }
+    };
+
+    void refreshQuota(true);
+    const timer = window.setInterval(() => void refreshQuota(false), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [onRefresh]);
 
   const completedCount = data.tasks.filter((t) => t.status === "done").length;
