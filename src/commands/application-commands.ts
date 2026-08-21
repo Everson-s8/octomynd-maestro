@@ -480,10 +480,11 @@ export class ApplicationCommands {
 
   getTaskLogs(origin: CommandOrigin, taskId: number): TaskLogs {
     try {
-      return this.database.getTaskLogs(taskId);
+      this.database.getTask(taskId);
     } catch (error) {
       throw notFoundError(error instanceof Error ? error.message : `Task not found: ${taskId}`);
     }
+    return this.database.getTaskLogs(taskId);
   }
 
   previewWorkIntake(

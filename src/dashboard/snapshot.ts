@@ -181,6 +181,7 @@ export function buildDashboardSnapshot(
       id: task.id,
       projectKey: task.projectKey,
       projectName: task.projectName,
+      parentTaskId: task.parentTaskId ?? null,
       text: redactSensitiveText(task.text),
       status: task.status,
       source: task.source,
