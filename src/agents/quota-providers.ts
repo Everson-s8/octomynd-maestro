@@ -241,7 +241,7 @@ async function antigravityFetcher(): Promise<QuotaResult> {
   // provider error to the first dashboard render.
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
-    for (const p of findAgyLoopbackPort()) {
+    for (const p of ports) {
       data = await postAgyRpc(p, ANTIGRAVITY_SUMMARY_PATH);
       const groups = (data as any)?.response?.groups;
       if (Array.isArray(groups) && groups.length > 0) break;

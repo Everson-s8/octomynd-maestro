@@ -142,7 +142,7 @@ export async function fetchAllQuota(fetchers: Record<string, QuotaFetcher>): Pro
     return cloneResults(cache.results);
   }
   if (cache.inFlight) {
-    return cache.results.length > 0 ? cloneResults(cache.results) : cache.inFlight;
+    return cache.results.length > 0 ? cloneResults(cache.results) : cache.inFlight.then(cloneResults);
   }
 
   cache.inFlight = (async () => {

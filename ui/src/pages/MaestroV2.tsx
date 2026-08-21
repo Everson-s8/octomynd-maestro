@@ -60,19 +60,9 @@ function PanelHead({ eyebrow, title, meta }: { eyebrow: string; title: string; m
 function InlineEmpty({ text }: { text: string }) { return <div className="inline-empty">{text}</div>; }
 function FeatureLine({ feature }: { feature: DashboardData["features"][number] }) { const status = feature.status === "completed" ? "ok" : feature.status === "failed" ? "err" : "run"; const label = feature.status === "completed" ? "concluída" : feature.status === "failed" ? "falhou" : "rodando"; return <div className="task"><span className="id">#{String(feature.id).padStart(2, "0")}</span><span className={`st ${status}`}>{label}</span><div className="body"><b>{feature.name}</b><span>{feature.branchName}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${feature.status === "completed" ? 76 : feature.status === "failed" ? 50 : 38}`} stroke={feature.status === "failed" ? "#b1503c" : feature.status === "completed" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={feature.status === "completed" ? 78 : feature.status === "failed" ? 52 : 40} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
 function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
-  const navigate = useNavigate();
   return (
     <div
       className="task"
-      role="button"
-      tabIndex={0}
-      onClick={() => navigate(`/tasks/${task.id}/logs`)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          navigate(`/tasks/${task.id}/logs`);
-        }
-      }}
     >
       <span className="id">#{String(task.id).padStart(2, "0")}</span>
       <span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>
@@ -101,15 +91,7 @@ function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
       >
         Logs
       </NavLink>
-      <NavLink
-        to={`/tasks/${task.id}/logs`}
-        className="arr task-log-arrow"
-        aria-label={`Abrir logs da task ${task.id}`}
-        title="Abrir logs da task"
-        onClick={(event) => event.stopPropagation()}
-      >
-        →
-      </NavLink>
+      <span className="arr task-log-arrow" aria-hidden="true">→</span>
     </div>
   );
 }
@@ -175,21 +157,32 @@ function Analytics({ data }: { data: DashboardData }) {
   const [quotaError, setQuotaError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetchQuota()
-      .then((results) => {
+    let inFlight = false;
+    const refreshQuota = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const results = await fetchQuota();
         if (!cancelled) {
           const stale = results.find((result) => result.stale);
           setQuotaError(stale ? `Exibindo a última leitura estável. Atualização: ${stale.error ?? "provider temporariamente indisponível"}.` : null);
           setQuota(results);
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!cancelled) {
-          setQuota([]);
+          setQuota((current) => current ?? []);
           setQuotaError(error instanceof Error ? error.message : "Não foi possível atualizar as cotas.");
         }
-    });
-    return () => { cancelled = true; };
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refreshQuota();
+    const timer = window.setInterval(() => void refreshQuota(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
   const tokenProviders = (data.costSummary?.byProvider ?? []).filter((provider) => provider.inputTokens + provider.outputTokens > 0);
   const totalTokens = tokenProviders.reduce((sum, provider) => sum + provider.inputTokens + provider.outputTokens, 0);
