@@ -209,10 +209,12 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
 .task-list { display: grid; gap: 9px; }
 .task-row { position: relative; display: grid; grid-template-columns: 64px minmax(0,1fr) 145px 42px; gap: 18px; align-items: center; min-height: 112px; padding: 18px 16px 18px 22px; background: #211a13; border: 1px solid #372c20; border-radius: 18px; transition: 180ms ease; }
 .task-row:hover { background: #251e16; border-color: #4a3f30; transform: translateY(-1px); }
+.task-row-main { grid-column: 1 / 4; display: grid; grid-template-columns: 64px minmax(0,1fr) 145px; gap: 18px; align-items: center; min-width: 0; padding: 0; color: inherit; text-align: left; background: transparent; }
+.task-row-main:focus-visible { outline: 2px solid var(--pink); outline-offset: 4px; border-radius: 8px; }
 .status-rail { position: absolute; top: 14px; bottom: 14px; left: 0; width: 4px; background: var(--status-color, var(--muted)); border-radius: 0 4px 4px 0; }
 .task-id { color: var(--faint); font-family: var(--mono); font-size: .76rem; }
 .task-copy { display: grid; gap: 5px; min-width: 0; }
-.task-copy > div { display: flex; gap: 7px; align-items: center; }
+.task-copy > span { display: flex; gap: 7px; align-items: center; }
 .task-copy strong { overflow: hidden; font-size: .94rem; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; color: #f3ece1; }
 .task-copy small { overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
 .project-tag { color: #c4622d; font-family: var(--mono); font-size: .66rem; font-weight: 750; }
@@ -546,6 +548,7 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
   .feature-row { grid-template-columns: minmax(0,1fr) 30px; }
   .feature-progress { display: none; }
   .task-row { grid-template-columns: 34px minmax(0,1fr) 30px; }
+  .task-row-main { grid-column: 1 / 3; grid-template-columns: 34px minmax(0,1fr); gap: 18px; }
   .task-id { display: none; }
   .task-progress { display: none; }
   .event-list { grid-template-columns: 1fr; }
