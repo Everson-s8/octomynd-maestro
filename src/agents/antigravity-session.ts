@@ -70,8 +70,8 @@ function scheduleIdleStop(): void {
   idleTimer.unref?.();
 }
 
-async function waitForAgyLoopback(child: ChildProcess): Promise<boolean> {
-  const deadline = Date.now() + AGY_START_TIMEOUT_MS;
+async function waitForAgyLoopback(child: ChildProcess, deadlineAt?: number): Promise<boolean> {
+  const deadline = Math.min(Date.now() + AGY_START_TIMEOUT_MS, deadlineAt ?? Number.POSITIVE_INFINITY);
   while (Date.now() < deadline) {
     if (findAgyLoopbackPort().length > 0) return true;
     if (child.exitCode !== null || child.killed) return false;
@@ -80,13 +80,14 @@ async function waitForAgyLoopback(child: ChildProcess): Promise<boolean> {
   return findAgyLoopbackPort().length > 0;
 }
 
-export async function ensureAntigravitySession(): Promise<boolean> {
+export async function ensureAntigravitySession(deadlineAt?: number): Promise<boolean> {
   if (findAgyLoopbackPort().length > 0) {
-    scheduleIdleStop();
+    // An existing session may belong to the user's CLI or another Maestro
+    // process. We can reuse it, but only reap children that this manager owns.
     return true;
   }
   if (managedChild && managedChild.exitCode === null && !managedChild.killed) {
-    return waitForAgyLoopback(managedChild);
+    return waitForAgyLoopback(managedChild, deadlineAt);
   }
   if (startPromise) return startPromise;
   if (Date.now() - lastStartFailureAt < AGY_START_RETRY_BACKOFF_MS) return false;
@@ -113,7 +114,7 @@ export async function ensureAntigravitySession(): Promise<boolean> {
         clearIdleTimer();
       });
 
-      const active = await waitForAgyLoopback(child);
+      const active = await waitForAgyLoopback(child, deadlineAt);
       if (!active) {
         child.kill();
         lastStartFailureAt = Date.now();
