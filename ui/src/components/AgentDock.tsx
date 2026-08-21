@@ -49,7 +49,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
     requiredProviderId: AgentProviderId | null,
     preferredModel?: string | null
   ) => {
-    const current = policy?.capabilities.find((item) => item.capability === capability);
+    const current = (policy?.capabilities ?? []).find((item) => item.capability === capability);
     if (!current) return;
     setBusy(`capability:${capability}`);
     try {
@@ -76,7 +76,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
       </div>
       {error ? <p className="provider-error">{error}</p> : null}
       <p className="provider-routing-copy">Escolha o primeiro provider, o modelo preferido e a regra de fallback.</p>
-          {policy?.capabilities.map((routing) => {
+          {(policy?.capabilities ?? []).map((routing) => {
             // Resolve the effective "first" to an actually-eligible provider (the
             // configured order may still reference a paused/removed provider).
             const eligible = providers.map((p) => String(p.id));

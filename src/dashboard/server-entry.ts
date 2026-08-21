@@ -3,7 +3,7 @@ import { createDatabase } from "../db.js";
 import { startDashboardServer } from "./server.js";
 
 const config = loadConfig();
-const errors = validateRuntimeConfig(config);
+const errors = validateRuntimeConfig(config, process.env, { requireTelegram: false });
 if (errors.length > 0) {
   errors.forEach((error) => console.error(error));
   process.exit(1);

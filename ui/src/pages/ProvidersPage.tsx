@@ -35,7 +35,7 @@ export function ProvidersPage({ data }: ProvidersPageProps) {
         defina a ordem de prioridade por função.
       </p>
       <div className="prov-grid">
-        <ProviderManager agents={data.agents} externalPolicy={policy} policyVersion={policy?.controls.map((c) => `${c.providerId}:${c.mode}`).join("|") ?? ""} setPolicy={setPolicy} onPolicyChanged={refreshPolicy} />
+        <ProviderManager agents={data.agents} externalPolicy={policy} policyVersion={(policy?.controls ?? []).map((c) => `${c.providerId}:${c.mode}`).join("|")} setPolicy={setPolicy} onPolicyChanged={refreshPolicy} />
         <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
       </div>
     </div>

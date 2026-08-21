@@ -395,8 +395,12 @@ export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { 
   const response = await fetch("/api/provider-policy");
   const payload = await response.json() as { policy?: ProviderPolicySnapshot; models?: Record<string, string[]>; error?: string };
   if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
+  const controls = Array.isArray(payload.policy.controls) ? payload.policy.controls : [];
+  const capabilities = Array.isArray(payload.policy.capabilities) ? payload.policy.capabilities : [];
   return {
     ...payload.policy,
+    controls,
+    capabilities,
     models: payload.models ?? payload.policy.models,
     availableModels: payload.models ?? payload.policy.models
   };
@@ -771,7 +775,72 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardDat
   if (!response.ok) {
     throw new Error(`Dashboard indisponível (${response.status}).`);
   }
-  return response.json() as Promise<DashboardData>;
+  const payload = await response.json() as Partial<DashboardData> | null;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("O dashboard retornou uma resposta inválida.");
+  }
+
+  const costSummary = payload.costSummary;
+  return {
+    ...payload,
+    generatedAt: payload.generatedAt ?? new Date().toISOString(),
+    daemon: payload.daemon ?? {
+      name: "octomynd-maestro",
+      state: "online",
+      access: "restricted",
+      dashboardHost: "127.0.0.1"
+    },
+    autopilot: payload.autopilot ?? {
+      enabled: false,
+      state: "disabled",
+      maxConcurrentGoals: 0,
+      pollIntervalMs: 0,
+      runningGoals: 0,
+      waitingProviderGoals: 0,
+      queuedTasks: 0,
+      lastAction: "",
+      lastTickAt: null
+    },
+    summary: payload.summary ?? {
+      projects: 0,
+      providersConnected: 0,
+      activeTasks: 0,
+      queuedTasks: 0,
+      humanGates: 0,
+      improvementCandidates: 0,
+      plannedFeaturePlans: 0,
+      activeGoals: 0,
+      completedTasks: 0
+    },
+    costSummary: {
+      todayTotalUsd: costSummary?.todayTotalUsd ?? 0,
+      todayInputTokens: costSummary?.todayInputTokens ?? 0,
+      todayOutputTokens: costSummary?.todayOutputTokens ?? 0,
+      byProvider: Array.isArray(costSummary?.byProvider) ? costSummary.byProvider : [],
+      byProject: Array.isArray(costSummary?.byProject) ? costSummary.byProject : []
+    },
+    projects: Array.isArray(payload.projects) ? payload.projects : [],
+    tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+    events: Array.isArray(payload.events) ? payload.events : [],
+    improvements: Array.isArray(payload.improvements) ? payload.improvements : [],
+    goals: Array.isArray(payload.goals) ? payload.goals : [],
+    features: Array.isArray(payload.features) ? payload.features : [],
+    featurePlans: Array.isArray(payload.featurePlans)
+      ? payload.featurePlans.map((plan) => ({
+          ...plan,
+          taskIds: Array.isArray(plan.taskIds) ? plan.taskIds : [],
+          tasks: Array.isArray(plan.tasks) ? plan.tasks : [],
+          blockers: Array.isArray(plan.blockers) ? plan.blockers : [],
+          dependsOnFeaturePlanIds: Array.isArray(plan.dependsOnFeaturePlanIds)
+            ? plan.dependsOnFeaturePlanIds
+            : []
+        }))
+      : [],
+    workGraphs: Array.isArray(payload.workGraphs) ? payload.workGraphs : [],
+    environments: Array.isArray(payload.environments) ? payload.environments : [],
+    reviewQueue: Array.isArray(payload.reviewQueue) ? payload.reviewQueue : [],
+    agents: Array.isArray(payload.agents) ? payload.agents : []
+  } as DashboardData;
 }
 
 export type PreviewWorkIntakeInput = {

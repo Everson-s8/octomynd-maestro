@@ -158,11 +158,12 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
 
 export function validateRuntimeConfig(
   config: MaestroConfig,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: { requireTelegram?: boolean } = {}
 ): string[] {
   const errors: string[] = [];
 
-  if (!config.telegram.botToken) {
+  if ((options.requireTelegram ?? true) && !config.telegram.botToken) {
     errors.push("TELEGRAM_BOT_TOKEN is missing. Set it in .env.local.");
   }
 
