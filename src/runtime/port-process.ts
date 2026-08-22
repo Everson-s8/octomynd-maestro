@@ -62,7 +62,10 @@ export async function killProcessGracefully(
   isAlive: (pid: string) => boolean = (p) => processIsAlive(p)
 ): Promise<void> {
   if (platform === "win32") {
-    const first = await runner("taskkill", ["/PID", pid, "/T"]);
+    // A graceful tree kill can leave a detached Node child holding the port
+    // after the root PID exits. Force the whole Windows process tree in one
+    // operation so restart cannot race a lingering child process.
+    const first = await runner("taskkill", ["/PID", pid, "/T", "/F"]);
     if (!first.ok) {
       // If the process is already gone, that's not an error.
       if (isAlive(pid)) return; // still alive but we couldn't signal -> give up gracefully

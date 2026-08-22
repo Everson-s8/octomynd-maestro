@@ -83,7 +83,7 @@ describe("findProcessOnPort", () => {
 });
 
 describe("killProcessGracefully", () => {
-  it("sends taskkill without /F on win32 first, then escalates if still alive", async () => {
+  it("force-kills the full process tree on win32", async () => {
     const calls: string[][] = [];
     const runner = vi.fn(async (cmd: string, args: string[]) => {
       calls.push([cmd, ...args]);
@@ -94,7 +94,7 @@ describe("killProcessGracefully", () => {
     // "dead" after one poll made this race the 10ms grace window and flake.)
     const isAlive = () => true;
     await killProcessGracefully("123", "win32", runner, 10, isAlive);
-    expect(calls[0]).toEqual(["taskkill", "/PID", "123", "/T"]);
+    expect(calls[0]).toEqual(["taskkill", "/PID", "123", "/T", "/F"]);
     expect(calls[1]).toEqual(["taskkill", "/PID", "123", "/T", "/F"]);
   });
 
