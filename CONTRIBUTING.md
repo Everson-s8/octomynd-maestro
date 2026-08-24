@@ -9,13 +9,13 @@ should preserve observable execution, human review gates, isolated worktrees, an
 - Read the relevant ADRs under [`docs/adr`](docs/adr) before changing orchestration, provider,
   review, or work-graph behaviour.
 - For product usage and onboarding, use the maintained documentation at
-  [docs.octomynd.com/maestro](https://docs.octomynd.com/maestro).
+  [docs.octomynd.com/en](https://docs.octomynd.com/en/).
 - For a substantial change, open an issue first so the design and scope are visible.
 
 ## Local development
 
-Use Node.js `>=20.17.0 <25` and Git. The repository's development version is
-`22.12.x` because the Electron packaging toolchain requires Node 22 or newer:
+Use Node.js `>=22.12.0 <25` and Git. The repository's development version is
+`22.12.x` because the dependency and Electron packaging toolchain require Node 22.12 or newer:
 
 ```powershell
 npm ci

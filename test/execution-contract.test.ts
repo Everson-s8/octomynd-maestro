@@ -34,10 +34,10 @@ describe("execution contract", () => {
   });
 
   it("accepts the supported Node range and rejects older or unsupported majors", () => {
-    expect(isSupportedNodeVersion("v20.17.0")).toBe(true);
-    expect(isSupportedNodeVersion("20.17.5")).toBe(true);
-    expect(isSupportedNodeVersion("v20.19.1")).toBe(true);
-    expect(isSupportedNodeVersion("v20.16.9")).toBe(false);
+    expect(isSupportedNodeVersion("v22.12.0")).toBe(true);
+    expect(isSupportedNodeVersion("22.12.5")).toBe(true);
+    expect(isSupportedNodeVersion("v22.13.1")).toBe(true);
+    expect(isSupportedNodeVersion("v22.11.9")).toBe(false);
     expect(isSupportedNodeVersion("v24.0.0")).toBe(true);
     expect(isSupportedNodeVersion("v25.0.0")).toBe(false);
   });
@@ -74,8 +74,8 @@ describe("execution contract", () => {
     const contract = {
       rootPath,
       worktreesPath: path.join(rootPath, "worktrees"),
-      expectedNodeVersion: "20.17.0",
-      supportedNodeRange: ">=20.17.0 <25"
+      expectedNodeVersion: "22.12.0",
+      supportedNodeRange: ">=22.12.0 <25"
     };
     try {
       const first = ensureExecutionContract(contract);

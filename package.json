@@ -13,7 +13,7 @@
   "bugs": {
     "url": "https://github.com/Everson-s8/octomynd-maestro/issues"
   },
-  "homepage": "https://docs.octomynd.com/maestro",
+  "homepage": "https://docs.octomynd.com/en/",
   "keywords": [
     "ai-agents",
     "llm",
@@ -27,7 +27,7 @@
     "maestro": "./src/cli/bin.cjs"
   },
   "engines": {
-    "node": ">=20.17.0 <25"
+    "node": ">=22.12.0 <25"
   },
   "scripts": {
     "setup": "tsx src/wizard.ts",

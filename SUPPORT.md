@@ -1,6 +1,6 @@
 # Getting help
 
-Start with the [Maestro documentation](https://docs.octomynd.com/maestro) and
+Start with the [Maestro documentation](https://docs.octomynd.com/en/) and
 [`INSTALL.md`](INSTALL.md). The documentation covers installation, provider onboarding, the local
 dashboard, tasks, reviews, and the Windows desktop build.
 

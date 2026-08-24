@@ -402,7 +402,14 @@ function isValidationDependencyRootComplete(root: string): boolean {
 }
 
 function hasLoadableNativeDependency(root: string, dependency: string): boolean {
-  return fs.existsSync(path.join(root, "node_modules", dependency, "build", "Release", "better_sqlite3.node"));
+  const dependencyRoot = path.join(root, "node_modules", dependency);
+  const legacyBuild = path.join(dependencyRoot, "build", "Release", "better_sqlite3.node");
+  const platformPrebuild = path.join(
+    dependencyRoot,
+    "prebuilds",
+    `${process.platform}-${process.arch}.node`
+  );
+  return fs.existsSync(legacyBuild) || fs.existsSync(platformPrebuild);
 }
 
 function readPackageJson(root: string): {
@@ -432,11 +439,14 @@ function runCommand(command: string, args: string[], cwd: string, timeout = 15_0
   // under the wrong node major fails or silently skips the binding, which then
   // shows up as a false `environment_blocked`. Pin npm to this process's own node
   // binary so the toolchain is always prepared under the supported runtime.
+  const bundledNpmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
   const nodeBin = process.execPath;
   const invocation =
     process.platform === "win32"
       ? command === "npm"
-        ? { command: nodeBin, args: [path.join(path.dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
+        ? fs.existsSync(bundledNpmCli)
+          ? { command: nodeBin, args: [bundledNpmCli, ...args] }
+          : { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", executableName("npm"), ...args] }
         : command.endsWith(".cmd")
           ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", command, ...args] }
           : { command, args }
