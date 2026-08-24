@@ -61,9 +61,10 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
   const summarizeScan = (providers: ProviderRescanEntry[]) => {
     const installed = providers.filter((provider) => provider.installed);
     const authenticated = installed.filter((provider) => provider.authStatus === "authenticated");
-    return translate("CLI(s) installed · {authenticated} authenticated session(s)", {
+    return translate("Provider scan: {installed} CLI(s) installed · {authenticated} authenticated session(s)", {
+      installed: installed.length,
       authenticated: authenticated.length
-    }).replace("CLI(s)", `${installed.length} CLI(s)` ) +
+    }) +
       (installed.length ? ` · ${installed.map((provider) => provider.label).join(", ")}` : "");
   };
 
@@ -115,7 +116,7 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
           <h1>Providers</h1>
         </div>
         <div className="top-actions">
-          <span className="provider-summary">{translate("CLI(s) detected · {ready} ready for use", { ready: ready.length }).replace("CLI(s)", `${installed.length} CLI(s)`)}</span>
+          <span className="provider-summary">{translate("{installed} CLI(s) detected · {ready} ready for use", { installed: installed.length, ready: ready.length })}</span>
           {antigravityInstalled && !antigravityPermissions?.configured ? (
             <button type="button" className="btn-ghost" onClick={() => void handleConfigureAntigravityPermissions()} disabled={permissionsBusy}>
               {permissionsBusy ? translate("Configuring…") : translate("Allow Antigravity execution")}

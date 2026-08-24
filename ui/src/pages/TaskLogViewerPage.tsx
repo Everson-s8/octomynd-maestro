@@ -321,7 +321,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             title={translate("Back to task flow")}
             onClick={() => onBack ? onBack() : navigate("/backlog")}
           >
-            ← Voltar
+            ← {translate("Back")}
           </button>
           <div className="task-log-brand-badge">
             <OctoMark />

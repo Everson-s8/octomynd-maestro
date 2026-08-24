@@ -296,9 +296,16 @@ function acquireSyncLock(repoPath: string): { release: () => void } | null {
       try {
         const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
         if (ageMs > SYNC_LOCK_STALE_MS) {
-          const owner = fs.readFileSync(path.join(lockPath, "owner"), "utf8").split("\n", 1)[0];
-          const ownerPid = Number(owner.split(":", 1)[0]);
-          if (!Number.isInteger(ownerPid) || !isProcessAlive(ownerPid)) {
+          let ownerPid: number | null = null;
+          try {
+            const owner = fs.readFileSync(path.join(lockPath, "owner"), "utf8").split("\n", 1)[0];
+            const parsedPid = Number(owner.split(":", 1)[0]);
+            ownerPid = Number.isInteger(parsedPid) ? parsedPid : null;
+          } catch {
+            // A process can die between creating the directory and writing its
+            // owner record. An old lock with no owner record is orphaned.
+          }
+          if (ownerPid === null || !isProcessAlive(ownerPid)) {
             fs.rmSync(lockPath, { recursive: true, force: true });
             continue;
           }
