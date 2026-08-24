@@ -24,7 +24,7 @@ module.exports = async function afterPack(context) {
     }
   }
 
-  const rcedit = require("rcedit");
+  const { rcedit } = await import("rcedit");
   await rcedit(executable, {
     icon,
     "version-string": {
