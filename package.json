@@ -56,28 +56,28 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.6.2",
-    "grammy": "^1.35.0",
-    "tsx": "^4.19.3",
-    "yaml": "^2.8.3"
+    "grammy": "^1.45.1",
+    "tsx": "^4.23.12",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.0",
-    "concurrently": "^9.2.0",
+    "concurrently": "^10.0.5",
     "electron": "^43.4.1",
     "electron-builder": "^26.15.3",
-    "rcedit": "^4.0.1",
+    "rcedit": "^5.0.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
-    "typescript": "^5.8.2",
+    "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
   },
