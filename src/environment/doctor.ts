@@ -403,13 +403,20 @@ function isValidationDependencyRootComplete(root: string): boolean {
 
 function hasLoadableNativeDependency(root: string, dependency: string): boolean {
   const dependencyRoot = path.join(root, "node_modules", dependency);
+  const platformTarget = `${process.platform}-${process.arch}`;
   const legacyBuild = path.join(dependencyRoot, "build", "Release", "better_sqlite3.node");
-  const platformPrebuild = path.join(
-    dependencyRoot,
-    "prebuilds",
-    `${process.platform}-${process.arch}.node`
-  );
-  return fs.existsSync(legacyBuild) || fs.existsSync(platformPrebuild);
+  const platformPrebuild = path.join(dependencyRoot, "prebuilds", `${platformTarget}.node`);
+  const platformModule = path.join(dependencyRoot, "lib", `${platformTarget}.js`);
+  const prebuildDirectory = path.join(dependencyRoot, "prebuilds");
+  const hasAnyPrebuild = fs.existsSync(prebuildDirectory)
+    && fs.readdirSync(prebuildDirectory).some((entry) => entry.endsWith(".node"));
+  // better-sqlite3 publishes platform loaders alongside its prebuilds. Keep
+  // the loader as a candidate signal for unusual package layouts; the later
+  // nativeRuntimeCheck still performs the real require() probe.
+  return fs.existsSync(legacyBuild)
+    || fs.existsSync(platformPrebuild)
+    || fs.existsSync(platformModule)
+    || hasAnyPrebuild;
 }
 
 function readPackageJson(root: string): {
