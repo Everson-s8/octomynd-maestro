@@ -39,6 +39,9 @@ export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
                 <span>{translate("No agent working now")}</span>
               )}
             </div>
+            <small className="project-path">
+              sync: {project.syncState} · {project.canonicalHeadSha ? project.canonicalHeadSha.slice(0, 8) : "no commit"}
+            </small>
             <small className="project-path">{translate("Protected local repository")}</small>
           </article>
         ))}

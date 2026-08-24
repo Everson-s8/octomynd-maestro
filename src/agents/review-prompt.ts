@@ -57,7 +57,7 @@ export function buildReviewPrompt(
     `Task #${task.id}: ${task.text}`,
     "",
     "Your only approval authority is the task objective and its acceptance criteria.",
-    "Evaluate the current repository state against that contract and answer in Portuguese:",
+    "Evaluate the current repository state against that contract and answer in English:",
     "1. criteria met, with concrete evidence for each (file/test/line);",
     "2. criteria NOT met or concrete defects (critical/high), if any;",
     "3. optional non-blocking suggestions, without requiring a fixed number of improvements;",

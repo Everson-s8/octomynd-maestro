@@ -27,7 +27,7 @@ export class GhReviewGateway implements ReviewGitHubGateway {
     if (state.state === "MERGED") return;
     if (state.state === "CLOSED") throw new Error("Closed pull requests cannot be merged.");
     if (state.isDraft) await this.markReady(url);
-    requireGh(["pr", "merge", url, "--merge", "--delete-branch"], "merge approved pull request");
+    requireGh(["pr", "merge", url, "--squash", "--delete-branch"], "merge approved pull request");
   }
 
   async markDraft(url: string): Promise<void> {

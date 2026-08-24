@@ -37,6 +37,7 @@ import { SkillVersionStore } from "./skills/store.js";
 import type { SkillLifecycleRuntime } from "./skills/lifecycle.js";
 import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
 import { stopAntigravitySession } from "./agents/antigravity-session.js";
+import { ProjectRepositoryService } from "./projects/repository-service.js";
 
 if (process.argv.includes("telegram") && process.argv.includes("connect")) {
   const { runTelegramConnectWizard } = await import("./telegram/connect.js");
@@ -62,6 +63,7 @@ if (errors.length > 0) {
 
 ensureExecutionContract(config.execution);
 const database = createDatabase(config.databasePath);
+const repositoryService = new ProjectRepositoryService(database);
 const environmentFingerprint = captureEnvironmentFingerprint(config.execution);
 database.addEvent({
   source: "maestro",
@@ -156,7 +158,8 @@ const featureCoordinator = new FeatureCoordinator(
   undefined,
   async (feature, headSha) => {
     await selfUpdateManager.triggerUpdate(feature, headSha);
-  }
+  },
+  repositoryService
 );
 const telegramManager = new TelegramSubsystemManager(config, database, {
   cancelTask: (taskId: number) => goalCoordinator.cancel(taskId),
@@ -165,7 +168,8 @@ const telegramManager = new TelegramSubsystemManager(config, database, {
   providerStatus: () => agentRegistry.snapshot(),
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator,
-  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate()
+  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
+  repositoryService
 });
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId: number) => goalCoordinator.cancel(taskId),
@@ -174,7 +178,8 @@ const bot = createTelegramBot(config, database, {
   providerStatus: () => agentRegistry.snapshot(),
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator,
-  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate()
+  triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
+  repositoryService
 });
 const featurePlanLifecycleNotifier = createTelegramFeaturePlanLifecycleNotifier(
   config,
@@ -242,7 +247,9 @@ const reviewCoordinator = new ReviewCoordinator(
   goalCoordinator,
   undefined,
   reviewNotifier,
-  reviewSyncNotifier
+  reviewSyncNotifier,
+  undefined,
+  repositoryService
 );
 const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(
   database,
@@ -281,7 +288,8 @@ const dashboardServer = config.dashboard.enabled
     agentRegistry,
     workGraphRuntime: workGraphCoordinator,
     skillLifecycle: skillLifecycleRuntime,
-    telegramManager
+    telegramManager,
+    repositoryService
   })
   : null;
 backlogAutopilot.start();

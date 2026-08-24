@@ -48,6 +48,7 @@ import { fetchAllQuota, buildQuotaFetchers } from "../agents/quota-providers.js"
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
+import { ProjectRepositoryService } from "../projects/repository-service.js";
 import { GLOBAL_CHAT_PROJECT_KEY } from "../chat/types.js";
 import type { ChatAccessMode } from "../chat/types.js";
 import {
@@ -130,6 +131,7 @@ export type DashboardServerOptions = {
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
   chatService?: OperationalChatService;
+  repositoryService?: ProjectRepositoryService;
   telegramManager?: Pick<TelegramSubsystemManager, "restart" | "getBotInfo">;
 };
 
@@ -145,13 +147,15 @@ export function createDashboardServer(options: DashboardServerOptions) {
     options.workGraphRuntime,
     options.skillLifecycle,
     undefined,
-    options.config.projectsPath
+    options.config.projectsPath,
+    options.repositoryService
   );
   const chatService = options.chatService ?? new OperationalChatService({
     database: options.database,
     agentRegistry: options.agentRegistry,
     commands,
     worktreesRoot: options.config.worktreesPath,
+    repositoryService: options.repositoryService,
     actionExecutor: options.goalCoordinator
       ? {
           taskCreated: async (taskId) => {

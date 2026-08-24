@@ -44,6 +44,7 @@ import {
 import { SkillLifecycleService, suggestSkillProposalQualifiedName, type SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import type { SkillCuratorReport } from "../skills/curator.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
+import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import {
   classifyWorkIntake,
   computeWorkIntakeId,
@@ -261,7 +262,8 @@ export class ApplicationCommands {
     private readonly workGraphRuntime?: WorkGraphRuntimeCommands,
     skillLifecycle?: SkillLifecycleRuntime,
     private readonly featureCoordinator?: FeatureCoordinator,
-    private readonly projectsRoot?: string
+    private readonly projectsRoot?: string,
+    private readonly repositoryService: ProjectRepositoryService = new ProjectRepositoryService(database)
   ) {
     this.skillLifecycleService = skillLifecycle
       ? new SkillLifecycleService(database, skillLifecycle)
@@ -431,6 +433,24 @@ export class ApplicationCommands {
       });
     } catch (error) {
       throw validationError(error instanceof Error ? error.message : "Unknown project error.");
+    }
+
+    try {
+      // Registration must remain responsive even when a local repository's
+      // remote is offline. The authoritative fetch happens before task
+      // preparation (and in project-scoped Chat); here we record the local
+      // checkout and any cached remote-tracking state without network I/O.
+      const sync = this.repositoryService.inspect(project, false);
+      project = this.database.getProjectByKey(project.key);
+      if (sync.syncState !== "current" && sync.syncState !== "local_only" && sync.syncState !== "local_ahead") {
+        warnings.push(sync.detail ?? `Repository synchronization state: ${sync.syncState}.`);
+      }
+    } catch (error) {
+      const message = error instanceof RepositorySyncError
+        ? error.message
+        : error instanceof Error ? error.message : "Repository synchronization failed.";
+      warnings.push(`Repository needs attention before Maestro tasks can run: ${message}`);
+      project = this.database.getProjectByKey(project.key);
     }
 
     this.database.addEvent({
@@ -1407,9 +1427,26 @@ export class ApplicationCommands {
       }
     }
 
+    let repositoryBase;
+    try {
+      repositoryBase = this.repositoryService.prepareTaskBase(project);
+      project = this.database.getProjectByKey(project.key);
+    } catch (error) {
+      const failure = conflictError(
+        error instanceof RepositorySyncError
+          ? error.message
+          : error instanceof Error ? error.message : "Repository synchronization failed before task preparation."
+      );
+      this.recordPrepareFailure(origin, task.id, failure.details);
+      throw failure;
+    }
+
     let baseline;
     try {
-      baseline = prepareFeatureTaskBaseline(this.database, task, project, worktreesRoot);
+      baseline = prepareFeatureTaskBaseline(this.database, task, project, worktreesRoot, {
+        baseRef: repositoryBase.baseRef,
+        baseBranch: repositoryBase.baseBranch
+      });
     } catch (error) {
       const failure = conflictError(
         error instanceof Error ? error.message : "Feature Task baseline preparation failed."
@@ -1430,7 +1467,8 @@ export class ApplicationCommands {
       status: "planning",
       branchName: plan.branchName,
       worktreePath: plan.worktreePath,
-      baseBranch: plan.baseBranch ?? project.defaultBranch
+      baseBranch: plan.baseBranch ?? project.defaultBranch,
+      baseCommitSha: repositoryBase.baseCommitSha
     });
 
     this.database.addEvent({
@@ -1444,6 +1482,10 @@ export class ApplicationCommands {
         branchName: plan.branchName,
         worktreePath: plan.worktreePath,
         baseBranch: plan.baseBranch ?? project.defaultBranch,
+        baseCommitSha: repositoryBase.baseCommitSha,
+        canonicalHeadSha: repositoryBase.state.canonicalHeadSha,
+        remoteHeadSha: repositoryBase.state.remoteHeadSha,
+        syncState: repositoryBase.state.syncState,
         dependencyTaskIds: baseline.dependencyTaskIds
       }
     });
