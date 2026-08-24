@@ -9,7 +9,7 @@ should preserve observable execution, human review gates, isolated worktrees, an
 - Read the relevant ADRs under [`docs/adr`](docs/adr) before changing orchestration, provider,
   review, or work-graph behaviour.
 - For product usage and onboarding, use the maintained documentation at
-  [docs.octomynd.com/maestro](https://docs.octomynd.com/maestro).
+  [docs.octomynd.com/en](https://docs.octomynd.com/en/).
 - For a substantial change, open an issue first so the design and scope are visible.
 
 ## Local development

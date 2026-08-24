@@ -5,7 +5,7 @@ Octomynd Maestro is designed for plug-and-play onboarding. You can run it with o
 
 For the packaged Windows desktop flow, see [`docs/desktop-release.md`](docs/desktop-release.md).
 The maintained product documentation is available at
-[`docs.octomynd.com/maestro`](https://docs.octomynd.com/maestro).
+[`docs.octomynd.com/en`](https://docs.octomynd.com/en/).
 
 ---
 

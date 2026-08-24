@@ -30,7 +30,7 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 The maintained user documentation is published at [docs.octomynd.com](https://docs.octomynd.com/)
 with English and Brazilian Portuguese guides. Start with the
-[Maestro guide](https://docs.octomynd.com/maestro) or the local
+[Maestro guide](https://docs.octomynd.com/en/) or the local
 [`INSTALL.md`](INSTALL.md) for a development checkout.
 
 This repository contains the runtime and source-level design notes. Product guides, onboarding
