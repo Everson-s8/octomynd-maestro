@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GoalRunRecord, ProjectRecord, TaskRecord } from "../src/db.js";
-import { createGoalDeliveryHandler, scanGoalChangesForSecrets } from "../src/goals/delivery.js";
+import { buildPullRequestTitle, createGoalDeliveryHandler, pullRequestSummary, scanGoalChangesForSecrets, validateStagedDiffWhitespace } from "../src/goals/delivery.js";
 import { formatSecretScanFinding, scanWorktreePathsForSecrets } from "../src/security/secrets.js";
 
 let tempDir: string;
@@ -18,6 +18,12 @@ afterEach(() => {
 });
 
 describe("goal delivery guard", () => {
+  it("summarizes the central objective for a pull request title", () => {
+    const text = "Crie essa task: A ideia inicial é fazer um projeto de controle de finanças, organizar gastos do apartamento e acompanhar investimentos. Faça.";
+    expect(pullRequestSummary(text)).toBe("fazer um projeto de controle de finanças");
+    expect(buildPullRequestTitle(taskRecord(), projectRecord())).toBe("feat(example): deliver feature");
+  });
+
   it("allows ordinary source files", () => {
     fs.writeFileSync(
       path.join(tempDir, "feature.ts"),
@@ -72,6 +78,20 @@ describe("goal delivery guard", () => {
     expect(git(["log", "-1", "--pretty=%s"])).toBe("Task #4: deliver feature");
     expect(publishCalls).toBe(2);
   }, 15_000);
+
+  it("allows Markdown hard-break whitespace but still rejects source whitespace errors", () => {
+    git(["init"]);
+    git(["config", "user.name", "Maestro Test"]);
+    git(["config", "user.email", "maestro@example.invalid"]);
+    fs.writeFileSync(path.join(tempDir, "README.md"), "line with a hard break  \nnext line\n");
+    fs.writeFileSync(path.join(tempDir, "feature.ts"), "export const value = 1;\n");
+    git(["add", "."]);
+    expect(() => validateStagedDiffWhitespace(tempDir)).not.toThrow();
+
+    fs.writeFileSync(path.join(tempDir, "feature.ts"), "export const value = 1;  \n");
+    git(["add", "feature.ts"]);
+    expect(() => validateStagedDiffWhitespace(tempDir)).toThrow(/validate staged diff/);
+  });
 });
 
 function git(args: string[]): string {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { decideHumanReview, HumanReviewDecision, ReviewQueueItem } from "../api";
 import { changeSafetyGateClass, changeSafetyGateLabel } from "../helpers";
+import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
@@ -29,13 +30,14 @@ export function HumanReviewQueue({
     message: "Verificacao de segredos concluida sem alertas."
   };
   const isChangeSafetyPassed = changeSafetyGate.status === "passed";
+  const hasGitHubPullRequest = selected ? isOpenableExternalUrl(selected.pullRequestUrl) : false;
 
   async function decide(decision: HumanReviewDecision) {
-    if (!selected || note.trim().length < 4) return;
+    if (!selected || note.trim().length < 4 || !hasGitHubPullRequest) return;
     setBusy(decision);
     setError(null);
     try {
-      await decideHumanReview(selected.runId, decision, note.trim());
+      await decideHumanReview(selected.runId, decision, note.trim(), decision === "approved");
       setNote("");
       await onChanged();
     } catch (requestError) {
@@ -145,12 +147,8 @@ export function HumanReviewQueue({
                 ))}
               </div>
               <div className="review-links">
-                <a href={selected.diffUrl} target="_blank" rel="noreferrer">
-                  Abrir diff <Icon name="arrow" />
-                </a>
-                <a href={selected.pullRequestUrl} target="_blank" rel="noreferrer">
-                  Abrir PR no GitHub <Icon name="arrow" />
-                </a>
+                <ReviewExternalLink url={selected.diffUrl} label="Abrir diff" />
+                <ReviewExternalLink url={selected.pullRequestUrl} label="Abrir PR no GitHub" />
               </div>
               <label className="review-note">
                 Justificativa da decisão
@@ -166,34 +164,59 @@ export function HumanReviewQueue({
               <div className="review-decision-actions">
                 <button
                   className="decision-reject"
-                  disabled={busy !== null || note.trim().length < 4}
+                  disabled={busy !== null || note.trim().length < 4 || !hasGitHubPullRequest}
                   onClick={() => void decide("rejected")}
                 >
                   Rejeitar
                 </button>
                 <button
                   className="decision-changes"
-                  disabled={busy !== null || note.trim().length < 4}
+                  disabled={busy !== null || note.trim().length < 4 || !hasGitHubPullRequest}
                   onClick={() => void decide("changes_requested")}
                 >
                   Solicitar ajustes
                 </button>
                 <button
                   className="decision-approve"
-                  disabled={busy !== null || note.trim().length < 4 || !isChangeSafetyPassed}
-                  title={!isChangeSafetyPassed ? changeSafetyGate.message : undefined}
+                  disabled={busy !== null || note.trim().length < 4 || !isChangeSafetyPassed || !hasGitHubPullRequest}
+                  title={!hasGitHubPullRequest
+                    ? "Não há PR no GitHub para esta execução. Instale/autentique o GitHub CLI e execute a entrega novamente."
+                    : !isChangeSafetyPassed
+                    ? changeSafetyGate.message
+                    : undefined}
                   onClick={() => void decide("approved")}
                 >
                   {busy === "approved" ? "Aprovando..." : "Aprovar para merge"}
                 </button>
               </div>
               <small className="review-merge-note">
-                A aprovação marca o PR como pronto. O Maestro nunca executa o merge automaticamente.
+                {hasGitHubPullRequest
+                  ? "A aprovação prepara e mergeia o PR no GitHub. Solicitar ajustes devolve o PR para draft."
+                  : "Esta execução ficou somente na branch local: não existe PR no GitHub para aprovar ou solicitar ajustes."}
               </small>
             </article>
           ) : null}
         </div>
       )}
     </section>
+  );
+}
+
+function ReviewExternalLink({ url, label }: { url: string; label: string }) {
+  const canOpen = isOpenableExternalUrl(url);
+  if (!canOpen) {
+    return (
+      <span
+        className="review-link-disabled"
+        title="Este trabalho não criou um PR no GitHub nesta execução; a entrega ficou apenas na branch local."
+      >
+        {label} indisponível
+      </span>
+    );
+  }
+  return (
+    <button type="button" className="review-link-button" onClick={() => openExternalUrl(url)}>
+      {label} <Icon name="arrow" />
+    </button>
   );
 }

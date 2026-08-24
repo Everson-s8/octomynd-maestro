@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Octomynd Maestro</title>
+  <rect width="1024" height="1024" rx="190" fill="#14110f"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="184" fill="none" stroke="#2a2219" stroke-width="16"/>
+  <g transform="translate(112 112) scale(4)">
+    <ellipse cx="100" cy="82" rx="54" ry="48" fill="#c4622d"/>
+    <path d="M56 116 C40 138,32 158,38 178" fill="none" stroke="#c4622d" stroke-width="11" stroke-linecap="round"/>
+    <path d="M144 116 C160 138,168 158,162 178" fill="none" stroke="#c4622d" stroke-width="11" stroke-linecap="round"/>
+    <path d="M80 126 C75 148,75 164,80 180" fill="none" stroke="#9c4d24" stroke-width="11" stroke-linecap="round"/>
+    <path d="M120 126 C125 148,125 164,120 180" fill="none" stroke="#9c4d24" stroke-width="11" stroke-linecap="round"/>
+    <path d="M100 128 L100 182" fill="none" stroke="#9c4d24" stroke-width="11" stroke-linecap="round"/>
+    <circle cx="120" cy="76" r="17" fill="#f3ece1"/>
+    <circle cx="120" cy="76" r="9" fill="#14110f"/>
+    <circle cx="124" cy="72" r="3" fill="#f3ece1"/>
+    <path d="M103 76 C106 60,134 58,137 76 C131 66,109 66,103 76Z" fill="#c4622d"/>
+  </g>
+</svg>

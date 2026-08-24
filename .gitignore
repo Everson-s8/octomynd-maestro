@@ -1,6 +1,8 @@
 node_modules/
 dist/
+release/
 coverage/
+*.tsbuildinfo
 .maestro/
 *.log
 *.sqlite
@@ -11,4 +13,5 @@ coverage/
 !.env.example
 .maestro-dev/
 .maestro-test/
+.hermes-tmp.*
 .design-ref/

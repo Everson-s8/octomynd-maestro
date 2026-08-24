@@ -84,6 +84,8 @@ export class EnvironmentDoctor {
 
 export function runEnvironmentDoctor(input: EnvironmentDoctorInput): EnvironmentDoctorReport {
   const workspacePath = input.task?.worktreePath || input.project.path;
+  const packagedRuntime = process.env.MAESTRO_RUNTIME_MODE === "packaged";
+  const hasProjectLockfile = fs.existsSync(path.join(workspacePath, "package-lock.json"));
   const checks: EnvironmentCheck[] = [];
   const fingerprint = captureEnvironmentFingerprint(input.config.execution);
   const pathAssessment = assessExecutionPaths(input.config.execution);
@@ -115,18 +117,36 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     git.ok ? "Git workspace is readable." : compactFailure(git.output),
     git.ok ? undefined : "environment_blocked"));
 
-  checks.push(check("node", isSupportedNodeVersion(process.version, input.config.execution.expectedNodeVersion)
+  checks.push(check("node", isSupportedNodeVersion(
+    process.version,
+    input.config.execution.expectedNodeVersion,
+    input.config.execution.supportedNodeRange
+  )
     ? "passed" : "failed",
-  `Node ${process.version}; expected ${input.config.execution.expectedNodeVersion}.x.`,
-  isSupportedNodeVersion(process.version, input.config.execution.expectedNodeVersion) ? undefined : "environment_blocked"));
+  `Node ${process.version}; supported range ${input.config.execution.supportedNodeRange}.`,
+  isSupportedNodeVersion(
+    process.version,
+    input.config.execution.expectedNodeVersion,
+    input.config.execution.supportedNodeRange
+  ) ? undefined : "environment_blocked"));
 
-  const npm = runCommand("npm", ["--version"], workspacePath);
-  checks.push(check("npm", npm.ok ? "passed" : "failed",
-    npm.ok ? `npm ${npm.output.trim().split(/\r?\n/)[0]}.` : compactFailure(npm.output),
-    npm.ok ? undefined : "environment_blocked"));
+  if (packagedRuntime) {
+    checks.push(check(
+      "npm",
+      "skipped",
+      hasProjectLockfile
+        ? "Packaged runtime does not install project dependencies; prepare this project's lockfile before running tasks."
+        : "Packaged runtime provides its own deterministic toolchain; npm is not required."
+    ));
+  } else {
+    const npm = runCommand("npm", ["--version"], workspacePath);
+    checks.push(check("npm", npm.ok ? "passed" : "failed",
+      npm.ok ? `npm ${npm.output.trim().split(/\r?\n/)[0]}.` : compactFailure(npm.output),
+      npm.ok ? undefined : "environment_blocked"));
+  }
 
   let dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
-  if (!dependencyRoot && input.prepareDependencies && fs.existsSync(path.join(workspacePath, "package-lock.json"))) {
+  if (!packagedRuntime && !dependencyRoot && input.prepareDependencies && fs.existsSync(path.join(workspacePath, "package-lock.json"))) {
     const prepared = runCommand(
       "npm",
       ["ci", "--no-audit", "--no-fund"],
@@ -297,7 +317,7 @@ function findPreparedDependencyRoot(workspacePath: string, projectPath: string):
   const workspaceRoot = path.resolve(workspacePath);
 
   // A task worktree with its own complete toolchain wins — self-development.
-  if (fs.existsSync(path.join(workspaceRoot, "node_modules", ".bin")) && isDependencyRootComplete(workspaceRoot)) {
+  if (isValidationDependencyRootComplete(workspaceRoot)) {
     return workspaceRoot;
   }
 
@@ -316,7 +336,13 @@ function findPreparedDependencyRoot(workspacePath: string, projectPath: string):
   // It does not need the Maestro toolchain installed in itself, so fall back to
   // the running Maestro runtime's node_modules so the goal is not blocked.
   const maestroRoot = process.cwd();
-  const maestroCandidates = [maestroRoot, path.dirname(maestroRoot), findMatchingAncestor(maestroRoot)];
+  const packagedRoot = process.env.MAESTRO_RUNTIME_ROOT?.trim();
+  const maestroCandidates = [
+    packagedRoot,
+    maestroRoot,
+    path.dirname(maestroRoot),
+    findMatchingAncestor(maestroRoot)
+  ];
   for (const candidate of maestroCandidates) {
     if (candidate && fs.existsSync(path.join(candidate, "node_modules", ".bin")) && isDependencyRootComplete(candidate)) {
       return candidate;
@@ -354,18 +380,45 @@ function findMatchingAncestor(start: string): string | null {
 }
 
 /**
- * A dependency root is only "prepared" if the deterministic toolchain is complete:
- * the TypeScript compiler (tsc), the test runner (vitest), and the better-sqlite3
- * native binding are all loadable. A partial install (e.g. a `.bin` present but the
- * native binding never compiled) must NOT be treated as ready, or the environment
- * doctor would skip the `npm ci` that would finish it.
+ * The project validation toolchain is TypeScript + Vitest. better-sqlite3 is
+ * checked only when the project actually declares it; external Node projects do
+ * not need to carry Maestro's native database dependency just to be validated.
  */
 function isDependencyRootComplete(root: string): boolean {
+  if (!isValidationDependencyRootComplete(root)) return false;
+  return hasLoadableNativeDependency(root, "better-sqlite3");
+}
+
+function isValidationDependencyRootComplete(root: string): boolean {
   const hasTsc = fs.existsSync(path.join(root, "node_modules", ".bin", executableName("tsc")));
   const hasVitest = fs.existsSync(path.join(root, "node_modules", ".bin", executableName("vitest")));
-  const betterSqlite3 = path.join(root, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
-  const hasNative = fs.existsSync(betterSqlite3);
-  return hasTsc && hasVitest && hasNative;
+  if (!hasTsc || !hasVitest) return false;
+
+  const packageJson = readPackageJson(root);
+  const declaresBetterSqlite = Boolean(
+    packageJson?.dependencies?.["better-sqlite3"] || packageJson?.devDependencies?.["better-sqlite3"]
+  );
+  return !declaresBetterSqlite || hasLoadableNativeDependency(root, "better-sqlite3");
+}
+
+function hasLoadableNativeDependency(root: string, dependency: string): boolean {
+  return fs.existsSync(path.join(root, "node_modules", dependency, "build", "Release", "better_sqlite3.node"));
+}
+
+function readPackageJson(root: string): {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+} | null {
+  try {
+    const packageJsonPath = path.join(root, "package.json");
+    if (!fs.existsSync(packageJsonPath)) return null;
+    return JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+  } catch {
+    return null;
+  }
 }
 
 function executableName(name: string): string {

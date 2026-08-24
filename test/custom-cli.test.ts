@@ -296,3 +296,56 @@ function mockExecutionRequest(
     artifactsRoot: path.join(workspacePath, "artifacts")
   };
 }
+
+describe("known install directory resolution (no-restart detection)", () => {
+  it("resolves an executable that only exists in a known CLI directory", () => {
+    const fakeLocalAppData = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-lad-"));
+    tempPaths.push(fakeLocalAppData);
+    const binDir = path.join(fakeLocalAppData, "agy", "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const executableName = process.platform === "win32" ? "agy-test-cmd.exe" : "agy-test-cmd";
+    fs.writeFileSync(path.join(binDir, executableName), "fixture", "utf8");
+
+    const previous = process.env.LOCALAPPDATA;
+    if (process.platform === "win32") {
+      process.env.LOCALAPPDATA = fakeLocalAppData;
+    } else {
+      process.env.HOME = fakeLocalAppData;
+    }
+    try {
+      expect(resolveCustomCliExecutable("agy-test-cmd")).toBe(
+        path.join(binDir, executableName)
+      );
+    } finally {
+      if (process.platform === "win32") {
+        if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous;
+      } else {
+        if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
+      }
+    }
+  });
+
+  it("keeps returning null for a command that exists nowhere", () => {
+    expect(resolveCustomCliExecutable("definitely-not-installed-cli-xyz")).toBeNull();
+  });
+
+  it("invalidateCaches() forces the next health() probe to re-examine the machine", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-invalidate-"));
+    tempPaths.push(tempDir);
+    const provider = new CustomCliProvider({
+      id: "probe-cache",
+      label: "Probe Cache",
+      command: "nonexistent-custom-cmd-98765",
+      capabilities: ["coding"]
+    });
+    await provider.health();
+    // Simulate the user installing the CLI: point the command at a real file.
+    const executable = path.join(tempDir, process.platform === "win32" ? "probe.exe" : "probe");
+    fs.writeFileSync(executable, "fixture", "utf8");
+    (provider as unknown as { config: { command: string } }).config.command = executable;
+
+    provider.invalidateCaches();
+    const health = await provider.health();
+    expect(health.state).toBe("ready");
+  });
+});

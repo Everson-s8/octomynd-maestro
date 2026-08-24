@@ -1,14 +1,33 @@
 {
   "name": "octomynd-maestro",
-  "version": "0.1.0",
+  "version": "0.3.3",
   "description": "Chat-first local orchestrator for Octomynd AI workflows.",
+  "author": "Octomynd Contributors",
   "type": "module",
-  "private": true,
+  "private": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Everson-s8/octomynd-maestro.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Everson-s8/octomynd-maestro/issues"
+  },
+  "homepage": "https://docs.octomynd.com/maestro",
+  "keywords": [
+    "ai-agents",
+    "llm",
+    "orchestration",
+    "developer-tools",
+    "electron",
+    "typescript"
+  ],
+  "main": "src/desktop/main.cjs",
   "bin": {
     "maestro": "./src/cli/bin.cjs"
   },
   "engines": {
-    "node": ">=20.17.0 <21"
+    "node": ">=20.17.0 <25"
   },
   "scripts": {
     "setup": "tsx src/wizard.ts",
@@ -25,34 +44,47 @@
     "dev:ui": "vite --config ui/vite.config.ts",
     "dev:platform": "concurrently -k -n api,ui -c magenta,cyan \"npm:dev:api\" \"npm:dev:ui\"",
     "build:ui": "vite build --config ui/vite.config.ts",
+    "build:backend": "tsc -p tsconfig.build.json",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "rebuild:desktop-native": "node scripts/rebuild-desktop-native.mjs",
+    "dist:win": "npm run rebuild:desktop-native && electron-builder --win --config electron-builder.yml",
+    "release:win": "node scripts/build-desktop.mjs && npm run rebuild:desktop-native && electron-builder --win --config electron-builder.yml",
+    "postrelease:win": "node scripts/rebuild-test-native.mjs",
     "typecheck:ui": "tsc --noEmit -p ui/tsconfig.json",
     "smoke": "tsx src/smoke.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.7",
+    "electron-updater": "^6.6.2",
     "grammy": "^1.35.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^7.18.2",
+    "tsx": "^4.19.3",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.14",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "concurrently": "^9.2.0",
-    "electron": "^34.2.0",
-    "tsx": "^4.19.3",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "rcedit": "^4.0.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.18.2",
     "typescript": "^5.8.2",
     "vite": "^6.2.7",
     "vitest": "^3.0.8"
   },
+  "overrides": {
+    "tar": "7.5.22"
+  },
   "allowScripts": {
-    "better-sqlite3@11.10.0": true
+    "better-sqlite3@12.11.1": true
   }
 }

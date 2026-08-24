@@ -1,12 +1,15 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { DashboardData, fetchChatMessages, OperationalChatMessage, sendChatMessage, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket, QuotaResult } from "../api";
+import { DashboardData, fetchProviderPolicy, updateProviderControl, updateProviderControls, updateCapabilityRouting, ProviderPolicySnapshot, AgentProviderId, ProviderMode, connectTelegram, createImprovement, decideImprovement, decideHumanReview, testProviderConnection, ProviderConnectionResult, fetchQuota, QuotaBucket, QuotaResult } from "../api";
+import { TaskDetail } from "../components/TaskDetail";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels, statusProgress, formatRelative } from "../helpers";
 import { ProvidersPage } from "./ProvidersPage";
 import { TaskLogViewerPage } from "./TaskLogViewerPage";
+import { ReviewPage } from "./ReviewPage";
+import { OperationalChatConsole } from "../components/OperationalChatConsole";
 
 const routes = [
   { to: "/", label: "Visão geral", icon: "grid", end: true },
@@ -37,7 +40,7 @@ function AppSidebar({ pending }: { pending: number }) {
 }
 
 function V2Header({ onRefresh, onCreate, refreshing }: { onRefresh: () => void; onCreate: () => void; refreshing: boolean }) {
-  return <div className="top"><div><div className="eyebrow">Central de Operação</div><h1>Bom dia, Everson.</h1></div><div className="top-actions"><div className="sync"><span className="d" /> sincronizado agora</div><button className="icon-btn" onClick={onRefresh} aria-label="Atualizar">{refreshing ? "…" : "↻"}</button><button className="btn-new" onClick={onCreate}>+ Nova task</button></div></div>;
+  return <div className="top"><div><div className="eyebrow">Central de Operação</div><h1>Bom dia.</h1></div><div className="top-actions"><div className="sync"><span className="d" /> sincronizado agora</div><button className="icon-btn" onClick={onRefresh} aria-label="Atualizar">{refreshing ? "…" : "↻"}</button><button className="btn-new" onClick={onCreate}>+ Nova task</button></div></div>;
 }
 
 function Overview({ data, onCreate, onRefresh, refreshing }: { data: DashboardData; onCreate: () => void; onRefresh: () => void; refreshing: boolean }) {
@@ -49,6 +52,20 @@ function Overview({ data, onCreate, onRefresh, refreshing }: { data: DashboardDa
   const events = data.events.slice(0, 3);
   return <div className="view active">
     <V2Header onRefresh={onRefresh} onCreate={onCreate} refreshing={refreshing} />
+    {data.agents.filter(agent => agent.id !== "telegram").every(agent => agent.state === "offline") ? (
+      <div className="panel" style={{ border: "1px solid rgba(196, 98, 45, 0.45)", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div className="lbl" style={{ color: "#e8967a" }}>Primeiro passo obrigatório</div>
+            <h3 style={{ margin: "4px 0" }}>Nenhum provider conectado — as tasks ficam paradas até você conectar um</h3>
+            <p style={{ margin: 0, color: "var(--text-2)", fontSize: 13 }}>
+              Conecte Claude, Codex ou Gemini Antigravity em Providers. O Maestro nunca executa nada sem pelo menos um braço ativo.
+            </p>
+          </div>
+          <button className="btn-new" onClick={() => navigate("/providers")}>Conectar provider agora</button>
+        </div>
+      </div>
+    ) : null}
     <div className="hero"><div className="hero-left"><div className="live-tag"><span className="d" /> Sistema vivo</div><h2>Um cérebro.<br /><span>Braços que decidem.</span></h2><p>Dois terços dos neurônios de um polvo vivem nos braços. Cada agente aqui prova o próprio trabalho — e você mantém a decisão final.</p><div className="hero-chips"><span><b>{active.length}</b> tasks ativas</span><span><b>{data.summary.projects}</b> projetos locais</span><span>acesso <b>{data.daemon.access === "restricted" ? "restrito" : "aberto"}</b></span><span>autopilot <b>{data.autopilot.state}</b></span></div></div><div className="nerve"><NervousSystem agents={data.agents} /></div></div>
     <div className="metrics"><Metric label="Providers" value={data.summary.providersConnected ?? data.agents.length} icon="✧" onClick={() => navigate("/providers")} /><Metric label="Em movimento" value={data.summary.activeTasks} icon="⌁" onClick={() => navigate("/backlog")} /><Metric label="Na fila" value={data.summary.queuedTasks} icon="=" onClick={() => navigate("/backlog")} /><Metric label="Sua decisão" value={data.summary.humanGates} icon="♧" onClick={() => navigate("/reviews")} /></div>
     <div className="cols"><section className="panel"><PanelHead eyebrow="Runtime de features" title="Fluxo recente" meta={`${data.features.length} registradas`} />{recent.length ? recent.map(f => <FeatureLine key={f.id} feature={f} />) : <InlineEmpty text="Nenhuma feature registrada." />}</section><section className="panel"><PanelHead eyebrow="Distribuição de custo" title="Hoje" meta={`$${(data.costSummary?.todayTotalUsd ?? 0).toFixed(2)}`} />{costs.length ? costs.map((item, index) => <div className="costrow" key={item.provider}><span className="dot" style={{ background: ["#6f8f6a", "#c4622d", "#8a7c68", "#5c6f8f"][index % 4] }} /><div className="lbl">{item.provider}<small>{item.inputTokens + item.outputTokens} tokens</small></div><div className="track"><i style={{ width: `${Math.max(4, item.costUsd / maxProviderCost * 100)}%` }} /></div><span className="amt">${item.costUsd.toFixed(2)}</span></div>) : <InlineEmpty text="Nenhum consumo registrado hoje." />}<div className="divider" /><PanelHead eyebrow="Telemetria" title="Pulso do sistema" meta={`${events.length} eventos`} />{events.length ? events.map(event => <div className="pulse-item" key={event.id}><span className="pd" /><div className="pt"><b>{event.text}</b><span>{event.source} · {event.type}</span></div><span className="tm">{formatRelative(event.createdAt)}</span></div>) : <InlineEmpty text="Nenhum evento recente." />}</section></div>
@@ -59,17 +76,19 @@ function Metric({ label, value, icon, onClick }: { label: string; value: number;
 function PanelHead({ eyebrow, title, meta }: { eyebrow: string; title: string; meta: string }) { return <div className="panel-head"><div><div className="lbl">{eyebrow}</div><h3>{title}</h3></div><div className="count">{meta}</div></div>; }
 function InlineEmpty({ text }: { text: string }) { return <div className="inline-empty">{text}</div>; }
 function FeatureLine({ feature }: { feature: DashboardData["features"][number] }) { const status = feature.status === "completed" ? "ok" : feature.status === "failed" ? "err" : "run"; const label = feature.status === "completed" ? "concluída" : feature.status === "failed" ? "falhou" : "rodando"; return <div className="task"><span className="id">#{String(feature.id).padStart(2, "0")}</span><span className={`st ${status}`}>{label}</span><div className="body"><b>{feature.name}</b><span>{feature.branchName}</span></div><div className="fiber"><svg viewBox="0 0 80 14"><path d="M2 7h76" stroke="#372c20" strokeWidth="2" /><path d={`M2 7h${feature.status === "completed" ? 76 : feature.status === "failed" ? 50 : 38}`} stroke={feature.status === "failed" ? "#b1503c" : feature.status === "completed" ? "#6f8f6a" : "#c4622d"} strokeWidth="2" /><circle cx={feature.status === "completed" ? 78 : feature.status === "failed" ? 52 : 40} cy="7" r="3" fill="#e8967a" /></svg></div><span className="arr">→</span></div>; }
-function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
+function TaskLine({ task, onOpen }: { task: DashboardData["tasks"][number]; onOpen?: () => void }) {
   return (
     <div
       className="task"
+      onClick={onOpen}
+      style={onOpen ? { cursor: "pointer" } : undefined}
     >
       <span className="id">#{String(task.id).padStart(2, "0")}</span>
       <span className={`st ${task.status === "failed" ? "err" : task.status === "done" ? "ok" : "run"}`}>
         {taskStatusLabels[task.status]}
       </span>
       <div className="body">
-        <b>{task.text}</b>
+        <b>{task.title || task.text}</b>
         <span>{task.branchName ?? `criada ${formatRelative(task.createdAt)}`}</span>
       </div>
       <div className="fiber">
@@ -91,30 +110,59 @@ function TaskLine({ task }: { task: DashboardData["tasks"][number] }) {
       >
         Logs
       </NavLink>
-      <span className="arr task-log-arrow" aria-hidden="true">→</span>
+      {onOpen ? (
+        <button
+          type="button"
+          className="arr task-log-arrow"
+          title="Abrir detalhes e ações da task (iniciar goal, cancelar...)"
+          aria-label={`Abrir detalhes da task ${task.id}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen();
+          }}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "inherit" }}
+        >
+          →
+        </button>
+      ) : (
+        <span className="arr task-log-arrow" aria-hidden="true">→</span>
+      )}
     </div>
   );
-}
-
-function Chat({ data }: { data: DashboardData }) {
-  const [projectKey, setProjectKey] = useState(data.projects[0]?.key ?? "maestro");
-  const [messages, setMessages] = useState<OperationalChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  useEffect(() => { void fetchChatMessages(projectKey).then(setMessages).catch(() => undefined); }, [projectKey]);
-  async function submit(event: FormEvent) { event.preventDefault(); if (!input.trim() || loading) return; const text = input.trim(); setInput(""); setLoading(true); try { const response = await sendChatMessage(projectKey, text); setMessages(await fetchChatMessages(projectKey)); if (!response) return; } finally { setLoading(false); } }
-  return <div className="view active"><PageTop eyebrow="Orquestrador unificado" title="Chat" action={<select className="sel" value={projectKey} onChange={event => setProjectKey(event.target.value)}>{data.projects.map(project => <option value={project.key} key={project.key}>@{project.key} · {project.name}</option>)}</select>} /><div className="chat-wrap"><div className="chat-threads"><div className="thread-lbl">Conversas</div><div className="thread active"><b>Conversa do projeto</b><span>agora</span></div></div><div className="chat-main"><div className="chat-head"><b>Conversa do projeto</b><span>@{projectKey}</span></div><div className="chat-body">{messages.length === 0 ? <div className="empty"><div className="ico">◯</div><h4>Comece uma conversa</h4><p>Pergunte sobre tasks, providers, custo ou peça uma ação governada.</p></div> : messages.map(message => <div className={`msg ${message.senderRole === "user" ? "user" : ""}`} key={message.id}><div className="msg-av">{message.senderRole === "user" ? "U" : "🐙"}</div><div><span className="msg-provider">{message.senderRole === "user" ? "você" : "Maestro"}</span><div className="msg-bub">{message.messageText}</div></div></div>)}</div><div className="chip-row"><button type="button" className="sugg" onClick={() => setInput("Quais tasks estão bloqueadas?")}>Quais tasks estão bloqueadas?</button><button type="button" className="sugg" onClick={() => setInput("Resumo de custo de hoje")}>Resumo de custo de hoje</button><button type="button" className="sugg" onClick={() => setInput("Listar providers ativos")}>Listar providers ativos</button></div><form className="chat-input" onSubmit={submit}><input value={input} onChange={e => setInput(e.target.value)} placeholder="Pergunte ao Maestro..." /><button className="chat-send" disabled={loading}>➤</button></form></div></div></div>;
 }
 
 function Flow({ data, onCreate }: { data: DashboardData; onCreate: () => void }) { const queued = data.tasks.filter(t => t.status === "queued").slice(0, 12); const active = data.tasks.filter(t => !["queued", "done", "failed", "rejected", "cancelled"].includes(t.status)); return <div className="view active"><PageTop eyebrow="Priorização" title="Fluxo de tasks" action={<div className="top-actions"><select className="sel"><option>Todos os projetos</option></select><button className="btn-new" onClick={onCreate}>+ Nova task</button></div>} /><section className="panel"><PanelHead eyebrow="Em andamento" title="Tasks em execução" meta={`${active.length} ativas`} />{active.length ? active.map(t => <TaskLine key={t.id} task={t} />) : <div className="empty"><div className="ico">ϟ</div><h4>Nenhuma task em execução</h4><p>As tasks na fila iniciarão automaticamente conforme os providers ficarem disponíveis.</p></div>}</section><section className="panel"><PanelHead eyebrow="Fila" title="Tasks na fila (Queued)" meta={`${queued.length} aguardando`} />{queued.length ? queued.map(t => <TaskLine key={t.id} task={t} />) : <div className="empty"><div className="ico">=</div><h4>Fila vazia</h4><p>Adicione novas demandas para colocar os agentes para trabalhar.</p></div>}</section><section className="panel"><PanelHead eyebrow="Planejamento" title="Feature Plans" meta={`${data.featurePlans.length} registrados`} /><div className="empty"><div className="ico">▤</div><h4>Feature Plans</h4><p>Planos agrupando várias tasks em um único PR consolidado aparecem aqui.</p></div></section></div>; }
 
 function FlowFiltered({ data, onCreate }: { data: DashboardData; onCreate: () => void }) {
   const [projectKey, setProjectKey] = useState("all");
+  // Deep-link from the Task Log Viewer ("Ir ao detalhe da task").
+  const [detailTaskId, setDetailTaskId] = useState<number | null>(() => {
+    const stored = window.sessionStorage.getItem("maestro:open-task");
+    if (stored) {
+      window.sessionStorage.removeItem("maestro:open-task");
+      const parsed = Number(stored);
+      return Number.isInteger(parsed) ? parsed : null;
+    }
+    return null;
+  });
   const visibleTasks = projectKey === "all" ? data.tasks : data.tasks.filter(task => task.projectKey === projectKey);
   const queued = visibleTasks.filter(task => task.status === "queued").slice(0, 12);
   const active = visibleTasks.filter(task => !["queued", "done", "failed", "rejected", "cancelled"].includes(task.status));
   const history = visibleTasks.filter(task => ["done", "failed", "rejected", "cancelled"].includes(task.status)).slice(0, 20);
-  return <div className="view active"><PageTop eyebrow="Priorização" title="Fluxo de tasks" action={<div className="top-actions"><select className="sel" value={projectKey} onChange={event => setProjectKey(event.target.value)}><option value="all">Todos os projetos</option>{data.projects.map(project => <option value={project.key} key={project.key}>@{project.key}</option>)}</select><button className="btn-new" onClick={onCreate}>+ Nova task</button></div>} /><section className="panel"><PanelHead eyebrow="Em andamento" title="Tasks em execução" meta={`${active.length} ativas`} />{active.length ? active.map(task => <TaskLine key={task.id} task={task} />) : <div className="empty compact"><div className="ico">ϟ</div><h4>Nenhuma task em execução</h4><p>Não há trabalho ativo neste momento.</p></div>}</section><section className="panel"><PanelHead eyebrow="Fila" title="Tasks na fila" meta={`${queued.length} aguardando`} />{queued.length ? queued.map(task => <TaskLine key={task.id} task={task} />) : <div className="empty compact"><div className="ico">=</div><h4>Fila vazia</h4><p>Adicione uma demanda para iniciar trabalho.</p></div>}</section><section className="panel"><PanelHead eyebrow="Histórico real" title="Tasks recentes" meta={`${history.length} exibidas de ${visibleTasks.length}`} />{history.map(task => <TaskLine key={task.id} task={task} />)}</section></div>;
+  const detailTask = detailTaskId != null ? data.tasks.find(task => task.id === detailTaskId) ?? null : null;
+  const detailGoal = detailTaskId != null
+    ? data.goals.filter(goal => goal.taskId === detailTaskId).slice(-1)[0] ?? null
+    : null;
+  const openDetail = (id: number) => setDetailTaskId(id);
+  return <div className="view active"><PageTop eyebrow="Priorização" title="Fluxo de tasks" action={<div className="top-actions"><select className="sel" value={projectKey} onChange={event => setProjectKey(event.target.value)}><option value="all">Todos os projetos</option>{data.projects.map(project => <option value={project.key} key={project.key}>@{project.key}</option>)}</select><button className="btn-new" onClick={onCreate}>+ Nova task</button></div>} /><section className="panel"><PanelHead eyebrow="Em andamento" title="Tasks em execução" meta={`${active.length} ativas`} />{active.length ? active.map(task => <TaskLine key={task.id} task={task} onOpen={() => openDetail(task.id)} />) : <div className="empty compact"><div className="ico">ϟ</div><h4>Nenhuma task em execução</h4><p>Não há trabalho ativo neste momento.</p></div>}</section><section className="panel"><PanelHead eyebrow="Fila" title="Tasks na fila" meta={`${queued.length} aguardando`} />{queued.length ? queued.map(task => <TaskLine key={task.id} task={task} onOpen={() => openDetail(task.id)} />) : <div className="empty compact"><div className="ico">=</div><h4>Fila vazia</h4><p>Adicione uma demanda para iniciar trabalho.</p></div>}</section><section className="panel"><PanelHead eyebrow="Histórico real" title="Tasks recentes" meta={`${history.length} exibidas de ${visibleTasks.length}`} />{history.map(task => <TaskLine key={task.id} task={task} onOpen={() => openDetail(task.id)} />)}</section>
+    <TaskDetail
+      task={detailTask}
+      goal={detailGoal}
+      onClose={() => setDetailTaskId(null)}
+      onPrepared={async () => { /* data refreshes via the 5s poll */ }}
+      onDeleted={async () => { setDetailTaskId(null); }}
+    />
+  </div>;
 }
 
 function Reviews({ data }: { data: DashboardData }) { const [items, setItems] = useState(data.reviewQueue); const [busy, setBusy] = useState<number | null>(null); async function decide(runId: number, decision: "approved" | "changes_requested" | "rejected") { setBusy(runId); try { const updated = await decideHumanReview(runId, decision, decision === "changes_requested" ? "Ajustes solicitados pelo usuário" : "Decisão tomada no dashboard"); setItems(current => current.map(item => item.runId === runId ? updated : item)); } finally { setBusy(null); } } return <div className="view active"><PageTop eyebrow="Governança humana (Human Gate)" title="Aguardando revisão" action={<div className="chip"><b>{items.filter(item => item.status === "pending").length}</b> PRs pendentes</div>} /><p className="desc">Revise evidências, verificações de segurança e aprove ou solicite alterações antes do merge final.</p>{items.filter(item => item.status === "pending").length ? items.filter(item => item.status === "pending").map(item => <div className="pr-card" key={item.runId}><div><span className="pr-tag">Human gate</span><h4>{item.demand}</h4><p>{item.projectName} · {item.changedFiles.length} arquivos · {item.changeSafetyGate.status}</p><div className="pr-actions"><a className="pr-btn" href={item.pullRequestUrl} target="_blank" rel="noreferrer">Ver diff</a><button className="pr-btn reject" disabled={busy === item.runId} onClick={() => void decide(item.runId, "changes_requested")}>Solicitar alterações</button><button className="pr-btn" disabled={busy === item.runId} onClick={() => void decide(item.runId, "rejected")}>Rejeitar</button></div></div><div><button className="seal" disabled={busy === item.runId} onClick={() => void decide(item.runId, "approved")}>✓</button><div className="seal-lbl">Aprovar</div></div></div>) : <section className="panel"><div className="empty"><div className="ico">✓</div><h4>Nenhum PR aguardando revisão</h4><p>Quando um agente entregar trabalho, ele aparecerá aqui.</p></div></section>}</div>; }
@@ -210,14 +258,21 @@ function quotaLabel(provider: string): string {
   return QUOTA_ALIASES[provider]?.label ?? provider;
 }
 
+// PT-BR copy per machine-readable reason. The server sends `reasonCode`;
+// free-text `error` is only the fallback for older payloads.
+const QUOTA_REASON_MESSAGES: Record<string, string> = {
+  not_installed: "CLI não instalada neste computador — conecte o provider para ver a cota.",
+  not_authenticated: "Provider instalado, mas sem login concluído.",
+  session_down: "CLI autenticada, mas a sessão local do Antigravity não está ativa para consultar o RPC de cota.",
+  transient_error: "Falha temporária ao consultar a cota. Tente atualizar novamente.",
+  no_data: "Conexão validada; este provider não expõe uma fração de cota."
+};
+
 function quotaStatusMessage(result: QuotaResult): string {
+  if (result.reasonCode && QUOTA_REASON_MESSAGES[result.reasonCode]) {
+    return QUOTA_REASON_MESSAGES[result.reasonCode];
+  }
   const detail = result.error ?? "sem leitura disponível";
-  if (/sessão local|servidor local|agy|RetrieveUserQuotaSummary|grupos de cota/i.test(detail)) {
-    return "CLI autenticada, mas a sessão local do Antigravity não está ativa para consultar o RPC de cota.";
-  }
-  if (/API key válida|API key indisponível|fração de cota/i.test(detail)) {
-    return "Conexão validada; este provider não expõe uma fração de cota por API key.";
-  }
   return detail;
 }
 
@@ -293,7 +348,7 @@ function Settings({ data }: { data: DashboardData }) {
   return <div className="view active"><PageTop eyebrow="Configurações" title="Sistema" /><div className="cfg-block"><PanelHead eyebrow="Integração Telegram" title="Conexão do Telegram Bot" meta="bot configurável" /><div className="cfg-status"><span className="d" /> {telegramStatus || "Configure o bot e restrinja o acesso ao seu usuário"}</div><form onSubmit={saveTelegram}><div className="field"><label>HTTP API Bot Token (@BotFather)</label><input value={botToken} onChange={event => setBotToken(event.target.value)} placeholder="Ex: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" type="password" required /></div><div className="field"><label>Telegram User ID (@userinfobot) — opcional</label><input value={allowedUserId} onChange={event => setAllowedUserId(event.target.value)} placeholder="Ex: 987654321 (deixe em branco para acesso livre)" inputMode="numeric" /></div><button className="btn-new" type="submit">Atualizar token do bot</button></form></div><div className="cfg-block"><PanelHead eyebrow="Autonomia" title="Configuração do Autopilot" meta={`estado: ${data.autopilot.state}`} /><div className="toggle-panel"><div className="tp"><div className="k">Autopilot status</div><div className="v"><span className="d" />{data.autopilot.enabled ? "Ativo (habilitado)" : "Desligado"}</div><p>O Maestro seleciona e avança automaticamente tasks elegíveis.</p></div><div className="tp"><div className="k">Modo de acesso do daemon</div><div className="v"><span className="d" />{data.daemon.access}</div><p>As worktrees isolam a execução e protegem o repositório.</p></div></div></div><div className="cfg-block"><PanelHead eyebrow="Evolução segura" title="Laboratório de aprendizado" meta={`${labItems.filter(item => item.status === "candidate").length} aguardando decisão`} /><form className="improvement-form" onSubmit={addProposal}><strong>Nova proposta governada</strong><p>Propostas ficam aguardando decisão antes de qualquer mutação persistente.</p><input value={labTitle} onChange={event => setLabTitle(event.target.value)} placeholder="Título da proposta" /><textarea value={labRationale} onChange={event => setLabRationale(event.target.value)} placeholder="Evidência e justificativa" /><button type="submit">Registrar proposta</button></form><div className="improvement-queue">{labItems.map(item => <article className="improvement-card" key={item.id}><header><span>{item.category}</span><span>{item.status}</span></header><strong>{item.title}</strong><p>{item.rationale}</p>{item.status === "candidate" && <div className="improvement-actions"><button onClick={() => void decide(item.id, "rejected")}>Rejeitar</button><button onClick={() => void decide(item.id, "approved")}>Aprovar</button></div>}</article>)}</div></div></div>;
 }
 
-export function MaestroV2({ data, onRefresh, onCreate, onRegisterProject, refreshing }: { data: DashboardData; onRefresh: () => void; onCreate: () => void; onRegisterProject?: () => void; refreshing: boolean }) {
+export function MaestroV2({ data, onRefresh, onCreate, onRegisterProject, refreshing }: { data: DashboardData; onRefresh: () => void | Promise<void>; onCreate: () => void; onRegisterProject?: () => void; refreshing: boolean }) {
   const location = useLocation();
   // Refetch fresh data whenever the user navigates between views (and on first
   // mount) so a screen never renders against stale data (the periodic poll is a
@@ -314,15 +369,15 @@ export function MaestroV2({ data, onRefresh, onCreate, onRegisterProject, refres
           {taskLogsMatch ? (
             <TaskLogViewerPage taskIdParam={taskLogsMatch[1]} onBack={() => window.history.back()} />
           ) : page === "/chat" ? (
-            <Chat data={data} />
+            <div className="view active"><OperationalChatConsole projects={data.projects} onChanged={() => { void onRefresh(); }} /></div>
           ) : page === "/backlog" ? (
             <FlowFiltered data={data} onCreate={onCreate} />
           ) : page === "/reviews" ? (
-            <Reviews data={data} />
+            <ReviewPage data={data} onRefresh={async () => { await onRefresh(); }} />
           ) : page === "/projects" ? (
             <Projects data={data} onRegisterProject={onRegisterProject} />
           ) : page === "/providers" ? (
-            <ProvidersPage data={data} />
+            <ProvidersPage data={data} onRefresh={onRefresh} />
           ) : page === "/analytics" ? (
             <Analytics data={data} />
           ) : page === "/settings" ? (

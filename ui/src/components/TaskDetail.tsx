@@ -9,10 +9,12 @@ import {
   GoalRun,
   prepareTask,
   requestClaudeReview,
+  resumeGoal,
   startTaskGoal,
   TaskReview
 } from "../api";
 import { formatRelative } from "../helpers";
+import { isOpenableExternalUrl } from "../external-links";
 import { Icon } from "./Icon";
 import { StatusPill } from "./StatusBadge";
 
@@ -71,6 +73,19 @@ export function TaskDetail({
     setError(null);
     try {
       await prepareTask(taskId);
+      // Prepare alone leaves the task parked in "planejando" with no provider
+      // attached — users reported it as "nothing happens". Fire the goal right
+      // away so the flow actually starts; a failure here is non-fatal because
+      // the user can still press "Iniciar goal" manually.
+      try {
+        await startTaskGoal(taskId);
+      } catch (goalError) {
+        setError(
+          goalError instanceof Error
+            ? `Worktree preparada, mas a execução não iniciou: ${goalError.message} Verifique se há um provider conectado em Providers.`
+            : "Worktree preparada, mas a execução não iniciou. Verifique se há um provider conectado."
+        );
+      }
       await onPrepared();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Não foi possível preparar a task.");
@@ -98,7 +113,11 @@ export function TaskDetail({
     setStartingGoal(true);
     setError(null);
     try {
-      await startTaskGoal(taskId);
+      if (goal && ["blocked", "failed"].includes(goal.status)) {
+        await resumeGoal(goal.id);
+      } else {
+        await startTaskGoal(taskId);
+      }
       await onPrepared();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "A goal nao pode ser iniciada.");
@@ -155,6 +174,7 @@ export function TaskDetail({
   const canPrepare = task.status === "queued" && !task.worktreePrepared;
   const canCancel = !["done", "failed", "rejected", "cancelled"].includes(task.status);
   const canDelete = !task.worktreePrepared && ["queued", "cancelled"].includes(task.status);
+  const canResumeGoal = Boolean(goal && ["blocked", "failed"].includes(goal.status));
 
   return (
     <div
@@ -169,7 +189,8 @@ export function TaskDetail({
         </button>
         <span className="task-detail-id">task #{String(task.id).padStart(2, "0")}</span>
         <StatusPill status={task.status} />
-        <h2 id="task-detail-title">{task.text}</h2>
+        <h2 id="task-detail-title">{task.title || task.text}</h2>
+        {task.title && task.title !== task.text ? <p className="task-original-request">Pedido original: {task.text}</p> : null}
         <div className="detail-project">
           <span>@{task.projectKey ?? "inbox"}</span>
           <strong>{task.projectName ?? "Sem projeto"}</strong>
@@ -289,13 +310,17 @@ export function TaskDetail({
             onClick={() => void handleStartGoal()}
           >
             {startingGoal
-              ? "Iniciando goal..."
+              ? canResumeGoal
+              ? "Retomando goal..."
+              : "Iniciando goal..."
               : goal?.status === "running"
               ? `Rodando ${goal.currentPhase} · ${goal.stepCount} etapas`
               : goal?.status === "waiting_provider"
               ? `Aguardando provider · ${goal.stepCount} etapas`
               : task.status === "awaiting_human" && goal?.pullRequestUrl
               ? "Draft PR aguardando merge"
+              : canResumeGoal
+              ? "Retomar goal do checkpoint"
               : task.worktreePrepared
               ? "Iniciar goal"
               : "Prepare a worktree primeiro"}
@@ -336,9 +361,15 @@ export function TaskDetail({
               ) : null}
               {goal.lastError ? <small>{goal.lastError}</small> : null}
               {goal.pullRequestUrl ? (
-                <a href={goal.pullRequestUrl} target="_blank" rel="noreferrer">
-                  Abrir draft PR
-                </a>
+                isOpenableExternalUrl(goal.pullRequestUrl) ? (
+                  <a href={goal.pullRequestUrl} target="_blank" rel="noreferrer">
+                    Abrir draft PR
+                  </a>
+                ) : (
+                  <span title="Esta execução não criou um PR no GitHub; a entrega ficou apenas na branch local.">
+                    PR GitHub indisponível (branch local)
+                  </span>
+                )
               ) : null}
             </div>
           ) : null}

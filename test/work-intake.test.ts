@@ -8,7 +8,7 @@ describe("Work Intake domain policy", () => {
     ["fix a typo in the dashboard", "direct_task"],
     ["update the installation guide", "direct_task"],
     ["audit provider timeout handling", "direct_task"],
-    ["...", "needs_clarification"]
+    ["...", "direct_task"]
   ] as const)("routes bounded intake '%s' to %s", (objective, expected) => {
     expect(classifyWorkIntake({ objective }).classification).toBe(expected);
   });
@@ -104,14 +104,15 @@ describe("Work Intake domain policy", () => {
     expect(decision.confidence).toBe(1.0);
   });
 
-  it("classifies as needs_clarification when objective is extremely short/vague without acceptance criteria", () => {
+  it("falls back to direct_task (never refuses) for short/vague objectives in automatic mode", () => {
     const decision = classifyWorkIntake({
       objective: "fix"
     });
 
-    expect(decision.classification).toBe("needs_clarification");
-    expect(decision.reasonCode).toBe("missing_acceptance_criteria");
-    expect(decision.confidence).toBe(0.85);
+    // F2: automatic mode must not end in "nothing was created".
+    expect(decision.classification).toBe("direct_task");
+    expect(decision.reasonCode).toBe("fallback_low_confidence");
+    expect(decision.confidence).toBe(0.6);
   });
 
   it("honors explicit governed overrides over automatic signals", () => {

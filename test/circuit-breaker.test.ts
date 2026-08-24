@@ -22,6 +22,23 @@ describe("GoalCircuitBreaker", () => {
     });
   });
 
+  it("does not turn provider permission failures into a task-split verdict", () => {
+    const breaker = new GoalCircuitBreaker();
+    const phases = ["planning", "implementing", "testing"] as const;
+    for (const [index, phase] of phases.entries()) {
+      expect(breaker.observe({
+        phase,
+        provider: "antigravity",
+        result: {
+          ...failed(`permission check failed for command ${index}`),
+          failureCategory: "permission_denied"
+        },
+        workspaceBefore: String(index),
+        workspaceAfter: String(index)
+      })).toBeNull();
+    }
+  });
+
   it("blocks repeated writable phases that make no worktree progress", () => {
     const breaker = new GoalCircuitBreaker();
     const observation = {

@@ -301,7 +301,11 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
 .review-alert .icon { flex: 0 0 auto; width: 18px; }.review-alert span { display: grid; gap: 3px; }.review-alert strong { font-size: .58rem; }.review-alert code { font-size: .48rem; }
 .alert-info { color: var(--success); background: rgba(67,228,155,.07); border-color: rgba(67,228,155,.2); }.alert-warning { color: #ffd487; background: rgba(255,184,61,.07); border-color: rgba(255,184,61,.2); }.alert-high { color: #ffadb2; background: rgba(255,92,103,.08); border-color: rgba(255,92,103,.24); }
 .review-links { display: flex; flex-wrap: wrap; gap: 8px; }
-.review-links a { display: inline-flex; gap: 7px; align-items: center; min-height: 38px; padding: 0 12px; color: white; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; font-size: .58rem; font-weight: 750; }.review-links a:hover { color: var(--ink); background: var(--cyan); }.review-links .icon { width: 14px; }
+.review-links a, .review-link-button, .review-link-disabled { display: inline-flex; gap: 7px; align-items: center; min-height: 38px; padding: 0 12px; color: white; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; font-family: inherit; font-size: .58rem; font-weight: 750; }
+.review-link-button { cursor: pointer; }
+.review-links a:hover, .review-link-button:hover { color: var(--ink); background: var(--cyan); }
+.review-link-disabled { color: rgba(255,255,255,.38); border-style: dashed; cursor: not-allowed; }
+.review-links .icon { width: 14px; }
 .review-note { display: grid; gap: 7px; color: rgba(255,255,255,.5); font-family: var(--mono); font-size: .48rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .review-note textarea { min-height: 82px; padding: 11px; color: white; resize: vertical; background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.11); border-radius: 11px; outline: 0; line-height: 1.45; }.review-note textarea:focus { border-color: var(--violet); }
 .review-decision-error { margin: 0; color: #ffadb2; font-size: .6rem; }

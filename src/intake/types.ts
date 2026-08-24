@@ -14,7 +14,8 @@ export type WorkIntakeReasonCode =
   | "explicit_override_direct_task"
   | "explicit_override_feature_plan"
   | "explicit_override_needs_clarification"
-  | "fallback_needs_clarification";
+  | "fallback_needs_clarification"
+  | "fallback_low_confidence";
 
 export type WorkIntakeCoordinationSignal = {
   dependsOnCount: number;

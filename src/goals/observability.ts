@@ -58,10 +58,16 @@ export function buildGoalObservability(
     ?? goal.lastProvider
     ?? null;
 
-  const nextProvider = (fallbackEvent?.metadata?.toProvider as string | undefined)
-    ?? (waitEvent?.metadata?.toProvider as string | undefined)
-    ?? (waitEvent?.metadata?.provider as string | undefined)
-    ?? null;
+  const terminal = goal.status === "blocked"
+    || goal.status === "failed"
+    || goal.status === "completed"
+    || goal.status === "cancelled";
+  const nextProvider = terminal
+    ? null
+    : (fallbackEvent?.metadata?.toProvider as string | undefined)
+      ?? (waitEvent?.metadata?.toProvider as string | undefined)
+      ?? (waitEvent?.metadata?.provider as string | undefined)
+      ?? null;
 
   const checkpointId = latestCheckpoint?.id
     ?? (fallbackEvent?.metadata?.resumeCheckpointId as number)

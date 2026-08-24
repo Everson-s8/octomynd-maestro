@@ -33,11 +33,13 @@ describe("execution contract", () => {
     expect(assessment.reasons).toHaveLength(3);
   });
 
-  it("accepts the pinned Node patch line and rejects divergent majors/minors", () => {
+  it("accepts the supported Node range and rejects older or unsupported majors", () => {
     expect(isSupportedNodeVersion("v20.17.0")).toBe(true);
     expect(isSupportedNodeVersion("20.17.5")).toBe(true);
+    expect(isSupportedNodeVersion("v20.19.1")).toBe(true);
     expect(isSupportedNodeVersion("v20.16.9")).toBe(false);
-    expect(isSupportedNodeVersion("v24.0.0")).toBe(false);
+    expect(isSupportedNodeVersion("v24.0.0")).toBe(true);
+    expect(isSupportedNodeVersion("v25.0.0")).toBe(false);
   });
 
   it("preserves path privacy in the environment fingerprint", () => {
@@ -73,7 +75,7 @@ describe("execution contract", () => {
       rootPath,
       worktreesPath: path.join(rootPath, "worktrees"),
       expectedNodeVersion: "20.17.0",
-      supportedNodeRange: ">=20.17.0 <21"
+      supportedNodeRange: ">=20.17.0 <25"
     };
     try {
       const first = ensureExecutionContract(contract);

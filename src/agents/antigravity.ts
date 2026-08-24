@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
+import { buildAgentGoalPrompt, buildConversationPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
 import {
   buildFailureSummary,
   classifyFailure,
@@ -32,6 +32,7 @@ import type {
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { configureAntigravityAutonomousPermissions } from "./antigravity-permissions.js";
 
 const ANTIGRAVITY_CAPABILITIES = new Set<AgentCapability>([
   "planning",
@@ -43,12 +44,20 @@ const ANTIGRAVITY_CAPABILITIES = new Set<AgentCapability>([
   "conversation"
 ]);
 
+// `agy models` is convenient in an interactive terminal, but the CLI waits
+// for a TTY when it is launched with piped stdio from the packaged desktop
+// app. The official print-mode command answers the same model/auth probe and
+// exits cleanly without a terminal.
+export const ANTIGRAVITY_AUTH_PROBE_ARGS = ["-p", "/model", "--output-format", "text"] as const;
+
 export type AntigravityProviderOptions = {
   model?: string | null;
   effort?: "low" | "medium" | "high";
   executionLimits?: number | Partial<ProviderExecutionLimits>;
   executablePath?: string;
   healthProbe?: boolean;
+  /** Prepare bounded command allow-rules before headless execution. */
+  autoConfigurePermissions?: boolean;
 };
 
 export class AntigravityProvider implements AgentProvider {
@@ -60,6 +69,7 @@ export class AntigravityProvider implements AgentProvider {
   private readonly effort: "low" | "medium" | "high";
   private readonly executablePath?: string;
   private readonly healthProbe: boolean;
+  private readonly autoConfigurePermissions: boolean;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
   private cachedModels: string[] | null = null;
@@ -75,14 +85,15 @@ export class AntigravityProvider implements AgentProvider {
     this.effort = options.effort ?? "medium";
     this.executablePath = options.executablePath;
     this.healthProbe = options.healthProbe ?? true;
+    this.autoConfigurePermissions = options.autoConfigurePermissions ?? false;
   }
 
   async models(): Promise<string[]> {
-    // Cache the live probe result so we don't spawn `agy models` (~2s) on every
+    // Cache the live probe result so we don't spawn `agy -p /model` on every
     // policy/dashboard request — the account model list rarely changes.
     if (this.cachedModels && Date.now() < this.modelsExpiresAt) return this.cachedModels;
     const executable = resolveAntigravityExecutable(this.executablePath);
-    // Fallback only if the live `antigravity models` probe fails. Kept in sync
+    // Fallback only if the live Antigravity probe fails. Kept in sync
     // with current account-available Gemini models (the dynamic probe is the
     // authoritative list); these are just a reasonable default for the dropdown.
     const fallbacks = [
@@ -102,7 +113,7 @@ export class AntigravityProvider implements AgentProvider {
     try {
       const probe = await runAgentProcess({
         command: executable,
-        args: ["models"],
+        args: [...ANTIGRAVITY_AUTH_PROBE_ARGS],
         cwd: process.cwd(),
         timeoutMs: 10_000,
         inactivityTimeoutMs: 10_000,
@@ -110,7 +121,7 @@ export class AntigravityProvider implements AgentProvider {
         env: buildRestrictedAgentEnvironment(process.env, { allowProviderKeys: true })
       });
       if (probe.exitCode === 0 && probe.stdout.trim()) {
-        // `antigravity models` may output "<slug>\t<Description>" rows; extract the slug.
+        // Print mode returns the current model as "<slug>\t<Description>".
         const lines = probe.stdout
           .split("\n")
           .map((line) => line.trim())
@@ -118,7 +129,9 @@ export class AntigravityProvider implements AgentProvider {
           .map((line) => line.split(/\t| {2,}/)[0].trim())
           .filter(Boolean);
         if (lines.length > 0) {
-          const result = [...new Set(lines)];
+          // The non-TTY probe returns the active model, while the curated
+          // fallback list keeps model selection useful in the dashboard.
+          const result = [...new Set([...lines, ...fallbacks])];
           this.cachedModels = result;
           this.modelsExpiresAt = Date.now() + AntigravityProvider.MODELS_CACHE_TTL_MS;
           return result;
@@ -130,21 +143,29 @@ export class AntigravityProvider implements AgentProvider {
     return fallbacks;
   }
 
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+    this.cachedModels = null;
+    this.modelsExpiresAt = 0;
+  }
+
+  invalidateCaches(): void {
+    this.refresh();
+  }
+
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const executable = resolveAntigravityExecutable(this.executablePath);
-    const envKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     let health: AgentHealth;
     if (!executable) {
-      health = envKey
-        ? { state: "ready", detail: "Gemini API Key disponivel via ENV", checkedAt: new Date().toISOString() }
-        : { state: "offline", detail: "Antigravity CLI nao encontrado", checkedAt: new Date().toISOString() };
+      health = { state: "offline", detail: "Antigravity CLI nao encontrado", checkedAt: new Date().toISOString() };
     } else if (!this.healthProbe) {
       health = { state: "ready", detail: "Antigravity CLI disponivel", checkedAt: new Date().toISOString() };
     } else {
       const probe = await runAgentProcess({
         command: executable,
-        args: ["models"],
+        args: [...ANTIGRAVITY_AUTH_PROBE_ARGS],
         cwd: process.cwd(),
         timeoutMs: 15_000,
         inactivityTimeoutMs: 15_000,
@@ -180,6 +201,15 @@ export class AntigravityProvider implements AgentProvider {
         ? "Antigravity CLI nao encontrado."
         : `Workspace nao existe: ${cwd}`;
       return failure(detail);
+    }
+
+    if (this.autoConfigurePermissions) {
+      try {
+        configureAntigravityAutonomousPermissions();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return failure(`Nao foi possivel preparar as permissoes do Antigravity: ${detail}`, "permission_denied");
+      }
     }
 
     const processResult = await runAgentProcess({
@@ -296,6 +326,14 @@ export class AntigravityProvider implements AgentProvider {
         : `Workspace nao existe: ${request.workspacePath}`;
       return improvementFailure(error, false);
     }
+    if (this.autoConfigurePermissions) {
+      try {
+        configureAntigravityAutonomousPermissions();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return improvementFailure(`Nao foi possivel preparar as permissoes do Antigravity: ${detail}`, false);
+      }
+    }
     const processResult = await runAgentProcess({
       command: executable,
       args: [
@@ -308,7 +346,6 @@ export class AntigravityProvider implements AgentProvider {
         "--effort",
         this.effort,
         "--sandbox",
-        "--disable-slash-commands",
         "--add-dir",
         request.workspacePath,
         "--print-timeout",
@@ -373,13 +410,12 @@ export function buildAntigravityArgs(
   const carriesEffort = /(?:^|-)high$|(?:^|-)medium$|(?:^|-)low$/i.test(model ?? "");
   const args = [
     "--print",
-    buildAgentGoalPrompt(request),
+    request.capability === "conversation" ? buildConversationPrompt(request) : buildAgentGoalPrompt(request),
     "--output-format",
     "text",
     "--mode",
     writable ? "accept-edits" : "plan",
     "--sandbox",
-    "--disable-slash-commands",
     "--add-dir",
     request.task.worktreePath || request.project.path,
     "--print-timeout",
@@ -405,7 +441,9 @@ export function resolveAntigravityExecutable(explicitPath?: string): string | nu
 
   try {
     const cmd = process.platform === "win32" ? "agy.exe" : "agy";
-    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    // Same rationale as codex/claude: slow cold-start probes must not flip
+    // the provider card to offline between dashboard polls.
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 10_000 });
     if (res.status === 0) return cmd;
   } catch {}
   return null;

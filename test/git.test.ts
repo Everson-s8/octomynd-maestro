@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  bootstrapEmptyRepository,
   cloneGitRepository,
   createWorktreePlan,
   detectGitDefaultBranch,
   ensureGitRemoteOrigin,
+  hasAnyCommit,
   runGit,
   validateGitProject
 } from "../src/git.js";
@@ -123,5 +125,66 @@ describe("git helpers", () => {
 
     const branch = detectGitDefaultBranch(repoDir);
     expect(branch).toBe("develop");
+  });
+});
+
+describe("empty repository bootstrap", () => {
+  it("detects a repository with zero commits", () => {
+    const repoDir = path.join(tempDir, "empty-repo");
+    fs.mkdirSync(repoDir);
+    runGit(["init", "-b", "main"], repoDir);
+
+    expect(hasAnyCommit(repoDir)).toBe(false);
+  });
+
+  it("detects a repository with commits", () => {
+    const repoDir = path.join(tempDir, "committed-repo");
+    fs.mkdirSync(repoDir);
+    runGit(["init", "-b", "main"], repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content\n");
+    runGit(["add", "file.txt"], repoDir);
+    runGit(["-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "-m", "init"], repoDir);
+
+    expect(hasAnyCommit(repoDir)).toBe(true);
+  });
+
+  it("bootstraps an empty repository with an initial commit", () => {
+    const repoDir = path.join(tempDir, "bootstrap-repo");
+    fs.mkdirSync(repoDir);
+    runGit(["init", "-b", "main"], repoDir);
+
+    const result = bootstrapEmptyRepository(repoDir, "myfinance");
+    expect(result.ok).toBe(true);
+    expect(hasAnyCommit(repoDir)).toBe(true);
+    expect(fs.existsSync(path.join(repoDir, "README.md"))).toBe(true);
+    expect(fs.existsSync(path.join(repoDir, ".gitignore"))).toBe(true);
+    const log = runGit(["log", "--oneline"], repoDir);
+    expect(log.stdout).toMatch(/initial commit by Maestro/i);
+  });
+
+  it("does not touch a repository that already has commits", () => {
+    const repoDir = path.join(tempDir, "untouched-repo");
+    fs.mkdirSync(repoDir);
+    runGit(["init", "-b", "main"], repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content\n");
+    runGit(["add", "file.txt"], repoDir);
+    runGit(["-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "-m", "init"], repoDir);
+
+    const result = bootstrapEmptyRepository(repoDir, "myfinance");
+    expect(result.ok).toBe(true);
+    expect(result.bootstrapped).toBe(false);
+    const log = runGit(["log", "--oneline"], repoDir);
+    expect(log.stdout).not.toMatch(/initial commit by Maestro/i);
+  });
+
+  it("refuses to bootstrap a dirty repository", () => {
+    const repoDir = path.join(tempDir, "dirty-repo");
+    fs.mkdirSync(repoDir);
+    runGit(["init", "-b", "main"], repoDir);
+    fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "dirty\n");
+
+    const result = bootstrapEmptyRepository(repoDir, "myfinance");
+    expect(result.ok).toBe(false);
+    expect(hasAnyCommit(repoDir)).toBe(false);
   });
 });

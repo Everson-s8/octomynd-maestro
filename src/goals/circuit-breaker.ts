@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentExecutionResult } from "../agents/types.js";
+import { classifyFailure, type FailureCategory } from "../agents/failure.js";
 import type { GoalPhase, GoalStepRecord } from "../db.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 
@@ -29,6 +30,7 @@ export type GoalCircuitBreakerObservation = {
   workspaceAfter: string | null;
   taskText?: string;
   taskMetadata?: Record<string, any> | null;
+  provider?: string;
 };
 
 const REPEATED_FAILURE_LIMIT = 2;
@@ -80,8 +82,13 @@ export class GoalCircuitBreaker {
       breaker.phaseStepCounts.set(step.phase, count);
 
       if (step.status === "failed") {
-        breaker.totalFailures += 1;
-        breaker.consecutiveFailures += 1;
+        const category = classifyFailure([step.summary, step.error ?? ""].join("\n"));
+        if (countsAsTaskFailure(category)) {
+          breaker.totalFailures += 1;
+          breaker.consecutiveFailures += 1;
+        } else {
+          breaker.consecutiveFailures = 0;
+        }
         breaker.incrementFailure(failureFingerprint(step.phase, step.summary, step.error));
       } else if (step.status === "completed") {
         breaker.consecutiveFailures = 0;
@@ -127,8 +134,17 @@ export class GoalCircuitBreaker {
     }
 
     if (observation.result.outcome === "failed") {
-      this.totalFailures += 1;
-      this.consecutiveFailures += 1;
+      const category = observation.result.failureCategory
+        ?? classifyFailure([observation.result.summary, observation.result.error ?? ""].join("\n"));
+      const countsAsFailure = countsAsTaskFailure(category);
+      if (countsAsFailure) {
+        this.totalFailures += 1;
+        this.consecutiveFailures += 1;
+      } else {
+        // Provider-specific failures should not become a task-splitting
+        // verdict when another provider can continue the same work.
+        this.consecutiveFailures = 0;
+      }
 
       const failureCount = this.incrementFailure(failureFingerprint(
         observation.phase,
@@ -148,14 +164,14 @@ export class GoalCircuitBreaker {
       }
 
       const small = isSmallTask(observation.taskText ?? "", observation.taskMetadata);
-      if (small && this.consecutiveFailures >= 2) {
+      if (countsAsFailure && small && this.consecutiveFailures >= 2) {
         return decision(
           "small_task_failure_limit",
           "Small task failed 2 consecutive times. Escalating and stopping retries with reduced scope."
         );
       }
 
-      if (this.totalFailures >= 3) {
+      if (countsAsFailure && this.totalFailures >= 3) {
         return decision(
           "task_split_required",
           "Task failed 3 times across execution steps. Goal must be split into smaller sub-tasks instead of growing prompt."
@@ -277,6 +293,10 @@ function failureFingerprint(phase: GoalPhase, summary: string, error: string | n
     .replace(/\s+/g, " ")
     .trim();
   return crypto.createHash("sha256").update(normalized).digest("hex");
+}
+
+function countsAsTaskFailure(category: FailureCategory): boolean {
+  return category === "unknown" || category === "invalid_output" || category === "environment_error";
 }
 
 function decision(reason: GoalCircuitBreakerReason, summary: string): GoalCircuitBreakerDecision {

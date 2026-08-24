@@ -1,13 +1,17 @@
 # Octomynd Maestro
 
+[![CI](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A local, chat-first orchestrator for Antigravity, Codex, Claude, and GitHub workflows, with a
 local visual command center to track projects, backlog, agents, and events.
 
-Maestro uses the authenticated CLIs of Antigravity, Codex, and Claude. It does not require
+Maestro uses the authenticated CLIs or API credentials that you choose. It does not require
 `OPENAI_API_KEY` and does not create a separate OpenAI API billing surface.
 
-This first version validates Telegram as the main control surface. It receives commands, creates
-local tasks, stores events in SQLite, and keeps secrets out of Git.
+The dashboard and terminal CLI are the primary local control surfaces. Telegram is optional: it
+can receive commands, create local tasks, store events in SQLite, and send notifications when you
+configure it.
 
 Telegram belongs to the Maestro gateway, not to every managed project. Projects only need their own
 Telegram integration when that is an explicit product requirement. When a goal opens a draft pull
@@ -15,9 +19,33 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 ## Requirements
 
-- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`,
-  and GitHub Actions share the same runtime contract.
-- A Telegram bot token from BotFather.
+- Node.js `>=20.17.0 <25` for the CLI/runtime. The full source checkout and Windows
+  packaging toolchain use Node.js `22.12.x` or newer within that range; see
+  `.node-version` and `docs/desktop-release.md`.
+- Git for project registration and worktree-based execution.
+- At least one supported provider CLI or API credential for agent execution.
+- A Telegram bot token from BotFather only if Telegram control is enabled.
+
+## Documentation
+
+The maintained user documentation is published at [docs.octomynd.com](https://docs.octomynd.com/)
+with English and Brazilian Portuguese guides. Start with the
+[Maestro guide](https://docs.octomynd.com/maestro) or the local
+[`INSTALL.md`](INSTALL.md) for a development checkout.
+
+This repository contains the runtime and source-level design notes. Product guides, onboarding
+walkthroughs, and operational documentation live in the separate
+[`Octomynd/octomynd-docs`](https://github.com/Octomynd/octomynd-docs) repository.
+
+## Desktop app (Windows)
+
+Maestro can be packaged as a shareable Windows desktop app that boots without a
+separate Node/npm/tsx installation. Git is still required for Git-backed
+project/task workflows, and providers must be installed or configured by the
+user. The packaged runtime does not run `npm install` or `npm ci` inside a
+root Node project; prepare that project's dependencies before execution. See
+[`docs/desktop-release.md`](docs/desktop-release.md) for the build, install, use
+and update instructions (`npm run release:win`).
 
 ## Setup
 
@@ -44,9 +72,50 @@ npm run dev:platform
 npm test
 ```
 
+### CLI parity
+
+The terminal launcher and dashboard use the same local database and application contracts. In a
+checkout, use `npm run cli -- <command>`; in the installed app, use `maestro.cmd <command>`:
+
+```powershell
+maestro.cmd project list
+maestro.cmd task create <project-key> "descreva a tarefa"
+maestro.cmd task prepare <task-id>
+maestro.cmd task start <task-id>
+maestro.cmd task logs <task-id> --follow
+maestro.cmd providers status
+maestro.cmd quota
+maestro.cmd doctor <project-key>
+```
+
+`task start`, `task cancel`, `task retry`, `task delete`, `quota`, `providers status` and `doctor`
+intentionally call the running dashboard API, so their result is the same result shown in the
+desktop interface. Start Maestro before using those commands. `project add/list`, `task
+create/list/prepare`, `logs` and `followup` also work directly against the shared local database.
+
 ## Visual platform
 
 The dashboard reads real data from SQLite and stays restricted to the local machine.
+
+### Chat operacional
+
+The Chat page is a persistent, project-aware conversation surface rather than a status shortcut.
+Create separate conversations with `+`, remove them with the trash action, and switch between a
+registered project and **Maestro (geral)**. The general context is useful for provider diagnostics
+and Maestro questions without mixing histories from different projects.
+
+Each conversation has an access mode enforced by the runtime:
+
+- **Somente leitura**: answers and evidence only; no governed mutation is exposed or accepted.
+- **Standard**: normal conversation plus safe, explicitly confirmed operations such as retrying a
+  goal, resuming a checkpoint, creating a task, or re-enabling a provider.
+- **Full Access**: all Maestro-governed chat actions, including cancellation. It is not an
+  unrestricted shell or credential bypass; destructive OS operations remain outside the chat
+  contract.
+
+Tasks preserve the exact original user request for audit, while deriving a short task title and an
+execution specification for the UI, provider prompt, branch, and pull-request title. This keeps
+long natural-language requests out of history and PR titles without losing the original intent.
 
 ### Provider control plane
 
@@ -257,7 +326,7 @@ dashboard automatically marks its task as completed and leaves the human review 
 Example:
 
 ```text
-/project_add octomynd C:\Users\evers\OneDrive\Imagens\TCC\octomynd_publish
+/project_add octomynd C:\path\to\octomynd_publish
 /task @octomynd improve out-of-context response
 /queue @octomynd
 ```
@@ -300,3 +369,18 @@ The local SQLite database is stored at `.maestro/maestro.db` by default. The fol
 - If `TELEGRAM_ALLOWED_USER_ID` is set, other users are blocked.
 - The dashboard validates the host and only accepts `127.0.0.1` or `localhost`.
 - Tokens and private Telegram IDs never enter the interface payload.
+The Windows desktop installer also includes a terminal launcher (`maestro.cmd`)
+beside `Maestro.exe`; it uses the bundled runtime and does not require a
+separate Node/npm/tsx installation.
+
+## Contributing and security
+
+Bug reports, feature proposals, and pull requests are welcome. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before changing the runtime and use the issue templates for
+user-facing reports. Never commit provider credentials, Telegram tokens, OAuth artifacts, local
+databases, logs, or machine-specific paths. Security reports belong in
+[`SECURITY.md`](SECURITY.md), not in a public issue.
+
+## License
+
+Maestro is released under the [MIT License](LICENSE).

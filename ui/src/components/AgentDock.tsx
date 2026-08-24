@@ -23,6 +23,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   // Control plane (they're connected but not routable) and don't appear as an
   // option or the selected "first" for any capability.
   const providers = (agents.filter((agent): agent is typeof agent & { id: AgentProviderId } => agent.id !== "telegram"))
+    .filter((agent) => agent.state === "ready" || agent.state === "working")
     .filter((agent) => {
       if (!policy) return true; // policy not loaded yet — show all providers
       const mode = policy.controls.find((c) => c.providerId === agent.id)?.mode ?? "enabled";

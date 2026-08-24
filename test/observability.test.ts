@@ -173,6 +173,7 @@ describe("Goal Observability", () => {
       expect(obs.classifiedReason).toBe("timeout");
       expect(obs.classifiedReasonLabel).toBe("tempo limite excedido");
       expect(obs.sourceProvider).toBe("claude");
+      expect(obs.nextProvider).toBeNull();
       expect(obs.checkpointId).toBe(5);
       expect(obs.preservedChanges).toBe(true);
       expect(obs.retryable).toBe(true);

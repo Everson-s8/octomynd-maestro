@@ -133,6 +133,17 @@ describe("human review queue", () => {
     expect(github.actions).not.toContain("merge");
   });
 
+  it("merges an approved PR when the dashboard requests delivery", async () => {
+    const run = reviewableGoal();
+    const github = new FakeGitHubGateway();
+    const reviews = new ReviewCoordinator(database, idleGoalCoordinator(), github);
+
+    await reviews.decide(run.id, "approved", "Entrega revisada e aprovada.", "dashboard", true);
+
+    expect(github.actions).toEqual(["ready", "merge"]);
+    expect(database.getTask(run.taskId).status).toBe("done");
+  });
+
   it("rejects and closes the draft PR", async () => {
     const run = reviewableGoal();
     const github = new FakeGitHubGateway();
@@ -174,7 +185,7 @@ describe("human review queue", () => {
     expect(github.actions).toEqual(["draft"]);
     expect(receivedFeedback).toBe("Remova o identificador pessoal do fixture.");
     expect(database.listGoalSteps(run.id).at(-1)?.phase).toBe("implementing");
-    goals.shutdown();
+    await goals.shutdown();
   });
 
   it("blocks approval when a changed file contains secret-shaped content", async () => {
@@ -259,7 +270,7 @@ describe("human review queue", () => {
         rootPath: tempDir,
         worktreesPath: path.join(tempDir, "worktrees"),
         expectedNodeVersion: "20.17.0",
-        supportedNodeRange: ">=20.17.0 <21"
+        supportedNodeRange: ">=20.17.0 <25"
       },
       dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
       autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
@@ -297,7 +308,7 @@ describe("human review queue", () => {
       expect(github.actions).toEqual(["ready"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-      goals.shutdown();
+      await goals.shutdown();
     }
   });
 });
@@ -307,6 +318,7 @@ class FakeGitHubGateway implements ReviewGitHubGateway {
   state: PullRequestState = { isDraft: true, state: "OPEN" };
   async inspect() { return this.state; }
   async markReady() { this.actions.push("ready"); }
+  async merge() { this.actions.push("merge"); }
   async markDraft() { this.actions.push("draft"); }
   async close() { this.actions.push("close"); }
 }

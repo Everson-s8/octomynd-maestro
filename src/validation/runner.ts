@@ -49,6 +49,7 @@ type CommandSpec = {
   command: string;
   args: string[];
   timeoutMs: number;
+  skipReason?: string;
 };
 
 const RAW_OUTPUT_MAX_CHARS = 400_000;
@@ -113,7 +114,18 @@ export class DeterministicValidationRunner {
 }
 
 function commandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
-  const nodeModules = path.join(workspacePath, "node_modules");
+  // Maestro validates arbitrary project worktrees, not only its own `ui/`
+  // checkout. Generated applications commonly use `backend/` + `frontend/`,
+  // so choose the project layout before constructing commands. Keep the old
+  // root catalog as the fallback for Maestro itself and for minimal fixtures.
+  const layout = detectProjectLayout(workspacePath);
+  if (layout === "nested-app") {
+    return nestedProjectCommandSpecs(workspacePath, request);
+  }
+
+  const typescriptBin = resolveRuntimeTool(workspacePath, "typescript", "bin/tsc");
+  const vitestEntry = resolveRuntimeTool(workspacePath, "vitest", "vitest.mjs");
+  const viteEntry = resolveRuntimeTool(workspacePath, "vite", "bin/vite.js");
   const tests = request.mode === "focused"
     ? validatedFocusedTests(request.focusedTests)
     : [];
@@ -129,28 +141,156 @@ function commandSpecs(workspacePath: string, request: ValidationRequest): Comman
     {
       id: "typecheck_backend",
       command: process.execPath,
-      args: [path.join(nodeModules, "typescript", "bin", "tsc"), "--noEmit"],
+      args: [typescriptBin, "--noEmit"],
       timeoutMs: 120_000
     },
     {
       id: "typecheck_ui",
       command: process.execPath,
-      args: [path.join(nodeModules, "typescript", "bin", "tsc"), "--noEmit", "-p", "ui/tsconfig.json"],
+      args: [typescriptBin, "--noEmit", "-p", "ui/tsconfig.json"],
       timeoutMs: 120_000
     },
     {
       id: testId,
       command: process.execPath,
-      args: [path.join(nodeModules, "vitest", "vitest.mjs"), "run", ...tests],
+      args: [vitestEntry, "run", ...tests],
       timeoutMs: tests.length > 0 ? 120_000 : 300_000
     },
     {
       id: "build_ui",
       command: process.execPath,
-      args: [path.join(nodeModules, "vite", "bin", "vite.js"), "build", "--config", "ui/vite.config.ts"],
+      args: [viteEntry, "build", "--config", "ui/vite.config.ts"],
       timeoutMs: 180_000
     }
   ];
+}
+
+type ProjectLayout = "root" | "nested-app";
+
+function detectProjectLayout(workspacePath: string): ProjectLayout {
+  const hasNestedBackend = hasAnyPath(workspacePath, ["backend/package.json", "backend/tsconfig.json"]);
+  const hasNestedFrontend = hasAnyPath(workspacePath, [
+    "frontend/package.json",
+    "frontend/tsconfig.json",
+    "frontend/vite.config.ts",
+    "frontend/vite.config.js"
+  ]);
+  return hasNestedBackend || hasNestedFrontend ? "nested-app" : "root";
+}
+
+function nestedProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
+  const typescriptBin = resolveRuntimeTool(workspacePath, "typescript", "bin/tsc");
+  const vitestEntry = resolveRuntimeTool(workspacePath, "vitest", "vitest.mjs");
+  const viteEntry = resolveRuntimeTool(workspacePath, "vite", "bin/vite.js");
+  const backendTsconfig = firstExistingPath(workspacePath, ["backend/tsconfig.json", "tsconfig.json"]);
+  const uiTsconfig = firstExistingPath(workspacePath, [
+    "frontend/tsconfig.json",
+    "ui/tsconfig.json",
+    "tsconfig.ui.json"
+  ]);
+  const uiViteConfig = firstExistingPath(workspacePath, [
+    "frontend/vite.config.ts",
+    "frontend/vite.config.js",
+    "ui/vite.config.ts",
+    "ui/vite.config.js",
+    "vite.config.ts",
+    "vite.config.js"
+  ]);
+  const tests = request.mode === "focused"
+    ? validatedFocusedTests(request.focusedTests)
+    : [];
+  const hasTests = tests.length > 0 || containsTestFile(workspacePath);
+  const testId: "tests_focused" | "tests_full" = tests.length > 0 ? "tests_focused" : "tests_full";
+  const diffTarget = validatedBaseRef(request.baseRef);
+
+  return [
+    {
+      id: "diff_check",
+      command: "git",
+      args: ["-C", workspacePath, "diff", "--check", ...(diffTarget ? [diffTarget] : [])],
+      timeoutMs: 30_000
+    },
+    {
+      id: "typecheck_backend",
+      command: process.execPath,
+      args: backendTsconfig
+        ? [typescriptBin, "--noEmit", "-p", backendTsconfig]
+        : [],
+      timeoutMs: 120_000,
+      skipReason: backendTsconfig ? undefined : "nenhum tsconfig de backend encontrado"
+    },
+    {
+      id: "typecheck_ui",
+      command: process.execPath,
+      args: uiTsconfig
+        ? [typescriptBin, "--noEmit", "-p", uiTsconfig]
+        : [],
+      timeoutMs: 120_000,
+      skipReason: uiTsconfig ? undefined : "nenhum tsconfig de frontend encontrado"
+    },
+    {
+      id: testId,
+      command: process.execPath,
+      args: [vitestEntry, "run", ...tests],
+      timeoutMs: tests.length > 0 ? 120_000 : 300_000,
+      skipReason: hasTests ? undefined : "nenhum arquivo de teste encontrado"
+    },
+    {
+      id: "build_ui",
+      command: process.execPath,
+      args: uiViteConfig
+        ? [viteEntry, "build", "--config", uiViteConfig]
+        : [],
+      timeoutMs: 180_000,
+      skipReason: uiViteConfig ? undefined : "nenhuma configuração Vite de frontend encontrada"
+    }
+  ];
+}
+
+function hasAnyPath(workspacePath: string, relativePaths: string[]): boolean {
+  return relativePaths.some((relativePath) => fs.existsSync(path.join(workspacePath, ...relativePath.split("/"))));
+}
+
+function firstExistingPath(workspacePath: string, relativePaths: string[]): string | null {
+  return relativePaths.find((relativePath) => fs.existsSync(path.join(workspacePath, ...relativePath.split("/")))) ?? null;
+}
+
+function containsTestFile(rootPath: string): boolean {
+  const ignored = new Set([".git", "node_modules", "dist", "build", ".next", "coverage"]);
+  const stack = [rootPath];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") && entry.name !== ".env.example") continue;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignored.has(entry.name)) stack.push(entryPath);
+        continue;
+      }
+      if (/\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/i.test(entry.name)) return true;
+    }
+  }
+  return false;
+}
+
+function resolveRuntimeTool(workspacePath: string, packageName: string, relativePath: string): string {
+  const roots = [
+    workspacePath,
+    process.env.MAESTRO_RUNTIME_ROOT?.trim()
+  ].filter((root): root is string => Boolean(root));
+  for (const root of roots) {
+    const candidate = path.join(root, "node_modules", packageName, ...relativePath.split("/"));
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  // Keep the failure actionable for a non-packaged checkout: the validation
+  // output points at the expected project-local dependency path.
+  return path.join(workspacePath, "node_modules", packageName, ...relativePath.split("/"));
 }
 
 function validatedFocusedTests(values: string[] | undefined): string[] {
@@ -177,6 +317,17 @@ async function runCommandCheck(
   invocationKey: string,
   signal: AbortSignal | undefined
 ): Promise<ValidationCheckResult> {
+  if (spec.skipReason) {
+    const artifactKey = path.posix.join(invocationKey, `${spec.id}.raw.txt`);
+    fs.writeFileSync(path.join(invocationRoot, `${spec.id}.raw.txt`), `SKIPPED: ${spec.skipReason}\n`, "utf8");
+    return {
+      id: spec.id,
+      status: "passed",
+      durationMs: 0,
+      summary: `skipped: ${spec.skipReason}`,
+      artifactKey
+    };
+  }
   const result = await executeProcess({
     command: spec.command,
     args: spec.args,

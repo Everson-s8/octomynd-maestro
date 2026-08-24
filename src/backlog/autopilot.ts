@@ -121,6 +121,39 @@ export class BacklogAutopilot {
         .filter((task) => task.status === "queued" || task.status === "waiting_dependency")
         .sort((left, right) => left.id - right.id);
 
+      // F1: adopt orphaned 'planning' tasks. A task that was prepared manually
+      // (worktree attached, status flipped to planning) used to leave the
+      // autopilot queue forever with no goal run — the exact "parked in
+      // planejando forever" report. If no active goal run exists for it, start
+      // one now instead of waiting for a human to press "Iniciar goal".
+      const taskIdsWithActiveGoal = new Set(goals.map((goal) => goal.taskId));
+      const orphanedPlanning = tasks.filter(
+        (task) =>
+          task.status === "planning" &&
+          task.worktreePath &&
+          !taskIdsWithActiveGoal.has(task.id)
+      );
+      for (const task of orphanedPlanning.slice(0, 2)) {
+        if (runningGoals.length >= this.maxConcurrentGoals) break;
+        let run: GoalRunRecord;
+        try {
+          run = this.goals.start(task.id);
+        } catch {
+          // Leave it for the next tick; do not block — the user may still be
+          // interacting with this task in the UI.
+          continue;
+        }
+        this.database.addEvent({
+          source: "maestro",
+          type: "backlog.task_adopted",
+          text: `Autopilot adopted manually-prepared task #${task.id} and started its goal.`,
+          taskId: task.id,
+          metadata: { runId: run.id, projectKey: task.projectKey }
+        });
+        this.lastAction = `adopted_task_${task.id}`;
+        return this.snapshot();
+      }
+
       for (const task of queued) {
         const revalidation = revalidateQueuedTask(task, tasks);
         if (!revalidation.applicable) {

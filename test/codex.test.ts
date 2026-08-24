@@ -107,6 +107,20 @@ describe("codex provider telemetry", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("uses a plain read-only conversation instead of the goal JSON contract", async () => {
+    process.env.FAKE_CODEX_MODE = "success";
+    const provider = new CodexProvider(5_000);
+    const request = executionRequest(cwd, "planning");
+    request.capability = "conversation";
+    request.humanFeedback = "Voce: oi\n\nPERGUNTA DO USUARIO: oi";
+
+    const result = await provider.execute(request);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.output).toContain("Resposta conversacional");
+    expect(result.artifactsProduced).toEqual([]);
+  });
+
   it("reports a short, structured summary for a quota failure and marks it retryable", async () => {
     process.env.FAKE_CODEX_MODE = "quota";
     const provider = new CodexProvider(5_000);
@@ -210,11 +224,13 @@ const mode = process.env.FAKE_CODEX_MODE || "unknown";
 if (mode === "success") {
   const outputIdx = process.argv.indexOf("--output-last-message");
   if (outputIdx !== -1 && process.argv[outputIdx + 1]) {
-    fs.writeFileSync(process.argv[outputIdx + 1], JSON.stringify({
-      outcome: "completed",
-      summary: "Plano gerado com sucesso.",
-      details: "Detalhes do plano."
-    }));
+    fs.writeFileSync(process.argv[outputIdx + 1], process.argv.includes("--output-schema")
+      ? JSON.stringify({
+        outcome: "completed",
+        summary: "Plano gerado com sucesso.",
+        details: "Detalhes do plano."
+      })
+      : "Resposta conversacional do Codex.");
   }
   process.exit(0);
 } else if (mode === "timeout") {

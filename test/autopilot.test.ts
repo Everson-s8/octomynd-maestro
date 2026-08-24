@@ -202,6 +202,41 @@ describe("backlog autopilot", () => {
 
     expect(database.listEvents().some((e) => e.type === "backlog.goal_auto_retried")).toBe(false);
   });
+  it("adopts a manually-prepared planning task with no goal run (F1)", async () => {
+    // A user pressed "Preparar worktree" by hand: worktree attached, status
+    // flipped to planning, and no goal run ever created. The old autopilot
+    // ignored it forever ("parked in planejando").
+    const orphan = database.createTask("manual demand", "dashboard", "alpha");
+    database.updateTaskWorktree({
+      id: orphan.id,
+      status: "planning",
+      branchName: "manual-branch",
+      worktreePath: tempDir
+    });
+    const started: number[] = [];
+
+    const snapshot = await createAutopilot(started).tick();
+
+    expect(started).toEqual([orphan.id]);
+    expect(snapshot.lastAction).toBe(`adopted_task_${orphan.id}`);
+    expect(database.getLastEvent()?.type).toBe("backlog.task_adopted");
+  });
+
+  it("does not adopt a planning task that already has a goal run", async () => {
+    const activeTask = database.createTask("already running", "dashboard", "alpha");
+    database.updateTaskWorktree({
+      id: activeTask.id,
+      status: "planning",
+      branchName: "running-branch",
+      worktreePath: tempDir
+    });
+    database.createGoalRun(activeTask.id);
+    const started: number[] = [];
+
+    await createAutopilot(started).tick();
+
+    expect(started).toEqual([]);
+  });
 });
 
 function createAutopilot(started: number[]) {

@@ -40,14 +40,15 @@ describe("claude review", () => {
     expect(isClaudeAuthenticationError("Unexpected filesystem failure")).toBe(false);
   });
 
-  it("advertises goal capabilities while leaving conversation out", () => {
+  it("advertises goal and conversation capabilities", () => {
     expect([...new ClaudeProvider().capabilities]).toEqual([
       "planning",
       "coding",
       "testing",
       "reviewing",
       "improvement_reviewing",
-      "research"
+      "research",
+      "conversation"
     ]);
   });
 

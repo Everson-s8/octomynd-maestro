@@ -5,6 +5,7 @@ export type PullRequestState = { isDraft: boolean; state: "OPEN" | "CLOSED" | "M
 export interface ReviewGitHubGateway {
   inspect(url: string): Promise<PullRequestState>;
   markReady(url: string): Promise<void>;
+  merge?(url: string): Promise<void>;
   markDraft(url: string): Promise<void>;
   close(url: string): Promise<void>;
 }
@@ -19,6 +20,14 @@ export class GhReviewGateway implements ReviewGitHubGateway {
     if (state.state !== "OPEN") throw new Error("Pull request is not open.");
     if (!state.isDraft) return;
     requireGh(["pr", "ready", url], "mark pull request ready for merge");
+  }
+
+  async merge(url: string): Promise<void> {
+    const state = readState(url);
+    if (state.state === "MERGED") return;
+    if (state.state === "CLOSED") throw new Error("Closed pull requests cannot be merged.");
+    if (state.isDraft) await this.markReady(url);
+    requireGh(["pr", "merge", url, "--merge", "--delete-branch"], "merge approved pull request");
   }
 
   async markDraft(url: string): Promise<void> {

@@ -812,6 +812,7 @@ export async function runTaskGoal(
       const circuitDecision = circuitBreaker.observe({
         phase,
         result,
+        provider: routed.provider.id,
         workspaceBefore,
         workspaceAfter,
         taskText: task.text,
@@ -886,6 +887,22 @@ export async function runTaskGoal(
         );
       }
 
+      // These failures cannot be repaired by changing providers: the prompt
+      // itself is too large for the process boundary, and a deadline means the
+      // goal's execution window is over. Preserve the hard-stop semantics for
+      // them while allowing provider-specific failures to fall back below.
+      if (circuitDecision?.reason === "prompt_too_large" || circuitDecision?.reason === "deadline") {
+        return finishCircuitBreak(
+          database,
+          currentRun,
+          phase,
+          stepCount,
+          task.id,
+          circuitDecision.reason,
+          circuitDecision.summary
+        );
+      }
+
       if (circuitDecision && result.outcome !== "failed") {
         return finishCircuitBreak(
           database,
@@ -902,17 +919,11 @@ export async function runTaskGoal(
         return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
       }
       if (result.outcome === "failed") {
-        if (circuitDecision) {
-          return finishCircuitBreak(
-            database,
-            currentRun,
-            phase,
-            stepCount,
-            task.id,
-            circuitDecision.reason,
-            circuitDecision.summary
-          );
-        }
+        // A circuit decision is a safety boundary for the current execution
+        // path, not a reason to skip a healthy alternate provider. This matters
+        // when one provider fails in several phases: the old code accumulated
+        // those failures and blocked the goal before trying Claude/Codex in
+        // the last phase, even though a fallback was available.
         excluded.add(routed.provider.id);
         const fallback = await registry.route(CAPABILITIES[phase], excluded);
         if (fallback) {
@@ -953,6 +964,17 @@ export async function runTaskGoal(
             }
           );
         }
+        if (circuitDecision) {
+          return finishCircuitBreak(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            task.id,
+            circuitDecision.reason,
+            circuitDecision.summary
+          );
+        }
         if (result.retryable) {
           return pauseRun(
             database,
@@ -986,8 +1008,17 @@ export async function runTaskGoal(
         }
         // DNA: check if iteration is allowed
         if (dna && !dna.allowIteration) {
-          // No iteration allowed — deliver as-is via the single completion path.
-          return await deliverGoal();
+          // Never deliver a diff that the reviewer explicitly rejected. The
+          // run remains resumable and preserves the review feedback/checkpoint.
+          return finishRun(
+            database,
+            currentRun,
+            "blocked",
+            phase,
+            stepCount,
+            "A revisao solicitou alteracoes, mas esta task nao permite iteracao automatica. Continue a Goal apos revisar o feedback.",
+            task.id
+          );
         }
         phase = "implementing";
         excluded = new Set();

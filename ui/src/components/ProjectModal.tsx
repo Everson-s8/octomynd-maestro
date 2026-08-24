@@ -264,7 +264,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                   <input
                     id="field-localpath-b"
                     type="text"
-                    placeholder="/Users/everson/projetos/boo-voice"
+                    placeholder="C:\\path\\to\\project"
                     value={localPath}
                     onChange={(e) => {
                       setLocalPath(e.target.value);
@@ -304,7 +304,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                   <input
                     id="field-localpath-c"
                     type="text"
-                    placeholder="/Users/everson/projetos/boo-voice"
+                    placeholder="C:\\path\\to\\project"
                     value={localPath}
                     onChange={(e) => {
                       setLocalPath(e.target.value);

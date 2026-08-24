@@ -32,7 +32,7 @@ export function createGoalDeliveryHandler(
       throw new Error(`Task #${task.id} has no prepared worktree or branch.`);
     }
 
-    const message = `Task #${task.id}: ${singleLine(task.text).slice(0, 120)}`;
+    const message = `Task #${task.id}: ${singleLine(task.title || task.text).slice(0, 120)}`;
     const changedFiles = listChangedFiles(task.worktreePath);
     if (changedFiles.length > 0) {
       const secretFindings = scanGoalChangesForSecrets(task.worktreePath, changedFiles);
@@ -41,7 +41,7 @@ export function createGoalDeliveryHandler(
       }
 
       requireGit(runGitSafe(["add", "--all"], task.worktreePath), "stage goal changes");
-      requireGit(runGitSafe(["diff", "--cached", "--check"], task.worktreePath), "validate staged diff");
+      validateStagedDiffWhitespace(task.worktreePath);
       const staged = runGitSafe(["diff", "--cached", "--quiet"], task.worktreePath);
       if (staged.exitCode === 0) {
         throw new Error(`Goal #${run.id} has no staged changes to deliver.`);
@@ -75,6 +75,33 @@ export function scanGoalChangesForSecrets(worktreePath: string, relativePaths: s
   return scanWorktreePathsForSecrets(worktreePath, relativePaths).map(formatSecretScanFinding);
 }
 
+/**
+ * Markdown uses two trailing spaces for an intentional hard line break. Keep
+ * Git's whitespace guard for source files while allowing that documented
+ * Markdown syntax through the delivery gate.
+ */
+export function validateStagedDiffWhitespace(worktreePath: string): void {
+  const result = runGitSafe(["diff", "--cached", "--check"], worktreePath);
+  if (result.ok) return;
+
+  const violations = [result.stdout, result.stderr]
+    .filter(Boolean)
+    .join("\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    // Git diff check prints the offending added line on the following line;
+    // only the location line is needed for the file extension filter.
+    .filter((line) => /^.+?:\d+(?::\d+)?:\s/.test(line))
+    .filter((line) => {
+      const file = line.match(/^(.+?):\d+:\d+:/)?.[1] ?? line.match(/^(.+?):\d+:/)?.[1] ?? line;
+      return !/\.mdx?$/i.test(file);
+    });
+  if (violations.length > 0) {
+    throw new Error(["Cannot validate staged diff:", violations.join("\n")].join(" "));
+  }
+}
+
 function listChangedFiles(worktreePath: string): string[] {
   const tracked = requireGit(
     runGitSafe(["diff", "--name-only", "-z", "HEAD"], worktreePath),
@@ -88,8 +115,18 @@ function listChangedFiles(worktreePath: string): string[] {
 }
 
 async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Promise<string> {
+  const remote = runGitSafe(["remote", "get-url", "origin"], task.worktreePath!);
+  if (!remote.ok) {
+    // A local-only project has no meaningful GitHub PR target. Preserve the
+    // branch delivery result without pretending that a remote PR exists.
+    return `local://${task.branchName}`;
+  }
+
   const pushResult = runGitSafe(["push", "-u", "origin", task.branchName!], task.worktreePath!);
-  // If remote origin is not configured (or offline in local mode), push warning is ignored
+  if (!pushResult.ok) {
+    throw new Error(`Nao foi possivel publicar a branch '${task.branchName}' no GitHub: ${pushResult.stderr || pushResult.stdout}`);
+  }
+
   const existing = runGh([
     "pr", "list", "--head", task.branchName!, "--json", "url", "--jq", ".[0].url"
   ], task.worktreePath!);
@@ -102,12 +139,18 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
   const existingUrl = existing.stdout.trim();
   if (existingUrl) return existingUrl;
 
-  const title = `Task #${task.id}: ${singleLine(task.text).slice(0, 100)}`;
+  const title = buildPullRequestTitle(task, project);
   const body = [
-    `Automated delivery for Maestro goal task #${task.id}.`,
+    "## Resumo",
+    `Implementa: ${task.title || pullRequestSummary(task.text)}.`,
     "",
-    "The goal completed planning, implementation, testing, and review.",
-    "This pull request is intentionally a draft; merge remains a human decision."
+    "## Objetivo original",
+    singleLine(task.text),
+    "",
+    "## Controle",
+    `- Task do Maestro: #${task.id}`,
+    `- Branch: \`${task.branchName}\``,
+    "- PR criado como draft; a revisão e o merge continuam sendo decisões humanas."
   ].join("\n");
   const created = runGh([
     "pr", "create", "--draft", "--base", task.baseBranch || project.defaultBranch, "--head", task.branchName!,
@@ -154,4 +197,30 @@ function splitNull(value: string): string[] {
 
 function singleLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+export function pullRequestSummary(taskText: string): string {
+  const original = singleLine(taskText);
+  const withoutFraming = original
+    .replace(/^(?:eu\s+)?(?:quero\s+)?(?:crie|criar|cadastre|cadastrar|abra|abrir|faca|faça)\b[\s\S]*?\btask\b\s*[:\-,]?\s*/i, "")
+    .replace(/^(?:eu\s+)?quero\s+criar\s+(?:um|uma)\s+/i, "")
+    .replace(/^(?:a ideia inicial é|a ideia e|objetivo:?)\s*/i, "")
+    .replace(/\s+(?:faça|faca)\.?$/i, "")
+    .trim();
+  const firstSentence = withoutFraming.split(/(?<=[.!?])\s+/)[0] || withoutFraming;
+  const firstClause = firstSentence.split(/,\s+|\s+\b(?:mas|porém|porem)\b\s+/i)[0].trim();
+  const summary = firstClause || original;
+  return summary.length <= 92 ? summary : `${summary.slice(0, 89).trim()}…`;
+}
+
+export function buildPullRequestTitle(task: TaskRecord, project: ProjectRecord): string {
+  const text = singleLine(task.title || task.text);
+  const kind = /\b(corrij|conser|bug|fix|falha|erro)\b/i.test(text)
+    ? "fix"
+    : /\b(refator|refactor|reorganiz|melhor)\b/i.test(text)
+      ? "refactor"
+      : /\b(document|readme|docs?)\b/i.test(text)
+        ? "docs"
+        : "feat";
+  return `${kind}(${project.key}): ${pullRequestSummary(text)}`.slice(0, 120);
 }

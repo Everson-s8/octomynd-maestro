@@ -6,6 +6,7 @@ import {
   fetchProviderAuth,
   fetchProviderPresets,
   fetchProviderPolicy,
+  ProviderAuthFlowId,
   ProviderAuthSession,
   ProviderPolicySnapshot,
   ProviderPreset,
@@ -79,6 +80,9 @@ export function ProviderManager({
   const [customLabel, setCustomLabel] = useState("");
   const [wizardBusy, setWizardBusy] = useState(false);
   const [authSession, setAuthSession] = useState<ProviderAuthSession | null>(null);
+  // Which login flow the user picked on the account step (e.g. codex offers
+  // browser / device code / verify existing terminal login).
+  const [authFlowId, setAuthFlowId] = useState<ProviderAuthFlowId | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
   const load = async () => {
@@ -142,27 +146,39 @@ export function ProviderManager({
         const control = policy?.controls.find((item) => item.providerId === runtimeId);
         const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
         const activeModel = control?.model || models[0] || "";
-        const paused = control?.mode === "disabled";
+        // The list is a runtime view, but an installed CLI that still needs
+        // authentication must remain visible so the user can understand why
+        // the top count is larger than the ready count. Offline/missing CLIs
+        // stay out of the connected list and remain available through the
+        // wizard.
+        // Until the policy request finishes, an authenticated provider should
+        // remain visible. An absent control means the runtime default (enabled),
+        // not that the provider was removed.
+        const paused = control ? control.mode !== "enabled" : false;
+        const connected = isProviderConnected(agent?.state);
         return {
           key: `preset:${preset.id}`,
           providerId: runtimeId,
           label: preset.label,
-          detail: agent?.detail || (agent?.state === "offline" ? "indisponivel" : "CLI disponivel"),
+          detail: paused
+            ? "Pausado — reative pelo botão ACCOUNT ou Conectar provider"
+            : agent?.detail || "Conexao ainda nao verificada nesta maquina",
           type: (preset.category === "api" ? "api" : preset.category === "local" ? "local" : "account") as "account" | "api" | "local",
           model: activeModel || "Padrao do provider",
-          active: !paused && agent?.state !== "offline",
-          connected: models.length > 0,
+          active: connected && !paused,
+          connected,
           paused,
           color: providerColor(preset.id),
           models,
           registeredProvider: null
         };
       })
-      .filter((p) => !p.paused);
+      .filter((p) => !p.paused && agents.some((agent) => agent.id === p.providerId && agent.state !== "offline"));
     const custom = registered.map((provider) => {
       const preset = presets.find((item) => item.id === provider.presetId);
       const local = preset?.category === "local" || provider.connectionMode === "local";
       const category = preset?.category ?? (local ? "local" : "api");
+      const agent = agents.find((item) => item.id === provider.id);
       const control = policy?.controls.find((item) => item.providerId === provider.id);
       const models = policy?.availableModels?.[provider.id] ?? provider.models ?? [];
       const activeModel = control?.model || provider.model || models[0] || "";
@@ -170,18 +186,21 @@ export function ProviderManager({
         key: `registered:${provider.id}`,
         providerId: provider.id,
         label: provider.label,
-        detail: local ? provider.endpointUrl || "endpoint local" : "conectado",
+        detail: agent?.detail || (local ? provider.endpointUrl || "Endpoint local" : "Conexao ainda nao verificada nesta maquina"),
         type: (category === "local" ? "local" : category === "account" ? "account" : "api") as "account" | "api" | "local",
         model: activeModel || "Padrao do provider",
-        active: true,
-        connected: models.length > 0,
-        paused: false,
+        active: isProviderConnected(agent?.state),
+        connected: isProviderConnected(agent?.state),
+        paused: control ? control.mode !== "enabled" : false,
         color: providerColor(provider.id),
         models,
         registeredProvider: provider
       };
     });
-    return [...builtIns, ...custom];
+    return [...builtIns, ...custom].filter((provider) => (
+      !provider.paused
+      && (provider.connected || agents.some((agent) => agent.id === provider.providerId && agent.state === "attention"))
+    ));
   }, [agents, presets, registered, policy]);
 
   const groupedProviders = {
@@ -296,6 +315,7 @@ export function ProviderManager({
     setBaseUrlValue("");
     setCustomLabel("");
     setAuthSession(null);
+    setAuthFlowId(null);
     setCopyState("idle");
     setError("");
   };
@@ -470,6 +490,27 @@ export function ProviderManager({
     // login subcommand (e.g. gemini/antigravity, which authenticates on its own)
     // skip the automated login and fall back to a probe + register.
     const hasAutoLogin = preset.authFlow && preset.authFlow !== "none" && (preset.authArgs?.length ?? 0) > 0;
+    const flows = preset.authFlows ?? [];
+    if (flows.length > 0) {
+      // Multi-flow presets always go through the broker with the chosen flow
+      // (verify_only resolves immediately server-side). Once connected, finish
+      // like the single-flow path does.
+      if (authSession?.state === "waiting") return;
+      if (authSession?.state !== "connected") {
+        setWizardBusy(true);
+        setError("");
+        try {
+          setAuthSession(await startProviderAuth(preset.id, authFlowId ?? flows.find((f) => f.recommended)?.id ?? flows[0].id));
+        } catch (cause) {
+          setError(readError(cause, "Nao foi possivel iniciar a autenticacao."));
+        } finally {
+          setWizardBusy(false);
+        }
+        return;
+      }
+      await confirmAccountLogin();
+      return;
+    }
     if (hasAutoLogin && (!authSession || authSession.state !== "connected")) {
       if (authSession?.state === "waiting") return;
       setWizardBusy(true);
@@ -488,6 +529,13 @@ export function ProviderManager({
 
   const accountPrimaryLabel = () => {
     if (!wizardPreset) return "Ja fiz login";
+    const flows = wizardPreset.authFlows ?? [];
+    if (flows.length > 0) {
+      if (authSession?.state === "waiting") return "Aguardando autorizacao...";
+      if (authSession?.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
+      if (authSession?.state === "failed") return "Tentar novamente";
+      return wizardBusy ? "Abrindo..." : "Entrar";
+    }
     const hasAutoLogin = wizardPreset.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
     if (hasAutoLogin) {
       if (!authSession) return wizardBusy ? "Abrindo..." : "Conectar conta";
@@ -524,7 +572,7 @@ export function ProviderManager({
         const name = wizardPreset?.label ?? "este provider";
         const autoLogin = wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
         const desc = autoLogin
-          ? `${name} sera autenticado automaticamente: clique em "Conectar conta", a CLI oficial sera iniciada e o navegador/terminal abrira para voce concluir o login.`
+          ? `${name} sera autenticado automaticamente se a CLI oficial ja estiver instalada: clique em "Conectar conta" e o navegador/terminal abrira para voce concluir o login.`
           : wizardPreset?.id === "gemini"
             ? 'Para usar o Antigravity no Maestro e necessario ter o CLI agy baixado e ja conectado com a sua conta Google no terminal. Se voce ja tem, clique em "Ja fiz login" para confirmar e ativar.'
             : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
@@ -555,22 +603,23 @@ export function ProviderManager({
                   {(() => {
                     const control = policy?.controls.find((item) => item.providerId === provider.providerId);
                     const mode = control?.mode ?? (provider.registeredProvider ? "enabled" : provider.active ? "enabled" : "paused");
-                    const on = mode === "enabled";
+                    const on = provider.connected && mode === "enabled";
                     return (
                       <span
-                        className={`toggle${on ? " on" : ""}`}
+                        className={`toggle${on ? " on" : ""}${provider.connected ? "" : " unavailable"}`}
                         role="switch"
                         aria-checked={on}
+                        aria-disabled={!provider.connected}
                         tabIndex={0}
-                        onClick={(event) => void toggleProvider(provider, event)}
-                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); void toggleProvider(provider, event); } }}
-                        title={on ? `Pausar ${provider.label} (conectado, mas nao chamado)` : `Ativar ${provider.label}`}
+                        onClick={(event) => { if (provider.connected) void toggleProvider(provider, event); }}
+                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); if (provider.connected) void toggleProvider(provider, event); } }}
+                        title={provider.connected ? (on ? `Pausar ${provider.label} (conectado, mas nao chamado)` : `Ativar ${provider.label}`) : `${provider.label} nao esta conectado nesta maquina`}
                       >
                         <i />
                       </span>
                     );
                   })()}
-                  <label>{provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? "ativo" : "pausado"}</label>
+                  <label>{!provider.connected ? "nao conectado" : provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? "ativo" : "pausado"}</label>
                 </div>
                 {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
               </div>
@@ -622,7 +671,11 @@ export function ProviderManager({
                   </div>
                 </>
               ) : (
-                <div className="pd-unconfigured">Conecte uma chave de API válida para escolher o modelo deste provider.</div>
+                <div className="pd-unconfigured">
+                  {detailProvider.type === "account"
+                    ? "Instale e autentique a CLI oficial deste provider para escolher o modelo."
+                    : "Conecte uma chave de API válida para escolher o modelo deste provider."}
+                </div>
               )}
 
               <div className="danger-zone">
@@ -731,6 +784,34 @@ export function ProviderManager({
                     </button>
                   </div>
                 ) : null}
+                {(wizardPreset?.authFlows?.length ?? 0) > 0 && !authSession ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
+                    {wizardPreset!.authFlows!.map((flow) => {
+                      const selected = (authFlowId ?? wizardPreset!.authFlows!.find((f) => f.recommended)?.id ?? wizardPreset!.authFlows![0].id) === flow.id;
+                      return (
+                        <button
+                          type="button"
+                          key={flow.id}
+                          onClick={() => { setAuthFlowId(flow.id); setAuthSession(null); }}
+                          style={{
+                            textAlign: "left",
+                            padding: "10px 12px",
+                            borderRadius: "var(--r-sm)",
+                            border: `1px solid ${selected ? "var(--accent, #c4622d)" : "var(--border-color)"}`,
+                            background: selected ? "var(--surface-2)" : "transparent",
+                            color: "var(--text-1)",
+                            cursor: "pointer"
+                          }}
+                        >
+                          <b style={{ display: "block", fontSize: "13px" }}>{flow.label}{flow.recommended ? " · recomendado" : ""}</b>
+                          {flow.description ? (
+                            <span style={{ display: "block", fontSize: "12px", color: "var(--text-2)", marginTop: "2px" }}>{flow.description}</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 {(wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0) && authSession ? <AuthSessionPanel session={authSession} /> : null}
                 {wizardPreset?.docsUrl ? (
                   <a href={wizardPreset.docsUrl} className="docs-link" target="_blank" rel="noreferrer">
@@ -780,7 +861,15 @@ function sanitizeId(value: string): string {
 }
 
 function readError(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback;
+  const message = cause instanceof Error ? cause.message : fallback;
+  const missingCli = message.match(/^provider_cli_not_found(?::(.+))?$/);
+  return missingCli
+    ? `A CLI${missingCli[1] ? ` ${missingCli[1]}` : " oficial"} nao esta instalada nesta maquina. Instale-a e tente novamente.`
+    : message;
+}
+
+function isProviderConnected(state: DashboardData["agents"][number]["state"] | undefined): boolean {
+  return state === "ready" || state === "working";
 }
 
 function providerColor(providerId: string): string {

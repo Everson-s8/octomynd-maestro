@@ -20,6 +20,7 @@ import { buildDashboardSnapshot, providerAgentPresence } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { sanitizePublicMetadata } from "../security/redaction.js";
 import { FeatureCoordinator } from "../features/coordinator.js";
 import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
@@ -29,6 +30,10 @@ import type { AgentCapability, AgentProviderId } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import { prepareCliSpawn, resolveCustomCliExecutable } from "../agents/custom-cli.js";
 import { CustomCliProvider } from "../agents/custom-cli.js";
+import {
+  configureAntigravityAutonomousPermissions,
+  getAntigravityPermissionStatus
+} from "../agents/antigravity-permissions.js";
 import {
   PROVIDER_PRESETS,
   addCustomProvider,
@@ -43,6 +48,8 @@ import { fetchAllQuota, buildQuotaFetchers } from "../agents/quota-providers.js"
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
 import { OperationalChatService } from "../chat/service.js";
+import { GLOBAL_CHAT_PROJECT_KEY } from "../chat/types.js";
+import type { ChatAccessMode } from "../chat/types.js";
 import {
   testTelegramBotToken,
   updateEnvTelegramConfig,
@@ -53,6 +60,7 @@ import type { TelegramSubsystemManager } from "../telegram/bot.js";
 
 const providerAuthBroker = new ProviderAuthBroker();
 const DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS = 1_500;
+const dashboardAgentCache = new WeakMap<object, ReturnType<typeof providerAgentPresence>>();
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
@@ -75,15 +83,31 @@ async function readDashboardAgents(
 ): Promise<ReturnType<typeof providerAgentPresence> | undefined> {
   if (!options.agentRegistry) return undefined;
   try {
-    const snapshot = await withTimeout(
-      options.agentRegistry.snapshot(),
-      DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS
-    );
-    return snapshot
-      ? providerAgentPresence(options.config, options.database, snapshot)
-      : undefined;
+    const snapshotPromise = options.agentRegistry.snapshot();
+    // A slow provider probe must not blank the dashboard. Keep the eventual
+    // result so the next poll can display it without requiring a restart/F5.
+    void snapshotPromise.then((snapshot) => {
+      if (snapshot) dashboardAgentCache.set(options, providerAgentPresence(options.config, options.database, snapshot));
+    }).catch(() => undefined);
+    const snapshot = await withTimeout(snapshotPromise, DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS);
+    if (snapshot) dashboardAgentCache.set(options, providerAgentPresence(options.config, options.database, snapshot));
+    return dashboardAgentCache.get(options);
   } catch {
-    return undefined;
+    return dashboardAgentCache.get(options);
+  }
+}
+
+async function readConnectedProviderIds(options: DashboardServerOptions): Promise<Set<string>> {
+  if (!options.agentRegistry) return new Set();
+  try {
+    const snapshot = await withTimeout(options.agentRegistry.snapshot(), DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS);
+    return new Set(
+      (snapshot ?? [])
+        .filter((provider) => (provider.state === "ready" || provider.state === "working") && provider.control.mode === "enabled")
+        .map((provider) => String(provider.id))
+    );
+  } catch {
+    return new Set();
   }
 }
 
@@ -97,11 +121,11 @@ export type DashboardServerOptions = {
   reviewCoordinator?: ReviewCoordinator;
   featureCoordinator?: Pick<FeatureCoordinator, "reconcile">;
   featureGithub?: FeatureGitHubGateway;
-  backlogAutopilot?: Pick<BacklogAutopilot, "snapshot">;
+  backlogAutopilot?: Pick<BacklogAutopilot, "snapshot"> & Partial<Pick<BacklogAutopilot, "tick">>;
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
-  agentRegistry?: Pick<AgentRegistry, "snapshot"> & Partial<Pick<
+  agentRegistry?: Pick<AgentRegistry, "snapshot" | "list"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "startHealthProbing" | "healthProber" | "refresh"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -111,7 +135,10 @@ export type DashboardServerOptions = {
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const staticRoot = options.staticRoot ?? path.join(moduleRoot, "ui", "dist");
+  // In the packaged desktop app the working directory and module layout differ
+  // from the checkout, so the launcher pins the built UI via MAESTRO_UI_DIST.
+  const envUiDist = process.env.MAESTRO_UI_DIST?.trim();
+  const staticRoot = options.staticRoot ?? envUiDist ?? path.join(moduleRoot, "ui", "dist");
   const commands = new ApplicationCommands(
     options.database,
     options.featureGithub,
@@ -127,14 +154,23 @@ export function createDashboardServer(options: DashboardServerOptions) {
     worktreesRoot: options.config.worktreesPath,
     actionExecutor: options.goalCoordinator
       ? {
-          retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
-          resumeGoal: (taskId) => {
-            const run = options.database.listActiveGoalRuns().find((r) => r.taskId === taskId);
-            if (run?.status === "waiting_provider") {
-              options.goalCoordinator!.resume(run.id);
-            } else {
-              options.goalCoordinator!.start(taskId);
+          taskCreated: async (taskId) => {
+            try {
+              await options.backlogAutopilot?.tick?.();
+            } catch (error) {
+              options.database.addEvent({
+                source: "maestro",
+                type: "backlog.tick_failed",
+                text: error instanceof Error
+                  ? error.message
+                  : "Falha ao iniciar o autopilot após criar a task pelo chat.",
+                taskId
+              });
             }
+          },
+          retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
+          resumeGoal: (runId) => {
+            options.goalCoordinator!.resumeExistingRun(runId);
           },
           cancelTask: (taskId) => { options.goalCoordinator!.cancel(taskId); },
           rerunReview: () => { /* reviews are re-attempted by goal runner when task status moves to reviewing */ }
@@ -238,6 +274,42 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/providers/antigravity/permissions") {
+    try {
+      sendJson(response, 200, getAntigravityPermissionStatus());
+    } catch (error) {
+      sendJson(response, 500, {
+        error: "antigravity_permissions_read_failed",
+        details: error instanceof Error ? error.message : "Nao foi possivel ler as permissoes do Antigravity."
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/antigravity/permissions") {
+    const body = await readJsonBody(request);
+    if (body.confirmed !== true) {
+      sendJson(response, 400, { error: "explicit_confirmation_required" });
+      return;
+    }
+    try {
+      const status = configureAntigravityAutonomousPermissions();
+      options.database.addEvent({
+        source: "dashboard",
+        type: "provider.antigravity_permissions_configured",
+        text: "Permissoes de comandos de desenvolvimento do Antigravity configuradas pelo usuario.",
+        metadata: { rulesAdded: status.requiredRules.length - status.missingRules.length }
+      });
+      sendJson(response, 200, status);
+    } catch (error) {
+      sendJson(response, 500, {
+        error: "antigravity_permissions_write_failed",
+        details: error instanceof Error ? error.message : "Nao foi possivel configurar as permissoes do Antigravity."
+      });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/providers/discover-models") {
     const body = await readJsonBody(request);
     const endpointUrl = typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : "";
@@ -264,15 +336,28 @@ async function routeRequest(
   if (request.method === "POST" && url.pathname === "/api/providers/auth/start") {
     const body = await readJsonBody(request);
     const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const flowId = typeof body.flowId === "string" && body.flowId.trim() ? body.flowId.trim() : undefined;
     const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
     if (!preset) {
       sendJson(response, 404, { error: "provider_preset_not_found" });
       return;
     }
     try {
-      sendJson(response, 202, { session: providerAuthBroker.start(preset) });
+      sendJson(response, 202, { session: providerAuthBroker.start(preset, flowId) });
     } catch (error) {
-      sendJson(response, 422, { error: error instanceof Error ? error.message : "provider_auth_start_failed" });
+      const message = error instanceof Error ? error.message : "provider_auth_start_failed";
+      const missingCli = message.match(/^provider_cli_not_found:(.+)$/);
+      if (missingCli) {
+        sendJson(response, 422, {
+          error: "provider_cli_not_found",
+          detail: `${preset.label} nao esta instalado nesta maquina. Instale o CLI oficial e tente novamente.`,
+          command: missingCli[1],
+          setupCommand: preset.setupCommand ?? null,
+          docsUrl: preset.docsUrl
+        });
+      } else {
+        sendJson(response, 422, { error: message });
+      }
     }
     return;
   }
@@ -294,11 +379,11 @@ async function routeRequest(
   // delete one. Registration updates the live runtime and future boots.
   if (request.method === "GET" && url.pathname === "/api/providers/presets") {
     sendJson(response, 200, {
-      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint, category, docsUrl, setupCommand, apiKeyEnv, defaultEndpoint, builtIn, authFlow, authArgs, authStatusArgs, modelDiscovery }) => ({
+      presets: PROVIDER_PRESETS.map(({ id, label, command, args, envKeys, description, models, connectionHint, category, docsUrl, setupCommand, apiKeyEnv, defaultEndpoint, builtIn, authFlow, authFlows, authArgs, authStatusArgs, modelDiscovery }) => ({
         id, label, command, args: args ?? [], envKeys: envKeys ?? [], description, models: models ?? [], connectionHint,
         category, docsUrl, setupCommand: setupCommand ?? null, apiKeyEnv: apiKeyEnv ?? null,
         defaultEndpoint: defaultEndpoint ?? null, builtIn: Boolean(builtIn), authFlow: authFlow ?? "none",
-        authArgs: authArgs ?? [], authStatusArgs: authStatusArgs ?? [], modelDiscovery: modelDiscovery ?? "manual"
+        authFlows: authFlows ?? [], authArgs: authArgs ?? [], authStatusArgs: authStatusArgs ?? [], modelDiscovery: modelDiscovery ?? "manual"
       })),
       registered: readCustomProviders(process.cwd())
     });
@@ -307,6 +392,103 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/api/providers/registered") {
     sendJson(response, 200, { providers: readCustomProviders(process.cwd()) });
+    return;
+  }
+
+  // F4: single source of truth for provider status. One row per provider with
+  // runtime health (background prober cache), user intent (control mode) and
+  // quota credentials — every screen (Providers, Analytics, Chat, Overview)
+  // consumes THIS endpoint so they can no longer disagree.
+  if (request.method === "GET" && url.pathname === "/api/providers") {
+    if (!options.agentRegistry) {
+      sendJson(response, 503, { error: "agent_registry_unavailable" });
+      return;
+    }
+    const snapshot = await options.agentRegistry.snapshot();
+    const connectedProviderIds = new Set(
+      snapshot
+        .filter((provider) => (provider.state === "ready" || provider.state === "working") && provider.control.mode === "enabled")
+        .map((provider) => String(provider.id))
+    );
+    const quota = await fetchAllQuota(buildQuotaFetchers({ providerIds: connectedProviderIds })).catch(() => null);
+    const quotaFor = (providerId: string) => {
+      if (!quota) return null;
+      const entry = (quota as unknown as Record<string, unknown>)[providerId];
+      return entry ?? null;
+    };
+    sendJson(response, 200, {
+      fetchedAt: new Date().toISOString(),
+      providers: snapshot.map((provider) => ({
+        id: provider.id,
+        label: provider.label,
+        state: provider.state,
+        detail: provider.detail,
+        health: provider.health,
+        control: provider.control,
+        activeCount: provider.activeCount,
+        currentModel: provider.currentModel ?? null,
+        models: provider.models ?? [],
+        quota: quotaFor(provider.id)
+      }))
+    });
+    return;
+  }
+
+  // Re-examine every known provider without restarting the app: probe the
+  // executable (live PATH + known install dirs), run the auth-status probe
+  // when the preset defines one, and clear stale caches so cards, routing and
+  // quota pick up a CLI that was installed while Maestro was running.
+  if (request.method === "POST" && url.pathname === "/api/providers/rescan") {
+    const results: Array<{
+      presetId: string;
+      label: string;
+      installed: boolean;
+      path: string | null;
+      authStatus: "authenticated" | "unauthenticated" | "unknown";
+    }> = [];
+    for (const preset of PROVIDER_PRESETS) {
+      if (preset.category === "api" || preset.category === "local") continue;
+      const resolved = resolveCustomCliExecutable(preset.command);
+      let authStatus: "authenticated" | "unauthenticated" | "unknown" = "unknown";
+      if (resolved && preset.authStatusArgs && preset.authStatusArgs.length > 0) {
+        authStatus = await new Promise((resolve) => {
+          try {
+            const invocation = prepareCliSpawn(resolved, preset.authStatusArgs!);
+            const child = spawn(invocation.command, invocation.args, {
+              windowsHide: true,
+              stdio: "ignore",
+              timeout: 15_000
+            });
+            child.once("error", () => resolve("unauthenticated"));
+            child.once("close", (code) => resolve(code === 0 ? "authenticated" : "unauthenticated"));
+          } catch {
+            resolve("unknown");
+          }
+        });
+      }
+      results.push({
+        presetId: preset.id,
+        label: preset.label,
+        installed: Boolean(resolved),
+        path: resolved,
+        authStatus
+      });
+    }
+    options.agentRegistry?.list().forEach((provider) => provider.invalidateCaches?.());
+    // Refresh the background prober immediately so the next poll reflects the
+    // rescan without waiting a full interval (F5).
+    void options.agentRegistry?.healthProber?.refreshNow();
+    const installedIds = results.filter((r) => r.installed).map((r) => r.presetId);
+    options.database.addEvent({
+      source: "maestro",
+      type: "provider.rescan",
+      text: `Provider rescan: ${installedIds.length}/${results.length} CLIs detected.`,
+      metadata: sanitizePublicMetadata({ installed: installedIds }) as Record<string, unknown>
+    });
+    // The list is an inventory of every known account provider — "not
+    // installed" is informational (e.g. GitHub Copilot was never offered),
+    // not an error. Only the ones the user actually connected matter.
+    sendJson(response, 200, { scannedAt: new Date().toISOString(), providers: results });
     return;
   }
 
@@ -451,7 +633,8 @@ async function routeRequest(
 
   // Quota / rate-limit usage indicator (consumo disponível per provider).
   if (request.method === "GET" && url.pathname === "/api/quota") {
-    const quota = await fetchAllQuota(buildQuotaFetchers());
+    const providerIds = await readConnectedProviderIds(options);
+    const quota = await fetchAllQuota(buildQuotaFetchers({ providerIds }));
     sendJson(response, 200, { quota });
     return;
   }
@@ -716,6 +899,7 @@ async function routeRequest(
     const body = await readJsonBody(request);
     const decision = readEnum(body.decision, ["approved", "changes_requested", "rejected"]);
     const note = readString(body.note);
+    const mergeAfterApproval = body.merge === true;
     if (!decision || !note) {
       sendJson(response, 400, { error: "decision_and_justification_are_required" });
       return;
@@ -725,7 +909,8 @@ async function routeRequest(
         Number(reviewDecisionMatch[1]),
         decision as HumanReviewDecision,
         note,
-        "dashboard"
+        "dashboard",
+        mergeAfterApproval
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -1258,6 +1443,36 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/providers/refresh") {
+    if (!options.agentRegistry?.refresh) {
+      sendJson(response, 503, { error: "provider_refresh_unavailable" });
+      return;
+    }
+    try {
+      await options.agentRegistry.refresh();
+      sendJson(response, 200, { refreshed: true });
+    } catch (error) {
+      sendJson(response, 500, {
+        error: "provider_refresh_failed",
+        details: error instanceof Error ? error.message : "Falha ao atualizar os providers."
+      });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/tasks") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || "";
+    const requestedLimit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 100;
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(500, Math.trunc(requestedLimit))
+      : 100;
+    const tasks = projectKey
+      ? options.database.listTasksByProject(projectKey, limit)
+      : options.database.listTasks(limit);
+    sendJson(response, 200, { tasks });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/tasks") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
@@ -1270,6 +1485,14 @@ async function routeRequest(
 
     try {
       const task = commands.createTask({ channel: "dashboard" }, { text, projectKey });
+      void options.backlogAutopilot?.tick?.().catch((error) => {
+        options.database.addEvent({
+          source: "maestro",
+          type: "backlog.tick_failed",
+          text: error instanceof Error ? error.message : "Falha ao iniciar o autopilot após criar a task.",
+          taskId: task.id
+        });
+      });
       sendJson(response, 201, { task });
     } catch (error) {
       sendCommandError(response, error, "task_create_failed");
@@ -1290,6 +1513,14 @@ async function routeRequest(
         { channel: "dashboard" },
         { parentTaskId: Number(followUpTaskMatch[1]), text }
       );
+      void options.backlogAutopilot?.tick?.().catch((error) => {
+        options.database.addEvent({
+          source: "maestro",
+          type: "backlog.tick_failed",
+          text: error instanceof Error ? error.message : "Falha ao iniciar o autopilot após criar a continuação.",
+          taskId: task.id
+        });
+      });
       sendJson(response, 201, { task });
     } catch (error) {
       sendCommandError(response, error, "task_follow_up_failed");
@@ -1335,18 +1566,55 @@ async function routeRequest(
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/chat/messages") {
-    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || "";
-    const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
+  if (request.method === "GET" && url.pathname === "/api/chat/threads") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
+    try {
+      sendJson(response, 200, { projectKey, threads: chatService.listThreads(projectKey) });
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_threads_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
 
-    if (!projectKey) {
-      sendJson(response, 400, { error: "projectKey_is_required" });
+  if (request.method === "POST" && url.pathname === "/api/chat/threads") {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
+    const title = typeof body.title === "string" ? body.title.trim() : undefined;
+    const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
+    try {
+      sendJson(response, 201, { thread: chatService.createThread(projectKey, title, accessMode) });
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_thread_create_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
+  const deleteChatThreadMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)$/);
+  if (request.method === "DELETE" && deleteChatThreadMatch) {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
+    const threadId = Number(deleteChatThreadMatch[1]);
+    if (!Number.isInteger(threadId)) {
+      sendJson(response, 400, { error: "valid_thread_id_is_required" });
       return;
     }
+    try {
+      const deleted = chatService.deleteThread(projectKey, threadId);
+      sendJson(response, deleted ? 200 : 404, { deleted });
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_thread_delete_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/chat/messages") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
+    const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
+    const threadIdParam = url.searchParams.get("threadId");
+    const threadId = threadIdParam ? Number(threadIdParam) : undefined;
 
     try {
-      const messages = await chatService.getHistory(projectKey, limit);
-      sendJson(response, 200, { projectKey, messages });
+      const messages = await chatService.getHistory(projectKey, limit, threadId);
+      sendJson(response, 200, { projectKey, threadId: messages[0]?.threadId ?? threadId ?? null, messages });
     } catch (error) {
       sendJson(response, 500, { error: "chat_history_failed", details: error instanceof Error ? error.message : "unknown" });
     }
@@ -1355,19 +1623,23 @@ async function routeRequest(
 
   if (request.method === "POST" && url.pathname === "/api/chat/ask") {
     const body = await readJsonBody(request);
-    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
     const message = typeof body.message === "string" ? body.message.trim() : "";
+    const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
+    const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
 
-    if (!projectKey || !message) {
-      sendJson(response, 400, { error: "projectKey_and_message_are_required" });
+    if (!message) {
+      sendJson(response, 400, { error: "message_is_required" });
       return;
     }
 
     try {
       const chatResponse = await chatService.ask({
         projectKey,
+        threadId,
         surface: "dashboard",
-        message
+        message,
+        accessMode
       });
       sendJson(response, 200, chatResponse);
     } catch (error) {
@@ -1378,23 +1650,27 @@ async function routeRequest(
 
   if (request.method === "POST" && url.pathname === "/api/chat/action") {
     const body = await readJsonBody(request);
-    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : "";
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
     const action = body.action as import("../chat/types.js").GovernedChatAction;
+    const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
+    const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
 
-    if (!projectKey || !action || !(action as any).type || (action as any).targetId === undefined) {
-      sendJson(response, 400, { error: "projectKey_and_valid_action_are_required" });
+    if (!action || !(action as any).type || (action as any).targetId === undefined) {
+      sendJson(response, 400, { error: "valid_action_is_required" });
       return;
     }
 
     try {
       const actionResult = await chatService.executeAction({
         projectKey,
+        threadId,
         surface: "dashboard",
-        action
+        action,
+        accessMode
       });
       sendJson(response, 200, actionResult);
     } catch (error) {
-      sendJson(response, 500, { error: "chat_action_failed", details: error instanceof Error ? error.message : "unknown" });
+      sendJson(response, chatErrorStatus(error), { error: "chat_action_failed", details: error instanceof Error ? error.message : "unknown" });
     }
     return;
   }
@@ -1479,6 +1755,24 @@ async function routeRequest(
       const message = error instanceof Error ? error.message : "Unknown goal start error";
       const status = message.includes("not found") ? 404 : 409;
       sendJson(response, status, { error: "goal_start_failed", details: message });
+    }
+    return;
+  }
+
+  const goalResumeMatch = url.pathname.match(/^\/api\/goals\/(\d+)\/resume$/);
+  if (request.method === "POST" && goalResumeMatch) {
+    if (!options.goalCoordinator) {
+      sendJson(response, 503, { error: "goal_runner_unavailable" });
+      return;
+    }
+    const runId = Number(goalResumeMatch[1]);
+    try {
+      const run = options.goalCoordinator.resumeExistingRun(runId);
+      sendJson(response, 202, { run });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown goal resume error";
+      const status = message.includes("not found") ? 404 : 409;
+      sendJson(response, status, { error: "goal_resume_failed", details: message });
     }
     return;
   }
@@ -1579,6 +1873,13 @@ async function routeRequest(
   }
 
   serveStatic(response, staticRoot, url.pathname);
+}
+
+function chatErrorStatus(error: unknown): number {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/somente leitura|acesso.*perm|modo de acesso/i.test(message)) return 403;
+  if (/nao e mais aplicavel|não pertence|does not belong/i.test(message)) return 409;
+  return 500;
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {

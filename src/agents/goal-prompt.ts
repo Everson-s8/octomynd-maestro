@@ -44,7 +44,9 @@ export function buildAgentGoalPrompt(
     "Do not use Caveman-style phrasing in security decisions, final reviews, merges, or important messages to the user.",
     "Never commit, push, merge, deploy, change credentials, or leave the workspace.",
     `Project: ${request.project.name} (@${request.project.key})`,
-    `Task #${request.task.id}: ${request.task.text}`,
+    `Task #${request.task.id}: ${request.task.title || request.task.text}`,
+    `Original user request: ${request.task.text}`,
+    ...(request.task.specification ? ["Task specification:", request.task.specification] : []),
     `Phase: ${request.phase}`,
     phaseInstruction,
     ...formatFeatureTaskContract(request.featureTaskContract),
@@ -58,6 +60,12 @@ export function buildAgentGoalPrompt(
     "",
     outputFormat.output
   ].join("\n");
+}
+
+/** Chat is a separate surface from a persistent goal; it must not inherit
+ * planning, coding, or structured-handoff instructions. */
+export function buildConversationPrompt(request: AgentExecutionRequest): string {
+  return request.humanFeedback?.trim() || request.task.text;
 }
 
 export function parseFinalReviewDecision(content: string): "approved" | "changes_requested" | null {

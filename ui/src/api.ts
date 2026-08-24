@@ -21,6 +21,8 @@ export type DashboardTask = {
   projectKey: string | null;
   projectName: string | null;
   text: string;
+  title?: string;
+  specification?: string;
   status: TaskStatus;
   source: string;
   branchName: string | null;
@@ -392,7 +394,7 @@ export type ProviderPolicySnapshot = {
 };
 
 export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }> {
-  const response = await fetch("/api/provider-policy");
+  const response = await fetch("/api/provider-policy", { cache: "no-store" });
   const payload = await response.json() as { policy?: ProviderPolicySnapshot; models?: Record<string, string[]>; error?: string };
   if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
   const controls = Array.isArray(payload.policy.controls) ? payload.policy.controls : [];
@@ -404,6 +406,29 @@ export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { 
     models: payload.models ?? payload.policy.models,
     availableModels: payload.models ?? payload.policy.models
   };
+}
+
+export type ProviderRescanEntry = {
+  presetId: string;
+  label: string;
+  installed: boolean;
+  path: string | null;
+  authStatus: "authenticated" | "unauthenticated" | "unknown";
+};
+
+export async function rescanProviders(): Promise<{ scannedAt: string; providers: ProviderRescanEntry[] }> {
+  const response = await fetch("/api/providers/rescan", { method: "POST" });
+  const payload = await response.json() as { scannedAt?: string; providers?: ProviderRescanEntry[]; error?: string };
+  if (!response.ok || !payload.providers) throw new Error(payload.error || "Não foi possível reexaminar os providers.");
+  return { scannedAt: payload.scannedAt ?? new Date().toISOString(), providers: payload.providers };
+}
+
+export async function refreshProviders(): Promise<void> {
+  const response = await fetch("/api/providers/refresh", { method: "POST" });
+  const payload = await response.json().catch(() => ({})) as { error?: string; details?: string };
+  if (!response.ok) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel atualizar os providers.");
+  }
 }
 
 export async function updateProviderControl(
@@ -438,6 +463,31 @@ export interface ProviderConnectionResult {
   detail: string;
   executable: string | null;
   models?: string[];
+}
+
+export type AntigravityPermissionStatus = {
+  configured: boolean;
+  settingsPath: string;
+  requiredRules: string[];
+  missingRules: string[];
+};
+
+export async function fetchAntigravityPermissionStatus(): Promise<AntigravityPermissionStatus> {
+  const response = await fetch("/api/providers/antigravity/permissions", { cache: "no-store" });
+  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
+  if (!response.ok) throw new Error(payload.details || payload.error || "Nao foi possivel ler as permissoes do Antigravity.");
+  return payload;
+}
+
+export async function configureAntigravityPermissions(): Promise<AntigravityPermissionStatus> {
+  const response = await fetch("/api/providers/antigravity/permissions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmed: true })
+  });
+  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
+  if (!response.ok) throw new Error(payload.details || payload.error || "Nao foi possivel configurar as permissoes do Antigravity.");
+  return payload;
 }
 
 /** Probe whether a provider CLI or endpoint is reachable without persisting it. */
@@ -475,6 +525,8 @@ export async function updateCapabilityRouting(
 
 export type ProviderConnectionMode = "account" | "api_key" | "local" | "custom";
 
+export type ProviderAuthFlowId = "browser" | "device_code" | "terminal" | "verify_only";
+
 export type ProviderPreset = {
   id: string;
   label: string;
@@ -491,9 +543,23 @@ export type ProviderPreset = {
   defaultEndpoint: string | null;
   builtIn: boolean;
   authFlow: "device_code" | "terminal" | "none";
+  /** Alternative login flows the wizard offers (browser default, device code, terminal verify). */
+  authFlows: Array<{
+    id: ProviderAuthFlowId;
+    label: string;
+    description?: string;
+    recommended?: boolean;
+  }>;
   authArgs: string[];
   authStatusArgs: string[];
   modelDiscovery: "cli" | "endpoint" | "ollama" | "manual";
+};
+
+export type ProviderAuthFlowOption = {
+  id: ProviderAuthFlowId;
+  label: string;
+  description?: string;
+  recommended?: boolean;
 };
 
 export type ProviderAuthSession = {
@@ -546,7 +612,7 @@ export type RegisterProviderResult = {
 };
 
 export async function fetchProviderPresets(): Promise<{ presets: ProviderPreset[]; registered: RegisteredCustomProvider[] }> {
-  const response = await fetch("/api/providers/presets");
+  const response = await fetch("/api/providers/presets", { cache: "no-store" });
   const payload = await response.json() as { presets?: ProviderPreset[]; registered?: RegisteredCustomProvider[]; error?: string };
   if (!response.ok) throw new Error(payload.error || "Nao foi possivel carregar presets de providers.");
   return { presets: payload.presets ?? [], registered: payload.registered ?? [] };
@@ -593,14 +659,14 @@ export async function discoverProviderModels(input: {
   return payload.models ?? [];
 }
 
-export async function startProviderAuth(presetId: string): Promise<ProviderAuthSession> {
+export async function startProviderAuth(presetId: string, flowId?: ProviderAuthFlowId): Promise<ProviderAuthSession> {
   const response = await fetch("/api/providers/auth/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ presetId })
+    body: JSON.stringify({ presetId, ...(flowId ? { flowId } : {}) })
   });
-  const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
-  if (!response.ok || !payload.session) throw new Error(payload.error || "Nao foi possivel iniciar a autenticacao.");
+  const payload = await response.json() as { session?: ProviderAuthSession; error?: string; detail?: string };
+  if (!response.ok || !payload.session) throw new Error(payload.detail || payload.error || "Nao foi possivel iniciar a autenticacao.");
   return payload.session;
 }
 
@@ -1203,15 +1269,28 @@ export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<Goal
   return payload.run;
 }
 
+export async function resumeGoal(runId: number): Promise<GoalRun> {
+  const response = await fetch(`/api/goals/${runId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  });
+  const payload = await response.json() as { run?: GoalRun; error?: string; details?: string };
+  if (!response.ok || !payload.run) {
+    throw new Error(payload.details || payload.error || "Nao foi possivel retomar a goal.");
+  }
+  return payload.run;
+}
+
 export async function decideHumanReview(
   runId: number,
   decision: HumanReviewDecision,
-  note: string
+  note: string,
+  mergeAfterApproval = false
 ): Promise<ReviewQueueItem> {
   const response = await fetch(`/api/review-queue/${runId}/decision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ decision, note })
+    body: JSON.stringify({ decision, note, merge: mergeAfterApproval || decision === "approved" })
   });
   const payload = await response.json() as {
     item?: ReviewQueueItem;
@@ -1233,8 +1312,22 @@ export type GovernedChatAction = {
   payload?: Record<string, any>;
 };
 
+export type OperationalChatThread = {
+  id: number;
+  projectKey: string;
+  title: string;
+  accessMode: ChatAccessMode;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export type ChatAccessMode = "read_only" | "standard" | "full";
+export const GLOBAL_CHAT_PROJECT_KEY = "__maestro__";
+
 export type OperationalChatMessage = {
   id: number;
+  threadId: number | null;
   projectKey: string;
   surface: "dashboard" | "telegram";
   senderRole: "user" | "orchestrator" | "system";
@@ -1246,6 +1339,7 @@ export type OperationalChatMessage = {
 
 export type OperationalChatResponse = {
   messageId: number;
+  threadId: number;
   projectKey: string;
   surface: "dashboard" | "telegram";
   explanation: string;
@@ -1262,8 +1356,33 @@ export type OperationalChatActionResult = {
   updatedEvidence?: any;
 };
 
-export async function fetchChatMessages(projectKey: string, limit = 50): Promise<OperationalChatMessage[]> {
-  const response = await fetch(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}`);
+export async function fetchChatThreads(projectKey = GLOBAL_CHAT_PROJECT_KEY): Promise<OperationalChatThread[]> {
+  const response = await fetch(`/api/chat/threads?projectKey=${encodeURIComponent(projectKey)}`, { cache: "no-store" });
+  const payload = await response.json() as { threads?: OperationalChatThread[]; error?: string };
+  if (!response.ok || !payload.threads) throw new Error(payload.error || "Nao foi possivel carregar as conversas.");
+  return payload.threads;
+}
+
+export async function createChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, title = "Nova conversa", accessMode: ChatAccessMode = "standard"): Promise<OperationalChatThread> {
+  const response = await fetch("/api/chat/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, title, accessMode })
+  });
+  const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
+  if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Nao foi possivel criar a conversa.");
+  return payload.thread;
+}
+
+export async function deleteChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number): Promise<void> {
+  const response = await fetch(`/api/chat/threads/${threadId}?projectKey=${encodeURIComponent(projectKey)}`, { method: "DELETE" });
+  const payload = await response.json().catch(() => ({})) as { deleted?: boolean; error?: string; details?: string };
+  if (!response.ok || !payload.deleted) throw new Error(payload.details || payload.error || "Nao foi possivel excluir a conversa.");
+}
+
+export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, limit = 50, threadId?: number): Promise<OperationalChatMessage[]> {
+  const threadQuery = threadId ? `&threadId=${threadId}` : "";
+  const response = await fetch(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}${threadQuery}`, { cache: "no-store" });
   const payload = await response.json() as { messages?: OperationalChatMessage[]; error?: string };
   if (!response.ok || !payload.messages) {
     throw new Error(payload.error || "Nao foi possivel carregar o historico de chat.");
@@ -1271,11 +1390,11 @@ export async function fetchChatMessages(projectKey: string, limit = 50): Promise
   return payload.messages;
 }
 
-export async function sendChatMessage(projectKey: string, message: string): Promise<OperationalChatResponse> {
+export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard"): Promise<OperationalChatResponse> {
   const response = await fetch("/api/chat/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, message, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, message, accessMode, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
   if (!response.ok || !payload.explanation) {
@@ -1284,11 +1403,11 @@ export async function sendChatMessage(projectKey: string, message: string): Prom
   return payload;
 }
 
-export async function executeChatAction(projectKey: string, action: GovernedChatAction): Promise<OperationalChatActionResult> {
+export async function executeChatAction(projectKey = GLOBAL_CHAT_PROJECT_KEY, action: GovernedChatAction, threadId?: number, accessMode: ChatAccessMode = "standard"): Promise<OperationalChatActionResult> {
   const response = await fetch("/api/chat/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, action, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, action, accessMode, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatActionResult & { error?: string; details?: string };
   if (!response.ok || payload.success === undefined) {
@@ -1365,12 +1484,21 @@ export type QuotaBucket = {
   detail?: string;
 };
 
+export type QuotaUnavailableReason =
+  | "not_installed"
+  | "not_authenticated"
+  | "session_down"
+  | "transient_error"
+  | "no_data";
+
 export type QuotaResult = {
   provider: string;
   status: "ok" | "unavailable" | "error";
   updatedAt: string;
   buckets: QuotaBucket[];
   error: string | null;
+  /** Machine-readable reason when status is not "ok". */
+  reasonCode?: QuotaUnavailableReason;
   stale?: boolean;
   lastSuccessfulAt?: string;
 };
@@ -1518,7 +1646,7 @@ export type TaskLogs = {
 };
 
 export async function fetchTaskLogs(taskId: number): Promise<TaskLogs> {
-  const response = await fetch(`/api/tasks/${taskId}/logs`);
+  const response = await fetch(`/api/tasks/${taskId}/logs`, { cache: "no-store" });
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error(`Task #${taskId} não encontrada.`);

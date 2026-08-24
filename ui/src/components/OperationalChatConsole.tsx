@@ -1,15 +1,20 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, KeyboardEvent, MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   DashboardProject,
   executeChatAction,
   fetchChatMessages,
+  fetchChatThreads,
   GovernedChatAction,
   OperationalChatMessage,
+  OperationalChatThread,
+  ChatAccessMode,
+  GLOBAL_CHAT_PROJECT_KEY,
+  createChatThread,
+  deleteChatThread,
   sendChatMessage
 } from "../api";
 import { formatRelative } from "../helpers";
 import { Icon } from "./Icon";
-import { SectionHeader } from "./SectionHeader";
 
 export function OperationalChatConsole({
   projects,
@@ -19,34 +24,144 @@ export function OperationalChatConsole({
   onChanged?: () => void;
 }) {
   const [selectedProjectKey, setSelectedProjectKey] = useState<string>(
-    projects.length > 0 ? projects[0].key : ""
+    projects.length > 0 ? projects[0].key : GLOBAL_CHAT_PROJECT_KEY
   );
+  const [threads, setThreads] = useState<OperationalChatThread[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
   const [messages, setMessages] = useState<OperationalChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [threadBusy, setThreadBusy] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [actionExecuting, setActionExecuting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accessMode, setAccessMode] = useState<ChatAccessMode>("standard");
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const deleteConfirmTimer = useRef<number | null>(null);
 
-  const loadHistory = useCallback(async (projectKey: string) => {
+  useEffect(() => {
+    setSelectedProjectKey((current) => {
+      if (projects.length === 0) return GLOBAL_CHAT_PROJECT_KEY;
+      return current === GLOBAL_CHAT_PROJECT_KEY || projects.some((project) => project.key === current) ? current : projects[0].key;
+    });
+  }, [projects]);
+
+  const loadThreads = useCallback(async (projectKey: string) => {
     if (!projectKey) return;
     try {
       setError(null);
-      const history = await fetchChatMessages(projectKey);
-      setMessages(history);
+      let nextThreads = await fetchChatThreads(projectKey);
+      if (nextThreads.length === 0) {
+        nextThreads = [await createChatThread(projectKey)];
+      }
+      setThreads(nextThreads);
+      setSelectedThreadId((current) => nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0].id);
+      const selected = nextThreads.find((thread) => thread.id === selectedThreadId) ?? nextThreads[0];
+      setAccessMode(selected.accessMode);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar histórico.");
+      setError(err instanceof Error ? err.message : "Falha ao carregar as conversas.");
     }
   }, []);
 
   useEffect(() => {
     if (selectedProjectKey) {
-      void loadHistory(selectedProjectKey);
+      setSelectedThreadId(null);
+      setMessages([]);
+      void loadThreads(selectedProjectKey);
     }
-  }, [selectedProjectKey, loadHistory]);
+  }, [selectedProjectKey, loadThreads]);
+
+  const loadHistory = useCallback(async (projectKey: string, threadId: number) => {
+    try {
+      setHistoryLoading(true);
+      setError(null);
+      setMessages(await fetchChatMessages(projectKey, 100, threadId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao carregar o histórico.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedProjectKey && selectedThreadId !== null) {
+      void loadHistory(selectedProjectKey, selectedThreadId);
+    }
+  }, [selectedProjectKey, selectedThreadId, loadHistory]);
+
+  useLayoutEffect(() => {
+    const element = chatBodyRef.current;
+    if (!element) return;
+    const frame = window.requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, loading, historyLoading, selectedThreadId]);
+
+  useEffect(() => () => {
+    if (deleteConfirmTimer.current !== null) window.clearTimeout(deleteConfirmTimer.current);
+  }, []);
+
+  const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
+
+  useEffect(() => {
+    if (selectedThread) setAccessMode(selectedThread.accessMode);
+  }, [selectedThread]);
+
+  const projectLabel = selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
+    ? "Maestro (geral)"
+    : `@${selectedProjectKey}`;
+
+  const handleNewChat = async () => {
+    if (!selectedProjectKey || threadBusy) return;
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await createChatThread(selectedProjectKey, "Nova conversa", accessMode);
+      setThreads((current) => [thread, ...current]);
+      setSelectedThreadId(thread.id);
+      setMessages([]);
+      setAccessMode(thread.accessMode);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao criar uma nova conversa.");
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const handleDeleteChat = async (event: MouseEvent | KeyboardEvent, thread: OperationalChatThread) => {
+    event.stopPropagation();
+    if (confirmDeleteId !== thread.id) {
+      setConfirmDeleteId(thread.id);
+      if (deleteConfirmTimer.current !== null) window.clearTimeout(deleteConfirmTimer.current);
+      deleteConfirmTimer.current = window.setTimeout(() => setConfirmDeleteId(null), 2500);
+      return;
+    }
+
+    setThreadBusy(true);
+    setError(null);
+    try {
+      await deleteChatThread(selectedProjectKey, thread.id);
+      const remaining = threads.filter((item) => item.id !== thread.id);
+      setThreads(remaining);
+      if (selectedThreadId === thread.id) {
+        setSelectedThreadId(remaining[0]?.id ?? null);
+        setMessages([]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao excluir a conversa.");
+    } finally {
+      setConfirmDeleteId(null);
+      setThreadBusy(false);
+    }
+  };
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedProjectKey || loading) return;
+    if (!inputText.trim() || !selectedProjectKey || !selectedThreadId || loading) return;
 
     const userText = inputText.trim();
     setInputText("");
@@ -55,6 +170,7 @@ export function OperationalChatConsole({
 
     const tempUserMsg: OperationalChatMessage = {
       id: Date.now(),
+      threadId: selectedThreadId,
       projectKey: selectedProjectKey,
       surface: "dashboard",
       senderRole: "user",
@@ -64,8 +180,11 @@ export function OperationalChatConsole({
     setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      await sendChatMessage(selectedProjectKey, userText);
-      await loadHistory(selectedProjectKey);
+      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode);
+      await Promise.all([
+        loadHistory(selectedProjectKey, selectedThreadId),
+        loadThreads(selectedProjectKey)
+      ]);
       if (onChanged) onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao enviar mensagem.");
@@ -78,6 +197,7 @@ export function OperationalChatConsole({
     if (!selectedProjectKey || actionExecuting) return;
 
     const requiresConfirmation = [
+      "create_task",
       "cancel_task",
       "cancel_feature_plan",
       "resume_goal",
@@ -94,8 +214,9 @@ export function OperationalChatConsole({
     setError(null);
 
     try {
-      await executeChatAction(selectedProjectKey, action);
-      await loadHistory(selectedProjectKey);
+      if (!selectedThreadId) return;
+      await executeChatAction(selectedProjectKey, action, selectedThreadId, accessMode);
+      await loadHistory(selectedProjectKey, selectedThreadId);
       if (onChanged) onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao executar ação governada.");
@@ -105,178 +226,162 @@ export function OperationalChatConsole({
   };
 
   return (
-    <section className="chat-console panel" id="chat" aria-labelledby="chat-title">
-      <SectionHeader
-        eyebrow="Orquestrador unificado"
-        title="Chat Operacional"
-        meta={selectedProjectKey ? `@${selectedProjectKey}` : "Selecione um projeto"}
-      />
-
-      <div className="chat-toolbar" style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px" }}>
-        <label htmlFor="chat-project-select" style={{ fontSize: "14px", fontWeight: "600", color: "#a0a5b5" }}>
-          Projeto:
+    <section className="chat-page" id="chat" aria-labelledby="chat-title">
+      <div className="chat-page-top">
+        <div>
+          <div className="chat-eyebrow">Orquestrador unificado</div>
+          <h1 id="chat-title">Chat</h1>
+        </div>
+        <label className="chat-project-picker" htmlFor="chat-project-select">
+          <span>Contexto</span>
+          <select id="chat-project-select" value={selectedProjectKey} onChange={(e) => setSelectedProjectKey(e.target.value)}>
+            <option value={GLOBAL_CHAT_PROJECT_KEY}>Maestro (geral)</option>
+            {projects.map((p) => (
+              <option key={p.key} value={p.key}>@{p.key}</option>
+            ))}
+          </select>
         </label>
-        <select
-          id="chat-project-select"
-          value={selectedProjectKey}
-          onChange={(e) => setSelectedProjectKey(e.target.value)}
-          style={{
-            padding: "8px 12px",
-            borderRadius: "6px",
-            background: "#181a20",
-            color: "#fff",
-            border: "1px solid #2e323e",
-            fontSize: "14px"
-          }}
-        >
-          {projects.map((p) => (
-            <option key={p.key} value={p.key}>
-              @{p.key} ({p.name})
-            </option>
-          ))}
-        </select>
+        <label className="chat-access-picker" htmlFor="chat-access-select">
+          <span>Acesso</span>
+          <select id="chat-access-select" value={accessMode} onChange={(e) => setAccessMode(e.target.value as ChatAccessMode)}>
+            <option value="read_only">Somente leitura</option>
+            <option value="standard">Standard</option>
+            <option value="full">Full Access</option>
+          </select>
+        </label>
       </div>
 
-      {error ? <div className="error-banner" style={{ marginBottom: "16px", color: "#ff6b6b" }}>{error}</div> : null}
-
-      <div
-        className="chat-log"
-        style={{
-          maxHeight: "380px",
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          marginBottom: "16px",
-          paddingRight: "8px"
-        }}
-      >
-        {messages.length === 0 ? (
-          <div
-            className="chat-empty"
-            style={{
-              padding: "24px",
-              textAlign: "center",
-              color: "#808595",
-              background: "#13151a",
-              borderRadius: "8px"
-            }}
-          >
-            <p style={{ margin: 0, fontWeight: "600" }}>Nenhuma mensagem ainda neste projeto.</p>
-            <small>Pergunte ao orquestrador por que tasks, goals ou feature plans estão bloqueados.</small>
+      <div className="chat-workspace">
+        <aside className="chat-threads" aria-label="Conversas">
+          <div className="chat-threads-header">
+            <span>Conversas</span>
+            <button type="button" className="chat-new-button" onClick={() => void handleNewChat()} disabled={!selectedProjectKey || threadBusy} title="Novo chat" aria-label="Criar novo chat">
+              <Icon name="plus" />
+            </button>
           </div>
-        ) : (
-          messages.map((msg) => {
-            const isUser = msg.senderRole === "user";
-            const isSystem = msg.senderRole === "system";
-            let actions: GovernedChatAction[] = [];
-            if (msg.actionTaken) {
-              try {
-                actions = JSON.parse(msg.actionTaken);
-              } catch (_) {}
-            }
-
-            return (
+          <div className="chat-thread-list">
+            {threads.map((thread) => (
               <div
-                key={msg.id}
-                className={`chat-message ${
-                  isUser ? "user-message" : isSystem ? "system-message" : "orchestrator-message"
-                }`}
-                style={{
-                  padding: "12px 16px",
-                  borderRadius: "8px",
-                  background: isUser ? "#1e293b" : isSystem ? "#2d1f3d" : "#172033",
-                  border: isUser ? "1px solid #334155" : isSystem ? "1px solid #5b21b6" : "1px solid #1e3a8a",
-                  alignSelf: isUser ? "flex-end" : "flex-start",
-                  maxWidth: "92%"
-                }}
+                className={`chat-thread ${thread.id === selectedThreadId ? "is-active" : ""}`}
+                key={thread.id}
               >
-                <div
-                  className="chat-message-header"
-                  style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px", fontSize: "12px", color: "#94a3b8" }}
-                >
-                  <strong style={{ color: isUser ? "#38bdf8" : isSystem ? "#c084fc" : "#60a5fa" }}>
-                    {isUser ? "Você" : isSystem ? "Sistema" : "Maestro Orchestrator"}
-                  </strong>
-                  <span>
-                    {formatRelative(msg.createdAt)} · {msg.surface}
+                <button type="button" className="chat-thread-select" onClick={() => setSelectedThreadId(thread.id)}>
+                  <span className="chat-thread-info">
+                    <strong>{thread.title}</strong>
+                    <small>{formatRelative(thread.updatedAt)}</small>
                   </span>
-                </div>
-                <div className="chat-message-body">
-                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "14px", color: "#e2e8f0" }}>
-                    {msg.messageText}
-                  </pre>
-                </div>
+                </button>
+                <button
+                  type="button"
+                  className={`chat-thread-delete ${confirmDeleteId === thread.id ? "is-confirm" : ""}`}
+                  title={confirmDeleteId === thread.id ? "Clique novamente para confirmar" : "Excluir conversa"}
+                  aria-label={confirmDeleteId === thread.id ? "Confirmar exclusão" : "Excluir conversa"}
+                  onClick={(event) => void handleDeleteChat(event, thread)}
+                >
+                  <Icon name={confirmDeleteId === thread.id ? "check" : "trash"} />
+                </button>
+              </div>
+            ))}
+          </div>
+          {threads.length === 0 ? <div className="chat-thread-empty">Clique em + para iniciar uma conversa.</div> : null}
+        </aside>
 
-                {actions.length > 0 && !isUser ? (
-                  <div
-                    className="chat-actions"
-                    style={{ marginTop: "12px", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}
-                  >
-                    <span style={{ fontSize: "12px", fontWeight: "600", color: "#a7f3d0", display: "block", marginBottom: "8px" }}>
-                      Ações governadas recomendadas:
-                    </span>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                      {actions.map((act) => (
-                        <button
-                          key={act.id}
-                          className="action-button"
-                          disabled={actionExecuting === act.id}
-                          onClick={() => handleAction(act)}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: "6px",
-                            background: "#059669",
-                            color: "#ffffff",
-                            border: "none",
-                            fontSize: "13px",
-                            fontWeight: "600",
-                            cursor: actionExecuting === act.id ? "wait" : "pointer"
-                          }}
-                        >
-                          {actionExecuting === act.id ? "Executando..." : act.label}
-                        </button>
-                      ))}
+        <div className="chat-main-panel">
+          <header className="chat-main-header">
+            <div>
+              <strong>{selectedThread?.title ?? "Nenhuma conversa"}</strong>
+              <span>{projectLabel} · Maestro</span>
+            </div>
+            <span className="chat-context-badge">
+              {accessMode === "read_only" ? "somente leitura" : accessMode === "full" ? "acesso amplo governado" : "acesso padrão"}
+            </span>
+          </header>
+
+          {error ? <div className="chat-error" role="alert">{error}</div> : null}
+
+          <div className="chat-body" ref={chatBodyRef} aria-busy={loading || historyLoading}>
+            {historyLoading ? (
+              <div className="chat-loading-history"><span className="chat-spinner" /> Carregando conversa…</div>
+            ) : messages.length === 0 ? (
+              <div className="chat-empty-state">
+                <div className="chat-empty-icon"><Icon name="chat" /></div>
+                <h2>Nova conversa</h2>
+                <p>{selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
+                  ? "Converse com o Maestro sobre providers, projetos e execução."
+                  : "Pergunte sobre este projeto, uma task bloqueada ou qualquer dúvida de implementação."}</p>
+              </div>
+            ) : (
+              messages.map((msg) => {
+                const isUser = msg.senderRole === "user";
+                const isSystem = msg.senderRole === "system";
+                let actions: GovernedChatAction[] = [];
+                if (msg.actionTaken && accessMode !== "read_only") {
+                  try {
+                    const parsed: unknown = JSON.parse(msg.actionTaken);
+                    actions = Array.isArray(parsed) ? parsed as GovernedChatAction[] : [];
+                    if (accessMode === "standard") {
+                      actions = actions.filter((action) => !["cancel_task", "cancel_feature_plan"].includes(action.type));
+                    }
+                  } catch (_) { /* legacy action text */ }
+                }
+
+                return (
+                  <div key={msg.id} className={`chat-message ${isUser ? "is-user" : isSystem ? "is-system" : "is-maestro"}`}>
+                    <div className="chat-avatar"><Icon name={isUser ? "hand" : isSystem ? "shield" : "ghost"} /></div>
+                    <div className="chat-message-content">
+                      <span className="chat-message-label">{isUser ? "Você" : isSystem ? "Sistema" : "Maestro"}</span>
+                      <div className="chat-bubble">{msg.messageText}</div>
+                      {actions.length > 0 && !isUser ? (
+                        <div className="chat-actions">
+                          <span>Ações disponíveis</span>
+                          <div>
+                            {actions.map((act) => (
+                              <button key={act.id} type="button" disabled={actionExecuting === act.id} onClick={() => void handleAction(act)}>
+                                {actionExecuting === act.id ? "Executando…" : act.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </div>
+                );
+              })
+            )}
 
-      <form className="chat-input-form" onSubmit={handleSend} style={{ display: "flex", gap: "10px" }}>
-        <input
-          type="text"
-          placeholder={
-            loading
-              ? "Orquestrador analisando evidências..."
-              : "Pergunte ao Maestro (ex: Por que a Task #12 está bloqueada?)..."
-          }
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          disabled={loading || !selectedProjectKey}
-          style={{
-            flex: 1,
-            padding: "10px 14px",
-            borderRadius: "6px",
-            background: "#181a20",
-            border: "1px solid #2e323e",
-            color: "#fff",
-            fontSize: "14px"
-          }}
-        />
-        <button
-          type="submit"
-          disabled={loading || !inputText.trim() || !selectedProjectKey}
-          className="primary-action"
-          style={{ padding: "10px 18px" }}
-        >
-          <Icon name="send" />
-          Enviar
-        </button>
-      </form>
+            {loading ? (
+              <div className="chat-thinking" role="status" aria-live="polite">
+                <div className="chat-avatar"><Icon name="ghost" /></div>
+                <div className="chat-thinking-card">
+                  <span>Maestro está respondendo</span>
+                  <div className="chat-thinking-dots"><i /><i /><i /></div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="chat-suggestions" aria-label="Sugestões">
+            {["O que está acontecendo no projeto?", "Por que uma task parou?", "Quais providers estão ativos?"] .map((suggestion) => (
+              <button type="button" key={suggestion} onClick={() => setInputText(suggestion)}>{suggestion}</button>
+            ))}
+          </div>
+
+          <form className="chat-input" onSubmit={handleSend}>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={loading ? "Maestro está respondendo…" : "Pergunte ao Maestro…"}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              disabled={loading || historyLoading || !selectedThreadId}
+              aria-label="Mensagem para o Maestro"
+            />
+            <button type="submit" disabled={loading || historyLoading || !inputText.trim() || !selectedThreadId} title="Enviar mensagem" aria-label="Enviar mensagem">
+              <Icon name="send" />
+            </button>
+          </form>
+        </div>
+      </div>
     </section>
   );
 }

@@ -151,6 +151,75 @@ describe("Environment Doctor", () => {
     expect(["passed", "skipped"], "typescript should not be unavailable").toContain(check!.status);
   }, 15_000);
 
+  it("does not borrow the packaged Maestro toolchain for a root Node project", () => {
+    const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-root-node");
+    fs.mkdirSync(isolatedWorktree, { recursive: true });
+    fs.writeFileSync(path.join(isolatedWorktree, "package-lock.json"), JSON.stringify({ name: "target", lockfileVersion: 3 }));
+
+    const previousMode = process.env.MAESTRO_RUNTIME_MODE;
+    const previousRoot = process.env.MAESTRO_RUNTIME_ROOT;
+    process.env.MAESTRO_RUNTIME_MODE = "packaged";
+    process.env.MAESTRO_RUNTIME_ROOT = process.cwd();
+    try {
+      const report = runEnvironmentDoctor({
+        config: doctorConfig(),
+        project: project(process.cwd()),
+        task: task(isolatedWorktree)
+      });
+
+      expect(report.status).toBe("environment_blocked");
+      expect(report.checks).toContainEqual(expect.objectContaining({
+        name: "npm",
+        status: "skipped",
+        summary: expect.stringContaining("does not install project dependencies")
+      }));
+      for (const name of ["native_runtime", "typescript", "test_runner"]) {
+        expect(report.checks).toContainEqual(expect.objectContaining({
+          name,
+          status: "failed",
+          classification: "environment_blocked"
+        }));
+      }
+    } finally {
+      if (previousMode === undefined) delete process.env.MAESTRO_RUNTIME_MODE;
+      else process.env.MAESTRO_RUNTIME_MODE = previousMode;
+      if (previousRoot === undefined) delete process.env.MAESTRO_RUNTIME_ROOT;
+      else process.env.MAESTRO_RUNTIME_ROOT = previousRoot;
+    }
+  }, 15_000);
+
+  it("accepts an external prepared Node project without Maestro's native dependency", () => {
+    const isolatedWorktree = path.join(runtimeRoot, "worktrees", "maestro", "task-external-node");
+    const binDir = path.join(isolatedWorktree, "node_modules", ".bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(isolatedWorktree, "package-lock.json"), JSON.stringify({ name: "external", lockfileVersion: 3 }));
+    fs.writeFileSync(path.join(isolatedWorktree, "package.json"), JSON.stringify({
+      name: "external",
+      devDependencies: { typescript: "^5", vitest: "^3" }
+    }));
+    const tscBin = process.platform === "win32" ? "tsc.cmd" : "tsc";
+    const vitestBin = process.platform === "win32" ? "vitest.cmd" : "vitest";
+    fs.writeFileSync(path.join(binDir, tscBin), "#!/bin/sh\n");
+    fs.writeFileSync(path.join(binDir, vitestBin), "#!/bin/sh\n");
+
+    const previousMode = process.env.MAESTRO_RUNTIME_MODE;
+    process.env.MAESTRO_RUNTIME_MODE = "packaged";
+    try {
+      const report = runEnvironmentDoctor({
+        config: doctorConfig(),
+        project: project(process.cwd()),
+        task: task(isolatedWorktree)
+      });
+
+      expect(report.checks).toContainEqual(expect.objectContaining({ name: "native_runtime", status: "skipped" }));
+      expect(report.checks).toContainEqual(expect.objectContaining({ name: "typescript", status: "passed" }));
+      expect(report.checks).toContainEqual(expect.objectContaining({ name: "test_runner", status: "passed" }));
+    } finally {
+      if (previousMode === undefined) delete process.env.MAESTRO_RUNTIME_MODE;
+      else process.env.MAESTRO_RUNTIME_MODE = previousMode;
+    }
+  }, 15_000);
+
   it("prevents Goal creation when preflight is blocked", () => {
     const database = createDatabase(path.join(tempDir, "maestro.db"));
     try {

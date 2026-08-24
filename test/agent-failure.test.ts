@@ -49,6 +49,8 @@ describe("provider failure classification", () => {
     expect(classifyFailure("", { spawnErrorCode: "EACCES" })).toBe("permission_denied");
     expect(classifyFailure("", { exitCode: 126 })).toBe("permission_denied");
     expect(classifyFailure("Permission denied when accessing worktree")).toBe("permission_denied");
+    expect(classifyFailure("Error: permission check failed for command node -v; user denied permission to run command")).toBe("permission_denied");
+    expect(classifyFailure("jetski: a tool required the command permission that headless mode cannot prompt for, so it was auto-denied")).toBe("permission_denied");
   });
 
   it("classifies environment errors (ENOENT, cannot find module)", () => {

@@ -119,5 +119,8 @@ describe("fetchAllQuota orchestration", () => {
     expect(buildError("codex", new Error("x")).error).toBe("x");
     expect(buildEmptyUnavailable("codex", "why").status).toBe("unavailable");
     expect(buildEmptyUnavailable("codex", "why").error).toBe("why");
+    expect(buildEmptyUnavailable("antigravity", "CLI ausente", "not_installed").reasonCode).toBe("not_installed");
+    expect(buildError("codex", new Error("x")).reasonCode).toBeUndefined();
+    expect(buildError("codex", new Error("x"), "transient_error").reasonCode).toBe("transient_error");
   });
 });

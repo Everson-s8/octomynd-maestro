@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   fetchTaskLogs,
@@ -6,11 +6,13 @@ import {
   TaskLogRun,
   TaskLogStep,
   prepareTask,
+  resumeGoal,
   startTaskGoal
 } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { formatRelative, taskStatusLabels } from "../helpers";
+import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
 
 export interface TaskLogViewerPageProps {
   taskIdParam?: number | string;
@@ -37,6 +39,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   const [copied, setCopied] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const autoOpenedPullRequestRef = useRef<string | null>(null);
 
   const loadLogs = useCallback(async (silent = false) => {
     if (!Number.isInteger(taskId) || taskId <= 0) {
@@ -72,6 +75,20 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
     }, 2500);
     return () => clearInterval(interval);
   }, [autoRefresh, logs?.telemetry.isRunning, logs, loadLogs]);
+
+  // A draft PR is created only after delivery finishes. Once its URL first
+  // appears in this live viewer, open it in the user's default browser. The
+  // ref prevents polling from opening the same PR repeatedly.
+  useEffect(() => {
+    const pullRequestUrl = logs?.runs
+      .slice()
+      .sort((a, b) => b.id - a.id)
+      .find((run) => run.pullRequestUrl && isOpenableExternalUrl(run.pullRequestUrl))
+      ?.pullRequestUrl ?? null;
+    if (!pullRequestUrl || autoOpenedPullRequestRef.current === pullRequestUrl) return;
+    autoOpenedPullRequestRef.current = pullRequestUrl;
+    openExternalUrl(pullRequestUrl, true);
+  }, [logs]);
 
   const selectedRun = useMemo(() => {
     if (!logs || selectedRunId === "all") return null;
@@ -231,10 +248,15 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
     if (!logs) return;
     setActionBusy(true);
     try {
-      await startTaskGoal(logs.task.id);
+      const latestRun = logs.runs.slice().sort((a, b) => b.id - a.id)[0] ?? null;
+      if (latestRun && ["blocked", "failed"].includes(latestRun.status)) {
+        await resumeGoal(latestRun.id);
+      } else {
+        await startTaskGoal(logs.task.id);
+      }
       await loadLogs(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao iniciar goal.");
+      setError(err instanceof Error ? err.message : "Erro ao iniciar ou retomar goal.");
     } finally {
       setActionBusy(false);
     }
@@ -280,6 +302,10 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   const { task, telemetry, runs, events, reviews } = logs;
   const isRunning = runs.length > 0 && telemetry.isRunning;
   const activeRun = runs.find((r) => r.id === telemetry.activeRunId) ?? runs[runs.length - 1] ?? null;
+  const resumableRun = runs
+    .slice()
+    .sort((a, b) => b.id - a.id)
+    .find((run) => ["blocked", "failed"].includes(run.status)) ?? null;
   const measuredTokens = telemetry.totalInputTokens + telemetry.totalOutputTokens;
   const hasMeasuredUsage = measuredTokens > 0 || telemetry.totalCostUsd > 0;
 
@@ -335,16 +361,33 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           >
             {copied ? "✓ Copiado!" : "Copiar Logs"}
           </button>
-          {activeRun?.pullRequestUrl && (
-            <a
-              href={activeRun.pullRequestUrl}
-              target="_blank"
-              rel="noreferrer"
+          {activeRun?.pullRequestUrl && isOpenableExternalUrl(activeRun.pullRequestUrl) ? (
+            <button
+              type="button"
               className="btn-new btn-sm"
               title="Ver Pull Request associado a esta task"
+              onClick={() => openExternalUrl(activeRun.pullRequestUrl!)}
             >
               Abrir PR ↗
-            </a>
+            </button>
+          ) : activeRun?.pullRequestUrl ? (
+            <span
+              className="btn-ghost btn-sm"
+              title="Esta execução não criou um PR no GitHub; a entrega ficou apenas na branch local."
+            >
+              PR GitHub indisponível
+            </span>
+          ) : null}
+          {resumableRun && (
+            <button
+              type="button"
+              className="btn-new btn-sm"
+              onClick={() => void handleStartGoal()}
+              disabled={actionBusy}
+              title="Continua a mesma Goal a partir do checkpoint salvo"
+            >
+              {actionBusy ? "Retomando…" : "Retomar do checkpoint"}
+            </button>
           )}
         </div>
       </header>
@@ -363,7 +406,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             </span>
           )}
         </div>
-        <h2 className="task-log-heading">{task.text}</h2>
+        <h2 className="task-log-heading">{task.title || task.text}</h2>
         <div className="task-log-meta-strip">
           <span>Criada {formatRelative(task.createdAt)}</span>
           <span>·</span>
@@ -441,7 +484,29 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <div className="metric-icon-v2">✧</div>
           <div className="metric-k">Provedor Ativo</div>
           <div className="metric-v-v2">{activeRun?.lastProvider ?? (runs.length > 0 ? "Multi-provider" : "Nenhum")}</div>
-          <span className="metric-sub">{activeRun ? `Fase: ${activeRun.currentPhase}` : "Aguardando disparo"}</span>
+          {!activeRun && runs.length === 0 ? (
+            <>
+              <span className="metric-sub">Nenhum goal foi disparado para esta task ainda.</span>
+              <span style={{ display: "block", fontSize: 12, color: "var(--text-2)", margin: "6px 0 8px" }}>
+                Abra o detalhe da task e clique em “Iniciar goal” — sem isso nenhum provider é acionado.
+              </span>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  // Navigate to the task flow, then open the task detail there.
+                  window.sessionStorage.setItem("maestro:open-task", String(task.id));
+                  window.location.hash = "#/backlog";
+                  window.location.reload();
+                }}
+                style={{ alignSelf: "flex-start", fontSize: 12 }}
+              >
+                Ir ao detalhe da task
+              </button>
+            </>
+          ) : (
+            <span className="metric-sub">{activeRun ? `Fase: ${activeRun.currentPhase}` : "Aguardando disparo"}</span>
+          )}
         </div>
 
         <div className="metric-card-v2">

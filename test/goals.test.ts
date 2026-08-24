@@ -779,6 +779,38 @@ describe("goal runner", () => {
     });
   });
 
+  it("tries a healthy fallback before a cumulative circuit breaker blocks the goal", async () => {
+    const projectDir = path.join(tempDir, "cumulative-project");
+    const worktreeDir = path.join(tempDir, "cumulative-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "cumulative", path: projectDir });
+    const task = database.createTask("finish after repeated provider failures", "dashboard", "cumulative");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const antigravity = new FakeProvider("antigravity", ["planning", "coding", "testing", "reviewing"], () => ({
+      outcome: "failed" as const,
+      summary: "permission check failed in headless mode",
+      output: "",
+      error: "user denied permission",
+      durationMs: 1,
+      retryable: false,
+      failureCategory: "permission_denied" as const
+    }));
+    const claude = new FakeProvider("claude", ["planning", "coding", "testing", "reviewing"], () => completed("Claude fallback completed"));
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([antigravity, claude]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 8 }
+    );
+
+    expect(run.status).toBe("completed");
+    expect(database.listEvents().filter((event) => event.type === "goal.provider_fallback")).toHaveLength(3);
+    expect(database.listEvents().some((event) => event.type === "goal.circuit_breaker")).toBe(false);
+  });
+
   it("waits for an untried provider and resumes it with preserved context", async () => {
     const projectDir = path.join(tempDir, "exhaustion-project");
     const worktreeDir = path.join(tempDir, "exhaustion-worktree");
@@ -1012,7 +1044,7 @@ describe("goal runner", () => {
     expect(database.listGoalSteps(run.id)).toHaveLength(5);
     expect(database.listEvents().some((event) => event.type === "goal.waiting_provider")).toBe(true);
     expect(database.listEvents().some((event) => event.type === "goal.resumed")).toBe(true);
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("creates a durable waiting Goal when provider preflight reports quota", async () => {
@@ -1066,7 +1098,7 @@ describe("goal runner", () => {
     expect(database.getTask(task.id).status).toBe("waiting_provider");
     expect(database.listEvents().some((event) => event.type === "goal.provider_preflight_wait")).toBe(true);
     expect(scheduler.pendingCount).toBe(1);
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("recovers an interrupted runtime step from the preserved worktree and checkpoint", async () => {
@@ -1134,7 +1166,7 @@ describe("goal runner", () => {
     expect(implementationResumeContext).toContain("Nao reverta nem refaca trabalho valido");
     expect(database.getTask(task.id).status).toBe("done");
     expect(database.listEvents().some((event) => event.type === "goal.recovered_after_restart")).toBe(true);
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("does not recover a Goal owned by another resident coordinator", () => {
@@ -1311,7 +1343,7 @@ describe("goal runner", () => {
 
     expect(notifications[0].id).toBe(run.id);
     expect(notifications[0].pullRequestUrl).toBe("https://github.com/example/boo/pull/1");
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("stores a short, sanitized lastError instead of a giant raw provider dump", async () => {
@@ -1467,7 +1499,7 @@ describe("goal runner", () => {
     expect(database.getTask(task.id).status).toBe("cancelled");
     expect(database.listGoalSteps(run.id).at(-1)?.status).toBe("cancelled");
     expect(database.listEvents().some((event) => event.type === "goal.cancelled")).toBe(true);
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("treats a rejected provider promise during cancellation as a cancelled step, not a stuck run", async () => {
@@ -1502,7 +1534,7 @@ describe("goal runner", () => {
     const steps = database.listGoalSteps(run.id);
     expect(steps.at(-1)?.status).toBe("cancelled");
     expect(steps.some((step) => step.status === "running")).toBe(false);
-    coordinator.shutdown();
+    await coordinator.shutdown();
   });
 
   it("closes the step and fails the run when a provider throws instead of resolving", async () => {
@@ -1678,6 +1710,42 @@ describe("goal runner", () => {
     // Must NOT lower the budget below the existing ceiling.
     expect(retried.status).toBe("waiting_provider");
     expect(retried.maxSteps).toBeGreaterThanOrEqual(150);
+  });
+
+  it("resumeExistingRun keeps the blocked GoalRun and current phase instead of creating a new plan", async () => {
+    const projectDir = path.join(tempDir, "resume-existing-project");
+    const worktreeDir = path.join(tempDir, "resume-existing-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "resumeexisting", path: projectDir });
+    const task = database.createTask("resume existing task", "dashboard", "resumeexisting");
+    database.updateTaskWorktree({ id: task.id, status: "implementing", branchName: "task", worktreePath: worktreeDir });
+
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([new FakeProvider("codex", ["coding"], () => completed("continued"))]),
+      path.join(tempDir, "artifacts")
+    );
+    const run = database.createGoalRun(task.id, 10);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 3,
+      lastError: "provider permission denied",
+      failureCategory: "permission_denied"
+    });
+
+    const resumed = coordinator.resumeExistingRun(run.id);
+
+    expect(resumed.id).toBe(run.id);
+    expect(resumed.status).toBe("waiting_provider");
+    expect(resumed.currentPhase).toBe("implementing");
+    expect(resumed.stepCount).toBe(3);
+    expect(database.listGoalRuns(20).filter((item) => item.taskId === task.id)).toHaveLength(1);
+    expect(database.getTask(task.id).status).toBe("implementing");
+    expect(database.listEvents().some((event) => event.type === "goal.resume_requested" && event.metadata.runId === run.id)).toBe(true);
+    await coordinator.shutdown();
   });
 
   it("counts only automatic budget elevations toward the auto-retry cap", async () => {

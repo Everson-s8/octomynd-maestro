@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ANTIGRAVITY_AUTH_PROBE_ARGS } from "./antigravity.js";
 import type { AgentCapability, CustomCliProviderConfig } from "./types.js";
 
 const ALL_CAPABILITIES: AgentCapability[] = [
@@ -28,6 +29,15 @@ export type ProviderPreset = {
   defaultEndpoint?: string;
   builtIn?: boolean;
   authFlow?: "device_code" | "terminal" | "none";
+  /** Alternative login flows the wizard offers; falls back to `authFlow`. */
+  authFlows?: Array<{
+    id: string;
+    label: string;
+    description?: string;
+    recommended?: boolean;
+    kind: "device_code" | "terminal" | "verify_only";
+    args: string[];
+  }>;
   authArgs?: string[];
   authStatusArgs?: string[];
   modelDiscovery?: "cli" | "endpoint" | "ollama" | "manual";
@@ -45,7 +55,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     connectionHint: "account",
     category: "account",
     docsUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
-    setupCommand: "claude auth login",
+    setupCommand: "npm install -g @anthropic-ai/claude-code",
     authFlow: "terminal",
     authArgs: ["auth", "login"],
     authStatusArgs: ["auth", "status"],
@@ -78,6 +88,32 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     docsUrl: "https://developers.openai.com/codex/cli",
     setupCommand: "codex login",
     authFlow: "device_code",
+    // Browser login is the desktop default; device code is the headless
+    // fallback; terminal-only users can just verify an existing login.
+    authFlows: [
+      {
+        id: "browser",
+        label: "Entrar pelo navegador",
+        description: "Abre o navegador para concluir o login (recomendado no desktop).",
+        recommended: true,
+        kind: "terminal",
+        args: ["login"]
+      },
+      {
+        id: "device_code",
+        label: "Entrar com código do dispositivo",
+        description: "Para ambientes sem navegador padrão; um código é mostrado aqui.",
+        kind: "device_code",
+        args: ["login", "--device-auth"]
+      },
+      {
+        id: "verify_only",
+        label: "Já fiz login no terminal",
+        description: "Apenas verifica o estado da conta com `codex login status`.",
+        kind: "verify_only",
+        args: []
+      }
+    ],
     authArgs: ["login", "--device-auth"],
     authStatusArgs: ["login", "status"],
     modelDiscovery: "manual",
@@ -148,17 +184,21 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "gemini",
     label: "Gemini Antigravity",
     command: "agy",
-    description: "Gemini via CLI agy (conta Google conectada). Preciso instalar o CLI 'agy' em https://antigravity.google/.",
+    description: "Gemini via CLI agy, com a conta Google autenticada na sessao local do Antigravity.",
     models: [],
     connectionHint: "account",
     category: "account",
     docsUrl: "https://antigravity.google/",
-    setupCommand: "agy install",
+    // Official Windows installer; `agy install` only works AFTER the binary
+    // exists (the installer itself wires PATH/env afterwards). Display/copy
+    // only — the Maestro never executes this itself. Mirrors the vendor's own
+    // documented install command (https://antigravity.google/cli/install.ps1).
+    setupCommand: 'irm https://antigravity.google/cli/install.ps1 | iex',
     authFlow: "terminal",
     authArgs: [],
-    // No stable auth-status command (agy models is flaky under non-interactive
-    // spawn); the account is confirmed implicitly when a goal actually runs.
-    authStatusArgs: [],
+    // Antigravity owns its browser/keyring login. Use print mode for the
+    // read-only probe: `agy models` waits for a TTY when spawned by Desktop.
+    authStatusArgs: [...ANTIGRAVITY_AUTH_PROBE_ARGS],
     modelDiscovery: "manual",
     builtIn: true
   },

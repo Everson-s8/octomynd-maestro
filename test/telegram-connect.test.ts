@@ -72,7 +72,7 @@ describe("Telegram Connect Subsystem", () => {
         rootPath: "/tmp",
         worktreesPath: "/tmp",
         expectedNodeVersion: "20",
-        supportedNodeRange: ">=20.17.0 <21"
+        supportedNodeRange: ">=20.17.0 <25"
       },
       runtime: { providerMaxRuntimeMs: 1000, codexInactivityTimeoutMs: 1000, claudeInactivityTimeoutMs: 1000, antigravityInactivityTimeoutMs: 1000, antigravityEnabled: true, antigravityModel: "gemini-2.5-pro", tokenEfficient: true, goalDeadlineMs: 60000, selfUpdatePollIntervalMs: 60000 },
       skills: { enabled: false, catalogPath: "", versionsPath: "", projectKey: "test", curator: { staleDays: 30, autoArchiveEnabled: false, pollIntervalMs: 60000 } },
@@ -101,7 +101,7 @@ describe("Telegram Connect Subsystem", () => {
         rootPath: "/tmp",
         worktreesPath: "/tmp",
         expectedNodeVersion: "20",
-        supportedNodeRange: ">=20.17.0 <21"
+        supportedNodeRange: ">=20.17.0 <25"
       },
       runtime: { providerMaxRuntimeMs: 1000, codexInactivityTimeoutMs: 1000, claudeInactivityTimeoutMs: 1000, antigravityInactivityTimeoutMs: 1000, antigravityEnabled: true, antigravityModel: "gemini-2.5-pro", tokenEfficient: true, goalDeadlineMs: 60000, selfUpdatePollIntervalMs: 60000 },
       skills: { enabled: false, catalogPath: "", versionsPath: "", projectKey: "test", curator: { staleDays: 30, autoArchiveEnabled: false, pollIntervalMs: 60000 } },

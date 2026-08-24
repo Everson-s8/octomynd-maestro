@@ -10,7 +10,7 @@ import {
   retryAfterMsForFailure,
   type FailureCategory
 } from "./failure.js";
-import { buildAgentGoalPrompt } from "./goal-prompt.js";
+import { buildAgentGoalPrompt, buildConversationPrompt } from "./goal-prompt.js";
 import {
   AgentExecutionRequest,
   AgentExecutionResult,
@@ -36,7 +36,8 @@ const CODEX_CAPABILITIES = new Set([
   "testing",
   "reviewing",
   "improvement_reviewing",
-  "research"
+  "research",
+  "conversation"
 ] as const);
 
 const RESULT_SCHEMA = {
@@ -101,18 +102,30 @@ export class CodexProvider implements AgentProvider {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const cliEntry = resolveCodexCliEntry();
     const envKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
-    const health: AgentHealth = cliEntry
-      ? { state: "ready", detail: "Codex CLI disponivel", checkedAt: new Date().toISOString() }
-      : envKey
-        ? { state: "ready", detail: "Codex API Key disponivel via ENV", checkedAt: new Date().toISOString() }
-        : {
+    const oauth = readCodexOAuthToken();
+    const health: AgentHealth = envKey
+      ? { state: "ready", detail: "Codex API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+      : !cliEntry
+        ? {
           state: "offline",
           detail: withRemediation("codex", "offline", "Codex CLI ou API Key nao encontrado."),
           checkedAt: new Date().toISOString()
-        };
+        }
+        : oauth
+          ? { state: "ready", detail: "Codex CLI autenticado", checkedAt: new Date().toISOString() }
+          : { state: "auth_required", detail: "Codex CLI instalado, mas a conta ainda nao foi autenticada.", checkedAt: new Date().toISOString() };
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + 30_000;
     return health;
+  }
+
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+  }
+
+  invalidateCaches(): void {
+    this.refresh();
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
@@ -128,9 +141,12 @@ export class CodexProvider implements AgentProvider {
       return failure(`Workspace nao existe: ${cwd}`, startedAt, false);
     }
 
+    const artifactRun = request.capability === "conversation"
+      ? `conversation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      : `goal-${request.runId}`;
     const artifactDir = path.join(
       request.artifactsRoot,
-      `goal-${request.runId}`,
+      artifactRun,
       `step-${String(request.stepNumber).padStart(2, "0")}-${request.phase}`
     );
     fs.mkdirSync(artifactDir, { recursive: true });
@@ -139,30 +155,47 @@ export class CodexProvider implements AgentProvider {
     fs.writeFileSync(schemaPath, JSON.stringify(RESULT_SCHEMA, null, 2), "utf8");
 
     const sandbox = codexSandboxForRequest(request);
-    const args = [
-      cliEntry,
-      "exec",
-      "--ephemeral",
-      "--color",
-      "never",
-      ...(selectedModel ? ["--model", selectedModel] : []),
-      "--output-schema",
-      schemaPath,
-      "--output-last-message",
-      outputPath,
-      "--sandbox",
-      sandbox,
-      "--cd",
-      cwd,
-      "-"
-    ];
+    const conversation = request.capability === "conversation";
+    const args = conversation
+      ? [
+        cliEntry,
+        "exec",
+        "--ephemeral",
+        "--color",
+        "never",
+        ...(selectedModel ? ["--model", selectedModel] : []),
+        "--output-last-message",
+        outputPath,
+        "--sandbox",
+        "read-only",
+        "--cd",
+        cwd,
+        "-"
+      ]
+      : [
+        cliEntry,
+        "exec",
+        "--ephemeral",
+        "--color",
+        "never",
+        ...(selectedModel ? ["--model", selectedModel] : []),
+        "--output-schema",
+        schemaPath,
+        "--output-last-message",
+        outputPath,
+        "--sandbox",
+        sandbox,
+        "--cd",
+        cwd,
+        "-"
+      ];
 
     const processResult = await runAgentProcess({
       command: process.execPath,
       args,
       cwd,
       provider: this.id,
-      stdin: buildCodexGoalPrompt(request),
+      stdin: conversation ? buildConversationPrompt(request) : buildCodexGoalPrompt(request),
       timeoutMs: this.executionLimits.maxRuntimeMs,
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
@@ -216,6 +249,26 @@ export class CodexProvider implements AgentProvider {
         output: combined,
         error: combined || summary,
         durationMs: processResult.durationMs,
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: selectedModel ?? "codex"
+      };
+    }
+
+    if (conversation) {
+      const output = fs.existsSync(outputPath)
+        ? fs.readFileSync(outputPath, "utf8").trim()
+        : processResult.stdout.trim();
+      this.cacheHealth("ready", "Codex CLI disponivel", 30_000);
+      return {
+        outcome: "completed",
+        summary: "Codex respondeu à conversa.",
+        structuredPayload: null,
+        artifactsProduced: [],
+        output,
+        error: null,
+        durationMs: processResult.durationMs,
+        retryable: false,
         processRuntime: processRuntime(processResult),
         tokenUsage: processResult.tokenUsage,
         model: selectedModel ?? "codex"
@@ -337,6 +390,18 @@ export class CodexProvider implements AgentProvider {
   }
 }
 
+function readCodexOAuthToken(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codex", "auth.json"), "utf8")) as {
+      tokens?: { access_token?: string };
+    };
+    const token = raw.tokens?.access_token?.trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 function processRuntime(result: AgentProcessResult): NonNullable<AgentExecutionResult["processRuntime"]> {
   return { breakerReason: result.breakerReason, outputStats: result.outputStats };
 }
@@ -404,7 +469,9 @@ export function resolveCodexCliEntry(): string | null {
 
   try {
     const cmd = process.platform === "win32" ? "codex.cmd" : "codex";
-    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    // Windows Defender frequently pushes cold .cmd->node shims past 3s; a
+    // slow probe must not flip the provider to offline between polls.
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 10_000 });
     if (res.status === 0) return cmd;
   } catch {}
   return null;

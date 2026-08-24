@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
+import { buildAgentGoalPrompt, buildConversationPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
 import {
   buildFailureSummary,
   classifyFailure,
@@ -84,6 +85,13 @@ export class CustomCliProvider implements AgentProvider {
     return result;
   }
 
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+    this.cachedModels = null;
+    this.modelsExpiresAt = 0;
+  }
+
   /** Run `command <modelDiscoveryArgs>` and parse stdout lines of `vendor/model` shape. */
   private discoverCliModels(): string[] {
     try {
@@ -164,7 +172,11 @@ export class CustomCliProvider implements AgentProvider {
         : { state: "offline", detail: `${this.label} CLI nao encontrado.`, checkedAt: new Date().toISOString() };
     }
 
-    this.cacheHealth(health, 30_000);
+    // Offline probes are the flicker source on the Providers screen: the
+    // dashboard polls every 5s and a short offline TTL made cards flip
+    // available/offline between polls. Keep ready-state fresh for fast
+    // routing decisions, but hold a failed probe longer.
+    this.cacheHealth(health, health.state === "ready" ? 30_000 : 60_000);
     return health;
   }
 
@@ -351,6 +363,13 @@ export class CustomCliProvider implements AgentProvider {
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + ttlMs;
   }
+
+  invalidateCaches(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+    this.cachedModels = null;
+    this.modelsExpiresAt = 0;
+  }
 }
 
 export function buildCustomCliArgs(
@@ -359,7 +378,9 @@ export function buildCustomCliArgs(
   printTimeoutMs = 8 * 60 * 60_000,
   model?: string | null
 ): string[] {
-  const prompt = buildAgentGoalPrompt(request);
+  const prompt = request.capability === "conversation"
+    ? buildConversationPrompt(request)
+    : buildAgentGoalPrompt(request);
   const cwd = request.task.worktreePath || request.project.path;
   const writable = isWritableExecution(request);
 
@@ -389,13 +410,42 @@ export function buildCustomCliArgs(
   ];
 }
 
+/**
+ * Directories where the supported CLIs install themselves on Windows but that
+ * a long-running process may not see: the installer updates the registry
+ * (machine PATH), while this process kept the PATH snapshot from boot.
+ * Probed live on every resolution, so an app restart is never needed after
+ * installing agy / claude / codex / copilot / opencode.
+ */
+function knownCliDirectories(): string[] {
+  const dirs: string[] = [];
+  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA;
+    const appData = process.env.APPDATA;
+    // Antigravity CLI official installer target (%LOCALAPPDATA%\agy\bin).
+    if (localAppData) dirs.push(path.join(localAppData, "agy", "bin"));
+    // npm global shims for claude/codex/copilot/opencode.
+    if (appData) dirs.push(path.join(appData, "npm"));
+  } else {
+    // Keep the Antigravity install layout consistent across platforms. This
+    // also covers Linux/macOS users whose installer places agy under ~/agy/bin.
+    dirs.push(path.join(home, "agy", "bin"));
+    dirs.push(path.join(home, ".local", "bin"));
+  }
+  return dirs;
+}
+
 export function resolveCustomCliExecutable(command: string): string | null {
   if (!command || !command.trim()) return null;
   const cmd = command.trim();
   if (path.isAbsolute(cmd) || cmd.includes("/") || cmd.includes("\\")) {
     return fs.existsSync(cmd) ? cmd : null;
   }
-  const pathDirs = (process.env.PATH || "").split(path.delimiter);
+  const pathDirs = [
+    ...(process.env.PATH || "").split(path.delimiter),
+    ...knownCliDirectories()
+  ];
   const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
   for (const dir of pathDirs) {
     if (!dir) continue;

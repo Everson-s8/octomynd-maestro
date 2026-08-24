@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 export const EXPECTED_NODE_VERSION = "20.17.0";
-export const SUPPORTED_NODE_RANGE = ">=20.17.0 <21";
+export const SUPPORTED_NODE_RANGE = ">=20.17.0 <25";
 
 export type ExecutionContract = {
   rootPath: string;
@@ -117,7 +117,7 @@ export function captureEnvironmentFingerprint(
     node: {
       version: process.version,
       executableHash: hashPath(process.execPath),
-      supported: isSupportedNodeVersion(process.version, contract.expectedNodeVersion)
+      supported: isSupportedNodeVersion(process.version, contract.expectedNodeVersion, contract.supportedNodeRange)
     },
     tools,
     paths: {
@@ -152,16 +152,29 @@ export function ensureExecutionContract(contract: ExecutionContract): ExecutionC
   return marker;
 }
 
-export function isSupportedNodeVersion(actual: string, expected = EXPECTED_NODE_VERSION): boolean {
+export function isSupportedNodeVersion(
+  actual: string,
+  expected = EXPECTED_NODE_VERSION,
+  supportedRange = SUPPORTED_NODE_RANGE
+): boolean {
   const actualParts = parseVersion(actual);
   const expectedParts = parseVersion(expected);
+  const upperBound = supportedRange.match(/<\s*(\d+)/)?.[1];
   return Boolean(
     actualParts
       && expectedParts
-      && actualParts.major === expectedParts.major
-      && actualParts.minor === expectedParts.minor
-      && actualParts.patch >= expectedParts.patch
+      && compareVersions(actualParts, expectedParts) >= 0
+      && (!upperBound || actualParts.major < Number(upperBound))
   );
+}
+
+function compareVersions(
+  left: { major: number; minor: number; patch: number },
+  right: { major: number; minor: number; patch: number }
+): number {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  return left.patch - right.patch;
 }
 
 export function isPathWithin(candidate: string, parent: string): boolean {
