@@ -56,14 +56,14 @@ describe("Goal Observability", () => {
       const obs = buildGoalObservability(database, updatedRun);
 
       expect(obs.classifiedReason).toBe("quota");
-      expect(obs.classifiedReasonLabel).toBe("cota do provedor esgotada");
+      expect(obs.classifiedReasonLabel).toBe("provider quota exhausted");
       expect(obs.sourceProvider).toBe("codex");
       expect(obs.nextProvider).toBe("claude");
       expect(obs.preservedChanges).toBe(true);
       expect(obs.preservedFiles).toEqual(["src/agents/codex.ts", "src/goals/runner.ts"]);
       expect(obs.checkpointId).toBe(checkpoint.id);
       expect(obs.retryable).toBe(true);
-      expect(obs.nextAction).toContain("Retomada automatica agendada");
+      expect(obs.nextAction).toContain("Automatic resume scheduled");
     } finally {
       database.close();
     }
@@ -121,16 +121,16 @@ describe("Goal Observability", () => {
 
       const text = formatGoalNotification(waitingRun, task, database);
 
-      expect(text).toContain("Task #1 requer atencao.");
-      expect(text).toContain("Projeto: @maestro");
+      expect(text).toContain("Task #1 needs attention.");
+      expect(text).toContain("Project: @maestro");
       expect(text).toContain("Goal #1: waiting_provider");
-      expect(text).toContain("Motivo: cota do provedor esgotada");
-      expect(text).toContain("Provedor origem: codex");
-      expect(text).toContain("Proximo provedor: claude");
-      expect(text).toContain("Alteracoes preservadas: sim (1 arquivos)");
+      expect(text).toContain("Reason: provider quota exhausted");
+      expect(text).toContain("Source provider: codex");
+      expect(text).toContain("Next provider: claude");
+      expect(text).toContain("Changes preserved: yes (1 files)");
       expect(text).toContain(`Checkpoint: #${checkpoint.id}`);
-      expect(text).toContain("Retomavel: sim");
-      expect(text).toContain("Proxima acao: Retomada automatica agendada");
+      expect(text).toContain("Retryable: yes");
+      expect(text).toContain("Next action: Automatic resume scheduled");
       expect(text).not.toContain(fakeSecret);
     } finally {
       database.close();
@@ -171,7 +171,7 @@ describe("Goal Observability", () => {
       const obs = buildGoalObservability(database, blockedRun);
 
       expect(obs.classifiedReason).toBe("timeout");
-      expect(obs.classifiedReasonLabel).toBe("tempo limite excedido");
+      expect(obs.classifiedReasonLabel).toBe("time limit exceeded");
       expect(obs.sourceProvider).toBe("claude");
       expect(obs.nextProvider).toBeNull();
       expect(obs.checkpointId).toBe(5);
@@ -226,7 +226,7 @@ describe("Goal Observability", () => {
       });
       const observation = buildGoalObservability(database, blocked);
       expect(observation.classifiedReason).toBe("budget_exhausted");
-      expect(observation.classifiedReasonLabel).toBe("orcamento de etapas da Goal esgotado");
+      expect(observation.classifiedReasonLabel).toBe("Goal step budget exhausted");
       expect(observation.sourceProvider).toBeNull();
       expect(observation.preservedChanges).toBe(true);
       expect(observation.nextAction).toContain("Resume from the checkpoint");

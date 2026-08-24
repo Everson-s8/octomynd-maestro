@@ -3,7 +3,7 @@
 // Ported from the Orca rate-limit layer for the providers the Maestro uses
 // (gemini/antigravity, claude, codex). Reads, per provider, the *remaining*
 // quota (%) and when it resets, so the Analytics page can show "consumo
-// disponível" instead of only the cost distribution.
+// available" instead of only the cost distribution.
 //
 // IMPORTANT (secrets): every token/credential value is read from the provider's
 // own credential store at request time and is NEVER logged, persisted, or

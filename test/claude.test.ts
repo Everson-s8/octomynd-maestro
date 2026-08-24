@@ -163,12 +163,12 @@ describe("claude provider telemetry", () => {
     const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Claude (reviewing): cota do provedor esgotada.");
+    expect(result.summary).toBe("Claude (reviewing): provider quota exhausted.");
     expect(result.retryable).toBe(true);
     expect(result.error).toContain("rate limit");
     expect(await provider.health()).toMatchObject({
       state: "quota",
-      detail: expect.stringContaining("cota do provider")
+        detail: expect.stringContaining("provider quota exhausted")
     });
   });
 
@@ -179,7 +179,7 @@ describe("claude provider telemetry", () => {
     const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Claude (reviewing): autenticacao necessaria.");
+    expect(result.summary).toBe("Claude (reviewing): authentication required.");
     expect(result.retryable).toBe(true);
     expect(await provider.health()).toMatchObject({
       state: "auth_required",
@@ -213,11 +213,11 @@ describe("claude provider telemetry", () => {
     const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Claude (reviewing): tempo limite excedido.");
+    expect(result.summary).toBe("Claude (reviewing): time limit exceeded.");
     expect(result.retryable).toBe(true);
     expect(await provider.health()).toMatchObject({
       state: "ready",
-      detail: expect.stringContaining("ultima execucao atingiu o limite de tempo")
+        detail: expect.stringContaining("last execution reached its time limit")
     });
   }, 10_000);
 
@@ -228,7 +228,7 @@ describe("claude provider telemetry", () => {
     const result = await provider.execute(executionRequest("reviewing", "reviewing", cwd));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Claude (reviewing): erro desconhecido.");
+    expect(result.summary).toBe("Claude (reviewing): unknown error.");
     expect(result.retryable).toBe(false);
     expect(result.structuredPayload).toBeNull();
     expect(result.artifactsProduced).toEqual([]);

@@ -165,7 +165,7 @@ async function projectAddCommand(argv: string[]): Promise<void> {
     const repo = githubMatch[1];
     const dest = path.resolve(process.cwd(), key);
     if (!fs.existsSync(dest)) {
-      console.log(`[..] Clonando https://github.com/${repo} em ${dest}`);
+      console.log(`[..] Cloning https://github.com/${repo} into ${dest}`);
       const url = `https://github.com/${repo}`;
       execFileSync("git", ["clone", url, dest], { stdio: "inherit" });
     }
@@ -173,7 +173,7 @@ async function projectAddCommand(argv: string[]): Promise<void> {
   }
 
   if (!fs.existsSync(command_path_dir(projectPath))) {
-    console.error(`[!] Caminho nao encontrado: ${projectPath}`);
+    console.error(`[!] Path not found: ${projectPath}`);
     process.exit(1);
   }
 
@@ -189,7 +189,7 @@ async function projectAddCommand(argv: string[]): Promise<void> {
         defaultBranch: detectedBranch ?? undefined
       });
     for (const warning of result.warnings) console.log(`[~] ${warning}`);
-    console.log(`[ok] Projeto @${key} registrado em ${result.project.path}`);
+    console.log(`[ok] Project @${key} registered at ${result.project.path}`);
   } catch (error) {
     console.error(`[!] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
@@ -229,15 +229,15 @@ function printTask(task: TaskRecord): void {
   const worktree = task.worktreePath ? " worktree=prepared" : "";
   console.log(`  #${task.id}  ${task.status.padEnd(18)} ${project}${worktree}`);
   console.log(`      ${task.title || task.text}`);
-  if (task.title && task.title !== task.text) console.log(`      Pedido original: ${task.text}`);
+  if (task.title && task.title !== task.text) console.log(`      Original request: ${task.text}`);
 }
 
 function projectListCommand(argv: string[]): void {
   const database = createDatabase(envDbPath());
   try {
     const projects = database.listProjects(parseLimit(argv));
-    console.log(`maestro project list — ${projects.length} projeto(s)\n`);
-    if (projects.length === 0) console.log("  Nenhum projeto registrado.");
+    console.log(`maestro project list — ${projects.length} project(s)\n`);
+    if (projects.length === 0) console.log("  No projects registered.");
     for (const project of projects) printProject(project);
   } finally {
     database.close();
@@ -252,7 +252,7 @@ function taskCreateCommand(argv: string[]): void {
   const database = createDatabase(envDbPath());
   try {
     const task = new ApplicationCommands(database).createTask(cliOrigin(), { projectKey, text });
-    console.log(`[ok] Task #${task.id} criada em @${task.projectKey}.`);
+    console.log(`[ok] Task #${task.id} created in @${task.projectKey}.`);
     printTask(task);
   } finally {
     database.close();
@@ -268,7 +268,7 @@ function taskListCommand(argv: string[]): void {
       ? database.listTasksByProject(projectKey, parseLimit(argv))
       : database.listTasks(parseLimit(argv));
     console.log(`maestro task list${projectKey ? ` — @${projectKey}` : ""} — ${tasks.length} task(s)\n`);
-    if (tasks.length === 0) console.log("  Nenhuma task encontrada.");
+    if (tasks.length === 0) console.log("  No tasks found.");
     for (const task of tasks) printTask(task);
   } finally {
     database.close();
@@ -281,7 +281,7 @@ function taskPrepareCommand(argv: string[]): void {
   try {
     const config = loadConfig(cliDataDir());
     const result = new ApplicationCommands(database).prepareTask(cliOrigin(), taskId, config.worktreesPath);
-    console.log(`[ok] Task #${result.task.id} preparada.`);
+    console.log(`[ok] Task #${result.task.id} prepared.`);
     console.log(`    Branch  : ${result.branchName}`);
     console.log(`    Worktree: ${result.worktreePath}`);
   } finally {
@@ -300,7 +300,7 @@ async function taskRuntimeCommand(operation: "start" | "cancel" | "retry" | "del
       method: "POST",
       body: JSON.stringify({ maxSteps })
     });
-    console.log(`[ok] Goal da Task #${taskId} iniciada (ate ${maxSteps} etapas).`);
+    console.log(`[ok] Goal for task #${taskId} started (up to ${maxSteps} steps).`);
     if (payload.run) console.log(`    Run: #${String(payload.run.id ?? "?")} ${String(payload.run.status ?? "")}`);
     return;
   }
@@ -311,13 +311,13 @@ async function taskRuntimeCommand(operation: "start" | "cancel" | "retry" | "del
     : `/api/tasks/${taskId}/${operation}`;
   payload = await requestDashboardJson(endpoint, { method });
   if (operation === "retry") {
-    console.log(`[ok] Retry solicitado para a Task #${taskId}.`);
+    console.log(`[ok] Retry requested for task #${taskId}.`);
     if (payload.goal) console.log(`    Run: #${String(payload.goal.id ?? "?")} ${String(payload.goal.status ?? "")}`);
   } else if (operation === "delete") {
-    console.log(`[ok] Task #${taskId} removida.`);
+    console.log(`[ok] Task #${taskId} deleted.`);
   } else {
-    console.log(`[ok] Task #${taskId} cancelada.`);
-    if (payload.task) console.log(`    Estado: ${payload.task.status}`);
+    console.log(`[ok] Task #${taskId} cancelled.`);
+    if (payload.task) console.log(`    Status: ${payload.task.status}`);
   }
 }
 
@@ -360,9 +360,9 @@ type DashboardAgent = { id: string; label: string; state: string; detail: string
 async function providersStatusCommand(): Promise<void> {
   const payload = await requestDashboardJson<{ agents?: DashboardAgent[]; summary?: { providersConnected?: number } }>("/api/dashboard");
   const agents = (payload.agents ?? []).filter((agent) => agent.id !== "telegram");
-  console.log(`maestro providers status — ${payload.summary?.providersConnected ?? agents.length} ativo(s)\n`);
+  console.log(`maestro providers status — ${payload.summary?.providersConnected ?? agents.length} active\n`);
   if (agents.length === 0) {
-    console.log("  Nenhum provider registrado no runtime.");
+    console.log("  No providers registered in the runtime.");
     return;
   }
   for (const agent of agents) {
@@ -607,17 +607,17 @@ async function statusCommand(): Promise<void> {
   const nodeMatch = /v(\d+)\./.exec(process.version);
   const nodeMajor = nodeMatch ? Number(nodeMatch[1]) : 0;
 
-  console.log("maestro status — resumo da instalacao\n");
+  console.log("maestro status — installation summary\n");
   console.log("  Runtime");
   console.log(`    Node       : ${process.version}${nodeMajor >= 20 ? " (ok)" : " (requer >= 20)"}`);
   const runtimeLabel = isPackagedCli()
-    ? "embutido no aplicativo"
-    : (fs.existsSync(path.join(cwd, "node_modules", "tsx")) ? "presente" : "ausente (npm install)");
+    ? "embedded in the app"
+    : (fs.existsSync(path.join(cwd, "node_modules", "tsx")) ? "present" : "missing (npm install)");
   console.log(`    Runtime CLI: ${runtimeLabel}`);
 
-  const cliGithub = commandAvailable("gh") ? "disponivel" : "ausente (opcional)";
-  const cliClaude = commandAvailable("claude") ? "disponivel" : "ausente";
-  const cliCodex = commandAvailable("codex") ? "disponivel" : "ausente";
+  const cliGithub = commandAvailable("gh") ? "available" : "missing (optional)";
+  const cliClaude = commandAvailable("claude") ? "available" : "missing";
+  const cliCodex = commandAvailable("codex") ? "available" : "missing";
 
   console.log("\n  Providers");
   console.log(`    GitHub     : ${cliGithub}`);
@@ -631,14 +631,14 @@ async function statusCommand(): Promise<void> {
   const hasBot = /^TELEGRAM_BOT_TOKEN=.+/m.test(env);
   const hasUserId = /^TELEGRAM_ALLOWED_USER_ID=.+/m.test(env);
   console.log("\n  Telegram");
-  console.log(`    Bot token  : ${hasBot ? "configurado" : "nao configurado"}`);
-  console.log(`    User ID    : ${hasUserId ? "restrito" : "livre (todos)"}`);
-  if (!hasBot) console.log("    Dica       : maestro telegram connect");
+  console.log(`    Bot token  : ${hasBot ? "configured" : "not configured"}`);
+  console.log(`    User ID    : ${hasUserId ? "restricted" : "open (everyone)"}`);
+  if (!hasBot) console.log("    Tip        : maestro telegram connect");
 
-  console.log("\n  Projeto");
+  console.log("\n  Project");
   const dbPath = envDbPath();
   const dbExists = fs.existsSync(dbPath);
-  console.log(`    Banco local: ${dbExists ? dbPath : "nao inicializado"}`);
+  console.log(`    Local database: ${dbExists ? dbPath : "not initialized"}`);
 
   const apiHost = process.env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1";
   const apiPort = Number.parseInt(process.env.MAESTRO_DASHBOARD_PORT ?? "4787", 10) || 4787;
@@ -652,11 +652,11 @@ function renderTaskLogs(taskId: number, limit: number): void {
   const logs = database.getTaskLogs(taskId);
   console.clear();
   console.log(`maestro logs — Task #${logs.task.id}`);
-  console.log(`  Projeto : @${logs.task.projectKey ?? "inbox"}`);
+  console.log(`  Project : @${logs.task.projectKey ?? "inbox"}`);
   console.log(`  Status  : ${logs.task.status}`);
-  console.log(`  Demanda : ${logs.task.text}`);
-  if (logs.task.parentTaskId) console.log(`  Origem  : continuidade da Task #${logs.task.parentTaskId}`);
-  console.log("\nEventos:");
+  console.log(`  Request : ${logs.task.text}`);
+  if (logs.task.parentTaskId) console.log(`  Origin  : follow-up from task #${logs.task.parentTaskId}`);
+  console.log("\nEvents:");
   for (const event of logs.events.slice(-limit)) {
     console.log(`  ${event.createdAt}  ${event.type}  ${event.text}`);
   }
@@ -664,7 +664,7 @@ function renderTaskLogs(taskId: number, limit: number): void {
   for (const run of logs.runs.slice(-limit)) {
     const outcome = run.lastError
       ?? (run.pullRequestUrl ? `PR ${run.pullRequestUrl}` : null)
-      ?? (run.commitSha ? `commit ${run.commitSha}` : "sem resultado registrado");
+      ?? (run.commitSha ? `commit ${run.commitSha}` : "no recorded result");
     console.log(`  #${run.id} ${run.status} ${run.currentPhase ?? ""} — ${outcome}`);
   }
   database.close();
@@ -684,10 +684,10 @@ async function followUpCommand(argv: string[]): Promise<void> {
       parentTaskId,
       text
     });
-    console.log(`[ok] Task #${task.id} criada como continuidade da Task #${parentTaskId}.`);
-    console.log(`    Projeto : @${task.projectKey ?? "inbox"}`);
-    console.log(`    Estado  : ${task.status}`);
-    console.log(`    Demanda : ${task.text}`);
+    console.log(`[ok] Task #${task.id} created as a follow-up to task #${parentTaskId}.`);
+    console.log(`    Project : @${task.projectKey ?? "inbox"}`);
+    console.log(`    Status  : ${task.status}`);
+    console.log(`    Request : ${task.text}`);
   } catch (error) {
     console.error(`[!] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
@@ -710,7 +710,7 @@ async function logsCommand(argv: string[]): Promise<void> {
     renderTaskLogs(taskId, limit);
     return;
   }
-  console.log("Acompanhando logs; pressione Ctrl+C para sair.");
+  console.log("Following logs; press Ctrl+C to exit.");
   while (true) {
     try {
       renderTaskLogs(taskId, limit);
@@ -740,27 +740,27 @@ async function providersLoginCommand(argv: string[]): Promise<void> {
   const providerId = argv[0];
   if (!providerId) {
     console.error("Usage: maestro providers login <id>");
-    console.error("Providers com login por conta: codex, claude, gemini, copilot");
+    console.error("Providers with account login: codex, claude, gemini, copilot");
     process.exit(1);
   }
   const preset = PROVIDER_PRESETS.find((item) => item.id === providerId);
   if (!preset) {
-    console.error(`maestro: provider '${providerId}' nao encontrado.`);
-    console.error(`Disponiveis: ${PROVIDER_PRESETS.filter((p) => p.authFlow && p.authFlow !== "none").map((p) => p.id).join(", ")}`);
+    console.error(`maestro: provider '${providerId}' not found.`);
+    console.error(`Available: ${PROVIDER_PRESETS.filter((p) => p.authFlow && p.authFlow !== "none").map((p) => p.id).join(", ")}`);
     process.exit(1);
   }
   if (!preset.authFlow || preset.authFlow === "none") {
-    console.error(`maestro: o provider '${providerId}' nao usa login por conta (use o modo API key ou endpoint).`);
+    console.error(`maestro: provider '${providerId}' does not support account login (use API key or endpoint mode).`);
     process.exit(1);
   }
 
   const broker = new ProviderAuthBroker();
-  console.log(`\n[maestro] Iniciando login de ${preset.label} (${preset.authFlow})...`);
+  console.log(`\n[maestro] Starting ${preset.label} login (${preset.authFlow})...`);
   let session;
   try {
     session = broker.start(preset);
   } catch (error) {
-    console.error(`[!] Nao foi possivel iniciar o login: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[!] Unable to start login: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 
@@ -778,8 +778,8 @@ async function providersLoginCommand(argv: string[]): Promise<void> {
       lastDetail = current.detail;
     }
     if (current.state === "connected") {
-      console.log(`\n[ok] ${preset.label} conectado.`);
-      console.log("Dica: rode 'maestro start' e abra o dashboard em Providers para definir prioridades.");
+      console.log(`\n[ok] ${preset.label} connected.`);
+      console.log("Tip: run 'maestro start' and open Providers in the dashboard to set priorities.");
       process.exit(0);
     }
     if (current.state === "failed" || current.state === "cancelled") {
@@ -787,7 +787,7 @@ async function providersLoginCommand(argv: string[]): Promise<void> {
       process.exit(1);
     }
   }
-  console.error("\n[!] Login nao concluido dentro de 10 minutos. Tente novamente.");
+  console.error("\n[!] Login did not complete within 10 minutes. Try again.");
   try { broker.cancel(session.id); } catch { /* ignore */ }
   process.exit(1);
 }
@@ -811,10 +811,10 @@ async function main(): Promise<void> {
       if (sub === "connect") {
         const result = await runTelegramConnectWizard({ cwd: cliDataDir() });
         if (!result.success) {
-          console.error(`[!] Nao foi possivel conectar o Telegram: ${result.error ?? "erro desconhecido"}`);
+          console.error(`[!] Unable to connect Telegram: ${result.error ?? "unknown error"}`);
           process.exit(1);
         }
-        console.log(`[ok] Bot conectado${result.botInfo ? ` como @${result.botInfo.username}` : ""}.`);
+        console.log(`[ok] Bot connected${result.botInfo ? ` as @${result.botInfo.username}` : ""}.`);
       } else {
         console.error("Usage: maestro telegram connect");
         process.exit(1);
@@ -875,7 +875,7 @@ async function main(): Promise<void> {
       else { console.error("Usage: maestro providers login <id> | maestro providers status"); process.exit(1); }
       break;
     default:
-      console.error(`maestro: comando desconhecido '${command}'`);
+      console.error(`maestro: unknown command '${command}'`);
       printHelp();
       process.exit(1);
   }

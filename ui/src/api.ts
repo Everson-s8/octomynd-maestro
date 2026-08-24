@@ -403,7 +403,7 @@ export type ProviderPolicySnapshot = {
 export async function fetchProviderPolicy(): Promise<ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }> {
   const response = await fetch("/api/provider-policy", { cache: "no-store" });
   const payload = await response.json() as { policy?: ProviderPolicySnapshot; models?: Record<string, string[]>; error?: string };
-  if (!response.ok || !payload.policy) throw new Error(payload.error || "Nao foi possivel carregar os providers.");
+  if (!response.ok || !payload.policy) throw new Error(payload.error || "Unable to load provider policies.");
   const controls = Array.isArray(payload.policy.controls) ? payload.policy.controls : [];
   const capabilities = Array.isArray(payload.policy.capabilities) ? payload.policy.capabilities : [];
   return {
@@ -426,7 +426,7 @@ export type ProviderRescanEntry = {
 export async function rescanProviders(): Promise<{ scannedAt: string; providers: ProviderRescanEntry[] }> {
   const response = await fetch("/api/providers/rescan", { method: "POST" });
   const payload = await response.json() as { scannedAt?: string; providers?: ProviderRescanEntry[]; error?: string };
-  if (!response.ok || !payload.providers) throw new Error(payload.error || "Não foi possível reexaminar os providers.");
+  if (!response.ok || !payload.providers) throw new Error(payload.error || "Unable to rescan providers.");
   return { scannedAt: payload.scannedAt ?? new Date().toISOString(), providers: payload.providers };
 }
 
@@ -434,7 +434,7 @@ export async function refreshProviders(): Promise<void> {
   const response = await fetch("/api/providers/refresh", { method: "POST" });
   const payload = await response.json().catch(() => ({})) as { error?: string; details?: string };
   if (!response.ok) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel atualizar os providers.");
+    throw new Error(payload.details || payload.error || "Unable to refresh providers.");
   }
 }
 
@@ -448,7 +448,7 @@ export async function updateProviderControl(
     body: JSON.stringify(input)
   });
   const payload = await response.json() as { control?: ProviderControl; error?: string };
-  if (!response.ok || !payload.control) throw new Error(payload.error || "Nao foi possivel atualizar o provider.");
+  if (!response.ok || !payload.control) throw new Error(payload.error || "Unable to update the provider.");
   return payload.control;
 }
 
@@ -461,7 +461,7 @@ export async function updateProviderControls(
     body: JSON.stringify({ controls })
   });
   const payload = await response.json() as { controls?: ProviderControl[]; error?: string };
-  if (!response.ok || !payload.controls) throw new Error(payload.error || "Nao foi possivel atualizar os providers.");
+  if (!response.ok || !payload.controls) throw new Error(payload.error || "Unable to update providers.");
   return payload.controls;
 }
 
@@ -482,7 +482,7 @@ export type AntigravityPermissionStatus = {
 export async function fetchAntigravityPermissionStatus(): Promise<AntigravityPermissionStatus> {
   const response = await fetch("/api/providers/antigravity/permissions", { cache: "no-store" });
   const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Nao foi possivel ler as permissoes do Antigravity.");
+  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to read Antigravity permissions.");
   return payload;
 }
 
@@ -493,7 +493,7 @@ export async function configureAntigravityPermissions(): Promise<AntigravityPerm
     body: JSON.stringify({ confirmed: true })
   });
   const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Nao foi possivel configurar as permissoes do Antigravity.");
+  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to configure Antigravity permissions.");
   return payload;
 }
 
@@ -512,7 +512,7 @@ export async function testProviderConnection(input: {
     body: JSON.stringify(input)
   });
   const payload = await response.json() as ProviderConnectionResult & { error?: string };
-  if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel testar a conexao.");
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to test the connection.");
   return payload;
 }
 
@@ -526,7 +526,7 @@ export async function updateCapabilityRouting(
     body: JSON.stringify(input)
   });
   const payload = await response.json() as { routing?: CapabilityRoutingPolicy; error?: string };
-  if (!response.ok || !payload.routing) throw new Error(payload.error || "Nao foi possivel atualizar a regra de roteamento.");
+  if (!response.ok || !payload.routing) throw new Error(payload.error || "Unable to update the routing rule.");
   return payload.routing;
 }
 
@@ -621,14 +621,14 @@ export type RegisterProviderResult = {
 export async function fetchProviderPresets(): Promise<{ presets: ProviderPreset[]; registered: RegisteredCustomProvider[] }> {
   const response = await fetch("/api/providers/presets", { cache: "no-store" });
   const payload = await response.json() as { presets?: ProviderPreset[]; registered?: RegisteredCustomProvider[]; error?: string };
-  if (!response.ok) throw new Error(payload.error || "Nao foi possivel carregar presets de providers.");
+  if (!response.ok) throw new Error(payload.error || "Unable to load provider presets.");
   return { presets: payload.presets ?? [], registered: payload.registered ?? [] };
 }
 
 export async function fetchRegisteredProviders(): Promise<RegisteredCustomProvider[]> {
   const response = await fetch("/api/providers/registered");
   const payload = await response.json() as { providers?: RegisteredCustomProvider[]; error?: string };
-  if (!response.ok) throw new Error(payload.error || "Nao foi possivel carregar providers registrados.");
+  if (!response.ok) throw new Error(payload.error || "Unable to load registered providers.");
   return payload.providers ?? [];
 }
 
@@ -639,14 +639,14 @@ export async function registerProvider(input: RegisterProviderInput): Promise<Re
     body: JSON.stringify(input)
   });
   const payload = await response.json() as RegisterProviderResult;
-  if (!response.ok) throw new Error(payload.error || "Nao foi possivel registrar o provider.");
+  if (!response.ok) throw new Error(payload.error || "Unable to register the provider.");
   return payload;
 }
 
 export async function deleteProvider(providerId: string): Promise<RegisteredCustomProvider[]> {
   const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
   const payload = await response.json() as { removed?: boolean; providers?: RegisteredCustomProvider[]; error?: string };
-  if (!response.ok) throw new Error(payload.error || "Nao foi possivel remover o provider.");
+  if (!response.ok) throw new Error(payload.error || "Unable to remove the provider.");
   return payload.providers ?? [];
 }
 
@@ -662,7 +662,7 @@ export async function discoverProviderModels(input: {
     body: JSON.stringify(input)
   });
   const payload = await response.json() as { models?: string[]; error?: string; detail?: string };
-  if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel descobrir os modelos.");
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to discover models.");
   return payload.models ?? [];
 }
 
@@ -673,21 +673,21 @@ export async function startProviderAuth(presetId: string, flowId?: ProviderAuthF
     body: JSON.stringify({ presetId, ...(flowId ? { flowId } : {}) })
   });
   const payload = await response.json() as { session?: ProviderAuthSession; error?: string; detail?: string };
-  if (!response.ok || !payload.session) throw new Error(payload.detail || payload.error || "Nao foi possivel iniciar a autenticacao.");
+  if (!response.ok || !payload.session) throw new Error(payload.detail || payload.error || "Unable to start authentication.");
   return payload.session;
 }
 
 export async function fetchProviderAuth(sessionId: string): Promise<ProviderAuthSession> {
   const response = await fetch(`/api/providers/auth/${encodeURIComponent(sessionId)}`);
   const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
-  if (!response.ok || !payload.session) throw new Error(payload.error || "Sessao de autenticacao nao encontrada.");
+  if (!response.ok || !payload.session) throw new Error(payload.error || "Authentication session not found.");
   return payload.session;
 }
 
 export async function cancelProviderAuth(sessionId: string): Promise<ProviderAuthSession> {
   const response = await fetch(`/api/providers/auth/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   const payload = await response.json() as { session?: ProviderAuthSession; error?: string };
-  if (!response.ok || !payload.session) throw new Error(payload.error || "Nao foi possivel cancelar a autenticacao.");
+  if (!response.ok || !payload.session) throw new Error(payload.error || "Unable to cancel authentication.");
   return payload.session;
 }
 
@@ -720,7 +720,7 @@ export async function connectTelegram(input: ConnectTelegramInput): Promise<Conn
     message?: string;
   };
   if (!response.ok || !payload.ok) {
-    throw new Error(payload.message || payload.error || "Falha ao conectar Telegram bot.");
+    throw new Error(payload.message || payload.error || "Unable to connect the Telegram bot.");
   }
   return {
     ok: true,
@@ -859,14 +859,14 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardDat
     }
   }
   if (!response) {
-    throw lastError instanceof Error ? lastError : new Error("Dashboard indisponível.");
+    throw lastError instanceof Error ? lastError : new Error("Dashboard unavailable.");
   }
   if (!response.ok) {
-    throw new Error(`Dashboard indisponível (${response.status}).`);
+    throw new Error(`Dashboard unavailable (${response.status}).`);
   }
   const payload = await response.json() as Partial<DashboardData> | null;
   if (!payload || typeof payload !== "object") {
-    throw new Error("O dashboard retornou uma resposta inválida.");
+    throw new Error("The dashboard returned an invalid response.");
   }
 
   const costSummary = payload.costSummary;
@@ -984,7 +984,7 @@ export async function previewWorkIntake(input: PreviewWorkIntakeInput): Promise<
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `Não foi possível analisar a demanda (${response.status}).`);
+    throw new Error(payload.error || `Unable to analyze the request (${response.status}).`);
   }
   return response.json();
 }
@@ -997,7 +997,7 @@ export async function submitWorkIntake(input: SubmitWorkIntakeInput): Promise<Su
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `Não foi possível submeter a demanda (${response.status}).`);
+    throw new Error(payload.error || `Unable to submit the request (${response.status}).`);
   }
   return response.json();
 }
@@ -1010,7 +1010,7 @@ export async function createTask(input: { projectKey: string; text: string }) {
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `Não foi possível criar a task (${response.status}).`);
+    throw new Error(payload.error || `Unable to create the task (${response.status}).`);
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }
@@ -1024,7 +1024,7 @@ export async function createFollowUpTask(taskId: number, text: string) {
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string; details?: string[] | string };
     const details = Array.isArray(payload.details) ? payload.details.join(" ") : payload.details;
-    throw new Error(details || payload.error || "Não foi possível criar a task de continuidade.");
+    throw new Error(details || payload.error || "Unable to create the follow-up task.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }
@@ -1036,7 +1036,7 @@ export async function prepareTask(taskId: number) {
       error?: string;
       details?: string[];
     };
-    throw new Error(payload.details?.join(" ") || payload.error || "Não foi possível preparar a task.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to prepare the task.");
   }
   return response.json() as Promise<{ task: DashboardTask }>;
 }
@@ -1045,7 +1045,7 @@ export async function cancelTask(taskId: number) {
   const response = await fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   const payload = await response.json() as { task?: DashboardTask; error?: string; details?: string };
   if (!response.ok || !payload.task) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel cancelar a task.");
+    throw new Error(payload.details || payload.error || "Unable to cancel the task.");
   }
   return payload.task;
 }
@@ -1063,7 +1063,7 @@ export async function cancelWorkGraph(workGraphId: number, reason = ""): Promise
   };
   if (!response.ok || !payload.workGraph) {
     const details = Array.isArray(payload.details) ? payload.details.join(" ") : payload.details;
-    throw new Error(details || payload.error || "Nao foi possivel cancelar o Work Graph.");
+    throw new Error(details || payload.error || "Unable to cancel the Work Graph.");
   }
   return payload.workGraph;
 }
@@ -1072,7 +1072,7 @@ export async function deleteTask(taskId: number) {
   const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
   const payload = await response.json() as { task?: DashboardTask; error?: string; details?: string };
   if (!response.ok || !payload.task) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel apagar a task.");
+    throw new Error(payload.details || payload.error || "Unable to delete the task.");
   }
   return payload.task;
 }
@@ -1080,7 +1080,7 @@ export async function deleteTask(taskId: number) {
 export async function fetchTaskReviews(taskId: number): Promise<TaskReview[]> {
   const response = await fetch(`/api/tasks/${taskId}/reviews`);
   if (!response.ok) {
-    throw new Error("Não foi possível carregar as revisões da task.");
+    throw new Error("Unable to load task reviews.");
   }
   const payload = await response.json() as { reviews: TaskReview[] };
   return payload.reviews;
@@ -1090,10 +1090,10 @@ export async function requestClaudeReview(taskId: number): Promise<TaskReview> {
   const response = await fetch(`/api/tasks/${taskId}/reviews/claude`, { method: "POST" });
   const payload = await response.json() as { review?: TaskReview; error?: string };
   if (!response.ok) {
-    throw new Error(payload.review?.error || payload.error || "A revisão do Claude falhou.");
+    throw new Error(payload.review?.error || payload.error || "The Claude review failed.");
   }
   if (!payload.review) {
-    throw new Error("Claude não retornou uma revisão válida.");
+    throw new Error("Claude did not return a valid review.");
   }
   return payload.review;
 }
@@ -1113,7 +1113,7 @@ export async function createImprovement(input: {
   });
   const payload = await response.json() as { improvement?: ImprovementProposal; error?: string; details?: string };
   if (!response.ok || !payload.improvement) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel registrar a proposta.");
+    throw new Error(payload.details || payload.error || "Unable to record the proposal.");
   }
   return payload.improvement;
 }
@@ -1130,7 +1130,7 @@ export async function decideImprovement(
   });
   const payload = await response.json() as { improvement?: ImprovementProposal; error?: string; details?: string };
   if (!response.ok || !payload.improvement) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel decidir a proposta.");
+    throw new Error(payload.details || payload.error || "Unable to decide the proposal.");
   }
   return payload.improvement;
 }
@@ -1143,7 +1143,7 @@ export async function cancelFeature(featureId: number, reason = ""): Promise<Das
   });
   const payload = await response.json() as { feature?: DashboardFeature; error?: string; details?: string[] };
   if (!response.ok || !payload.feature) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel cancelar a Feature.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to cancel the Feature.");
   }
   return payload.feature;
 }
@@ -1152,7 +1152,7 @@ export async function fetchFeaturePlan(featurePlanId: number): Promise<FeaturePl
   const response = await fetch(`/api/feature-plans/${featurePlanId}`);
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel carregar o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to load the plan.");
   }
   return payload;
 }
@@ -1172,7 +1172,7 @@ export async function createFeaturePlan(input: {
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel criar o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to create the plan.");
   }
   return payload;
 }
@@ -1185,7 +1185,7 @@ export async function cancelFeaturePlan(featurePlanId: number, reason = ""): Pro
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel cancelar o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to cancel the plan.");
   }
   return payload;
 }
@@ -1207,7 +1207,7 @@ export async function replanFeaturePlan(
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel replanejar.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to replan.");
   }
   return payload;
 }
@@ -1220,7 +1220,7 @@ export async function pauseFeaturePlan(featurePlanId: number, reason = ""): Prom
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel pausar o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to pause the plan.");
   }
   return payload;
 }
@@ -1232,7 +1232,7 @@ export async function resumeFeaturePlan(featurePlanId: number): Promise<FeatureP
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel retomar o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to resume the plan.");
   }
   return payload;
 }
@@ -1245,7 +1245,7 @@ export async function updateFeaturePlanPriority(featurePlanId: number, priority:
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel atualizar a prioridade.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to update the priority.");
   }
   return payload;
 }
@@ -1258,7 +1258,7 @@ export async function retryFeaturePlan(featurePlanId: number, reason = ""): Prom
   });
   const payload = await response.json() as FeaturePlanDetails & { error?: string; details?: string[] };
   if (!response.ok || !payload.plan) {
-    throw new Error(payload.details?.join(" ") || payload.error || "Nao foi possivel tentar novamente o plano.");
+    throw new Error(payload.details?.join(" ") || payload.error || "Unable to retry the plan.");
   }
   return payload;
 }
@@ -1271,7 +1271,7 @@ export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<Goal
   });
   const payload = await response.json() as { run?: GoalRun; error?: string; details?: string };
   if (!response.ok || !payload.run) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel iniciar a goal.");
+    throw new Error(payload.details || payload.error || "Unable to start the goal.");
   }
   return payload.run;
 }
@@ -1283,7 +1283,7 @@ export async function resumeGoal(runId: number): Promise<GoalRun> {
   });
   const payload = await response.json() as { run?: GoalRun; error?: string; details?: string };
   if (!response.ok || !payload.run) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel retomar a goal.");
+    throw new Error(payload.details || payload.error || "Unable to resume the goal.");
   }
   return payload.run;
 }
@@ -1305,7 +1305,7 @@ export async function decideHumanReview(
     details?: string;
   };
   if (!response.ok || !payload.item) {
-    throw new Error(payload.details || payload.error || "Nao foi possivel registrar a decisao.");
+    throw new Error(payload.details || payload.error || "Unable to record the decision.");
   }
   return payload.item;
 }
@@ -1367,7 +1367,7 @@ export type OperationalChatActionResult = {
 export async function fetchChatThreads(projectKey = GLOBAL_CHAT_PROJECT_KEY): Promise<OperationalChatThread[]> {
   const response = await fetch(`/api/chat/threads?projectKey=${encodeURIComponent(projectKey)}`, { cache: "no-store" });
   const payload = await response.json() as { threads?: OperationalChatThread[]; error?: string };
-  if (!response.ok || !payload.threads) throw new Error(payload.error || "Nao foi possivel carregar as conversas.");
+  if (!response.ok || !payload.threads) throw new Error(payload.error || "Unable to load conversations.");
   return payload.threads;
 }
 
@@ -1378,14 +1378,14 @@ export async function createChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, tit
     body: JSON.stringify({ projectKey, title, accessMode })
   });
   const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
-  if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Nao foi possivel criar a conversa.");
+  if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Unable to create the conversation.");
   return payload.thread;
 }
 
 export async function deleteChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number): Promise<void> {
   const response = await fetch(`/api/chat/threads/${threadId}?projectKey=${encodeURIComponent(projectKey)}`, { method: "DELETE" });
   const payload = await response.json().catch(() => ({})) as { deleted?: boolean; error?: string; details?: string };
-  if (!response.ok || !payload.deleted) throw new Error(payload.details || payload.error || "Nao foi possivel excluir a conversa.");
+  if (!response.ok || !payload.deleted) throw new Error(payload.details || payload.error || "Unable to delete the conversation.");
 }
 
 export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, limit = 50, threadId?: number): Promise<OperationalChatMessage[]> {
@@ -1393,7 +1393,7 @@ export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, li
   const response = await fetch(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}${threadQuery}`, { cache: "no-store" });
   const payload = await response.json() as { messages?: OperationalChatMessage[]; error?: string };
   if (!response.ok || !payload.messages) {
-    throw new Error(payload.error || "Nao foi possivel carregar o historico de chat.");
+    throw new Error(payload.error || "Unable to load chat history.");
   }
   return payload.messages;
 }
@@ -1406,7 +1406,7 @@ export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, mess
   });
   const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
   if (!response.ok || !payload.explanation) {
-    throw new Error(payload.details || payload.error || "Falha no envio da mensagem.");
+    throw new Error(payload.details || payload.error || "Unable to send the message.");
   }
   return payload;
 }
@@ -1419,7 +1419,7 @@ export async function executeChatAction(projectKey = GLOBAL_CHAT_PROJECT_KEY, ac
   });
   const payload = await response.json() as OperationalChatActionResult & { error?: string; details?: string };
   if (!response.ok || payload.success === undefined) {
-    throw new Error(payload.details || payload.error || "Falha na execucao da acao governada.");
+    throw new Error(payload.details || payload.error || "Unable to execute the governed action.");
   }
   return payload;
 }
@@ -1460,9 +1460,9 @@ export async function registerProject(input: RegisterProjectInput): Promise<Regi
     });
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("O registro do projeto demorou mais de 2 minutos. Verifique o Git e tente novamente.");
+      throw new Error("Project registration took longer than 2 minutes. Check Git and try again.");
     }
-    throw new Error("Não foi possível manter a conexão com o Maestro. Confirme que o HG está ativo e tente novamente.");
+    throw new Error("Unable to keep the connection to Maestro alive. Confirm that HG is running and try again.");
   } finally {
     window.clearTimeout(timeout);
   }
@@ -1470,7 +1470,7 @@ export async function registerProject(input: RegisterProjectInput): Promise<Regi
   if (!response.ok || !payload.project) {
     const detailMsg = Array.isArray(payload.details)
       ? payload.details.join(", ")
-      : payload.details || payload.error || "Falha ao registrar projeto.";
+      : payload.details || payload.error || "Unable to register the project.";
     throw new Error(detailMsg);
   }
   return payload;
@@ -1519,14 +1519,14 @@ export async function fetchQuota(): Promise<QuotaResult[]> {
     response = await fetch("/api/quota", { signal: controller.signal, cache: "no-store" });
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("A leitura de cotas demorou demais; exibindo a última leitura disponível.");
+      throw new Error("Quota reading took too long; showing the last available reading.");
     }
-    throw error instanceof Error ? error : new Error("Quota indisponível.");
+    throw error instanceof Error ? error : new Error("Quota unavailable.");
   } finally {
     window.clearTimeout(timeout);
   }
   if (!response.ok) {
-    throw new Error(`Quota indisponível (${response.status}).`);
+    throw new Error(`Quota unavailable (${response.status}).`);
   }
   const payload = (await response.json()) as { quota?: QuotaResult[] };
   return payload.quota ?? [];
@@ -1657,9 +1657,9 @@ export async function fetchTaskLogs(taskId: number): Promise<TaskLogs> {
   const response = await fetch(`/api/tasks/${taskId}/logs`, { cache: "no-store" });
   if (!response.ok) {
     if (response.status === 404) {
-      throw new Error(`Task #${taskId} não encontrada.`);
+      throw new Error(`Task #${taskId} not found.`);
     }
-    throw new Error(`Falha ao carregar logs da task #${taskId} (${response.status}).`);
+    throw new Error(`Unable to load logs for task #${taskId} (${response.status}).`);
   }
   const payload = await response.json() as { logs: TaskLogs };
     return payload.logs;

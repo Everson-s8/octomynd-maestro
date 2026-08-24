@@ -29,13 +29,13 @@ export class ProviderAuthBroker {
     const flow = flowId ? preset.authFlows?.find((item) => item.id === flowId) : undefined;
     const session: InternalSession = {
       id: crypto.randomUUID(), presetId: preset.id, state: "waiting", verificationUrl: null,
-      userCode: null, detail: "Preparando autorizacao segura.", startedAt: new Date().toISOString(), completedAt: null
+      userCode: null, detail: "Preparing secure authorization.", startedAt: new Date().toISOString(), completedAt: null
     };
     this.sessions.set(session.id, session);
     if (flow?.kind === "verify_only") {
       void probeStatus(executable, preset.authStatusArgs).then((connected) =>
         complete(session, connected ? "connected" : "failed",
-          connected ? "Conta conectada." : "Login nao detectado. Faca o login no terminal e tente novamente."));
+          connected ? "Account connected." : "Login not detected. Sign in through the terminal and try again."));
     } else if (flow ? flow.kind === "terminal" : preset.authFlow === "terminal") {
       this.startTerminal(executable, { ...preset, authArgs: flow?.args ?? preset.authArgs }, session);
     } else {
@@ -53,7 +53,7 @@ export class ProviderAuthBroker {
     const session = this.sessions.get(id);
     if (!session) return null;
     session.cancel?.();
-    complete(session, "cancelled", "Autorizacao cancelada.");
+    complete(session, "cancelled", "Authorization cancelled.");
     return publicSession(session);
   }
 
@@ -69,7 +69,7 @@ export class ProviderAuthBroker {
       const parsed = parseDeviceAuthorization(output);
       session.verificationUrl = parsed.verificationUrl ?? session.verificationUrl;
       session.userCode = parsed.userCode ?? session.userCode;
-      session.detail = session.userCode ? "Aguardando voce autorizar no navegador." : "Preparando autorizacao segura.";
+      session.detail = session.userCode ? "Waiting for browser authorization." : "Preparing secure authorization.";
       if (session.verificationUrl && openedUrl !== session.verificationUrl) {
         openedUrl = session.verificationUrl;
         openExternalUrl(openedUrl);
@@ -78,12 +78,12 @@ export class ProviderAuthBroker {
     child.stdout.on("data", consume);
     child.stderr.on("data", consume);
     child.once("error", (error) => complete(session, "failed", error.message));
-    child.once("close", (code) => complete(session, code === 0 ? "connected" : "failed", code === 0 ? "Conta conectada." : cleanAuthError(output)));
+    child.once("close", (code) => complete(session, code === 0 ? "connected" : "failed", code === 0 ? "Account connected." : cleanAuthError(output)));
     session.cancel = () => child.kill();
   }
 
   private startTerminal(executable: string, preset: ProviderPreset, session: InternalSession) {
-    session.detail = "Terminal de autenticacao aberto. Conclua o login nele.";
+    session.detail = "Authentication terminal opened. Complete the login there.";
     // Open a cmd.exe window that runs the login command and stays open (/k).
     // cmd.exe is far more tolerant of quoting than powershell -Command, so paths
     // with spaces (e.g. "C:\Program Files\GitHub CLI\gh.exe") survive correctly.
@@ -95,7 +95,7 @@ export class ProviderAuthBroker {
     child.once("error", (error) => complete(session, "failed", error.message));
     child.once("close", async () => {
       const connected = await probeStatus(executable, preset.authStatusArgs);
-      complete(session, connected ? "connected" : "failed", connected ? "Conta conectada." : "O terminal foi fechado antes da conexao ser confirmada.");
+      complete(session, connected ? "connected" : "failed", connected ? "Account connected." : "The terminal closed before the connection was confirmed.");
     });
     session.cancel = () => child.kill();
   }
@@ -134,4 +134,4 @@ async function probeStatus(command: string, args?: string[]): Promise<boolean> {
     child.once("error", () => resolve(false)); child.once("close", (code) => resolve(code === 0));
   });
 }
-function cleanAuthError(output: string) { return output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" ") || "Autorizacao nao confirmada."; }
+function cleanAuthError(output: string) { return output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" ") || "Authorization was not confirmed."; }

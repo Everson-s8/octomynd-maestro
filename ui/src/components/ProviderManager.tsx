@@ -433,7 +433,7 @@ export function ProviderManager({
             fallbackEnabled: control?.fallbackEnabled ?? false
           });
         }
-        setNotice(`${preset.label} foi ativado. Use o painel de prioridade para definir a ordem.`);
+        setNotice(translate("{provider} enabled. Use the priority panel to define the order.", { provider: preset.label }));
         await load();
         onChanged?.();
         onPolicyChanged?.();
@@ -469,7 +469,7 @@ export function ProviderManager({
         connectionMode: "account"
       });
       setRegistered(result.providers);
-      setNotice(`${preset.label} foi conectado e ativado sem reiniciar o Maestro.`);
+      setNotice(translate("{provider} connected and enabled without restarting Maestro.", { provider: preset.label }));
       await load();
       onChanged?.();
       onPolicyChanged?.();
@@ -747,7 +747,7 @@ export function ProviderManager({
                 {presets.filter((preset) => preset.category === "account").map((preset) => (
                   <div className="pick-row" key={preset.id} onClick={() => openAccountPreset(preset)}>
                     <div className="av" style={{ background: providerColor(preset.id) }}>{preset.label.slice(0, 1).toUpperCase()}</div>
-                    <div className="tx"><b>{preset.label}</b><span>login via CLI oficial</span></div>
+                  <div className="tx"><b>{preset.label}</b><span>{translate("sign in via official CLI")}</span></div>
                     <svg className="go" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                   </div>
                 ))}

@@ -80,7 +80,7 @@ export class BackgroundHealthProber {
           } catch {
             this.latest.set(id, {
               state: "offline",
-              detail: "Falha ao verificar o CLI do provider.",
+              detail: "Unable to probe the provider CLI.",
               checkedAt: new Date().toISOString()
             });
           }

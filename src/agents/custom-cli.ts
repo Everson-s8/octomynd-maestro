@@ -132,7 +132,7 @@ export class CustomCliProvider implements AgentProvider {
     if (!executable && !envKeyPresent) {
       health = {
         state: "offline",
-        detail: `${this.label} CLI ou chave ENV nao encontrada`,
+        detail: `${this.label} CLI or ENV key not found`,
         checkedAt: new Date().toISOString()
       };
     } else if (this.config.healthProbe && executable) {
@@ -160,16 +160,16 @@ export class CustomCliProvider implements AgentProvider {
       });
 
       if (category === "auth_required") {
-        health = { state: "auth_required", detail: `${this.label} precisa de autenticacao.`, checkedAt: new Date().toISOString() };
+        health = { state: "auth_required", detail: `${this.label} requires authentication.`, checkedAt: new Date().toISOString() };
       } else if (probe.exitCode === 0) {
-        health = { state: "ready", detail: `${this.label} CLI disponivel`, checkedAt: new Date().toISOString() };
+        health = { state: "ready", detail: `${this.label} CLI available`, checkedAt: new Date().toISOString() };
       } else {
-        health = { state: "offline", detail: `${this.label} CLI probe indisponivel.`, checkedAt: new Date().toISOString() };
+        health = { state: "offline", detail: `${this.label} CLI probe unavailable.`, checkedAt: new Date().toISOString() };
       }
     } else {
       health = executable
-        ? { state: "ready", detail: `${this.label} CLI disponivel`, checkedAt: new Date().toISOString() }
-        : { state: "offline", detail: `${this.label} CLI nao encontrado.`, checkedAt: new Date().toISOString() };
+        ? { state: "ready", detail: `${this.label} CLI available`, checkedAt: new Date().toISOString() }
+        : { state: "offline", detail: `${this.label} CLI not found.`, checkedAt: new Date().toISOString() };
     }
 
     // Offline probes are the flicker source on the Providers screen: the
@@ -186,12 +186,12 @@ export class CustomCliProvider implements AgentProvider {
     const selectedModel = request.model ?? this.model;
 
     if (!executable) {
-      return failure(`${this.label} CLI nao encontrado: ${this.config.command}`);
+      return failure(`${this.label} CLI not found: ${this.config.command}`);
     }
     const cmdToRun = executable;
 
     if (!fs.existsSync(cwd)) {
-      return failure(`Workspace nao existe: ${cwd}`);
+      return failure(`Workspace does not exist: ${cwd}`);
     }
 
     const processResult = await runAgentProcess({
@@ -264,7 +264,7 @@ export class CustomCliProvider implements AgentProvider {
 
     this.cacheHealth({
       state: "ready",
-      detail: `${this.label} CLI disponivel`,
+      detail: `${this.label} CLI available`,
       checkedAt: new Date().toISOString()
     }, 30_000);
 
@@ -278,9 +278,9 @@ export class CustomCliProvider implements AgentProvider {
       outcome: changesRequested ? "changes_requested" : "completed",
       summary: changesRequested
         ? reviewDecision === "changes_requested"
-          ? `${this.label} solicitou ajustes concretos.`
-          : `${this.label} nao aprovou explicitamente a revisao final.`
-        : `${this.label} concluiu a fase ${request.phase}.`,
+          ? `${this.label} requested concrete changes.`
+          : `${this.label} did not explicitly approve the final review.`
+        : `${this.label} completed the ${request.phase} phase.`,
       structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
       artifactsProduced: [],
       output: redactSensitiveText(output),
@@ -299,8 +299,8 @@ export class CustomCliProvider implements AgentProvider {
     const executable = resolveCustomCliExecutable(this.config.command);
     if (!executable || !fs.existsSync(request.workspacePath)) {
       const error = !executable
-        ? `${this.label} CLI nao encontrado.`
-        : `Workspace nao existe: ${request.workspacePath}`;
+        ? `${this.label} CLI not found.`
+        : `Workspace does not exist: ${request.workspacePath}`;
       return improvementFailure(error, false);
     }
     const processResult = await runAgentProcess({

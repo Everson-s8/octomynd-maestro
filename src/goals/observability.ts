@@ -15,18 +15,18 @@ export type GoalObservabilitySnapshot = {
 };
 
 const WAIT_REASON_LABELS: Record<string, string> = {
-  quota: "cota do provedor esgotada",
-  auth_required: "autenticacao necessaria",
-  timeout: "tempo limite excedido",
-  output_limit: "limite de output do provedor atingido",
-  offline: "provedor indisponivel",
-  capacity: "nenhum provedor com capacidade disponivel",
-  runtime_restart: "reinicio do runtime Maestro",
-  budget_exhausted: "orcamento de etapas da Goal esgotado",
-  small_task_failure_limit: "falha repetida em task pequena; escopo deve ser reduzido",
-  task_split_required: "falhas consecutivas; task deve ser dividida em sub-tasks menores",
-  prompt_too_large: "tamanho do prompt excedido (ENAMETOOLONG/E2BIG)",
-  unknown: "erro desconhecido do provedor"
+  quota: "provider quota exhausted",
+  auth_required: "authentication required",
+  timeout: "time limit exceeded",
+  output_limit: "provider output limit reached",
+  offline: "provider unavailable",
+  capacity: "no provider with available capacity",
+  runtime_restart: "Maestro runtime restart",
+  budget_exhausted: "Goal step budget exhausted",
+  small_task_failure_limit: "repeated small-task failure; scope should be reduced",
+  task_split_required: "consecutive failures; task should be split into smaller sub-tasks",
+  prompt_too_large: "prompt size exceeded (ENAMETOOLONG/E2BIG)",
+  unknown: "unknown provider error"
 };
 
 export function formatReasonLabel(reason: string): string {
@@ -120,21 +120,21 @@ function determineNextAction(input: {
   fromProvider: string | null;
 }): string {
   if (input.status === "completed") {
-    return "Goal concluida com sucesso.";
+    return "Goal completed successfully.";
   }
   if (input.status === "cancelled") {
-    return "Goal cancelada pelo usuario.";
+    return "Goal cancelled by the user.";
   }
   if (input.status === "running") {
     if (input.fromProvider && input.nextProvider && input.fromProvider !== input.nextProvider) {
-      return `Handoff automatico de ${input.fromProvider} para ${input.nextProvider}.`;
+      return `Automatic handoff from ${input.fromProvider} to ${input.nextProvider}.`;
     }
-    return "Executando o proximo passo da goal.";
+    return "Executing the next goal step.";
   }
   if (input.status === "waiting_provider") {
     if (input.nextRetryAt) {
       const timeStr = formatRetryTime(input.nextRetryAt);
-      return `Retomada automatica agendada para ${timeStr}.`;
+      return `Automatic resume scheduled for ${timeStr}.`;
     }
     if (input.nextProvider) {
       return `Waiting for provider ${input.nextProvider} to become available.`;

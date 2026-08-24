@@ -204,10 +204,10 @@ export function compressStepOutput(input: StepCompressionInput): StepCompression
 }
 
 export function formatTokenEfficientPreviousSteps(steps: TokenEfficientHandoffStep[]): string {
-  if (steps.length === 0) return "Nenhuma etapa anterior.";
+  if (steps.length === 0) return "No previous steps.";
   return steps.map((step) => [
-    `- ${step.phase}/${step.provider}/${step.status}: ${step.summary || "sem resumo"}`,
-    `  compacto: ${indentDetails(step.compactOutput || "sem detalhes")}`
+    `- ${step.phase}/${step.provider}/${step.status}: ${step.summary || "no summary"}`,
+    `  compact: ${indentDetails(step.compactOutput || "no details")}`
   ].join("\n")).join("\n");
 }
 
@@ -227,10 +227,10 @@ export function dedupeTokenEfficientHandoffs(steps: TokenEfficientHandoffStep[])
 }
 
 export function formatLegacyPreviousSteps(steps: GoalStepRecord[]): string {
-  if (steps.length === 0) return "Nenhuma etapa anterior.";
+  if (steps.length === 0) return "No previous steps.";
   return steps.map((step) => (
     `- ${step.phase}/${step.provider}/${step.status}: ${step.summary}\n`
-    + `  detalhes: ${step.output.slice(0, LEGACY_OUTPUT_SLICE_CHARS) || "sem detalhes"}`
+    + `  details: ${step.output.slice(0, LEGACY_OUTPUT_SLICE_CHARS) || "no details"}`
   )).join("\n");
 }
 
@@ -246,19 +246,19 @@ function buildCompactOutput(input: {
     : SUCCESS_COMPACT_MAX_CHARS;
   const sections: string[] = [];
   if (input.error) {
-    sections.push("erros:");
+    sections.push("errors:");
     sections.push(...firstMeaningfulLines(input.error, 10).map((line) => `- ${line}`));
   }
 
   const evidence = selectEvidenceLines(input.output, input.commandNames, input.status);
   if (evidence.length > 0) {
-    sections.push("evidencias:");
+    sections.push("evidence:");
     sections.push(...evidence.map((line) => `- ${line}`));
   }
 
   if (input.rawArtifact) sections.push(`raw: artifact:${input.rawArtifact}`);
   const compact = sections.join("\n").trim();
-  return truncateForDisplay(compact || firstMeaningfulLines(input.output, 6).join("\n") || "sem detalhes", maxChars);
+  return truncateForDisplay(compact || firstMeaningfulLines(input.output, 6).join("\n") || "no details", maxChars);
 }
 
 function detectCommands(text: string): RuntimeCommandName[] {
@@ -303,7 +303,7 @@ function commandMetric(command: RuntimeCommandName, output: string, compactOutpu
 }
 
 function legacyOutputSlice(output: string): string {
-  return output.slice(0, LEGACY_OUTPUT_SLICE_CHARS) || "sem detalhes";
+  return output.slice(0, LEGACY_OUTPUT_SLICE_CHARS) || "no details";
 }
 
 function firstMeaningfulLines(text: string, maxLines: number): string[] {

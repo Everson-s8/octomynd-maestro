@@ -147,7 +147,7 @@ export class GoalCoordinator {
   resumeExistingRun(runId: number): GoalRunRecord {
     const run = this.database.getGoalRun(runId);
     if (!["blocked", "failed", "waiting_provider"].includes(run.status)) {
-      throw new Error(`Goal #${runId} nao esta bloqueado ou aguardando provider.`);
+      throw new Error(`Goal #${runId} is not blocked or waiting for a provider.`);
     }
     if (this.active.has(run.taskId)) return run;
 

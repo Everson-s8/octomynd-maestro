@@ -104,16 +104,16 @@ export class CodexProvider implements AgentProvider {
     const envKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
     const oauth = readCodexOAuthToken();
     const health: AgentHealth = envKey
-      ? { state: "ready", detail: "Codex API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+      ? { state: "ready", detail: "Codex API key available through ENV", checkedAt: new Date().toISOString() }
       : !cliEntry
         ? {
           state: "offline",
-          detail: withRemediation("codex", "offline", "Codex CLI ou API Key nao encontrado."),
+          detail: withRemediation("codex", "offline", "Codex CLI or API key not found."),
           checkedAt: new Date().toISOString()
         }
         : oauth
-          ? { state: "ready", detail: "Codex CLI autenticado", checkedAt: new Date().toISOString() }
-          : { state: "auth_required", detail: "Codex CLI instalado, mas a conta ainda nao foi autenticada.", checkedAt: new Date().toISOString() };
+          ? { state: "ready", detail: "Codex CLI authenticated", checkedAt: new Date().toISOString() }
+          : { state: "auth_required", detail: "Codex CLI is installed, but the account is not authenticated.", checkedAt: new Date().toISOString() };
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + 30_000;
     return health;
@@ -133,12 +133,12 @@ export class CodexProvider implements AgentProvider {
     const cliEntry = resolveCodexCliEntry();
     const selectedModel = request.model ?? this.model;
     if (!cliEntry) {
-      return failure("Codex CLI nao encontrado.", startedAt, false);
+      return failure("Codex CLI not found.", startedAt, false);
     }
 
     const cwd = request.task.worktreePath || request.project.path;
     if (!fs.existsSync(cwd)) {
-      return failure(`Workspace nao existe: ${cwd}`, startedAt, false);
+      return failure(`Workspace does not exist: ${cwd}`, startedAt, false);
     }
 
     const artifactRun = request.capability === "conversation"
@@ -259,10 +259,10 @@ export class CodexProvider implements AgentProvider {
       const output = fs.existsSync(outputPath)
         ? fs.readFileSync(outputPath, "utf8").trim()
         : processResult.stdout.trim();
-      this.cacheHealth("ready", "Codex CLI disponivel", 30_000);
+      this.cacheHealth("ready", "Codex CLI available", 30_000);
       return {
         outcome: "completed",
-        summary: "Codex respondeu à conversa.",
+        summary: "Codex replied to the conversation.",
         structuredPayload: null,
         artifactsProduced: [],
         output,
@@ -281,7 +281,7 @@ export class CodexProvider implements AgentProvider {
         summary: string;
         details: string;
       };
-      this.cacheHealth("ready", "Codex CLI disponivel", 30_000);
+      this.cacheHealth("ready", "Codex CLI available", 30_000);
       return {
         outcome: parsed.outcome,
         summary: parsed.summary.trim(),
@@ -296,7 +296,7 @@ export class CodexProvider implements AgentProvider {
         model: selectedModel ?? "codex"
       };
     } catch (error) {
-      const detail = `Codex retornou saida invalida: ${error instanceof Error ? error.message : "erro desconhecido"}`;
+      const detail = `Codex returned invalid output: ${error instanceof Error ? error.message : "unknown error"}`;
       const category = classifyFailure(detail, {
         provider: this.id,
         phase: request.phase,
@@ -319,9 +319,9 @@ export class CodexProvider implements AgentProvider {
   ): Promise<ImprovementReviewExecutionResult> {
     const startedAt = Date.now();
     const cliEntry = resolveCodexCliEntry();
-    if (!cliEntry) return improvementFailure("Codex CLI nao encontrado.", startedAt, false);
+    if (!cliEntry) return improvementFailure("Codex CLI not found.", startedAt, false);
     if (!fs.existsSync(request.workspacePath)) {
-      return improvementFailure(`Workspace nao existe: ${request.workspacePath}`, startedAt, false);
+      return improvementFailure(`Workspace does not exist: ${request.workspacePath}`, startedAt, false);
     }
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-improvement-codex-"));

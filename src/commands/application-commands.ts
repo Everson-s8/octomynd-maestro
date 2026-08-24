@@ -277,10 +277,10 @@ export class ApplicationCommands {
   ): Promise<ManualReviewResult> {
     const feature = this.database.findFeatureByTarget(targetInput);
     if (!feature) {
-      throw notFoundError("Feature PR nao encontrado para o alvo especificado.");
+      throw notFoundError("Feature PR not found for the specified target.");
     }
     if (!this.featureCoordinator) {
-      throw validationError("Feature Coordinator indisponivel.");
+      throw validationError("Feature Coordinator unavailable.");
     }
     return this.featureCoordinator.triggerManualReview(feature.id, isRetry);
   }
@@ -291,10 +291,10 @@ export class ApplicationCommands {
   ): Promise<ManualReviewStatusResult> {
     const feature = this.database.findFeatureByTarget(targetInput);
     if (!feature) {
-      throw notFoundError("Feature PR nao encontrado para o alvo especificado.");
+      throw notFoundError("Feature PR not found for the specified target.");
     }
     if (!this.featureCoordinator) {
-      throw validationError("Feature Coordinator indisponivel.");
+      throw validationError("Feature Coordinator unavailable.");
     }
     return this.featureCoordinator.getReviewStatus(feature.id);
   }

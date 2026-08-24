@@ -24,17 +24,17 @@ const NPM_BIN_CANDIDATES = [
 
 export function detectLocalRtk(env: NodeJS.ProcessEnv = process.env): RtkDetection {
   const fromPath = findOnPath(env, "rtk");
-  if (fromPath) return detection("path", fromPath, "RTK local encontrado no PATH.");
+  if (fromPath) return detection("path", fromPath, "RTK found on PATH.");
 
   const npmEntry = findNpmGlobalEntry(env);
-  if (npmEntry) return detection("npm_global", npmEntry, "RTK local encontrado em instalacao npm global.");
+  if (npmEntry) return detection("npm_global", npmEntry, "RTK found in the global npm installation.");
 
   return {
     available: false,
     source: "absent",
     command: null,
     argsPrefix: [],
-    detail: "RTK local nao encontrado; usando compressor interno.",
+    detail: "RTK was not found; using the built-in compressor.",
     checkedAt: new Date().toISOString()
   };
 }

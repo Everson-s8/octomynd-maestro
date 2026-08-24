@@ -124,7 +124,7 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
 
   const pushResult = runGitSafe(["push", "-u", "origin", task.branchName!], task.worktreePath!);
   if (!pushResult.ok) {
-    throw new Error(`Nao foi possivel publicar a branch '${task.branchName}' no GitHub: ${pushResult.stderr || pushResult.stdout}`);
+    throw new Error(`Unable to publish branch '${task.branchName}' to GitHub: ${pushResult.stderr || pushResult.stdout}`);
   }
 
   const existing = runGh([

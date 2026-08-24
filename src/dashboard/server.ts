@@ -253,8 +253,8 @@ async function routeRequest(
         sendJson(response, 200, {
           ok: true,
           detail: models.length
-            ? `Endpoint conectado. ${models.length} modelo(s) encontrado(s).`
-            : "Endpoint conectado, mas nenhum modelo foi anunciado.",
+            ? `Endpoint connected. ${models.length} model(s) found.`
+            : "Endpoint connected, but it did not announce any models.",
           executable: null,
           models
         });
@@ -262,7 +262,7 @@ async function routeRequest(
         sendJson(response, 422, {
           ok: false,
           error: "provider_connection_failed",
-          detail: error instanceof Error ? error.message : "Falha ao testar o endpoint.",
+          detail: error instanceof Error ? error.message : "Unable to test the endpoint.",
           executable: null,
           models: []
         });
@@ -284,7 +284,7 @@ async function routeRequest(
     } catch (error) {
       sendJson(response, 500, {
         error: "antigravity_permissions_read_failed",
-        details: error instanceof Error ? error.message : "Nao foi possivel ler as permissoes do Antigravity."
+        details: error instanceof Error ? error.message : "Unable to read Antigravity permissions."
       });
     }
     return;
@@ -301,14 +301,14 @@ async function routeRequest(
       options.database.addEvent({
         source: "dashboard",
         type: "provider.antigravity_permissions_configured",
-        text: "Permissoes de comandos de desenvolvimento do Antigravity configuradas pelo usuario.",
+        text: "Antigravity development command permissions configured by the user.",
         metadata: { rulesAdded: status.requiredRules.length - status.missingRules.length }
       });
       sendJson(response, 200, status);
     } catch (error) {
       sendJson(response, 500, {
         error: "antigravity_permissions_write_failed",
-        details: error instanceof Error ? error.message : "Nao foi possivel configurar as permissoes do Antigravity."
+        details: error instanceof Error ? error.message : "Unable to configure Antigravity permissions."
       });
     }
     return;
@@ -354,7 +354,7 @@ async function routeRequest(
       if (missingCli) {
         sendJson(response, 422, {
           error: "provider_cli_not_found",
-          detail: `${preset.label} nao esta instalado nesta maquina. Instale o CLI oficial e tente novamente.`,
+          detail: `${preset.label} is not installed on this machine. Install the official CLI and try again.`,
           command: missingCli[1],
           setupCommand: preset.setupCommand ?? null,
           docsUrl: preset.docsUrl
@@ -729,7 +729,7 @@ async function routeRequest(
     options.database.addEvent({
       source: "dashboard",
       type: "telegram.connected",
-      text: `Telegram bot @${testRes.botInfo?.username ?? "desconhecido"} conectado via dashboard.`,
+      text: `Telegram bot @${testRes.botInfo?.username ?? "unknown"} connected through the dashboard.`,
       metadata: {
         botInfo: testRes.botInfo,
         allowedUserId: allowedUserId || null,
@@ -1458,7 +1458,7 @@ async function routeRequest(
     } catch (error) {
       sendJson(response, 500, {
         error: "provider_refresh_failed",
-        details: error instanceof Error ? error.message : "Falha ao atualizar os providers."
+        details: error instanceof Error ? error.message : "Unable to refresh providers."
       });
     }
     return;
@@ -2027,7 +2027,7 @@ async function discoverProviderModels(endpointUrl: string, apiKey: string): Prom
     signal: AbortSignal.timeout(8_000)
   });
   if (!response.ok) {
-    throw new Error(`O endpoint de modelos respondeu HTTP ${response.status}.`);
+    throw new Error(`The model endpoint returned HTTP ${response.status}.`);
   }
   const payload = await response.json() as {
     data?: Array<{ id?: string }>;
@@ -2042,11 +2042,11 @@ async function discoverProviderModels(endpointUrl: string, apiKey: string): Prom
 async function discoverModelsForPreset(preset: ProviderPreset | undefined, endpointUrl: string, apiKey: string): Promise<string[]> {
   if (preset?.modelDiscovery === "cli") {
     const executable = resolveCustomCliExecutable(preset.command);
-    if (!executable) throw new Error(`CLI '${preset.command}' nao foi encontrado no PATH.`);
+    if (!executable) throw new Error(`CLI '${preset.command}' was not found on PATH.`);
     return discoverCliModels(executable, preset.modelDiscoveryArgs ?? []);
   }
   const endpoint = endpointUrl || preset?.defaultEndpoint || "";
-  if (!endpoint) throw new Error("Este provider nao publica um catalogo de modelos. Use Auto ou informe o ID manualmente.");
+  if (!endpoint) throw new Error("This provider does not publish a model catalog. Use Auto or enter the model ID manually.");
   return discoverProviderModels(endpoint, apiKey);
 }
 
@@ -2087,8 +2087,8 @@ async function testAgentConnection(command: string, args: string[]): Promise<{ o
     // Async version probe so a slow/hung CLI does not block the event loop.
     const ok = await probeExecutable(executable, args);
     return ok
-      ? { ok: true, detail: `Conectado (${command}).`, executable }
-      : { ok: false, detail: `Falha ao executar ${command}.`, executable };
+      ? { ok: true, detail: `Connected (${command}).`, executable }
+      : { ok: false, detail: `Unable to execute ${command}.`, executable };
   }
   return { ok: true, detail: `Executable found (${command}).`, executable };
 }

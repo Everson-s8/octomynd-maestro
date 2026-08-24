@@ -189,7 +189,7 @@ export class AgentRegistry {
             const retryAfterMs = Math.max(1_000, feedback.retryAfterMs);
             this.cooldowns.set(providerId, {
               until: this.now() + retryAfterMs,
-              detail: feedback.summary || "Provider em cooldown apos falha transitoria.",
+              detail: feedback.summary || "Provider is in cooldown after a transient failure.",
               reason: feedback.failureCategory ?? "unknown"
             });
           }

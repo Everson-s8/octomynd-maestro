@@ -235,6 +235,6 @@ function resetLabel(bucket: QuotaBucket): string | null {
   const diffMs = new Date(bucket.resetsAt).getTime() - Date.now();
   if (!Number.isFinite(diffMs)) return null;
   const mins = Math.max(0, Math.round(diffMs / 60_000));
-  if (mins >= 60) return `reset em ${Math.round(mins / 60)}h`;
-  return `reset em ${mins}min`;
+  if (mins >= 60) return translate("reset in {hours}h", { hours: Math.round(mins / 60) });
+  return translate("reset in {minutes}min", { minutes: mins });
 }

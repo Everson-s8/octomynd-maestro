@@ -57,7 +57,7 @@ describe("CustomCliProvider", () => {
 
     const health = await provider.health();
     expect(health.state).toBe("ready");
-    expect(health.detail).toContain("OpenCode Go CLI disponivel");
+    expect(health.detail).toContain("OpenCode Go CLI available");
   });
 
   it("returns health offline when env key is present but the CLI is missing", async () => {
@@ -74,7 +74,7 @@ describe("CustomCliProvider", () => {
     try {
       const health = await provider.health();
       expect(health.state).toBe("offline");
-      expect(health.detail).toContain("nao encontrado");
+      expect(health.detail).toContain("not found");
     } finally {
       delete process.env.CUSTOM_OPENCODE_TEST_KEY;
     }
@@ -89,7 +89,7 @@ describe("CustomCliProvider", () => {
 
     const health = await provider.health();
     expect(health.state).toBe("offline");
-    expect(health.detail).toContain("nao encontrada");
+    expect(health.detail).toContain("not found");
   });
 
   it("spawns restricted command on execute() and returns AgentExecutionResult", async () => {
@@ -115,7 +115,7 @@ describe("CustomCliProvider", () => {
     const res = await provider.execute(req);
 
     expect(res.outcome).toBe("completed");
-    expect(res.summary).toContain("Mock OpenCode concluiu a fase implementing.");
+    expect(res.summary).toContain("Mock OpenCode completed the implementing phase.");
     expect(res.output).toContain("OpenCode execution successful");
     expect(res.model).toBe("mock-opencode");
   });
@@ -208,7 +208,7 @@ describe("CustomCliProvider", () => {
 
     const health = await provider.health();
     expect(health.state).toBe("offline");
-    expect(health.detail.toLowerCase()).toContain("nao enco");
+      expect(health.detail.toLowerCase()).toContain("not found");
 
     const result = await provider.execute(mockExecutionRequest("implementing", "coding", process.cwd()));
     expect(result.outcome).toBe("failed");

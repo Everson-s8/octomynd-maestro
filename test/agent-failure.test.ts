@@ -132,14 +132,14 @@ describe("provider failure classification", () => {
 
   it("builds a short, structured summary instead of echoing raw provider output", () => {
     expect(buildFailureSummary("Codex", "implementing", "quota"))
-      .toBe("Codex (implementing): cota do provedor esgotada.");
+      .toBe("Codex (implementing): provider quota exhausted.");
     expect(buildFailureSummary("Claude", "reviewing", "auth_required"))
-      .toBe("Claude (reviewing): autenticacao necessaria.");
+      .toBe("Claude (reviewing): authentication required.");
     expect(buildFailureSummary("Codex", "testing", "timeout"))
-      .toBe("Codex (testing): tempo limite excedido.");
+      .toBe("Codex (testing): time limit exceeded.");
     expect(buildFailureSummary("Gemini", "planning", "environment_error"))
-      .toBe("Gemini (planning): erro de ambiente.");
+      .toBe("Gemini (planning): environment error.");
     expect(buildFailureSummary("Claude", "planning", "unknown"))
-      .toBe("Claude (planning): erro desconhecido.");
+      .toBe("Claude (planning): unknown error.");
   });
 });

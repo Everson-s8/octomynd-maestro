@@ -64,7 +64,7 @@ describe("local RTK detection", () => {
 
     expect(detection.available).toBe(false);
     expect(detection.source).toBe("absent");
-    expect(detection.detail).toContain("compressor interno");
+    expect(detection.detail).toContain("built-in compressor");
   });
 });
 

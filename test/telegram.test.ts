@@ -120,7 +120,7 @@ describe("telegram helpers", () => {
     } satisfies WorkGraphView;
 
     const message = formatWorkGraphs([graph]);
-    expect(message).toContain("Adocao: explicit/work_graph");
+    expect(message).toContain("Adoption: explicit/work_graph");
     expect(message).toContain("codex [failed]");
     expect(message).toContain("claude [running]");
     expect(message).toContain("fallbacks 1");
@@ -244,10 +244,10 @@ describe("telegram helpers", () => {
       summary: "Approved cleanly.",
       message: "Revisao final aprovada e Feature PR mesclado com sucesso!"
     });
-    expect(successMsg).toContain("Revisao final aprovada para Feature #12!");
-    expect(successMsg).toContain("Projeto: @maestro");
-    expect(successMsg).toContain("Revisor: codex");
-    expect(successMsg).toContain("Feature PR mesclado com sucesso.");
+    expect(successMsg).toContain("Final review approved for Feature #12!");
+    expect(successMsg).toContain("Project: @maestro");
+    expect(successMsg).toContain("Reviewer: codex");
+    expect(successMsg).toContain("Feature PR merged successfully.");
 
     const statusMsg = formatManualReviewStatusMessage({
       feature: dummyFeature,
@@ -269,10 +269,10 @@ describe("telegram helpers", () => {
       notReadyReason: null,
       isReviewActive: false
     });
-    expect(statusMsg).toContain("Status da revisao final - Feature #12");
-    expect(statusMsg).toContain("Estado no Maestro: completed");
-    expect(statusMsg).toContain("Estado no GitHub: OPEN | Ready | MERGEABLE");
-    expect(statusMsg).toContain("Pronto para revisao: Sim");
+    expect(statusMsg).toContain("Final review status - Feature #12");
+    expect(statusMsg).toContain("Maestro status: completed");
+    expect(statusMsg).toContain("GitHub status: OPEN | Ready | MERGEABLE");
+    expect(statusMsg).toContain("Ready for review: Yes");
   });
 
   it("formats improvement candidates with the governed activation rule", () => {
@@ -290,7 +290,7 @@ describe("telegram helpers", () => {
     const message = formatImprovementCandidates([proposal]);
 
     expect(message).toContain("#1 @maestro [low]");
-    expect(message).toContain("Aprovar cria Task + Feature Plan");
+    expect(message).toContain("Approval creates a Task + Feature Plan");
     database.close();
   });
 
@@ -328,7 +328,7 @@ describe("telegram helpers", () => {
   });
 
   it("formats empty queue", () => {
-    expect(formatQueue([])).toBe("Fila vazia.");
+    expect(formatQueue([])).toBe("Queue is empty.");
   });
 
   it("executes the Telegram cancel command through the runtime handler", () => {
@@ -339,7 +339,7 @@ describe("telegram helpers", () => {
     });
 
     expect(calls).toEqual([42]);
-    expect(message).toBe("Task #42 cancelada. Estado: cancelled.");
+      expect(message).toBe("Task #42 cancelled. Status: cancelled.");
     expect(executeCancelCommand("/cancel nope", () => taskRecord())).toBe("Use: /cancel 2");
   });
 
@@ -381,7 +381,7 @@ describe("telegram helpers", () => {
       }]);
 
       expect(status).toContain("Providers:");
-      expect(status).toContain("Claude: working (1 ativo) - Claude CLI autenticado");
+      expect(status).toContain("Claude: working (1 active) - Claude CLI autenticado");
     } finally {
       database.close();
     }
@@ -390,8 +390,8 @@ describe("telegram helpers", () => {
   it("formats a review notification without local paths or credentials", () => {
     const message = formatGoalNotification(goalRun(), taskRecord());
 
-    expect(message).toContain("Task #3 pronta para review.");
-    expect(message).toContain("Projeto: @boo");
+    expect(message).toContain("Task #3 ready for review.");
+    expect(message).toContain("Project: @boo");
     expect(message).toContain("https://github.com/example/boo/pull/1");
     expect(message).not.toContain("C:\\Users");
     expect(message).not.toContain("token");
@@ -402,12 +402,12 @@ describe("telegram helpers", () => {
     const failedRun: GoalRunRecord = {
       ...goalRun(),
       status: "failed",
-      lastError: `Codex (implementing): erro desconhecido. Key ${fakeSecret} at C:\\Users\\evers\\worktree`
+      lastError: `Codex (implementing): unknown error. Key ${fakeSecret} at C:\\Users\\evers\\worktree`
     };
 
     const message = formatGoalNotification(failedRun, taskRecord());
 
-    expect(message).toContain("requer atencao");
+    expect(message).toContain("needs attention");
     expect(message).not.toContain(fakeSecret);
     expect(message).not.toContain("C:\\Users\\evers");
   });
@@ -434,7 +434,7 @@ describe("telegram helpers", () => {
 
       expect(sent).toHaveLength(1);
       expect(sent[0].chatId).toBe("private-chat-id");
-      expect(sent[0].text).toContain("pronta para merge");
+      expect(sent[0].text).toContain("ready to merge");
       expect(sent[0].text).not.toContain("private-chat-id");
       expect(sent[0].text).not.toContain("bot-token");
       expect(database.getLastEvent()?.type).toBe("review.notification_sent");
@@ -458,8 +458,8 @@ describe("telegram helpers", () => {
 
       await notifier!(run, "codex");
 
-      expect(sent[0]).toContain("Task #1 em andamento");
-      expect(sent[0]).toContain("Agente: codex");
+      expect(sent[0]).toContain("Task #1 in progress");
+      expect(sent[0]).toContain("Agent: codex");
       expect(database.getLastEvent()?.type).toBe("goal.progress_notification_sent");
     } finally {
       database.close();
@@ -494,7 +494,7 @@ describe("telegram helpers", () => {
         message: `Falhou em C:\\Users\\private com sk-proj-${"x".repeat(48)}`
       });
 
-      expect(ready).toContain("Revise apenas este PR consolidado");
+      expect(ready).toContain("Review only this consolidated PR");
       expect(ready).toContain(feature.pullRequestUrl);
       expect(blocked).not.toContain("C:\\Users\\private");
       expect(blocked).not.toContain(`sk-proj-${"x".repeat(48)}`);

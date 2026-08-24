@@ -49,7 +49,7 @@ describe("Antigravity autonomous permissions", () => {
     tempPaths.push(root);
     const settingsPath = path.join(root, "settings.json");
     fs.writeFileSync(settingsPath, "not-json");
-    expect(() => configureAntigravityAutonomousPermissions(settingsPath)).toThrow(/JSON valido/);
+    expect(() => configureAntigravityAutonomousPermissions(settingsPath)).toThrow(/valid JSON/);
     expect(fs.readFileSync(settingsPath, "utf8")).toBe("not-json");
   });
 });

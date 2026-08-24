@@ -31,18 +31,18 @@ export type FailureContext = {
 };
 
 const CATEGORY_LABELS: Record<FailureCategory, string> = {
-  quota: "cota do provedor esgotada",
-  auth_required: "autenticacao necessaria",
-  timeout: "tempo limite excedido",
-  offline: "provedor indisponivel",
-  capacity: "nenhum provedor com capacidade disponivel",
-  output_limit: "limite de saida excedido",
-  permission_denied: "permissao negada",
-  environment_error: "erro de ambiente",
-  invalid_output: "saida invalida",
-  user_cancelled: "cancelado pelo usuario",
-  prompt_too_large: "tamanho do prompt excedido",
-  unknown: "erro desconhecido"
+  quota: "provider quota exhausted",
+  auth_required: "authentication required",
+  timeout: "time limit exceeded",
+  offline: "provider unavailable",
+  capacity: "no provider with available capacity",
+  output_limit: "output limit exceeded",
+  permission_denied: "permission denied",
+  environment_error: "environment error",
+  invalid_output: "invalid output",
+  user_cancelled: "cancelled by the user",
+  prompt_too_large: "prompt size exceeded",
+  unknown: "unknown error"
 };
 
 const SUMMARY_MAX_LENGTH = 200;
@@ -195,7 +195,7 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
 }
 
 export function failureCategoryLabel(category: FailureCategory): string {
-  return CATEGORY_LABELS[category] ?? "erro desconhecido";
+  return CATEGORY_LABELS[category] ?? "unknown error";
 }
 
 const RETRYABLE_CATEGORIES = new Set<FailureCategory>([

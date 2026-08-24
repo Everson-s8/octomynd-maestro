@@ -10,6 +10,7 @@ import {
 import { featureStatusLabels } from "../helpers";
 import { EmptyState } from "./EmptyState";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function FeaturePlanBoard({
   featurePlans,
@@ -27,21 +28,21 @@ export function FeaturePlanBoard({
   );
 
   async function handleCancel(plan: DashboardFeaturePlan) {
-    if (!window.confirm(`Cancelar o Feature Plan #${plan.id} antes da integracao? O historico sera preservado.`)) return;
+    if (!window.confirm(translate("Cancel Feature Plan #{id} before integration? The history will be preserved.", { id: plan.id }))) return;
     setBusyId(plan.id);
     setError(null);
     try {
-      await cancelFeaturePlan(plan.id, "Cancelado pelo dashboard.");
+      await cancelFeaturePlan(plan.id, translate("Cancelled from the dashboard."));
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar o Feature Plan.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to cancel the Feature Plan."));
     } finally {
       setBusyId(null);
     }
   }
 
   async function handlePause(plan: DashboardFeaturePlan) {
-    const reason = window.prompt(`Motivo da pausa para o Feature Plan #${plan.id}:`, "Pausa manual pelo operador");
+    const reason = window.prompt(translate("Pause reason for Feature Plan #{id}:", { id: plan.id }), translate("Manual pause by operator"));
     if (reason === null) return;
     setBusyId(plan.id);
     setError(null);
@@ -49,7 +50,7 @@ export function FeaturePlanBoard({
       await pauseFeaturePlan(plan.id, reason);
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel pausar o Feature Plan.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to pause the Feature Plan."));
     } finally {
       setBusyId(null);
     }
@@ -62,7 +63,7 @@ export function FeaturePlanBoard({
       await resumeFeaturePlan(plan.id);
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel retomar o Feature Plan.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to resume the Feature Plan."));
     } finally {
       setBusyId(null);
     }
@@ -70,8 +71,8 @@ export function FeaturePlanBoard({
 
   async function handleRetry(plan: DashboardFeaturePlan) {
     const reason = window.prompt(
-      `Motivo da nova tentativa para o Feature Plan #${plan.id}:`,
-      "Reinicio manual pelo operador"
+      translate("Retry reason for Feature Plan #{id}:", { id: plan.id }),
+      translate("Manual retry by operator")
     );
     if (reason === null) return;
     setBusyId(plan.id);
@@ -80,7 +81,7 @@ export function FeaturePlanBoard({
       await retryFeaturePlan(plan.id, reason);
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel tentar novamente o Feature Plan.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to retry the Feature Plan."));
     } finally {
       setBusyId(null);
     }
@@ -96,7 +97,7 @@ export function FeaturePlanBoard({
       await updateFeaturePlanPriority(plan.id, newPriority);
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel atualizar a prioridade.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to update priority."));
     } finally {
       setBusyId(null);
     }
@@ -105,13 +106,13 @@ export function FeaturePlanBoard({
   return (
     <section className="panel feature-plan-board" id="feature-plans" aria-labelledby="feature-plans-title">
       <SectionHeader
-        eyebrow="Planejamento"
+        eyebrow={translate("Planning")}
         title="Feature Plans"
-        meta={`${featurePlans.filter((plan) => plan.lifecycleStatus === "active").length} ativo(s)`}
+        meta={`${featurePlans.filter((plan) => plan.lifecycleStatus === "active").length} ${translate("active")}`}
       />
       {featurePlans.some((plan) => plan.lifecycleStatus !== "active") ? (
         <button className="row-action" onClick={() => setShowHistory((current) => !current)}>
-          {showHistory ? "Ocultar historico" : "Ver historico"}
+          {showHistory ? translate("Hide history") : translate("View history")}
         </button>
       ) : null}
       {error ? <p className="detail-error">{error}</p> : null}
@@ -119,8 +120,8 @@ export function FeaturePlanBoard({
         {sortedPlans.length === 0 ? (
           <EmptyState
             icon="spark"
-            title="Nenhum Feature Plan"
-            text="Planos agrupando varias tasks em um unico PR consolidado aparecem aqui."
+            title={translate("No Feature Plan")}
+            text={translate("Plans grouping multiple tasks into one consolidated PR appear here.")}
           />
         ) : (
           sortedPlans.slice(0, 6).map((plan) => (
@@ -131,19 +132,19 @@ export function FeaturePlanBoard({
                   <span className={`status-pill plan-status-${plan.status}`}>{plan.status}</span>
                   <span className="status-pill priority-pill">prio: {plan.priority ?? 0}</span>
                   {plan.isPaused ? (
-                    <span className="status-pill paused-pill" title={plan.pauseReason || "Pausado"}>
-                      pausado
+                    <span className="status-pill paused-pill" title={plan.pauseReason || translate("paused")}>
+                      {translate("paused")}
                     </span>
                   ) : null}
                   {plan.lifecycleStatus === "active" ? (
                     <span className={`status-pill eligibility-${plan.eligible ? "ready" : "blocked"}`}>
-                      {plan.eligible ? "elegivel para integrar" : "aguardando"}
+                      {plan.eligible ? translate("eligible for integration") : translate("waiting")}
                     </span>
                   ) : null}
                 </div>
                 <strong>{plan.objective}</strong>
                 <small>
-                  {plan.taskCount} task(s) no bloco - revisao {plan.revision}
+                  {plan.taskCount} {translate("task(s) in block")} - {translate("revision")} {plan.revision}
                   {plan.dependsOnFeaturePlanIds && plan.dependsOnFeaturePlanIds.length > 0
                     ? ` · depende de: ${plan.dependsOnFeaturePlanIds.map((id) => `#${id}`).join(", ")}`
                     : ""}
@@ -155,13 +156,13 @@ export function FeaturePlanBoard({
                       key={task.id}
                       title={[
                         task.objective,
-                        `Depende de: ${
-                          task.dependsOnTaskIds.length ? task.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : "nenhuma"
+                        `${translate("Depends on")}: ${
+                          task.dependsOnTaskIds.length ? task.dependsOnTaskIds.map((id) => `#${id}`).join(", ") : translate("none")
                         }`,
-                        `Escopo: ${task.mutationScope.length ? task.mutationScope.join(", ") : "somente leitura"}`,
-                        `Modo: ${task.parallelMode}`,
-                        `Aceite: ${task.acceptanceCriteria.join(" | ")}`,
-                        `Fora de escopo: ${task.excludedScope.join(", ") || "nao especificado"}`
+                        `${translate("Scope")}: ${task.mutationScope.length ? task.mutationScope.join(", ") : translate("read-only")}`,
+                        `${translate("Mode")}: ${task.parallelMode}`,
+                        `${translate("Acceptance")}: ${task.acceptanceCriteria.join(" | ")}`,
+                        `${translate("Out of scope")}: ${task.excludedScope.join(", ") || translate("not specified")}`
                       ].join("\n")}
                     >
                       #{task.id} {task.status}
@@ -176,27 +177,27 @@ export function FeaturePlanBoard({
                   </ul>
                 ) : null}
                 {plan.blockedReason ? (
-                  <small className="feature-plan-integration-error">Bloqueio: {plan.blockedReason}</small>
+                  <small className="feature-plan-integration-error">{translate("Blocked:")} {plan.blockedReason}</small>
                 ) : null}
                 <small className="feature-plan-next-action">
-                  Proxima acao:{" "}
+                  {translate("Next action:")}{" "}
                   {plan.status === "blocked"
-                    ? "Resolva o motivo do bloqueio e clique em Tentar novamente."
+                    ? translate("Resolve the blocker and click Retry.")
                     : plan.isPaused
-                    ? "Clique em Retomar para reenviar o plano para a fila."
+                    ? translate("Click Resume to send the plan back to the queue.")
                     : plan.status === "queued" && plan.eligible
-                    ? "Plano elegivel, aguardando inicio das tasks."
+                    ? translate("Plan is eligible and waiting for tasks to start.")
                     : plan.status === "queued"
-                    ? "Aguardando liberacao de dependencias ou do projeto."
-                    : "Tasks em andamento pelo agente."}
+                    ? translate("Waiting for dependencies or project access to be released.")
+                    : translate("Tasks are in progress with the agent.")}
                 </small>
                 {plan.integration ? (
                   <small className={plan.integration.status === "failed" ? "feature-plan-integration-error" : ""}>
-                    Integracao: {plan.integration.status} ({plan.integration.checkpoint})
+                    {translate("Integration:")} {plan.integration.status} ({plan.integration.checkpoint})
                     {plan.integration.lastError ? ` - ${plan.integration.lastError}` : ""}
                   </small>
                 ) : null}
-                {plan.cancelReason ? <small>Cancelado: {plan.cancelReason}</small> : null}
+                {plan.cancelReason ? <small>{translate("Cancelled:")} {plan.cancelReason}</small> : null}
               </div>
               <div className="feature-plan-actions">
                 {plan.cancellable ? (
@@ -205,7 +206,7 @@ export function FeaturePlanBoard({
                       className="row-action"
                       disabled={busyId !== null}
                       onClick={() => void handlePriority(plan, 5)}
-                      title="Aumentar prioridade (+5)"
+                      title={translate("Increase priority (+5)")}
                     >
                       ▲
                     </button>
@@ -213,7 +214,7 @@ export function FeaturePlanBoard({
                       className="row-action"
                       disabled={busyId !== null || (plan.priority ?? 0) <= 0}
                       onClick={() => void handlePriority(plan, -5)}
-                      title="Reduzir prioridade (-5)"
+                      title={translate("Decrease priority (-5)")}
                     >
                       ▼
                     </button>
@@ -221,22 +222,22 @@ export function FeaturePlanBoard({
                 ) : null}
                 {plan.status === "blocked" ? (
                   <button className="row-action row-action-accent" disabled={busyId !== null} onClick={() => void handleRetry(plan)}>
-                    {busyId === plan.id ? "..." : "Tentar novamente"}
+                    {busyId === plan.id ? "..." : translate("Retry")}
                   </button>
                 ) : null}
                 {plan.cancellable && !plan.isPaused ? (
                   <button className="row-action" disabled={busyId !== null} onClick={() => void handlePause(plan)}>
-                    {busyId === plan.id ? "..." : "Pausar"}
+                    {busyId === plan.id ? "..." : translate("Pause")}
                   </button>
                 ) : null}
                 {plan.cancellable && plan.isPaused ? (
                   <button className="row-action" disabled={busyId !== null} onClick={() => void handleResume(plan)}>
-                    {busyId === plan.id ? "..." : "Retomar"}
+                    {busyId === plan.id ? "..." : translate("Resume")}
                   </button>
                 ) : null}
                 {plan.cancellable ? (
                   <button className="row-action row-action-danger" disabled={busyId !== null} onClick={() => void handleCancel(plan)}>
-                    {busyId === plan.id ? "..." : "Cancelar plano"}
+                    {busyId === plan.id ? "..." : translate("Cancel plan")}
                   </button>
                 ) : null}
                 {plan.feature ? (

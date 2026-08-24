@@ -93,7 +93,7 @@ describe("Antigravity provider", () => {
     const res = await provider.execute(req);
     expect(res).toMatchObject({
       outcome: "failed",
-      summary: expect.stringMatching(/Antigravity CLI nao encontrado|Workspace nao existe/),
+      summary: expect.stringMatching(/Antigravity CLI not found|Workspace does not exist/),
       structuredPayload: null,
       failureCategory: "offline",
       retryable: false,

@@ -113,7 +113,7 @@ describe("feature completion protocol", () => {
     expect(fixture.database.getTask(fixture.task.id).status).toBe("done");
     expect(fixture.database.listFeatureItems(feature.id)[0].status).toBe("completed");
     expect(notification).not.toBeNull();
-    expect(formatFeatureCompletionNotification(notification!)).toContain("Feature concluida");
+    expect(formatFeatureCompletionNotification(notification!)).toContain("Feature completed");
     fixture.database.close();
   });
 
@@ -266,7 +266,7 @@ describe("feature completion protocol", () => {
     const draftResult = await coordinator.triggerManualReview(fixture.feature.id);
     expect(draftResult.success).toBe(false);
     expect(draftResult.reason).toBe("is_draft");
-    expect(draftResult.message).toContain("Feature PR esta em draft");
+    expect(draftResult.message).toContain("Feature PR is still a draft");
 
     // Fix draft
     fixture.github.state.isDraft = false;

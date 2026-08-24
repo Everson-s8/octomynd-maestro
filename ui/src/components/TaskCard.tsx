@@ -39,7 +39,7 @@ export function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => 
             <StatusBadge status={task.status} />
           </span>
           <strong>{task.title || task.text}</strong>
-          {task.title && task.title !== task.text ? <small className="task-original-request">Pedido: {task.text}</small> : null}
+          {task.title && task.title !== task.text ? <small className="task-original-request">{translate("Request:")} {task.text}</small> : null}
           <small>{task.branchName ?? `${translate("created")} ${formatRelative(task.createdAt)}`}</small>
         </span>
         <span className="task-progress" aria-label={`${translate("Status")}: ${taskStatusLabel(task.status)}`}>
@@ -65,8 +65,8 @@ export function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => 
         <Link
           to={`/tasks/${task.id}/logs`}
           className="task-log-badge-action"
-          title={`Ver logs da task #${task.id}`}
-          aria-label={`Ver logs da task #${task.id}`}
+          title={translate("View logs for task #{id}", { id: task.id })}
+          aria-label={translate("View logs for task #{id}", { id: task.id })}
         >
           <Icon name="timeline" />
           <span>Logs</span>

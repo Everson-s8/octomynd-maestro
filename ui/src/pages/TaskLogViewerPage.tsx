@@ -348,7 +348,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <button
             type="button"
             className="icon-btn"
-            title="Recarregar logs agora"
+            title={translate("Refresh logs now")}
             onClick={() => void loadLogs(false)}
             disabled={refreshing}
           >
@@ -366,7 +366,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             <button
               type="button"
               className="btn-new btn-sm"
-              title="Ver Pull Request associado a esta task"
+              title={translate("View the Pull Request associated with this task")}
               onClick={() => openExternalUrl(activeRun.pullRequestUrl!)}
             >
               {translate("Open PR")} ↗
@@ -385,9 +385,9 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               className="btn-new btn-sm"
               onClick={() => void handleStartGoal()}
               disabled={actionBusy}
-              title="Continua a mesma Goal a partir do checkpoint salvo"
+              title={translate("Continue the same goal from the saved checkpoint")}
             >
-              {actionBusy ? "Retomando…" : "Retomar do checkpoint"}
+              {actionBusy ? translate("Resuming…") : translate("Resume from checkpoint")}
             </button>
           )}
         </div>
@@ -413,7 +413,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <span>·</span>
           <span>{translate("Origin")}: <b>{task.source}</b></span>
           {task.worktreePrepared && <span>· {translate("Isolated worktree")}</span>}
-          {runs.length > 0 && <span>· <b>{runs.length}</b> ciclo(s) de goal</span>}
+          {runs.length > 0 && <span>· <b>{runs.length}</b> {translate("goal run(s)")}</span>}
         </div>
       </section>
 
@@ -422,17 +422,17 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="stepper-track">
           <StepperItem
             step="01"
-            label="Capturada"
+            label={translate("Captured")}
             state="done"
           />
           <StepperItem
             step="02"
-            label="Worktree"
+            label={translate("Worktree")}
             state={task.worktreePrepared ? "done" : task.status === "queued" ? "current" : "pending"}
           />
           <StepperItem
             step="03"
-            label="Planejamento"
+            label={translate("Planning")}
             state={
               task.status === "planning"
                 ? "current"
@@ -483,7 +483,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       <section className="task-log-metrics">
         <div className="metric-card-v2">
           <div className="metric-icon-v2">✧</div>
-          <div className="metric-k">Provedor Ativo</div>
+          <div className="metric-k">{translate("Active provider")}</div>
           <div className="metric-v-v2">{activeRun?.lastProvider ?? (runs.length > 0 ? translate("Multi-provider") : translate("none"))}</div>
           {!activeRun && runs.length === 0 ? (
             <>
@@ -502,7 +502,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                 }}
                 style={{ alignSelf: "flex-start", fontSize: 12 }}
               >
-                Ir ao detalhe da task
+                {translate("Open task details")}
               </button>
             </>
           ) : (
@@ -514,14 +514,14 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <div className="metric-icon-v2">⌁</div>
           <div className="metric-k">{translate("Execution steps")}</div>
           <div className="metric-v-v2">{telemetry.totalSteps}</div>
-          <span className="metric-sub">{runs.length} run(s) de goal</span>
+          <span className="metric-sub">{runs.length} {translate("goal run(s)")}</span>
         </div>
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">⏱</div>
           <div className="metric-k">{translate("Execution time")}</div>
           <div className="metric-v-v2">{formatDuration(telemetry.totalDurationMs)}</div>
-          <span className="metric-sub">{telemetry.totalDurationMs > 0 ? "auditado por etapa" : "tempo estimado"}</span>
+          <span className="metric-sub">{telemetry.totalDurationMs > 0 ? translate("audited by step") : translate("estimated time")}</span>
         </div>
 
         <div className="metric-card-v2">
@@ -533,7 +533,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">📁</div>
-          <div className="metric-k">Arquivos Alterados</div>
+          <div className="metric-k">{translate("Changed files")}</div>
           <div className="metric-v-v2">{changedFiles.length}</div>
           <span className="metric-sub">{changedFiles.length > 0 ? translate("verified at checkpoint") : translate("no changes")}</span>
         </div>
@@ -666,12 +666,12 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               <div className="empty-log-actions">
                 {!task.worktreePrepared && (
                   <button type="button" className="btn-new" onClick={handlePrepare} disabled={actionBusy}>
-                    {actionBusy ? "Preparando..." : "Preparar Worktree"}
+                    {actionBusy ? translate("Preparing…") : translate("Prepare worktree")}
                   </button>
                 )}
                 {task.worktreePrepared && (
                   <button type="button" className="btn-new" onClick={handleStartGoal} disabled={actionBusy}>
-                    {actionBusy ? "Iniciando..." : "Iniciar Goal Autônoma"}
+                    {actionBusy ? translate("Starting goal…") : translate("Start autonomous goal")}
                   </button>
                 )}
               </div>
@@ -756,9 +756,9 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <div className="panel-head">
             <div>
               <div className="lbl">{translate("Tool execution")}</div>
-              <h3>Tool Calls & Comandos Executados</h3>
+              <h3>{translate("Tool calls & executed commands")}</h3>
             </div>
-            <div className="count">{filteredTools.length} chamadas capturadas</div>
+            <div className="count">{filteredTools.length} {translate("captured calls")}</div>
           </div>
 
           {filteredTools.length === 0 ? (
@@ -784,7 +784,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                   )}
                   {tool.details && (
                     <div className="tool-details">
-                      <span className="tool-details-lbl">Resultado:</span>
+                      <span className="tool-details-lbl">{translate("Result:")}</span>
                       <pre className="tool-details-content">{tool.details}</pre>
                     </div>
                   )}
@@ -801,9 +801,9 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <div className="panel-head">
             <div>
               <div className="lbl">Worktree Audit</div>
-              <h3>Arquivos Alterados & Checkpoints</h3>
+              <h3>{translate("Changed files & checkpoints")}</h3>
             </div>
-            <div className="count">{changedFiles.length} arquivos</div>
+            <div className="count">{changedFiles.length} {translate("files")}</div>
           </div>
 
           {changedFiles.length === 0 ? (
@@ -828,8 +828,8 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               <div className="divider" style={{ margin: "24px 0" }} />
               <div className="panel-head">
                 <div>
-                  <div className="lbl">Snapshots de Worktree</div>
-                  <h3>Checkpoints Salvos</h3>
+                  <div className="lbl">{translate("Worktree snapshots")}</div>
+                  <h3>{translate("Saved checkpoints")}</h3>
                 </div>
                 <div className="count">{allCheckpoints.length} checkpoints</div>
               </div>
@@ -865,10 +865,10 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <section className="task-log-events-section panel">
           <div className="panel-head">
             <div>
-              <div className="lbl">Auditoria Completa</div>
-              <h3>Eventos do Sistema (Audit Log)</h3>
+                  <div className="lbl">{translate("Full audit")}</div>
+                  <h3>{translate("System events (audit log)")}</h3>
             </div>
-            <div className="count">{events.length} eventos</div>
+                <div className="count">{events.length} {translate("events")}</div>
           </div>
 
           {events.length === 0 ? (
@@ -891,7 +891,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                     </div>
                     {event.metadata && Object.keys(event.metadata).length > 0 && (
                       <details className="event-meta-details">
-                        <summary>Metadados sanitizados</summary>
+                        <summary>{translate("Sanitized metadata")}</summary>
                         <pre className="event-meta-json">
                           {JSON.stringify(event.metadata, null, 2)}
                         </pre>
@@ -986,7 +986,7 @@ function StepAccordionCard({ step, index }: { step: TaskLogStep; index: number }
             <span className="step-cost" title={`Model: ${step.tokenUsage.model}`}>
               ${step.tokenUsage.costUsd.toFixed(4)}
             </span>
-          ) : step.tokenUsage ? <span className="step-cost" title={`Model: ${step.tokenUsage.model}`}>uso n/d</span> : null}
+            ) : step.tokenUsage ? <span className="step-cost" title={`Model: ${step.tokenUsage.model}`}>{translate("usage n/a")}</span> : null}
           <span className="accordion-arrow">{open ? "▾" : "▸"}</span>
         </div>
       </header>
@@ -1016,7 +1016,7 @@ function StepAccordionCard({ step, index }: { step: TaskLogStep; index: number }
 
           {step.error && (
             <div className="step-error-box">
-              <div className="box-title">Erro Registrado</div>
+              <div className="box-title">{translate("Recorded error")}</div>
               <pre className="step-error-text">{step.error}</pre>
             </div>
           )}

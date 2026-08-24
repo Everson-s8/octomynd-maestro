@@ -223,11 +223,11 @@ describe("Operational Skill Curator with evidence-driven self-correction", () =>
 
     const candidates = curator.processIncidentsIntoCandidates();
     expect(sentMessages.length).toBeGreaterThan(0);
-    expect(sentMessages[0]).toContain("Nova proposta de self-correction");
+    expect(sentMessages[0]).toContain("New self-correction proposal");
 
     curator.evaluateCandidate(candidates[0].id);
     expect(sentMessages.length).toBeGreaterThan(1);
-    expect(sentMessages[1]).toContain("Candidato ativado");
+    expect(sentMessages[1]).toContain("Candidate promoted");
   });
 });
 
