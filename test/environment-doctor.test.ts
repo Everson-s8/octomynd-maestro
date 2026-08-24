@@ -38,7 +38,7 @@ describe("Environment Doctor", () => {
       }]
     });
 
-    expect(report.status, JSON.stringify(report.checks)).toBe("ready");
+    expect(report.status).toBe("ready");
     expect(report.fingerprintId).toHaveLength(16);
     expect(report.checks.filter((item) => item.status === "failed")).toEqual([]);
     expect(report.checks).toContainEqual(expect.objectContaining({
@@ -66,7 +66,7 @@ describe("Environment Doctor", () => {
     for (const name of ["native_runtime", "typescript", "test_runner"]) {
       const check = report.checks.find((c) => c.name === name);
       expect(check, `${name} check should exist`).toBeDefined();
-      expect(["passed", "skipped"], `${name} should not be unavailable: ${check?.summary}`).toContain(check!.status);
+      expect(["passed", "skipped"], `${name} should not be unavailable`).toContain(check!.status);
     }
   }, 15_000);
 
@@ -124,7 +124,7 @@ describe("Environment Doctor", () => {
       }]
     });
 
-    expect(report.status, JSON.stringify(report.checks)).toBe("quota");
+    expect(report.status).toBe("quota");
     expect(report.recommendedAction).toContain("quota");
   }, 15_000);
 
