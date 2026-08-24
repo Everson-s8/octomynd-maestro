@@ -13,6 +13,7 @@ import { GoalCoordinator } from "../src/goals/coordinator.js";
 import { ReviewCoordinator } from "../src/reviews/coordinator.js";
 import { buildReviewQueueItem } from "../src/reviews/evidence.js";
 import { PullRequestState, ReviewGitHubGateway } from "../src/reviews/github.js";
+import { ProjectRepositoryService } from "../src/projects/repository-service.js";
 
 let tempDir: string;
 let projectDir: string;
@@ -142,6 +143,28 @@ describe("human review queue", () => {
 
     expect(github.actions).toEqual(["ready", "merge"]);
     expect(database.getTask(run.taskId).status).toBe("done");
+  });
+
+  it("records the approval and leaves reconciliation pending when the local checkout cannot sync after merge", async () => {
+    const run = reviewableGoal();
+    const github = new FakeGitHubGateway();
+    const reviews = new ReviewCoordinator(
+      database,
+      idleGoalCoordinator(),
+      github,
+      undefined,
+      undefined,
+      15_000,
+      new FailingRepositoryService()
+    );
+
+    const result = await reviews.decide(run.id, "approved", "Entrega revisada e aprovada.", "dashboard", true);
+
+    expect(github.actions).toEqual(["ready", "merge"]);
+    expect(result.review.decision).toBe("approved");
+    expect(database.getTask(run.taskId).status).toBe("ready_to_merge");
+    expect(database.getLatestHumanReview(run.id)?.decision).toBe("approved");
+    expect(database.listEvents(20).some((event) => event.type === "repository.reconcile_failed")).toBe(true);
   });
 
   it("rejects and closes the draft PR", async () => {
@@ -321,6 +344,12 @@ class FakeGitHubGateway implements ReviewGitHubGateway {
   async merge() { this.actions.push("merge"); }
   async markDraft() { this.actions.push("draft"); }
   async close() { this.actions.push("close"); }
+}
+
+class FailingRepositoryService extends ProjectRepositoryService {
+  override reconcileAfterMerge(): never {
+    throw new Error("repository temporarily unavailable");
+  }
 }
 
 function reviewableGoal(options: {

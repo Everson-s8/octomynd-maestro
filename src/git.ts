@@ -17,6 +17,10 @@ export type GitCommandResult = {
   exitCode: number | null;
 };
 
+export type GitCommandOptions = {
+  timeoutMs?: number;
+};
+
 export function createWorktreePlan(
   project: ProjectRecord,
   task: TaskRecord,
@@ -74,17 +78,18 @@ export function createGitWorktree(project: ProjectRecord, plan: WorktreePlan): G
   ], project.path);
 }
 
-export function runGit(args: string[], cwd: string): GitCommandResult {
+export function runGit(args: string[], cwd: string, options: GitCommandOptions = {}): GitCommandResult {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    windowsHide: true
+    windowsHide: true,
+    timeout: options.timeoutMs
   });
 
   return {
-    ok: result.status === 0,
+    ok: result.status === 0 && !result.error,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr: result.stderr ?? result.error?.message ?? "",
     exitCode: result.status
   };
 }

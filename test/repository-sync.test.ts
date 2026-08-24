@@ -105,6 +105,21 @@ describe("project repository synchronization", () => {
     expect(database.getProjectByKey("diverged").syncState).toBe("diverged");
     expect(fs.existsSync(path.join(canonicalPath, "local.txt"))).toBe(true);
   }, 30_000);
+
+  it("keeps a bootstrapped local commit usable when the configured remote is still empty", () => {
+    const remote = path.join(tempDir, "empty-remote.git");
+    expect(runGit(["init", "--bare", remote], tempDir).ok).toBe(true);
+    const canonicalPath = createRepository(path.join(tempDir, "canonical-empty-remote"));
+    const remoteUrl = `file://${remote.replace(/\\/g, "/")}`;
+    expect(runGit(["remote", "add", "origin", remoteUrl], canonicalPath).ok).toBe(true);
+
+    const project = database.registerProject({ key: "empty-remote", path: canonicalPath, defaultBranch: "main" });
+    const state = new ProjectRepositoryService(database).synchronize(project);
+
+    expect(state.syncState).toBe("local_ahead");
+    expect(state.remoteHeadSha).toBeNull();
+    expect(state.canonicalHeadSha).toMatch(/^[a-f0-9]{40}$/);
+  }, 30_000);
 });
 
 function createRepository(repoPath: string): string {
