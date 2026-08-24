@@ -1,0 +1,94 @@
+# electron-builder configuration for the shareable Maestro Windows desktop app.
+#
+# Design notes:
+#   - `asar: false` keeps the compiled backend and native modules on disk so the
+#     backend can be spawned as an Electron-as-Node child process and
+#     `better-sqlite3` loads without asar edge cases. Predictable and easy to
+#     validate on a clean machine; trade a slightly larger install for it.
+#   - Native deps are rebuilt explicitly by `dist:win` against the exact
+#     Electron version before packaging; electron-builder does not rebuild a
+#     second time.
+#   - Only build outputs and secret-free sources are packaged. No `.env.local`,
+#     no `.maestro/`, no database — user data lives under the OS userData dir.
+appId: dev.octomynd.maestro
+productName: Maestro
+copyright: Copyright © Octomynd
+
+directories:
+  output: release
+  buildResources: build
+
+afterPack: scripts/after-pack.cjs
+
+# `scripts/rebuild-desktop-native.mjs` owns the ABI rebuild so the build is
+# deterministic and does not spend time/memory rebuilding twice.
+npmRebuild: false
+asar: false
+
+# What ships inside resources/app. node_modules for runtime dependencies are
+# included automatically from package.json "dependencies".
+files:
+  - "dist/**/*"
+  - "ui/dist/**/*"
+  - "src/desktop/main.cjs"
+  - "src/desktop/preload.cjs"
+  - "src/desktop/production.cjs"
+  - "src/desktop/index.js"
+  - ".env.example"
+  - "package.json"
+  - "!**/*.map"
+  - "!**/*.ts"
+  - "!test/**"
+
+win:
+  # Reuse the OctoMark shown in the dashboard sidebar for the executable,
+  # shortcuts and taskbar instead of Electron's default icon.
+  icon: build/maestro.ico
+  # The first public builds are intentionally unsigned. The afterPack hook
+  # embeds the OctoMark without initializing electron-builder's code-signing
+  # bundle; signing can be enabled later in a release pipeline.
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Deterministic, versioned artifact name for sharing.
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Maestro
+  installerIcon: build/maestro.ico
+  uninstallerIcon: build/maestro.ico
+  installerHeader: build/installer-header.bmp
+  installerSidebar: build/installer-sidebar.bmp
+  # F8: register the install dir in the user's PATH so `maestro` works from any
+  # terminal after installation (the launcher maestro.cmd ships in the app
+  # root). customInstall/customUnInstall macros run inside the stock script.
+  include: build/installer.nsh
+  # Update path: same NSIS installer replaces the app in place; user data under
+  # userData (config, credentials, database) is preserved across versions.
+
+# F6: publish to GitHub Releases so electron-updater finds latest.yml there.
+# The GH_TOKEN at build time authorizes the upload; the app reads it publicly.
+publish:
+  provider: github
+  owner: Everson-s8
+  repo: octomynd-maestro
+
+# A terminal launcher is installed beside Maestro.exe. It invokes the compiled
+# CLI through the bundled Electron-as-Node runtime, so the desktop installer
+# provides both the graphical app and a usable Windows terminal command.
+extraFiles:
+  - from: scripts/maestro.cmd
+    to: maestro.cmd
+
+# The packaged Electron window can also load the same icon at runtime. The
+# executable still carries the primary Windows shell icon above.
+extraResources:
+  - from: build/maestro.ico
+    to: maestro.ico

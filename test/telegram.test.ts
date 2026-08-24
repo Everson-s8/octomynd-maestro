@@ -615,13 +615,14 @@ describe("telegram work intake integration", () => {
     expect(directRes.createdType).toBe("task");
     expect(directRes.task?.source).toBe("telegram");
 
-    // 2. Needs clarification
+    // 2. Ambiguous objective in automatic mode (F2): still creates a task.
     const clarifyRes = commands.submitWorkIntake(origin, {
       projectKey: "boo",
       objective: "..."
     });
-    expect(clarifyRes.status).toBe("needs_clarification");
-    expect(clarifyRes.createdType).toBe("none");
+    expect(clarifyRes.status).toBe("created");
+    expect(clarifyRes.createdType).toBe("task");
+    expect(clarifyRes.decision.reasonCode).toBe("fallback_low_confidence");
 
     // 3. Feature plan
     const featureRes = commands.submitWorkIntake(origin, {

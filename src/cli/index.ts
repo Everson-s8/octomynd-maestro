@@ -6,6 +6,8 @@ import { execFileSync, execSync, spawn } from "node:child_process";
 import { runConfigWizard } from "../config/wizard.js";
 import { runTelegramConnectWizard } from "../telegram/connect.js";
 import { createDatabase } from "../db.js";
+import type { ProjectRecord, TaskRecord } from "../db.js";
+import { loadConfig } from "../config.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { CommandOrigin } from "../commands/types.js";
 import { PROVIDER_PRESETS } from "../agents/provider-config.js";
@@ -19,9 +21,71 @@ import {
 } from "../desktop/launcher.js";
 import { findProcessOnPort, killProcessGracefully } from "../runtime/port-process.js";
 import { detectGitDefaultBranch } from "../git.js";
+import { requestDashboardJson } from "./dashboard-client.js";
 
 function cliOrigin(): CommandOrigin {
   return { channel: "maestro" };
+}
+
+function cliDataDir(): string {
+  return path.resolve(process.env.MAESTRO_DATA_DIR?.trim() || process.cwd());
+}
+
+function isPackagedCli(): boolean {
+  return process.env.MAESTRO_CLI_MODE === "packaged";
+}
+
+function resolveOrchestratorEntry(): string | null {
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [path.resolve(cliDir, "../index.js"), path.resolve(cliDir, "../index.ts")];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+}
+
+type OrchestratorLaunch = {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+};
+
+function buildOrchestratorLaunch(): OrchestratorLaunch | null {
+  const entry = resolveOrchestratorEntry();
+  if (!entry) return null;
+
+  const packaged = isPackagedCli();
+  if (entry.endsWith(".js") && packaged) {
+    return {
+      command: process.execPath,
+      args: [entry],
+      cwd: cliDataDir(),
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        MAESTRO_REQUIRE_TELEGRAM: "false",
+        MAESTRO_RUNTIME_MODE: "packaged",
+        MAESTRO_RUNTIME_ROOT: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+      }
+    };
+  }
+
+  if (entry.endsWith(".js")) {
+    return {
+      command: process.execPath,
+      args: [entry],
+      cwd: process.cwd(),
+      env: { ...process.env }
+    };
+  }
+
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
+  if (!fs.existsSync(tsxCli)) return null;
+  return {
+    command: process.execPath,
+    args: [tsxCli, entry],
+    cwd: process.cwd(),
+    env: { ...process.env }
+  };
 }
 
 /** Portable lookup for a command on PATH (works on Windows and POSIX). */
@@ -38,7 +102,7 @@ function commandAvailable(command: string): boolean {
 function envDbPath(): string {
   const configured = process.env.MAESTRO_DB_PATH;
   if (configured && path.isAbsolute(configured)) return configured;
-  return path.resolve(process.cwd(), configured ?? ".maestro/maestro.db");
+  return path.resolve(cliDataDir(), configured ?? ".maestro/maestro.db");
 }
 
 function printHelp(): void {
@@ -51,6 +115,22 @@ Commands:
   telegram connect      Connect your Telegram bot (token from @BotFather).
   project add <key> <path|github-url>
                         Register a local Git project, or clone a GitHub URL and register it.
+  project list [--limit N]
+                        List projects registered in the same database as the dashboard.
+  task create <project> <text>
+                        Queue a task through the shared application command layer.
+  task list [--project K] [--limit N]
+                        List tasks using the same records shown by the dashboard.
+  task prepare <id>     Create the deterministic worktree for a queued task.
+  task start <id> [--max-steps N]
+                        Start a Goal through the dashboard API.
+  task cancel <id>      Cancel a running Goal through the dashboard API.
+  task retry <id>       Retry a task through the dashboard API.
+  task delete <id>      Delete a queued/cancelled task through the dashboard API.
+  task logs <id> [--follow] [--limit N]
+                        Inspect persisted task activity in the terminal.
+  task followup <id> <text>
+                        Create a queued follow-up linked to an existing task.
   start                 Launch the Maestro orchestrator (dashboard UI + API + workers).
   restart [--port N] [--host H]
                         Restart a running Maestro process on the current code.
@@ -59,6 +139,9 @@ Commands:
                         Inspect persisted task activity in the terminal.
   followup <task-id> <text>
                         Create a queued follow-up task linked to an existing task.
+  quota                 Read provider quota through the running dashboard runtime.
+  providers status      Show live provider health and routing controls.
+  doctor [project-key]  Inspect project readiness through the running dashboard.
   desktop [--skip-build]
                         Launch Maestro as a native desktop app (Electron).
   status                Show what is installed, connected, and ready.
@@ -117,20 +200,198 @@ function command_path_dir(p: string): string {
   return path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
 }
 
+function parseLimit(argv: string[], fallback = 20): number {
+  const index = argv.indexOf("--limit");
+  const value = index >= 0 ? Number(argv[index + 1]) : fallback;
+  return Number.isInteger(value) ? Math.min(500, Math.max(1, value)) : fallback;
+}
+
+function parseTaskId(value: string | undefined, usage: string): number {
+  const taskId = Number(value);
+  if (!Number.isInteger(taskId) || taskId <= 0) {
+    throw new Error(`Usage: ${usage}`);
+  }
+  return taskId;
+}
+
+function printProject(project: ProjectRecord): void {
+  console.log(`  @${project.key}  ${project.name}  (${project.defaultBranch})`);
+  console.log(`      ${project.path}`);
+}
+
+function printTask(task: TaskRecord): void {
+  const project = task.projectKey ? `@${task.projectKey}` : "inbox";
+  const worktree = task.worktreePath ? " worktree=prepared" : "";
+  console.log(`  #${task.id}  ${task.status.padEnd(18)} ${project}${worktree}`);
+  console.log(`      ${task.title || task.text}`);
+  if (task.title && task.title !== task.text) console.log(`      Pedido original: ${task.text}`);
+}
+
+function projectListCommand(argv: string[]): void {
+  const database = createDatabase(envDbPath());
+  try {
+    const projects = database.listProjects(parseLimit(argv));
+    console.log(`maestro project list — ${projects.length} projeto(s)\n`);
+    if (projects.length === 0) console.log("  Nenhum projeto registrado.");
+    for (const project of projects) printProject(project);
+  } finally {
+    database.close();
+  }
+}
+
+function taskCreateCommand(argv: string[]): void {
+  const projectKey = argv[0]?.trim();
+  const text = argv.slice(1).join(" ").trim();
+  if (!projectKey || !text) throw new Error("Usage: maestro task create <project> <text>");
+
+  const database = createDatabase(envDbPath());
+  try {
+    const task = new ApplicationCommands(database).createTask(cliOrigin(), { projectKey, text });
+    console.log(`[ok] Task #${task.id} criada em @${task.projectKey}.`);
+    printTask(task);
+  } finally {
+    database.close();
+  }
+}
+
+function taskListCommand(argv: string[]): void {
+  const projectIndex = argv.indexOf("--project");
+  const projectKey = projectIndex >= 0 ? argv[projectIndex + 1]?.trim().toLowerCase() : "";
+  const database = createDatabase(envDbPath());
+  try {
+    const tasks = projectKey
+      ? database.listTasksByProject(projectKey, parseLimit(argv))
+      : database.listTasks(parseLimit(argv));
+    console.log(`maestro task list${projectKey ? ` — @${projectKey}` : ""} — ${tasks.length} task(s)\n`);
+    if (tasks.length === 0) console.log("  Nenhuma task encontrada.");
+    for (const task of tasks) printTask(task);
+  } finally {
+    database.close();
+  }
+}
+
+function taskPrepareCommand(argv: string[]): void {
+  const taskId = parseTaskId(argv[0], "maestro task prepare <id>");
+  const database = createDatabase(envDbPath());
+  try {
+    const config = loadConfig(cliDataDir());
+    const result = new ApplicationCommands(database).prepareTask(cliOrigin(), taskId, config.worktreesPath);
+    console.log(`[ok] Task #${result.task.id} preparada.`);
+    console.log(`    Branch  : ${result.branchName}`);
+    console.log(`    Worktree: ${result.worktreePath}`);
+  } finally {
+    database.close();
+  }
+}
+
+async function taskRuntimeCommand(operation: "start" | "cancel" | "retry" | "delete", argv: string[]): Promise<void> {
+  const taskId = parseTaskId(argv[0], `maestro task ${operation} <id>`);
+  let payload: { task?: TaskRecord; run?: Record<string, unknown>; goal?: Record<string, unknown> };
+  if (operation === "start") {
+    const maxStepsIndex = argv.indexOf("--max-steps");
+    const requested = maxStepsIndex >= 0 ? Number(argv[maxStepsIndex + 1]) : 12;
+    const maxSteps = Number.isInteger(requested) ? Math.min(30, Math.max(4, requested)) : 12;
+    payload = await requestDashboardJson(`/api/tasks/${taskId}/goal`, {
+      method: "POST",
+      body: JSON.stringify({ maxSteps })
+    });
+    console.log(`[ok] Goal da Task #${taskId} iniciada (ate ${maxSteps} etapas).`);
+    if (payload.run) console.log(`    Run: #${String(payload.run.id ?? "?")} ${String(payload.run.status ?? "")}`);
+    return;
+  }
+
+  const method = operation === "delete" ? "DELETE" : "POST";
+  const endpoint = operation === "delete"
+    ? `/api/tasks/${taskId}`
+    : `/api/tasks/${taskId}/${operation}`;
+  payload = await requestDashboardJson(endpoint, { method });
+  if (operation === "retry") {
+    console.log(`[ok] Retry solicitado para a Task #${taskId}.`);
+    if (payload.goal) console.log(`    Run: #${String(payload.goal.id ?? "?")} ${String(payload.goal.status ?? "")}`);
+  } else if (operation === "delete") {
+    console.log(`[ok] Task #${taskId} removida.`);
+  } else {
+    console.log(`[ok] Task #${taskId} cancelada.`);
+    if (payload.task) console.log(`    Estado: ${payload.task.status}`);
+  }
+}
+
+type QuotaCliResult = {
+  provider: string;
+  status: string;
+  buckets?: Array<{
+    windowKind?: string;
+    usedPercent?: number | null;
+    remainingPercent?: number | null;
+    resetsAt?: string | null;
+    planType?: string | null;
+  }>;
+  error?: string | null;
+  stale?: boolean;
+};
+
+async function quotaCommand(): Promise<void> {
+  const payload = await requestDashboardJson<{ quota?: QuotaCliResult[] }>("/api/quota", {}, { timeoutMs: 20_000 });
+  const results = payload.quota ?? [];
+  console.log(`maestro quota — ${results.length} provider(s)\n`);
+  for (const result of results) {
+    const suffix = result.stale ? " (ultima leitura)" : "";
+    console.log(`  ${result.provider}: ${result.status}${suffix}`);
+    if (result.buckets?.length) {
+      for (const bucket of result.buckets) {
+        const used = bucket.usedPercent == null ? "?" : `${bucket.usedPercent}%`;
+        const remaining = bucket.remainingPercent == null ? "?" : `${bucket.remainingPercent}%`;
+        const reset = bucket.resetsAt ? ` reset=${bucket.resetsAt}` : "";
+        console.log(`      ${bucket.windowKind ?? "window"}: usado=${used} restante=${remaining}${reset}`);
+      }
+    } else if (result.error) {
+      console.log(`      ${result.error}`);
+    }
+  }
+}
+
+type DashboardAgent = { id: string; label: string; state: string; detail: string; phase?: string };
+
+async function providersStatusCommand(): Promise<void> {
+  const payload = await requestDashboardJson<{ agents?: DashboardAgent[]; summary?: { providersConnected?: number } }>("/api/dashboard");
+  const agents = (payload.agents ?? []).filter((agent) => agent.id !== "telegram");
+  console.log(`maestro providers status — ${payload.summary?.providersConnected ?? agents.length} ativo(s)\n`);
+  if (agents.length === 0) {
+    console.log("  Nenhum provider registrado no runtime.");
+    return;
+  }
+  for (const agent of agents) {
+    console.log(`  ${agent.id.padEnd(16)} ${agent.state.padEnd(10)} ${agent.detail}`);
+  }
+}
+
+async function doctorCommand(argv: string[]): Promise<void> {
+  const projectKey = argv[0]?.trim();
+  const endpoint = projectKey
+    ? `/api/environment/doctor?projectKey=${encodeURIComponent(projectKey)}`
+    : "/api/environment/doctor";
+  const payload = await requestDashboardJson<{ report: {
+    projectKey: string;
+    status: string;
+    summary: string;
+    recommendedAction: string;
+    checks: Array<{ name: string; status: string; summary: string }>;
+  } }>(endpoint);
+  const report = payload.report;
+  console.log(`maestro doctor — @${report.projectKey}: ${report.status}\n`);
+  for (const check of report.checks) console.log(`  ${check.status.padEnd(7)} ${check.name}: ${check.summary}`);
+  console.log(`\n  Acao: ${report.recommendedAction}`);
+}
+
 async function startCommand(): Promise<void> {
-  const cliDir = path.dirname(fileURLToPath(import.meta.url));
-  const srcIndex = path.resolve(cliDir, "../index.ts");
-  const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
-  if (!fs.existsSync(tsxCli)) {
-    console.error(`[!] tsx not found at ${tsxCli}. Run 'npm install' in the Maestro checkout first.`);
+  const launch = buildOrchestratorLaunch();
+  if (!launch) {
+    console.error("[!] Orchestrator runtime files are unavailable. Reinstall Maestro or run npm install in the checkout.");
     process.exit(1);
   }
-  if (!fs.existsSync(srcIndex)) {
-    console.error(`[!] Orchestrator entry not found at ${srcIndex}`);
-    process.exit(1);
-  }
-  const child = spawn(process.execPath, [tsxCli, srcIndex], {
-    cwd: process.cwd(),
+  const child = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    env: launch.env,
     stdio: "inherit"
   });
   child.on("close", (code) => process.exit(code ?? 1));
@@ -176,22 +437,20 @@ async function restartCommand(argv: string[]): Promise<void> {
   }
   console.log(`[ok] Port ${port} is free.`);
 
-  const cliDir = path.dirname(fileURLToPath(import.meta.url));
-  const srcIndex = path.resolve(cliDir, "../index.ts");
-  const tsxCli = path.resolve(cliDir, "../../node_modules/tsx/dist/cli.mjs");
-  if (!fs.existsSync(tsxCli) || !fs.existsSync(srcIndex)) {
+  const launch = buildOrchestratorLaunch();
+  if (!launch) {
     console.error("[!] Unable to locate orchestrator entry files.");
     process.exit(1);
   }
 
   console.log("[..] Relaunching Maestro on the current code...");
-  const relaunchEnv = { ...process.env };
+  const relaunchEnv: NodeJS.ProcessEnv = { ...launch.env };
   // Propagate a non-default port/host so the relaunched process boots on the
   // same endpoint the health check polls (the orchestrator reads these from env).
   if (port !== 4787) relaunchEnv.MAESTRO_DASHBOARD_PORT = String(port);
   if (host !== "127.0.0.1") relaunchEnv.MAESTRO_DASHBOARD_HOST = host;
-  const child = spawn(process.execPath, [tsxCli, srcIndex], {
-    cwd: process.cwd(),
+  const child = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
     detached: true,
     stdio: "ignore",
     env: relaunchEnv
@@ -221,6 +480,10 @@ async function restartCommand(argv: string[]): Promise<void> {
 }
 
 async function dashboardCommand(): Promise<void> {
+  if (isPackagedCli()) {
+    await desktopCommand([]);
+    return;
+  }
   console.log("Launching Maestro Dashboard web mode (http://127.0.0.1:4788)...");
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
   const child = spawn(npmCmd, ["run", "dev:platform"], {
@@ -233,6 +496,19 @@ async function dashboardCommand(): Promise<void> {
 }
 
 async function desktopCommand(argv: string[]): Promise<void> {
+  if (isPackagedCli()) {
+    const desktopEnv = { ...process.env };
+    delete desktopEnv.ELECTRON_RUN_AS_NODE;
+    const desktopChild = spawn(process.execPath, [], {
+      cwd: cliDataDir(),
+      env: desktopEnv,
+      stdio: "inherit",
+      windowsHide: false
+    });
+    desktopChild.on("close", (code) => process.exit(code ?? 0));
+    return;
+  }
+
   const options = parseDesktopCliOptions(argv);
   const paths = resolveDesktopPaths();
 
@@ -320,15 +596,19 @@ async function desktopCommand(argv: string[]): Promise<void> {
   process.on("SIGTERM", cleanup);
 }
 
-function statusCommand(): void {
+async function statusCommand(): Promise<void> {
   const cwd = process.cwd();
+  const configRoot = cliDataDir();
   const nodeMatch = /v(\d+)\./.exec(process.version);
   const nodeMajor = nodeMatch ? Number(nodeMatch[1]) : 0;
 
   console.log("maestro status — resumo da instalacao\n");
   console.log("  Runtime");
   console.log(`    Node       : ${process.version}${nodeMajor >= 20 ? " (ok)" : " (requer >= 20)"}`);
-  console.log(`    TSX        : ${fs.existsSync(path.join(cwd, "node_modules", "tsx")) ? "presente" : "ausente (npm install)"}`);
+  const runtimeLabel = isPackagedCli()
+    ? "embutido no aplicativo"
+    : (fs.existsSync(path.join(cwd, "node_modules", "tsx")) ? "presente" : "ausente (npm install)");
+  console.log(`    Runtime CLI: ${runtimeLabel}`);
 
   const cliGithub = commandAvailable("gh") ? "disponivel" : "ausente (opcional)";
   const cliClaude = commandAvailable("claude") ? "disponivel" : "ausente";
@@ -339,7 +619,9 @@ function statusCommand(): void {
   console.log(`    Claude     : ${cliClaude}`);
   console.log(`    Codex      : ${cliCodex}`);
 
-  const envFile = [".env.local", ".env"].map(name => path.join(cwd, name)).find(f => fs.existsSync(f));
+  const envFile = [".env.local", ".env"]
+    .map(name => path.join(configRoot, name))
+    .find(f => fs.existsSync(f));
   const env = envFile ? fs.readFileSync(envFile, "utf8") : "";
   const hasBot = /^TELEGRAM_BOT_TOKEN=.+/m.test(env);
   const hasUserId = /^TELEGRAM_ALLOWED_USER_ID=.+/m.test(env);
@@ -352,6 +634,12 @@ function statusCommand(): void {
   const dbPath = envDbPath();
   const dbExists = fs.existsSync(dbPath);
   console.log(`    Banco local: ${dbExists ? dbPath : "nao inicializado"}`);
+
+  const apiHost = process.env.MAESTRO_DASHBOARD_HOST?.trim() || "127.0.0.1";
+  const apiPort = Number.parseInt(process.env.MAESTRO_DASHBOARD_PORT ?? "4787", 10) || 4787;
+  const apiOnline = await checkApiHealth(apiHost, apiPort, 1_000);
+  console.log("\n  Dashboard");
+  console.log(`    API        : ${apiOnline ? `online (http://${apiHost}:${apiPort})` : "offline"}`);
 }
 
 function renderTaskLogs(taskId: number, limit: number): void {
@@ -509,14 +797,14 @@ async function main(): Promise<void> {
       printHelp();
       break;
     case "setup": {
-      const result = runConfigWizard();
+      const result = runConfigWizard({ cwd: cliDataDir() });
       console.log(result.summary);
       break;
     }
     case "telegram": {
       const sub = argv[0];
       if (sub === "connect") {
-        const result = await runTelegramConnectWizard();
+        const result = await runTelegramConnectWizard({ cwd: cliDataDir() });
         if (!result.success) {
           console.error(`[!] Nao foi possivel conectar o Telegram: ${result.error ?? "erro desconhecido"}`);
           process.exit(1);
@@ -530,8 +818,25 @@ async function main(): Promise<void> {
     }
     case "project":
       if (argv[0] === "add") await projectAddCommand(argv.slice(1));
-      else { console.error("Usage: maestro project add <key> <path|github-url>"); process.exit(1); }
+      else if (argv[0] === "list") projectListCommand(argv.slice(1));
+      else { console.error("Usage: maestro project add <key> <path|github-url> | maestro project list"); process.exit(1); }
       break;
+    case "task": {
+      const subcommand = argv[0];
+      const taskArgs = argv.slice(1);
+      if (subcommand === "create") taskCreateCommand(taskArgs);
+      else if (subcommand === "list") taskListCommand(taskArgs);
+      else if (subcommand === "prepare") taskPrepareCommand(taskArgs);
+      else if (subcommand === "start" || subcommand === "cancel" || subcommand === "retry" || subcommand === "delete") {
+        await taskRuntimeCommand(subcommand, taskArgs);
+      } else if (subcommand === "logs") await logsCommand(taskArgs);
+      else if (subcommand === "followup") await followUpCommand(taskArgs);
+      else {
+        console.error("Usage: maestro task <create|list|prepare|start|cancel|retry|delete|logs|followup> ...");
+        process.exit(1);
+      }
+      break;
+    }
     case "start":
       await startCommand();
       break;
@@ -545,7 +850,7 @@ async function main(): Promise<void> {
       await desktopCommand(argv);
       break;
     case "status":
-      statusCommand();
+      await statusCommand();
       break;
     case "logs":
       await logsCommand(argv);
@@ -553,9 +858,16 @@ async function main(): Promise<void> {
     case "followup":
       await followUpCommand(argv);
       break;
+    case "quota":
+      await quotaCommand();
+      break;
+    case "doctor":
+      await doctorCommand(argv);
+      break;
     case "providers":
       if (argv[0] === "login") await providersLoginCommand(argv.slice(1));
-      else { console.error("Usage: maestro providers login <id>"); process.exit(1); }
+      else if (argv[0] === "status") await providersStatusCommand();
+      else { console.error("Usage: maestro providers login <id> | maestro providers status"); process.exit(1); }
       break;
     default:
       console.error(`maestro: comando desconhecido '${command}'`);

@@ -11,11 +11,14 @@ import {
   QuotaBucket,
   QuotaFetcher,
   QuotaResult,
+  QuotaUnavailableReason,
   buildEmptyUnavailable,
   buildError,
   remainingFractionToBucket,
   usedLimitToBucket,
 } from "./quota-fetcher.js";
+import { resolveAntigravityExecutable } from "./antigravity.js";
+import { resolveCustomCliExecutable } from "./custom-cli.js";
 import {
   ensureAntigravitySession,
   findAgyLoopbackPort,
@@ -262,7 +265,9 @@ async function antigravityFetcher(deadlineAt: number): Promise<QuotaResult> {
   const groups: AntigravityGroup[] = Array.isArray((data as any)?.response?.groups)
     ? (data as any).response.groups
     : [];
-  if (groups.length === 0) return buildError("antigravity", new Error("RetrieveUserQuotaSummary sem groups"));
+  if (groups.length === 0) {
+    return buildError("antigravity", new Error("RetrieveUserQuotaSummary sem groups"), "no_data");
+  }
 
   const buckets: QuotaBucket[] = [];
   for (const g of groups) {
@@ -279,7 +284,7 @@ async function antigravityFetcher(deadlineAt: number): Promise<QuotaResult> {
         resetsAt: b.resetTime ?? null,
         windowMinutes: isWeekly ? 10080 : 300,
         windowKind: isWeekly ? "weekly" : "5h",
-        planType: "pro",
+        planType: null,
         detail: label
       });
     }
@@ -294,6 +299,11 @@ async function antigravityFetcher(deadlineAt: number): Promise<QuotaResult> {
 }
 
 async function antigravityQuotaFetcher(): Promise<QuotaResult> {
+  // An uninstalled CLI can never produce a quota reading: report the truth
+  // ("not installed") instead of registering a fetcher that always fails.
+  if (!resolveAntigravityExecutable()) {
+    return buildEmptyUnavailable("antigravity", "CLI 'agy' não está instalada", "not_installed");
+  }
   // Authentication alone does not create the local language-server session.
   // Start one resumable, prompt-less CLI session on demand for the dashboard.
   // It is singleton-managed and automatically stopped after idle timeout.
@@ -301,7 +311,8 @@ async function antigravityQuotaFetcher(): Promise<QuotaResult> {
   if (!(await ensureAntigravitySession(deadlineAt))) {
     return buildEmptyUnavailable(
       "antigravity",
-      "CLI Antigravity autenticada, mas o Maestro não conseguiu manter a sessão local do agy ativa; tente abrir o Antigravity CLI uma vez e atualize a leitura"
+      "CLI Antigravity autenticada, mas o Maestro não conseguiu manter a sessão local do agy ativa; tente abrir o Antigravity CLI uma vez e atualize a leitura",
+      "session_down"
     );
   }
   const result = await antigravityFetcher(deadlineAt);
@@ -571,33 +582,56 @@ async function openCodeGoFetcher(): Promise<QuotaResult> {
 
 // Detects whether a provider is LOGGED IN / connected, so we only fetch quota
 // for providers the user actually has. Returns a map of fetchers keyed by id.
-export function buildQuotaFetchers(): Record<string, QuotaFetcher> {
+export function buildQuotaFetchers(options: { providerIds?: ReadonlySet<string> } = {}): Record<string, QuotaFetcher> {
   const fetchers: Record<string, QuotaFetcher> = {};
+  const allowed = (providerId: string): boolean => !options.providerIds || options.providerIds.has(providerId);
 
-  // Codex: ~/.codex/auth.json present and has tokens.
-  if (fs.existsSync(homeFile(".codex", "auth.json"))) {
+  // Codex: ~/.codex/auth.json present and has tokens. When the CLI is
+  // installed but credentials are missing/empty, surface an explicit
+  // "not_authenticated" row instead of silently omitting the provider.
+  const codexAuthPath = homeFile(".codex", "auth.json");
+  if (allowed("codex") && fs.existsSync(codexAuthPath)) {
     try {
-      const auth = readJson(homeFile(".codex", "auth.json")) as { tokens?: { access_token?: string } };
+      const auth = readJson(codexAuthPath) as { tokens?: { access_token?: string } };
       if (auth.tokens?.access_token) fetchers.codex = codexFetcher;
     } catch {
       /* skip */
     }
   }
+  if (allowed("codex") && !fetchers.codex && resolveCustomCliExecutable("codex")) {
+    fetchers.codex = async () =>
+      buildEmptyUnavailable("codex", "Codex instalado, mas sem login concluído (~/.codex/auth.json ausente ou vazio)", "not_authenticated");
+  }
 
-  fetchers.antigravity = antigravityQuotaFetcher;
+  // Antigravity only when the CLI binary exists; otherwise the dashboard must
+  // not show it as a connected provider with quota (it is just a catalog entry).
+  if (allowed("antigravity") && resolveAntigravityExecutable()) {
+    fetchers.antigravity = antigravityQuotaFetcher;
+  }
 
   // Claude: ~/.claude/.credentials.json has claudeAiOauth.
-  if (fs.existsSync(homeFile(".claude", ".credentials.json"))) {
+  if (allowed("claude") && hasClaudeOAuthToken()) {
     fetchers.claude = claudeFetcher;
   }
 
   // OpenRouter / OpenAI / Gemini API: by env API key presence.
-  if (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY) fetchers.openrouter = openRouterFetcher;
-  if (process.env.OPENAI_API_KEY) fetchers.openai = openAIFetcher;
-  if (process.env.GEMINI_API_KEY) fetchers["gemini-api"] = geminiApiFetcher;
+  if (allowed("openrouter") && (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY)) fetchers.openrouter = openRouterFetcher;
+  if (allowed("openai") && process.env.OPENAI_API_KEY) fetchers.openai = openAIFetcher;
+  if (allowed("gemini-api") && process.env.GEMINI_API_KEY) fetchers["gemini-api"] = geminiApiFetcher;
 
   // OpenCode Go: by OPENCODE_GO_API_KEY env.
-  if (process.env.OPENCODE_GO_API_KEY) fetchers["opencode-go"] = openCodeGoFetcher;
+  if (allowed("opencode-go") && process.env.OPENCODE_GO_API_KEY) fetchers["opencode-go"] = openCodeGoFetcher;
 
   return fetchers;
+}
+
+function hasClaudeOAuthToken(): boolean {
+  try {
+    const data = readJson(homeFile(".claude", ".credentials.json")) as {
+      claudeAiOauth?: { accessToken?: string };
+    };
+    return Boolean(data.claudeAiOauth?.accessToken?.trim());
+  } catch {
+    return false;
+  }
 }

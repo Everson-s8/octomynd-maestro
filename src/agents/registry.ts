@@ -6,6 +6,7 @@ import {
   AgentProviderId
 } from "./types.js";
 import type { FailureCategory } from "./failure.js";
+import { BackgroundHealthProber } from "./health-prober.js";
 import {
   ProviderPolicySnapshot,
   ProviderPolicyStore,
@@ -62,6 +63,8 @@ export class AgentRegistry {
   private readonly providers = new Map<AgentProviderId, AgentProvider>();
   private readonly activeLeases = new Map<AgentProviderId, number>();
   private readonly cooldowns = new Map<AgentProviderId, ProviderCooldown>();
+  /** F5: background health loop; request paths only peek cached results. */
+  healthProber?: import("./health-prober.js").BackgroundHealthProber;
 
   constructor(
     providers: AgentProvider[],
@@ -78,12 +81,23 @@ export class AgentRegistry {
     }
   }
 
+  /** Start the background health prober (call once from the runtime boot). */
+  startHealthProbing(intervalMs = 20_000): void {
+    this.healthProber?.stop();
+    this.healthProber = new BackgroundHealthProber(
+      new Map(this.list().map((provider) => [provider.id, provider])),
+      intervalMs
+    );
+    this.healthProber.start();
+  }
+
   registerProvider(provider: AgentProvider, limit = 1): void {
     if (this.providers.has(provider.id)) {
       throw new Error(`Duplicate agent provider: ${provider.id}`);
     }
     this.providers.set(provider.id, provider);
     this.providerLimits[provider.id] = Math.max(1, limit);
+    this.healthProber?.setProvider(provider.id, provider);
   }
 
   replaceProvider(provider: AgentProvider, limit = 1): void {
@@ -96,6 +110,7 @@ export class AgentRegistry {
     this.providers.set(provider.id, provider);
     this.providerLimits[provider.id] = Math.max(1, limit);
     this.cooldowns.delete(provider.id);
+    this.healthProber?.setProvider(provider.id, provider);
   }
 
   unregisterProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
@@ -107,11 +122,22 @@ export class AgentRegistry {
     }
     this.cooldowns.delete(providerId);
     delete this.providerLimits[providerId];
+    this.healthProber?.removeProvider(providerId);
     return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
   }
 
   list(): AgentProvider[] {
     return [...this.providers.values()];
+  }
+
+  /**
+   * Drop provider-local discovery caches. The desktop installer can install or
+   * authenticate a CLI while the daemon stays alive, so a page refresh must
+   * observe that change without requiring a process restart.
+   */
+  async refresh(): Promise<void> {
+    await Promise.all([...this.providers.values()].map((provider) => provider.refresh?.()));
+    if (this.healthProber) await this.healthProber.refreshNow();
   }
 
   async route(
@@ -219,7 +245,9 @@ export class AgentRegistry {
     const policy = this.policySnapshot();
     const controls = new Map(policy.controls.map((control) => [control.providerId, control]));
     return Promise.all(this.list().map(async (provider) => {
-      const health = await provider.health();
+      const health = this.healthProber
+        ? this.healthProber.peek(provider.id)
+        : await provider.health();
       const activeCount = this.activeCount(provider.id);
       const cooldown = this.activeCooldown(provider.id);
       const state: AgentOperationalState = health.state !== "ready"

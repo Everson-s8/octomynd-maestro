@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ANTIGRAVITY_AUTH_PROBE_ARGS,
   AntigravityProvider,
   buildAntigravityArgs,
   resolveAntigravityExecutable
@@ -18,6 +19,10 @@ afterEach(() => {
 });
 
 describe("Antigravity provider", () => {
+  it("uses the non-TTY print probe for packaged desktop authentication", () => {
+    expect(ANTIGRAVITY_AUTH_PROBE_ARGS).toEqual(["-p", "/model", "--output-format", "text"]);
+  });
+
   it("advertises general execution capabilities", () => {
     expect([...new AntigravityProvider().capabilities]).toEqual([
       "planning",
@@ -45,6 +50,8 @@ describe("Antigravity provider", () => {
     expect(codingArgs).toContain("high");
     expect(codingArgs.join(" ")).toContain("Never commit, push, merge, deploy");
     expect(codingArgs).not.toContain("--dangerously-skip-permissions");
+    expect(planningArgs).not.toContain("--disable-slash-commands");
+    expect(codingArgs).not.toContain("--disable-slash-commands");
   });
 
   it("omits --effort when the model id already encodes the effort in its suffix", () => {

@@ -4,6 +4,26 @@ import type { AgentProviderId } from "../agents/types.js";
 
 export type OperationalChatSurface = "dashboard" | "telegram";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
+export type ChatAccessMode = "read_only" | "standard" | "full";
+
+/** Sentinel used for conversations that are not attached to a project. */
+export const GLOBAL_CHAT_PROJECT_KEY = "__maestro__";
+
+export type OperationalChatThreadRecord = {
+  id: number;
+  projectKey: string;
+  title: string;
+  accessMode: ChatAccessMode;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export type OperationalChatThreadInput = {
+  projectKey: string;
+  title?: string | null;
+  accessMode?: ChatAccessMode | null;
+};
 
 export type ChatEvidenceTaskFact = {
   id: number;
@@ -88,6 +108,7 @@ export type ChatEvidenceContext = {
 };
 
 export type GovernedChatActionType =
+  | "create_task"
   | "unblock_provider"
   | "retry_task"
   | "resume_goal"
@@ -108,6 +129,7 @@ export type GovernedChatAction = {
 
 export type OperationalChatMessageRecord = {
   id: number;
+  threadId: number;
   projectKey: string;
   surface: OperationalChatSurface;
   senderRole: OperationalChatSenderRole;
@@ -118,6 +140,7 @@ export type OperationalChatMessageRecord = {
 };
 
 export type OperationalChatMessageInput = {
+  threadId?: number | null;
   projectKey: string;
   surface: OperationalChatSurface;
   senderRole: OperationalChatSenderRole;
@@ -129,29 +152,35 @@ export type OperationalChatMessageInput = {
 
 export type OperationalChatRequest = {
   projectKey: string;
+  threadId?: number | null;
   surface: OperationalChatSurface;
   message: string;
   userId?: string | null;
   username?: string | null;
+  accessMode?: ChatAccessMode | null;
 };
 
 export type OperationalChatResponse = {
   messageId: number;
+  threadId: number;
   projectKey: string;
   surface: OperationalChatSurface;
   explanation: string;
   evidence: ChatEvidenceContext;
   actions: GovernedChatAction[];
   providerId: AgentProviderId | "deterministic_engine";
+  accessMode: ChatAccessMode;
   createdAt: string;
 };
 
 export type OperationalChatActionRequest = {
   projectKey: string;
+  threadId?: number | null;
   surface: OperationalChatSurface;
   action: GovernedChatAction;
   userId?: string | null;
   username?: string | null;
+  accessMode?: ChatAccessMode | null;
 };
 
 export type OperationalChatActionResponse = {
@@ -162,8 +191,9 @@ export type OperationalChatActionResponse = {
 };
 
 export type ChatActionExecutor = {
+  taskCreated?(taskId: number): void | Promise<void>;
   retryTask?(taskId: number): void;
-  resumeGoal?(taskId: number): void;
+  resumeGoal?(runId: number): void;
   cancelTask?(taskId: number): void;
   rerunReview?(taskId: number): void;
 };

@@ -62,7 +62,8 @@ export class ReviewCoordinator {
     runId: number,
     decision: HumanReviewDecision,
     note: string,
-    source = "dashboard"
+    source = "dashboard",
+    mergeAfterApproval = false
   ): Promise<{ review: HumanReviewRecord; item: ReviewQueueItem }> {
     const item = this.get(runId);
     if (item.status === "approved" || item.status === "rejected") {
@@ -80,7 +81,13 @@ export class ReviewCoordinator {
       throw new Error("High-severity security alerts must be resolved before approval.");
     }
 
-    if (decision === "approved") await this.github.markReady(item.pullRequestUrl);
+    if (decision === "approved") {
+      await this.github.markReady(item.pullRequestUrl);
+      if (mergeAfterApproval) {
+        if (!this.github.merge) throw new Error("O gateway do GitHub não suporta merge automático.");
+        await this.github.merge(item.pullRequestUrl);
+      }
+    }
     if (decision === "changes_requested") await this.github.markDraft(item.pullRequestUrl);
     if (decision === "rejected") await this.github.close(item.pullRequestUrl);
 
@@ -90,10 +97,10 @@ export class ReviewCoordinator {
       type: `review.${decision}`,
       text: `Human decision for goal #${runId}: ${decision}`,
       taskId: item.taskId,
-      metadata: { runId, reviewId: review.id, decision }
+      metadata: { runId, reviewId: review.id, decision, mergeAfterApproval }
     });
 
-    if (decision === "approved") this.database.updateTaskStatus(item.taskId, "ready_to_merge");
+    if (decision === "approved") this.database.updateTaskStatus(item.taskId, mergeAfterApproval ? "done" : "ready_to_merge");
     if (decision === "rejected") this.database.updateTaskStatus(item.taskId, "rejected");
     if (decision === "changes_requested") this.goals.requestChanges(runId);
 

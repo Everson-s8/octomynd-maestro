@@ -29,9 +29,11 @@ import {
   createOperationalChatPersistence,
   migrateOperationalChatPersistence
 } from "./chat/persistence.js";
+import { deriveTaskIntake } from "./tasks/intake.js";
 export type {
   OperationalChatMessageInput,
   OperationalChatMessageRecord,
+  OperationalChatThreadRecord,
   OperationalChatSenderRole,
   OperationalChatSurface,
   ChatEvidenceContext,
@@ -130,6 +132,10 @@ export type TaskRecord = {
   projectKey: string | null;
   projectName: string | null;
   text: string;
+  /** Short display/PR title derived from the original request. */
+  title?: string;
+  /** Execution-oriented specification; `text` remains the immutable request. */
+  specification?: string;
   status: TaskStatus;
   source: string;
   branchName: string | null;
@@ -737,8 +743,8 @@ export function createDatabase(databasePath: string) {
   const chatPersistence = createOperationalChatPersistence(db);
 
   const createTaskStatement = db.prepare(`
-    INSERT INTO tasks (project_id, text, status, source, branch_name, worktree_path, parent_task_id, created_at, updated_at)
-    VALUES (@projectId, @text, 'queued', @source, NULL, NULL, @parentTaskId, @now, @now)
+    INSERT INTO tasks (project_id, text, title, specification, status, source, branch_name, worktree_path, parent_task_id, created_at, updated_at)
+    VALUES (@projectId, @text, @title, @specification, 'queued', @source, NULL, NULL, @parentTaskId, @now, @now)
   `);
   const addEventStatement = db.prepare(`
     INSERT INTO events (source, type, text, user_id, username, task_id, created_at, metadata_json)
@@ -1074,6 +1080,7 @@ export function createDatabase(databasePath: string) {
 
   return {
     close: () => db.close(),
+    isOpen: () => db.open,
 
     ...skillPersistence,
     ...workGraphPersistence,
@@ -1123,18 +1130,47 @@ export function createDatabase(databasePath: string) {
       text: string,
       source = "telegram",
       projectKey?: string | null,
-      parentTaskId?: number | null
+      parentTaskId?: number | null,
+      title?: string | null,
+      specification?: string | null
     ): TaskRecord {
       const now = new Date().toISOString();
       const project = projectKey ? this.getProjectByKey(projectKey) : this.getDefaultProject();
+      const intake = deriveTaskIntake(text);
       const result = createTaskStatement.run({
         projectId: project?.id ?? null,
         text,
+        title: title?.trim() || intake.title,
+        specification: specification?.trim() || intake.specification,
         source,
         parentTaskId: parentTaskId ?? null,
         now
       });
       return this.getTask(Number(result.lastInsertRowid));
+    },
+
+    /** F3: durable work-intake idempotency. Returns the previously recorded
+     *  submission for this intake id, or null when this is the first time. */
+    findWorkIntakeSubmission(intakeId: string): { taskId: number | null; featurePlanId: number | null } | null {
+      const row = db
+        .prepare("SELECT task_id, feature_plan_id FROM work_intake_submissions WHERE intake_id = ?")
+        .get(intakeId) as { task_id: number | null; feature_plan_id: number | null } | undefined;
+      return row ? { taskId: row.task_id, featurePlanId: row.feature_plan_id } : null;
+    },
+
+    recordWorkIntakeSubmission(intakeId: string, refs: { taskId?: number | null; featurePlanId?: number | null }): void {
+      db.prepare(`
+        INSERT INTO work_intake_submissions (intake_id, task_id, feature_plan_id, created_at)
+        VALUES (@intakeId, @taskId, @featurePlanId, @now)
+        ON CONFLICT(intake_id) DO UPDATE SET
+          task_id = COALESCE(excluded.task_id, task_id),
+          feature_plan_id = COALESCE(excluded.feature_plan_id, feature_plan_id)
+      `).run({
+        intakeId,
+        taskId: refs.taskId ?? null,
+        featurePlanId: refs.featurePlanId ?? null,
+        now: new Date().toISOString()
+      });
     },
 
     getTask(id: number): TaskRecord {
@@ -3069,6 +3105,8 @@ function migrate(db: Database.Database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER,
       text TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      specification TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued',
       source TEXT NOT NULL,
       branch_name TEXT,
@@ -3080,7 +3118,6 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (project_id) REFERENCES projects(id),
       FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
     );
-
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
@@ -3100,6 +3137,19 @@ function migrate(db: Database.Database) {
       ON events(CAST(json_extract(metadata_json, '$.taskId') AS INTEGER));
     CREATE INDEX IF NOT EXISTS idx_events_metadata_deleted_task_id
       ON events(CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER));
+
+    /* F3: durable idempotency for work-intake submissions. The previous scheme
+       scanned the last 200 events for task.created metadata — once the window
+       rolled over the same demand created duplicate tasks. A dedicated column
+       with a UNIQUE index makes dedupe O(1) and permanent. */
+    CREATE TABLE IF NOT EXISTS work_intake_submissions (
+      intake_id TEXT PRIMARY KEY,
+      task_id INTEGER,
+      feature_plan_id INTEGER,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+      FOREIGN KEY (feature_plan_id) REFERENCES feature_plans(id) ON DELETE SET NULL
+    );
 
     CREATE TABLE IF NOT EXISTS task_reviews (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3425,6 +3475,20 @@ function migrate(db: Database.Database) {
       ON runtime_updates(status);
   `);
 
+  const taskColumns = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  if (!taskColumns.some((column) => column.name === "title")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''");
+  }
+  if (!taskColumns.some((column) => column.name === "specification")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN specification TEXT NOT NULL DEFAULT ''");
+  }
+  const legacyTasks = db.prepare("SELECT id, text, title, specification FROM tasks").all() as Array<{ id: number; text: string; title: string | null; specification: string | null }>;
+  const updateLegacyTask = db.prepare("UPDATE tasks SET title = ?, specification = ? WHERE id = ?");
+  for (const task of legacyTasks) {
+    const intake = deriveTaskIntake(task.text);
+    updateLegacyTask.run(task.title?.trim() || intake.title, task.specification?.trim() || intake.specification, task.id);
+  }
+
   migrateSkillPersistence(db);
   migrateWorkGraphPersistence(db);
   migrateWorkIntakePersistence(db);
@@ -3492,6 +3556,8 @@ type TaskRow = {
   project_key: string | null;
   project_name: string | null;
   text: string;
+  title: string;
+  specification: string;
   status: TaskStatus;
   source: string;
   branch_name: string | null;
@@ -4139,6 +4205,8 @@ function mapTask(row: TaskRow): TaskRecord {
     projectKey: row.project_key,
     projectName: row.project_name,
     text: row.text,
+    title: row.title || undefined,
+    specification: row.specification || undefined,
     status: row.status,
     source: row.source,
     branchName: row.branch_name,

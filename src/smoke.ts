@@ -50,6 +50,7 @@ if (config.runtime.antigravityEnabled) {
   agentProviders.push(new AntigravityProvider({
     model: config.runtime.antigravityModel,
     effort: config.runtime.antigravityEffort ?? "medium",
+    autoConfigurePermissions: true,
     executionLimits: {
       ...providerLimits,
       inactivityTimeoutMs: config.runtime.antigravityInactivityTimeoutMs

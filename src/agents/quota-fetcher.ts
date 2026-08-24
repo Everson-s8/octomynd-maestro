@@ -29,11 +29,21 @@ export type QuotaResult = {
   updatedAt: string;
   buckets: QuotaBucket[];
   error: string | null;
+  /** Machine-readable reason when status is not "ok"; UI renders per code. */
+  reasonCode?: QuotaUnavailableReason;
   /** True when the values are the last successful reading, not this poll. */
   stale?: boolean;
   /** Timestamp of the last successful reading when this result is stale. */
   lastSuccessfulAt?: string;
 };
+
+/** Why a provider has no quota reading right now (structured, not free text). */
+export type QuotaUnavailableReason =
+  | "not_installed"
+  | "not_authenticated"
+  | "session_down"
+  | "transient_error"
+  | "no_data";
 
 // What a quota provider's fetcher must produce: a list of normalized buckets.
 export type QuotaFetcher = () => Promise<QuotaResult>;
@@ -158,7 +168,8 @@ export async function fetchAllQuota(fetchers: Record<string, QuotaFetcher>): Pro
             status: "error",
             updatedAt: new Date().toISOString(),
             buckets: [],
-            error: outcome.reason instanceof Error ? outcome.reason.message : "quota_fetch_failed"
+            error: outcome.reason instanceof Error ? outcome.reason.message : "quota_fetch_failed",
+            reasonCode: "transient_error"
           };
       const isUsable = current.status === "ok" && current.buckets.length > 0;
       if (isUsable) {
@@ -190,17 +201,22 @@ export async function fetchAllQuota(fetchers: Record<string, QuotaFetcher>): Pro
 }
 
 // Convenience: a provider with no usable credentials -> status unavailable.
-export function buildEmptyUnavailable(provider: string, detail: string): QuotaResult {
-  return { provider, status: "unavailable", updatedAt: new Date().toISOString(), buckets: [], error: detail };
+export function buildEmptyUnavailable(
+  provider: string,
+  detail: string,
+  reasonCode?: QuotaUnavailableReason
+): QuotaResult {
+  return { provider, status: "unavailable", updatedAt: new Date().toISOString(), buckets: [], error: detail, ...(reasonCode ? { reasonCode } : {}) };
 }
 
 // Convenience: wrap a thrown error -> status error.
-export function buildError(provider: string, error: unknown): QuotaResult {
+export function buildError(provider: string, error: unknown, reasonCode?: QuotaUnavailableReason): QuotaResult {
   return {
     provider,
     status: "error",
     updatedAt: new Date().toISOString(),
     buckets: [],
-    error: error instanceof Error ? error.message : "quota_fetch_failed"
+    error: error instanceof Error ? error.message : "quota_fetch_failed",
+    ...(reasonCode ? { reasonCode } : {})
   };
 }

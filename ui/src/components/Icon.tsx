@@ -27,6 +27,13 @@ export function Icon({ name, className = "" }: { name: string; className?: strin
       </>
     ),
     plus: <path d="M12 5v14M5 12h14" />,
+    check: <path d="m5 12 4 4L19 6" />,
+    trash: (
+      <>
+        <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        <path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      </>
+    ),
     queue: (
       <>
         <path d="M5 6h14M5 12h14M5 18h9" />

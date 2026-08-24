@@ -1,13 +1,6 @@
 import path from "node:path";
-import { AntigravityProvider } from "./agents/antigravity.js";
-import { CustomCliProvider } from "./agents/custom-cli.js";
-import { OpenAICompatibleProvider } from "./agents/openai-compatible.js";
-import { mergeCustomProviders, readCustomProviders } from "./agents/provider-config.js";
-import type { AgentProvider } from "./agents/types.js";
 import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
-import { ClaudeProvider } from "./agents/claude.js";
-import { CodexProvider } from "./agents/codex.js";
-import { AgentRegistry } from "./agents/registry.js";
+import { createAgentRegistry } from "./agents/runtime.js";
 import { loadConfig, validateRuntimeConfig } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createTelegramBot, TelegramSubsystemManager } from "./telegram/bot.js";
@@ -52,7 +45,13 @@ if (process.argv.includes("telegram") && process.argv.includes("connect")) {
 }
 
 const config = loadConfig();
-const errors = validateRuntimeConfig(config);
+// The packaged desktop app boots the full orchestrator before Telegram is
+// configured, so it sets MAESTRO_REQUIRE_TELEGRAM=false. Any other context
+// keeps requiring a bot token, preserving the existing CLI behaviour.
+const requireTelegram = !["0", "false", "off", "no"].includes(
+  (process.env.MAESTRO_REQUIRE_TELEGRAM ?? "").trim().toLowerCase()
+);
+const errors = validateRuntimeConfig(config, process.env, { requireTelegram });
 
 if (errors.length > 0) {
   for (const error of errors) {
@@ -70,45 +69,9 @@ database.addEvent({
   text: environmentFingerprint.id,
   metadata: { fingerprint: environmentFingerprint }
 });
-const providerLimits = { maxRuntimeMs: config.runtime.providerMaxRuntimeMs };
-const agentProviders: AgentProvider[] = [
-  new CodexProvider({
-    ...providerLimits,
-    inactivityTimeoutMs: config.runtime.codexInactivityTimeoutMs,
-    model: config.runtime.codexModel
-  }),
-  new ClaudeProvider({
-    ...providerLimits,
-    inactivityTimeoutMs: config.runtime.claudeInactivityTimeoutMs,
-    model: config.runtime.claudeModel
-  })
-];
-if (config.runtime.antigravityEnabled) {
-  agentProviders.push(new AntigravityProvider({
-    model: config.runtime.antigravityModel,
-    effort: config.runtime.antigravityEffort ?? "medium",
-    executionLimits: {
-      ...providerLimits,
-      inactivityTimeoutMs: config.runtime.antigravityInactivityTimeoutMs
-    }
-  }));
-}
-const customProviders = mergeCustomProviders(config.runtime.customProviders, readCustomProviders());
-if (customProviders.length > 0) {
-  for (const customConfig of customProviders) {
-    // Providers with an OpenAI-compatible endpoint use the HTTP+key provider
-    // (mirrors Hermes's opencode-go usage) instead of spawning a local CLI.
-    if (customConfig.endpointUrl) {
-      agentProviders.push(new OpenAICompatibleProvider(customConfig));
-    } else {
-      agentProviders.push(new CustomCliProvider(customConfig, {
-        executionLimits: providerLimits,
-        model: customConfig.model
-      }));
-    }
-  }
-}
-const agentRegistry = new AgentRegistry(agentProviders, undefined, Date.now, database);
+const agentRegistry = createAgentRegistry(config, database);
+// F5: probe provider health in the background; dashboard reads cached results.
+agentRegistry.startHealthProbing();
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
 const skillBootstrap = config.skills.enabled
@@ -375,7 +338,7 @@ async function shutdown() {
   selfUpdateManager.shutdown();
   skillCuratorWorker?.shutdown();
   await workGraphCoordinator.shutdown();
-  goalCoordinator.shutdown();
+  await goalCoordinator.shutdown();
   if (dashboardServer) {
     await new Promise<void>((resolve, reject) => {
       dashboardServer.close((error) => error ? reject(error) : resolve());

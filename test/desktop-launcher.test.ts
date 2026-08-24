@@ -91,6 +91,7 @@ describe("Desktop Launcher & Electron Entry", () => {
     expect(opts.height).toBe(800);
     expect(opts.title).toBe("Maestro");
     expect(opts.backgroundColor).toBe("#0f172a");
+    expect(opts.icon).toBe(path.resolve(process.cwd(), "build", "maestro.ico"));
     expect(opts.webPreferences?.contextIsolation).toBe(true);
   });
 

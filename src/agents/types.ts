@@ -105,9 +105,16 @@ export interface ProviderAdapter {
   capabilities: ReadonlySet<AgentCapability>;
   model?: string | null;
   health(): Promise<AgentHealth>;
+  /** Invalidate discovery/health caches after a CLI is installed or logged in. */
+  refresh?(): void | Promise<void>;
   execute(request: AgentExecutionRequest): Promise<AgentExecutionResult>;
   reviewImprovements?(request: ImprovementReviewExecutionRequest): Promise<ImprovementReviewExecutionResult>;
   models?(): Promise<string[]>;
+  /**
+   * Drop memoized health/models so the next probe re-examines the machine
+   * (used by provider rescan after the user installs a CLI mid-session).
+   */
+  invalidateCaches?(): void;
 }
 
 export type AgentProvider = ProviderAdapter;

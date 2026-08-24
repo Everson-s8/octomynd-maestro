@@ -1,6 +1,11 @@
-# Octomynd Maestro - Plug-and-Play Installation Guide
+# Octomynd Maestro — Plug-and-Play Installation Guide
 
-Octomynd Maestro is designed for plug-and-play onboarding. You can run Maestro on any machine with **JUST ONE** provider (only Codex, only Claude, or only Gemini).
+Octomynd Maestro is designed for plug-and-play onboarding. You can run it with one available provider
+(Codex, Claude, or Gemini Antigravity); you do not need to install every provider.
+
+For the packaged Windows desktop flow, see [`docs/desktop-release.md`](docs/desktop-release.md).
+The maintained product documentation is available at
+[`docs.octomynd.com/maestro`](https://docs.octomynd.com/maestro).
 
 ---
 
@@ -26,7 +31,7 @@ You do **not** need all AI providers installed. Maestro automatically detects av
 - **ENV API Key Override**: Set `CLAUDE_API_KEY` (or `ANTHROPIC_API_KEY`) in `.env`
 
 ### Option C: Gemini Antigravity
-- **CLI Installation**: Install `agy` executable in PATH
+- **CLI Installation (Windows PowerShell)**: `irm https://antigravity.google/cli/install.ps1 | iex`
 - **CLI Authentication**: `agy login`
 - **ENV API Key Override**: Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env`
 
@@ -60,7 +65,8 @@ Installing the CLI globally lets you run `maestro setup`, `maestro start`, etc. 
 npm link
 ```
 
-> Note: the package is `private`, so `npm link` is the supported path for a local global command. If you prefer not to link, substitute `npx tsx src/cli/index.ts <command>` or the `npm run cli:*` scripts below.
+`npm link` is optional and only affects the local developer checkout. If you prefer not to link,
+substitute `npx tsx src/cli/index.ts <command>` or the `npm run cli:*` scripts below.
 
 ### Step 3: Run Configuration Wizard
 
@@ -138,6 +144,21 @@ maestro start
 - **Plug-and-Play Capability Routing**: When only one provider exists on your machine, Maestro routes 100% of capabilities (planning, coding, testing, reviewing, improvement reviewing, research, conversation) using that provider.
 - **Environment API Keys**: You can supply provider API keys (`CODEX_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`) via `.env` or standard shell variables without needing global CLI binaries.
 - **Graceful GitHub Fallback**: Setup and goal execution do **NOT** fail if the GitHub CLI (`gh`) is missing or unauthenticated. Maestro falls back to local branch delivery mode seamlessly.
+
+### Conversa e permissões
+
+No Dashboard, abra **Chat** para conversar com o Maestro sobre um projeto específico ou escolha
+**Maestro (geral)** para dúvidas de providers, configuração e runtime. Use `+` para criar uma
+conversa isolada e a lixeira para removê-la. O seletor **Acesso** controla as ações disponíveis:
+
+- **Somente leitura** responde e consulta evidências, sem alterar estado.
+- **Standard** permite operações governadas após confirmação explícita.
+- **Full Access** permite todas as operações governadas do Maestro, incluindo cancelamento; não
+  libera um shell irrestrito nem expõe credenciais.
+
+O chat continua disponível mesmo quando nenhum projeto foi cadastrado. Para criar uma task nesse
+contexto, cadastre pelo menos um projeto; o Maestro usará o projeto padrão cadastrado e mostrará
+essa associação antes da execução.
 
 ---
 

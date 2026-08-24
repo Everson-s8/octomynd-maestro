@@ -70,18 +70,22 @@ export type MaestroConfig = {
 };
 
 export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfig {
-  dotenv.config({ path: path.join(cwd, ".env.local"), override: false });
-  dotenv.config({ path: path.join(cwd, ".env"), override: false });
+  // Packaged desktop/CLI runs keep user-owned configuration outside the
+  // installation directory. Normal checkout runs continue to resolve
+  // everything from the current working directory.
+  const configRoot = path.resolve(env.MAESTRO_DATA_DIR?.trim() || cwd);
+  dotenv.config({ path: path.join(configRoot, ".env.local"), override: false });
+  dotenv.config({ path: path.join(configRoot, ".env"), override: false });
 
   const projectName = env.MAESTRO_PROJECT_NAME?.trim() || "octomynd-maestro";
   const execution = resolveExecutionContract(cwd, projectName, env);
 
   return {
     projectName,
-    databasePath: path.resolve(cwd, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
+    databasePath: path.resolve(configRoot, env.MAESTRO_DB_PATH?.trim() || ".maestro/maestro.db"),
     worktreesPath: execution.worktreesPath,
     projectsPath: path.resolve(
-      cwd,
+      configRoot,
       env.MAESTRO_PROJECTS_PATH?.trim() || path.join(execution.worktreesPath, "projects")
     ),
     execution,
@@ -137,9 +141,9 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     },
     skills: {
       enabled: normalizeBoolean(env.MAESTRO_SKILLS_ENABLED, false),
-      catalogPath: path.resolve(cwd, env.MAESTRO_SKILLS_PATH?.trim() || "skills"),
+      catalogPath: path.resolve(configRoot, env.MAESTRO_SKILLS_PATH?.trim() || "skills"),
       versionsPath: path.resolve(
-        cwd,
+        configRoot,
         env.MAESTRO_SKILL_VERSIONS_PATH?.trim() || ".maestro/skill-versions"
       ),
       projectKey: env.MAESTRO_SKILLS_PROJECT_KEY?.trim().toLowerCase() || "maestro",
@@ -177,7 +181,7 @@ export function validateRuntimeConfig(
 
   if (!isSupportedNodeVersion(process.version, config.execution.expectedNodeVersion)) {
     errors.push(
-      `Node ${config.execution.expectedNodeVersion}.x is required; current runtime is ${process.version}.`
+      `Node >=${config.execution.expectedNodeVersion} and <21 is required; current runtime is ${process.version}.`
     );
   }
 

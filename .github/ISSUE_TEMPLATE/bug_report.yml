@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible problem in Maestro.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Remove credentials, OAuth data, local paths, databases, and private logs before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Maestro version or commit
+      placeholder: 0.3.2 or abc1234
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and runtime
+      placeholder: Windows 11, packaged desktop / Node 20.17
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and CLI version
+      placeholder: Claude Code 2.x, Codex CLI, or Gemini Antigravity
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Redact secrets, user identifiers, databases, and private paths.

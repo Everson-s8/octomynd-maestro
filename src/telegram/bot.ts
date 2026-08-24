@@ -118,7 +118,10 @@ export function createTelegramBot(
   database: MaestroDatabase,
   options: TelegramBotOptions = {}
 ) {
-  const bot = new Bot(config.telegram.botToken);
+  // grammy throws on an empty token. The desktop app constructs the runtime
+  // before Telegram is configured, so fall back to the inert placeholder the
+  // subsystem manager already treats as "do not start long-polling".
+  const bot = new Bot(config.telegram.botToken || "dummy_token_for_local_setup");
   const commands = new ApplicationCommands(
     database,
     options.featureGithub,
@@ -1171,7 +1174,7 @@ export function formatQueue(tasks: TaskRecord[]): string {
   }
 
   return tasks
-    .map((task) => `#${task.id} ${task.projectKey ? `@${task.projectKey} ` : ""}[${task.status}] ${truncate(task.text, 120)}`)
+    .map((task) => `#${task.id} ${task.projectKey ? `@${task.projectKey} ` : ""}[${task.status}] ${truncate(task.title || task.text, 120)}`)
     .join("\n");
 }
 

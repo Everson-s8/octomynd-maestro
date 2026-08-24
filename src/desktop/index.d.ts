@@ -4,6 +4,7 @@ export function getDesktopWindowOptions(): {
   title: string;
   backgroundColor: string;
   show: boolean;
+  icon?: string;
   webPreferences: {
     nodeIntegration: boolean;
     contextIsolation: boolean;

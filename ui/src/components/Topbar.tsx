@@ -17,7 +17,7 @@ export function Topbar({
     <header className="topbar">
       <div>
         <span className="topbar-kicker">Central de operação</span>
-        <h1>Bom dia, Everson.</h1>
+        <h1>Bom dia.</h1>
       </div>
       <div className="topbar-actions">
         <span className="sync-stamp">

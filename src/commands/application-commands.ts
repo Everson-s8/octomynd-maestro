@@ -21,11 +21,13 @@ import {
 import { FeatureGitHubGateway, GhFeatureGateway } from "../features/github.js";
 import { FeatureIntegrationBuilder, WorkPullRequestGateway } from "../features/integration.js";
 import {
+  bootstrapEmptyRepository,
   cloneGitRepository,
   createGitWorktree,
   createWorktreePlan,
   detectGitDefaultBranch,
   ensureGitRemoteOrigin,
+  hasAnyCommit,
   validateGitProject
 } from "../git.js";
 import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from "../security/redaction.js";
@@ -34,6 +36,7 @@ import { CommandOrigin } from "./types.js";
 import type { WorkGraphDetails } from "../work-graphs/types.js";
 import type { FeatureTaskContractInput } from "../features/task-graph.js";
 import { prepareFeatureTaskBaseline } from "../features/task-baseline.js";
+import { deriveTaskIntake } from "../tasks/intake.js";
 import {
   revalidateQueuedFeaturePlans,
   revalidateQueuedFeaturePlansWithAudit
@@ -330,6 +333,22 @@ export class ApplicationCommands {
             `Failed to clone remote repository: ${cloneResult.stderr || cloneResult.stdout || "Unknown error"}`
           );
         }
+        const bootstrap = bootstrapEmptyRepository(projectPath, key);
+        if (bootstrap.bootstrapped) {
+          warnings.push(
+            "Repositório vazio: o Maestro criou o commit inicial (README + .gitignore)" +
+              (bootstrap.pushed ? " e publicou a branch no remoto." : ".")
+          );
+          this.database.addEvent({
+            source: origin.channel,
+            type: "project.bootstrapped",
+            text: `Initial commit created by Maestro for @${key} (empty remote repository).`,
+            userId: origin.userId ?? null,
+            username: origin.username ?? null
+          });
+        } else if (!bootstrap.ok) {
+          warnings.push(`Repository needs attention before Maestro tasks can run: ${bootstrap.error}`);
+        }
       } else if (!fs.existsSync(path.join(projectPath, ".git"))) {
         throw validationError(`Path already exists and is not a Git repository: ${projectPath}`);
       } else {
@@ -359,16 +378,34 @@ export class ApplicationCommands {
       }
       if (!fs.existsSync(path.join(projectPath, ".git"))) {
         warnings.push("Path exists, but .git was not found. Future Git automation will be blocked.");
-      } else if (remoteUrl) {
-        const remoteResult = ensureGitRemoteOrigin(projectPath, remoteUrl);
-        if (remoteResult.error) {
-          warnings.push(`Could not configure remote origin: ${remoteResult.error}`);
-        } else if (remoteResult.added) {
-          warnings.push(`Configured remote origin pointing to ${remoteUrl}.`);
-        } else if (remoteResult.existingUrl && normalizeRemoteUrl(remoteResult.existingUrl) !== normalizeRemoteUrl(remoteUrl)) {
+      } else {
+        const bootstrap = bootstrapEmptyRepository(projectPath, key);
+        if (bootstrap.bootstrapped) {
           warnings.push(
-            `Local repo at ${projectPath} already has origin ${remoteResult.existingUrl}, which differs from requested ${remoteUrl}; keeping the existing origin.`
+            "Repositório vazio: o Maestro criou o commit inicial (README + .gitignore)" +
+              (bootstrap.pushed ? " e publicou a branch no remoto." : ".")
           );
+          this.database.addEvent({
+            source: origin.channel,
+            type: "project.bootstrapped",
+            text: `Initial commit created by Maestro for @${key} (empty local repository).`,
+            userId: origin.userId ?? null,
+            username: origin.username ?? null
+          });
+        } else if (!bootstrap.ok) {
+          warnings.push(`Repository needs attention before Maestro tasks can run: ${bootstrap.error}`);
+        }
+        if (remoteUrl) {
+          const remoteResult = ensureGitRemoteOrigin(projectPath, remoteUrl);
+          if (remoteResult.error) {
+            warnings.push(`Could not configure remote origin: ${remoteResult.error}`);
+          } else if (remoteResult.added) {
+            warnings.push(`Configured remote origin pointing to ${remoteUrl}.`);
+          } else if (remoteResult.existingUrl && normalizeRemoteUrl(remoteResult.existingUrl) !== normalizeRemoteUrl(remoteUrl)) {
+            warnings.push(
+              `Local repo at ${projectPath} already has origin ${remoteResult.existingUrl}, which differs from requested ${remoteUrl}; keeping the existing origin.`
+            );
+          }
         }
       }
     }
@@ -430,7 +467,8 @@ export class ApplicationCommands {
       throw notFoundError("No project registered.");
     }
 
-    const task = this.database.createTask(text, origin.channel, project.key);
+    const intake = deriveTaskIntake(text);
+    const task = this.database.createTask(text, origin.channel, project.key, null, intake.title, intake.specification);
 
     this.database.addEvent({
       source: origin.channel,
@@ -461,7 +499,8 @@ export class ApplicationCommands {
       throw conflictError(`Task #${parent.id} is not attached to a project.`);
     }
 
-    const task = this.database.createTask(text, origin.channel, parent.projectKey, parent.id);
+    const intake = deriveTaskIntake(text);
+    const task = this.database.createTask(text, origin.channel, parent.projectKey, parent.id, intake.title, intake.specification);
     this.database.addEvent({
       source: origin.channel,
       type: "task.follow_up_created",
@@ -547,43 +586,26 @@ export class ApplicationCommands {
       projectKey: project.key
     });
 
-    const events = this.database.listEvents(200);
-
-    const existingPlanEvent = events.find(
-      (e) => e.type === "feature_plan.created" && e.metadata?.workIntakeId === intakeId && e.metadata?.featurePlanId
-    );
-    if (existingPlanEvent && existingPlanEvent.metadata?.featurePlanId) {
-      const featurePlan = this.database.getFeaturePlanDetails(Number(existingPlanEvent.metadata.featurePlanId));
-      const existingTaskEvent = events.find(
-        (e) => e.type === "task.created" && e.metadata?.workIntakeId === intakeId && e.taskId
-      );
-      const task = existingTaskEvent?.taskId ? this.database.getTask(existingTaskEvent.taskId) : undefined;
-      const existingDecision = this.database.getWorkIntakeDecision(intakeId);
-      const decision = existingDecision || classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
-      return {
-        status: "already_created",
-        createdType: "feature_plan",
-        task,
-        featurePlan,
-        decision,
-        explanation: explainWorkIntakeDecision(decision)
-      };
-    }
-
-    const existingTaskEvent = events.find(
-      (e) => e.type === "task.created" && e.metadata?.workIntakeId === intakeId && e.taskId
-    );
-    if (existingTaskEvent && existingTaskEvent.taskId) {
-      const task = this.database.getTask(existingTaskEvent.taskId);
-      const existingDecision = this.database.getWorkIntakeDecision(intakeId);
-      const decision = existingDecision || classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
-      return {
-        status: "already_created",
-        createdType: "task",
-        task,
-        decision,
-        explanation: explainWorkIntakeDecision(decision)
-      };
+    // F3: durable idempotency via the work_intake_submissions table. The old
+    // scheme scanned listEvents(200) and silently duplicated once the window
+    // rolled over.
+    const existingSubmission = this.database.findWorkIntakeSubmission(intakeId);
+    if (existingSubmission) {
+      const task = existingSubmission.taskId ? this.database.getTask(existingSubmission.taskId) : undefined;
+      const featurePlan = existingSubmission.featurePlanId
+        ? this.database.getFeaturePlanDetails(existingSubmission.featurePlanId)
+        : undefined;
+      if (task || featurePlan) {
+        const decision = classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
+        return {
+          status: "already_created",
+          createdType: featurePlan ? "feature_plan" : "task",
+          ...(featurePlan ? { featurePlan } : {}),
+          task: featurePlan ? task : (task as TaskRecord | undefined),
+          decision,
+          explanation: explainWorkIntakeDecision(decision)
+        };
+      }
     }
 
     const decision = classifyWorkIntake({
@@ -606,6 +628,7 @@ export class ApplicationCommands {
 
     if (decision.classification === "direct_task") {
       const task = this.database.createTask(input.objective, origin.channel, project.key);
+      this.database.recordWorkIntakeSubmission(intakeId, { taskId: task.id });
       this.database.addEvent({
         source: origin.channel,
         type: "task.created",
@@ -659,6 +682,11 @@ export class ApplicationCommands {
       workIntakeDecisionId: decision.id,
       classification: decision.classification,
       reasonCode: decision.reasonCode
+    });
+
+    this.database.recordWorkIntakeSubmission(intakeId, {
+      taskId: task.id,
+      featurePlanId: writeResult.plan.id
     });
 
     return {
@@ -1294,18 +1322,89 @@ export class ApplicationCommands {
       throw failure;
     }
 
+    // Idempotent prepare (F-hotfix): a task that already has a worktree must
+    // NOT fail preparation again. This is the retry loop killer — the chat
+    // "Reiniciar" flips a blocked task back to queued, the autopilot calls
+    // prepareTask, and the old code threw "already has a worktree", blocking
+    // it again forever. If the worktree still exists on disk, reuse it and
+    // move on; only a MISSING worktree is an error (user deleted it).
     if (task.branchName || task.worktreePath) {
-      const failure = conflictError(`Task #${task.id} already has a worktree.`);
+      const worktreeExists = task.worktreePath
+        ? fs.existsSync(task.worktreePath)
+        : false;
+      if (worktreeExists) {
+        if (task.status === "queued") {
+          this.database.updateTaskWorktree({
+            id: task.id,
+            status: "planning",
+            branchName: task.branchName!,
+            worktreePath: task.worktreePath!,
+            baseBranch: task.baseBranch ?? null
+          });
+        }
+        this.database.addEvent({
+          source: origin.channel,
+          type: "task.prepared",
+          text: `Reused existing worktree for task #${task.id} (idempotent re-prepare).`,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          taskId: task.id
+        });
+        return {
+          task: this.database.getTask(task.id),
+          branchName: task.branchName!,
+          worktreePath: task.worktreePath!
+        };
+      }
+      const failure = conflictError(
+        `Task #${task.id} references a worktree that no longer exists on disk (${task.worktreePath}). Cancel the task and create a new one.`
+      );
       this.recordPrepareFailure(origin, task.id, failure.details);
       throw failure;
     }
 
-    const project = this.database.getProjectByKey(task.projectKey);
+    let project = this.database.getProjectByKey(task.projectKey);
     const validationErrors = validateGitProject(project);
     if (validationErrors.length > 0) {
       const failure = validationError(validationErrors.join("\n"), validationErrors);
       this.recordPrepareFailure(origin, task.id, failure.details);
       throw failure;
+    }
+
+    // A freshly created repository (zero commits) has an unborn default branch,
+    // so the worktree step below would fail with "fatal: invalid reference".
+    // Give the project its first commit instead of blocking the task.
+    if (!hasAnyCommit(project.path)) {
+      const bootstrap = bootstrapEmptyRepository(project.path, project.key);
+      if (!bootstrap.ok) {
+        const failure = conflictError(
+          bootstrap.error ?? "Repository has no commits and Maestro could not create the initial one."
+        );
+        this.recordPrepareFailure(origin, task.id, failure.details);
+        throw failure;
+      }
+      if (bootstrap.bootstrapped) {
+        // The real branch name is only known after the first commit; keep the
+        // DB in sync so worktrees/baselines never target a stale ref.
+        const actualBranch = detectGitDefaultBranch(project.path);
+        if (actualBranch && actualBranch !== project.defaultBranch) {
+          project = { ...project, defaultBranch: actualBranch };
+          this.database.registerProject({
+            key: project.key,
+            name: project.name,
+            path: project.path,
+            defaultBranch: actualBranch
+          });
+        }
+        this.database.addEvent({
+          source: origin.channel,
+          type: "project.bootstrapped",
+          text: `Initial commit created by Maestro for @${project.key} before preparing Task #${task.id}.`,
+          userId: origin.userId ?? null,
+          username: origin.username ?? null,
+          taskId: task.id
+        });
+      }
     }
 
     let baseline;

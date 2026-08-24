@@ -1,4 +1,4 @@
-import { buildAgentGoalPrompt } from "./goal-prompt.js";
+import { buildAgentGoalPrompt, buildConversationPrompt } from "./goal-prompt.js";
 import { classifyFailure, isRetryableFailureCategory, retryAfterMsForFailure, type FailureCategory } from "./failure.js";
 import type {
   AgentCapability,
@@ -88,9 +88,15 @@ export class OpenAICompatibleProvider implements AgentProvider {
       };
     }
 
-    const prompt = buildAgentGoalPrompt(request);
+    const conversation = request.capability === "conversation";
+    const prompt = conversation ? buildConversationPrompt(request) : buildAgentGoalPrompt(request);
     const messages = [
-      { role: "system", content: "You are an autonomous agent executing a structured goal. Follow the instructions in the user message exactly and output a clear final result." },
+      {
+        role: "system",
+        content: conversation
+          ? "You are the conversational assistant inside Octomynd Maestro. Reply naturally and directly to the user. Do not turn casual conversation into a task report."
+          : "You are an autonomous agent executing a structured goal. Follow the instructions in the user message exactly and output a clear final result."
+      },
       { role: "user", content: prompt }
     ];
 

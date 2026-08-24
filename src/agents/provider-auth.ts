@@ -20,17 +20,27 @@ type InternalSession = ProviderAuthSession & { cancel?: () => void };
 export class ProviderAuthBroker {
   private readonly sessions = new Map<string, InternalSession>();
 
-  start(preset: ProviderPreset): ProviderAuthSession {
+  start(preset: ProviderPreset, flowId?: string): ProviderAuthSession {
     if (!preset.authFlow || preset.authFlow === "none") throw new Error("provider_auth_flow_not_supported");
     const executable = resolveCustomCliExecutable(preset.command);
     if (!executable) throw new Error(`provider_cli_not_found:${preset.command}`);
+    // A preset may advertise several login flows; the chosen one overrides the
+    // legacy single authFlow/authArgs pair. verify_only only probes status.
+    const flow = flowId ? preset.authFlows?.find((item) => item.id === flowId) : undefined;
     const session: InternalSession = {
       id: crypto.randomUUID(), presetId: preset.id, state: "waiting", verificationUrl: null,
       userCode: null, detail: "Preparando autorizacao segura.", startedAt: new Date().toISOString(), completedAt: null
     };
     this.sessions.set(session.id, session);
-    if (preset.authFlow === "terminal") this.startTerminal(executable, preset, session);
-    else this.startDeviceCode(executable, preset, session);
+    if (flow?.kind === "verify_only") {
+      void probeStatus(executable, preset.authStatusArgs).then((connected) =>
+        complete(session, connected ? "connected" : "failed",
+          connected ? "Conta conectada." : "Login nao detectado. Faca o login no terminal e tente novamente."));
+    } else if (flow ? flow.kind === "terminal" : preset.authFlow === "terminal") {
+      this.startTerminal(executable, { ...preset, authArgs: flow?.args ?? preset.authArgs }, session);
+    } else {
+      this.startDeviceCode(executable, { ...preset, authArgs: flow?.args ?? preset.authArgs }, session);
+    }
     return publicSession(session);
   }
 

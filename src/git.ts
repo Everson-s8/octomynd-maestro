@@ -24,7 +24,7 @@ export function createWorktreePlan(
   base?: { baseRef: string; baseBranch: string }
 ): WorktreePlan {
   return {
-    branchName: `maestro/task-${task.id}-${slugify(task.text)}`,
+    branchName: `maestro/task-${task.id}-${slugify(task.title || task.text)}`,
     worktreePath: path.join(worktreesRoot, project.key, `task-${task.id}`),
     ...(base ?? {})
   };
@@ -190,6 +190,108 @@ export function detectGitDefaultBranch(repoPath: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * True when the repository has at least one commit. On a freshly created
+ * repository HEAD points at an unborn branch, so any operation that needs a
+ * base ref (e.g. `git worktree add ... main`) fails with
+ * "fatal: invalid reference". Callers should bootstrap first.
+ */
+export function hasAnyCommit(repoPath: string): boolean {
+  return runGit(["rev-parse", "--verify", "--quiet", "HEAD"], repoPath).ok;
+}
+
+export type RepositoryBootstrapResult = {
+  ok: boolean;
+  /** True when this call created the initial commit. */
+  bootstrapped: boolean;
+  /** True when the initial state was pushed to `origin`. */
+  pushed: boolean;
+  error?: string;
+};
+
+const BOOTSTRAP_GIT_IDENTITY = [
+  "-c",
+  "user.name=Maestro",
+  "-c",
+  "user.email=maestro@octomynd.local"
+];
+
+const BOOTSTRAP_GITIGNORE = [
+  "# Dependencies",
+  "node_modules/",
+  "",
+  "# Build output",
+  "dist/",
+  "build/",
+  "*.tsbuildinfo",
+  "",
+  "# Environment & secrets",
+  ".env",
+  ".env.*",
+  "",
+  "# OS noise",
+  ".DS_Store",
+  "Thumbs.db",
+  ""
+].join("\n");
+
+/**
+ * Make an empty (zero-commit) repository usable by Maestro: create a minimal
+ * README + .gitignore, commit them, and (when a remote exists) publish the
+ * branch so remote worktrees/PRs work. Refuses to touch repositories that
+ * already have commits or carry uncommitted changes.
+ */
+export function bootstrapEmptyRepository(
+  repoPath: string,
+  projectKey: string,
+  options: { push?: boolean } = {}
+): RepositoryBootstrapResult {
+  const fail = (error: string): RepositoryBootstrapResult => ({ ok: false, bootstrapped: false, pushed: false, error });
+
+  if (!fs.existsSync(path.join(repoPath, ".git"))) {
+    return fail(`Not a Git repository: ${repoPath}`);
+  }
+  const status = runGit(["status", "--porcelain"], repoPath);
+  if (!status.ok) {
+    return fail(status.stderr || status.stdout || "Cannot read Git status.");
+  }
+  if (hasAnyCommit(repoPath)) {
+    return { ok: true, bootstrapped: false, pushed: false };
+  }
+  // Includes untracked files — a dirty first-commit attempt would mix user
+  // data into the scaffolded commit.
+  if (status.stdout.trim()) {
+    return fail("Repository has uncommitted changes; commit or clean them before Maestro creates the initial commit.");
+  }
+
+  try {
+    fs.writeFileSync(path.join(repoPath, "README.md"), `# ${projectKey}\n\nScaffolded by Maestro.\n`, "utf8");
+    fs.writeFileSync(path.join(repoPath, ".gitignore"), BOOTSTRAP_GITIGNORE, "utf8");
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "Failed to write scaffold files.");
+  }
+
+  runGit(["add", "README.md", ".gitignore"], repoPath);
+  const commit = runGit(
+    [...BOOTSTRAP_GIT_IDENTITY, "commit", "-m", "chore: initial commit by Maestro"],
+    repoPath
+  );
+  if (!commit.ok) {
+    return fail(commit.stderr || commit.stdout || "git commit failed during bootstrap.");
+  }
+
+  let pushed = false;
+  if (options.push !== false) {
+    const remote = runGit(["remote", "get-url", "origin"], repoPath);
+    if (remote.ok) {
+      const branch = detectGitDefaultBranch(repoPath) ?? "main";
+      // Non-fatal: credentials may be absent; local preparation still works.
+      pushed = runGit(["push", "-u", "origin", branch], repoPath).ok;
+    }
+  }
+  return { ok: true, bootstrapped: true, pushed };
 }
 
 function slugify(text: string): string {

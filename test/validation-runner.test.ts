@@ -52,6 +52,29 @@ describe("DeterministicValidationRunner", () => {
     expect(fs.existsSync(path.join(artifactsRoot, ...report.reportArtifactKey.split("/")))).toBe(true);
   });
 
+  it("uses backend/frontend paths and skips optional checks when a generated app has no tests", async () => {
+    fs.mkdirSync(path.join(workspacePath, "backend"));
+    fs.mkdirSync(path.join(workspacePath, "frontend"));
+    fs.writeFileSync(path.join(workspacePath, "backend", "tsconfig.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "frontend", "tsconfig.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "frontend", "vite.config.ts"), "export default {}\n", "utf8");
+
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot });
+
+    expect(report.status).toBe("passed");
+    expect(calls.find((call) => call.args.includes("backend/tsconfig.json"))).toBeDefined();
+    expect(calls.find((call) => call.args.includes("frontend/tsconfig.json"))).toBeDefined();
+    expect(calls.find((call) => call.args.includes("frontend/vite.config.ts"))).toBeDefined();
+    expect(report.checks.find((check) => check.id === "tests_full")?.summary)
+      .toContain("nenhum arquivo de teste");
+  });
+
   it("returns compact actionable failures while retaining raw output", async () => {
     const runner = new DeterministicValidationRunner(async (request) => (
       request.args.includes("--noEmit")

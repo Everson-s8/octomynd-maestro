@@ -15,6 +15,7 @@ import { captureGoalCheckpoint } from "./checkpoint.js";
 import { captureWorkspaceProgress } from "./circuit-breaker.js";
 
 const RESTART_RETRY_DELAY_MS = 5_000;
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000;
 const NON_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
   "awaiting_human",
   "ready_to_merge",
@@ -42,6 +43,7 @@ export type GoalPreflight = (taskId: number) => EnvironmentDoctorReport;
 export class GoalCoordinator {
   private readonly active = new Map<number, { promise: Promise<GoalRunRecord>; controller: AbortController }>();
   private readonly retryTimers = new Map<number, unknown>();
+  private shuttingDown = false;
 
   constructor(
     private readonly database: MaestroDatabase,
@@ -62,6 +64,9 @@ export class GoalCoordinator {
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
+    if (this.shuttingDown) {
+      throw new Error("Goal coordinator is shutting down.");
+    }
     if (this.active.has(taskId)) {
       throw new Error(`Task #${taskId} already has a goal running in this process.`);
     }
@@ -78,17 +83,37 @@ export class GoalCoordinator {
 
     const readiness = this.preflight?.(taskId);
     if (readiness?.status === "environment_blocked") {
-      this.database.withTransaction(() => {
-        this.database.updateTaskStatus(taskId, "blocked");
-        this.database.addEvent({
-          source: "maestro",
-          type: "goal.environment_blocked",
-          text: readiness.summary,
-          taskId,
-          metadata: { report: readiness }
+      // Soft-degrade (F-hotfix): a missing VALIDATION toolchain (tsc/vitest/
+      // better-sqlite3 in the target workspace) must not hard-block the goal.
+      // Those tools are only needed for post-execution deterministic
+      // validation; the agent can still implement the change. Hard-block stays
+      // for real infrastructure blockers (git, workspace, npm itself).
+      const VALIDATION_ONLY = new Set(["typescript", "test_runner", "native_runtime"]);
+      const failed = readiness.checks.filter(
+        (item) => item.status === "failed" && item.classification === "environment_blocked"
+      );
+      const validationOnly =
+        failed.length > 0 && failed.every((item) => VALIDATION_ONLY.has(item.name));
+      if (!validationOnly) {
+        this.database.withTransaction(() => {
+          this.database.updateTaskStatus(taskId, "blocked");
+          this.database.addEvent({
+            source: "maestro",
+            type: "goal.environment_blocked",
+            text: readiness.summary,
+            taskId,
+            metadata: { report: readiness }
+          });
         });
+        throw new EnvironmentBlockedError(readiness);
+      }
+      this.database.addEvent({
+        source: "maestro",
+        type: "goal.preflight_degraded",
+        text: `${readiness.summary} Goal proceeding WITHOUT deterministic validation.`,
+        taskId,
+        metadata: { report: readiness }
       });
-      throw new EnvironmentBlockedError(readiness);
     }
     if (readiness && readiness.status !== "ready") {
       this.database.addEvent({
@@ -112,6 +137,47 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) return run;
     this.execute(run);
     return run;
+  }
+
+  /**
+   * Resume a terminal run in place after a human fixes its provider or
+   * environment. The existing GoalRun, step count, checkpoint and worktree
+   * are preserved; this must never create a new planning run.
+   */
+  resumeExistingRun(runId: number): GoalRunRecord {
+    const run = this.database.getGoalRun(runId);
+    if (!["blocked", "failed", "waiting_provider"].includes(run.status)) {
+      throw new Error(`Goal #${runId} nao esta bloqueado ou aguardando provider.`);
+    }
+    if (this.active.has(run.taskId)) return run;
+
+    const reopened = this.database.withTransaction(() => {
+      const updated = this.database.updateGoalRun({
+        id: run.id,
+        status: "waiting_provider",
+        currentPhase: run.currentPhase,
+        stepCount: run.stepCount,
+        maxSteps: run.maxSteps,
+        lastError: null,
+        nextRetryAt: null
+      });
+      this.database.updateTaskStatus(run.taskId, run.currentPhase);
+      this.database.addEvent({
+        source: "human",
+        type: "goal.resume_requested",
+        text: `Goal #${runId} retomado do checkpoint existente na fase ${run.currentPhase}.`,
+        taskId: run.taskId,
+        metadata: {
+          runId,
+          phase: run.currentPhase,
+          stepCount: run.stepCount,
+          checkpointId: this.database.getLatestGoalCheckpoint(run.id)?.id ?? null
+        }
+      });
+      return updated;
+    });
+    this.execute(reopened);
+    return reopened;
   }
 
   /**
@@ -250,10 +316,25 @@ export class GoalCoordinator {
     }
   }
 
-  shutdown() {
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
     for (const timer of this.retryTimers.values()) this.scheduler.cancel(timer);
     this.retryTimers.clear();
-    for (const active of this.active.values()) active.controller.abort();
+    const activePromises = [...this.active.values()].map(({ promise, controller }) => {
+      controller.abort();
+      return promise;
+    });
+    if (activePromises.length === 0) return;
+
+    let timeout: NodeJS.Timeout | undefined;
+    const drain = Promise.allSettled(activePromises);
+    const deadline = new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
+      timeout.unref?.();
+    });
+    await Promise.race([drain, deadline]);
+    if (timeout) clearTimeout(timeout);
+    this.active.clear();
   }
 
   isActive(taskId: number): boolean {
@@ -334,6 +415,7 @@ export class GoalCoordinator {
       workGraphRunner: this.workGraphRunner,
       signal: controller.signal,
       onProgress: (progressRun, providerId) => {
+        if (this.shuttingDown) return;
         if (!this.notifyProgress) return;
         void this.notifyProgress(progressRun, providerId).catch((error) => {
           this.database.addEvent({
@@ -350,6 +432,7 @@ export class GoalCoordinator {
     void promise.then(
       (result) => {
         this.active.delete(run.taskId);
+        if (this.shuttingDown) return;
         if (result.status === "waiting_provider") {
           this.scheduleRetry(result);
         }
@@ -497,6 +580,7 @@ export class GoalCoordinator {
   }
 
   private scheduleRetry(run: GoalRunRecord) {
+    if (this.shuttingDown) return;
     if (this.retryTimers.has(run.id)) return;
     const nextRetryAt = run.nextRetryAt ? Date.parse(run.nextRetryAt) : Number.NaN;
     const delayMs = Number.isFinite(nextRetryAt)
@@ -504,9 +588,11 @@ export class GoalCoordinator {
       : this.retryDelayMs;
     const timer = this.scheduler.schedule(() => {
       this.retryTimers.delete(run.id);
+      if (this.shuttingDown || !this.database.isOpen()) return;
       try {
         this.resume(run.id);
       } catch (error) {
+        if (!this.database.isOpen()) return;
         this.database.addEvent({
           source: "maestro",
           type: "goal.resume_failed",

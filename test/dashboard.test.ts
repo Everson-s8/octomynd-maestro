@@ -115,7 +115,8 @@ describe("dashboard", () => {
           cooldownUntil: "2026-07-15T12:00:00.000Z",
           detail: "Claude atingiu timeout transitorio.",
           control: { mode: "enabled", fallbackEnabled: true }
-        }]
+        }],
+        list: () => []
       }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -145,7 +146,8 @@ describe("dashboard", () => {
       staticRoot: tempDir,
       runtimeMode: "full",
       agentRegistry: {
-        snapshot: () => new Promise(() => {})
+        snapshot: () => new Promise(() => {}),
+        list: () => []
       }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -640,10 +642,12 @@ describe("dashboard", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectKey: "boo", objective: "..." })
       });
-      expect(intakeClarifyResponse.status).toBe(200);
-      const intakeClarifyData = await intakeClarifyResponse.json() as { status: string; createdType: string; explanation: string };
-      expect(intakeClarifyData.status).toBe("needs_clarification");
-      expect(intakeClarifyData.createdType).toBe("none");
+      // F2: automatic mode never refuses — even "..." becomes a low-confidence task.
+      expect(intakeClarifyResponse.status).toBe(201);
+      const intakeClarifyData = await intakeClarifyResponse.json() as { status: string; createdType: string; decision: { reasonCode: string } };
+      expect(intakeClarifyData.status).toBe("created");
+      expect(intakeClarifyData.createdType).toBe("task");
+      expect(intakeClarifyData.decision.reasonCode).toBe("fallback_low_confidence");
 
       const intakeFeatureResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
         method: "POST",
@@ -808,10 +812,11 @@ describe("dashboard", () => {
       const prepareResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
       expect(prepareResponse.status).toBe(200);
 
-      const conflictResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
-      expect(conflictResponse.status).toBe(409);
-      const conflictPayload = await conflictResponse.json() as { error: string; details: string[] };
-      expect(conflictPayload.details.join(" ")).toContain("already has a worktree");
+      // Idempotent re-prepare: reusing the live worktree succeeds (retry-loop fix).
+      const reprepareResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/prepare`, { method: "POST" });
+      expect(reprepareResponse.status).toBe(200);
+      const repreparePayload = await reprepareResponse.json() as { task: { status: string } };
+      expect(repreparePayload.task.status).toBe("planning");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -925,6 +930,11 @@ describe("dashboard", () => {
       expect(listRes.status).toBe(200);
       const listData = await listRes.json() as any;
       expect(listData.projects.some((p: any) => p.key === "api-proj")).toBe(true);
+
+      const taskListRes = await fetch(`http://127.0.0.1:${port}/api/tasks?projectKey=boo&limit=10`);
+      expect(taskListRes.status).toBe(200);
+      const taskListData = await taskListRes.json() as any;
+      expect(taskListData.tasks.some((task: any) => task.projectKey === "boo")).toBe(true);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -1026,3 +1036,60 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
   async deleteHeadBranch(): Promise<void> {}
   async closeIssue(): Promise<void> {}
 }
+
+describe("POST /api/providers/rescan", () => {
+  it("returns per-preset install/auth status and records an audit event", async () => {
+    const registry = new AgentRegistry([], undefined, Date.now, database);
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full",
+      agentRegistry: registry
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/providers/rescan`, { method: "POST" });
+      expect(response.status).toBe(200);
+      const payload = await response.json() as {
+        scannedAt: string;
+        providers: Array<{
+          presetId: string;
+          installed: boolean;
+          path: string | null;
+          authStatus: "authenticated" | "unauthenticated" | "unknown";
+        }>;
+      };
+
+      // Every account-category preset is scanned; API-key/local presets are skipped.
+      const ids = payload.providers.map((p) => p.presetId);
+      expect(ids).toContain("claude");
+      expect(ids).toContain("codex");
+      expect(ids).toContain("gemini");
+      expect(ids).not.toContain("openrouter");
+      expect(ids).not.toContain("ollama");
+
+      for (const entry of payload.providers) {
+        if (!entry.installed) {
+          expect(entry.path).toBeNull();
+          expect(entry.authStatus).toBe("unknown");
+        }
+        // Antigravity now has a bounded read-only `agy models` probe. When the
+        // CLI exists, the rescan must report its actual result instead of
+        // leaving a stale "unknown" state; an absent CLI remains unknown above.
+        if (entry.presetId === "gemini" && entry.installed) {
+          expect(["authenticated", "unauthenticated"]).toContain(entry.authStatus);
+        }
+      }
+
+      const events = database.listEvents(50).filter((event) => event.type === "provider.rescan");
+      expect(events.length).toBeGreaterThan(0);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  }, 60_000);
+});

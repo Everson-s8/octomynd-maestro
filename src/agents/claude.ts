@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ProjectRecord, TaskRecord, TaskReviewStatus } from "../db.js";
@@ -28,7 +29,7 @@ import {
   normalizeProviderExecutionLimits,
   ProviderExecutionLimits
 } from "./execution-limits.js";
-import { buildAgentGoalPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
+import { buildAgentGoalPrompt, buildConversationPrompt, parseFinalReviewDecision } from "./goal-prompt.js";
 import { buildReviewPrompt } from "./review-prompt.js";
 
 export type ClaudeReviewResult = {
@@ -51,7 +52,8 @@ const CLAUDE_CAPABILITIES = new Set<AgentCapability>([
   "testing",
   "reviewing",
   "improvement_reviewing",
-  "research"
+  "research",
+  "conversation"
 ]);
 
 const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
@@ -152,17 +154,29 @@ export class ClaudeProvider implements AgentProvider {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const cli = resolveClaudeCliCommand();
     const envKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
-    const health: AgentHealth = cli
-      ? { state: "ready", detail: "Claude CLI disponivel", checkedAt: new Date().toISOString() }
-      : envKey
-        ? { state: "ready", detail: "Claude API Key disponivel via ENV", checkedAt: new Date().toISOString() }
-        : {
+    const oauth = readClaudeOAuthToken();
+    const health: AgentHealth = envKey
+      ? { state: "ready", detail: "Claude API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+      : !cli
+        ? {
           state: "offline",
           detail: withRemediation("claude", "offline", "Claude CLI ou API Key nao encontrado."),
           checkedAt: new Date().toISOString()
-        };
+        }
+        : oauth
+          ? { state: "ready", detail: "Claude CLI autenticado", checkedAt: new Date().toISOString() }
+          : { state: "auth_required", detail: "Claude CLI instalado, mas a conta ainda nao foi autenticada.", checkedAt: new Date().toISOString() };
     this.cacheHealth(health, 30_000);
     return health;
+  }
+
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+  }
+
+  invalidateCaches(): void {
+    this.refresh();
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
@@ -323,6 +337,19 @@ export class ClaudeProvider implements AgentProvider {
   }
 }
 
+function readClaudeOAuthToken(): string | null {
+  const credentialsPath = path.join(os.homedir(), ".claude", ".credentials.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as {
+      claudeAiOauth?: { accessToken?: string };
+    };
+    const token = raw.claudeAiOauth?.accessToken?.trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 export const reviewTaskWithClaude = async (
   task: TaskRecord,
   project: ProjectRecord,
@@ -403,6 +430,23 @@ export function buildClaudeGoalArgs(
   cwd: string,
   model?: string | null
 ): string[] {
+  if (request.capability === "conversation") {
+    return [
+      ...cli.argsPrefix,
+      "--print",
+      "--output-format",
+      "text",
+      "--permission-mode",
+      "plan",
+      "--tools",
+      READ_ONLY_TOOLS.join(","),
+      "--add-dir",
+      cwd,
+      "--no-session-persistence",
+      ...(model ? ["--model", model] : []),
+      buildConversationPrompt(request)
+    ];
+  }
   const writable = isWritableExecution(request);
   const testing = request.capability === "testing";
   const reviewing = request.capability === "reviewing";
@@ -529,7 +573,8 @@ export function resolveClaudeCliCommand(): ClaudeCliCommand | null {
 
   try {
     const cmd = process.platform === "win32" ? "claude.exe" : "claude";
-    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 3_000 });
+    // Same rationale as codex: slow cold-start probes must not flip the card.
+    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 10_000 });
     if (res.status === 0) return buildClaudeCliCommand(cmd);
   } catch {}
   return null;

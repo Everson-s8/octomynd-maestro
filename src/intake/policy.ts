@@ -95,9 +95,11 @@ export function classifyWorkIntake(
     reasonCode = "multiple_acceptance_units";
     confidence = 0.9;
   } else if (acceptanceCriteria.length === 0 && (objective.length < 5 || objective === "...")) {
-    classification = "needs_clarification";
-    reasonCode = "missing_acceptance_criteria";
-    confidence = 0.85;
+    // Automatic mode must NEVER end in "nothing was created" (F2): a short or
+    // placeholder objective still becomes a task the user can refine later.
+    classification = "direct_task";
+    reasonCode = "fallback_low_confidence";
+    confidence = 0.6;
   } else {
     classification = "direct_task";
     reasonCode = "single_bounded_objective";

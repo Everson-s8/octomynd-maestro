@@ -159,9 +159,17 @@ export function isSupportedNodeVersion(actual: string, expected = EXPECTED_NODE_
     actualParts
       && expectedParts
       && actualParts.major === expectedParts.major
-      && actualParts.minor === expectedParts.minor
-      && actualParts.patch >= expectedParts.patch
+      && compareVersions(actualParts, expectedParts) >= 0
   );
+}
+
+function compareVersions(
+  left: { major: number; minor: number; patch: number },
+  right: { major: number; minor: number; patch: number }
+): number {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  return left.patch - right.patch;
 }
 
 export function isPathWithin(candidate: string, parent: string): boolean {

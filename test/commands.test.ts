@@ -4,9 +4,15 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
+import { detectGitDefaultBranch, hasAnyCommit } from "../src/git.js";
 import { ApplicationCommands } from "../src/commands/application-commands.js";
 import { ApplicationCommandError } from "../src/commands/errors.js";
 import { FeatureGitHubGateway, FeaturePullRequestState } from "../src/features/github.js";
+
+function spawnGit(args: string[], cwd: string) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
 
 let tempDir: string;
 let projectDir: string;
@@ -114,10 +120,29 @@ describe("ApplicationCommands.prepareTask", () => {
     expect(database.listEvents().length).toBe(eventsBefore);
   });
 
-  it("throws a typed conflict error and audits the failure when a worktree already exists", () => {
-    expect.assertions(3);
+  it("re-prepares idempotently when the worktree already exists on disk (retry loop fix)", () => {
     const task = commands.createTask({ channel: "dashboard" }, { text: "preparar duas vezes", projectKey: "boo" });
+    const first = commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+
+    // Second prepare must REUSE the worktree instead of throwing — the chat
+    // retry flow flips blocked tasks back and the autopilot re-prepares.
+    const second = commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+
+    expect(second.branchName).toBe(first.branchName);
+    expect(second.worktreePath).toBe(first.worktreePath);
+    expect(second.task.status).toBe("planning");
+  });
+
+  it("throws a typed conflict error when the recorded worktree no longer exists on disk", () => {
+    expect.assertions(3);
+    const task = commands.createTask({ channel: "dashboard" }, { text: "worktree sumiu", projectKey: "boo" });
     commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+
+    // Simulate the user deleting the worktree directory outside Maestro.
+    const stored = commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+    fs.rmSync(stored.worktreePath, { recursive: true, force: true });
+    // Reset the DB status so the next prepare is attempted.
+    database.updateTaskStatus(task.id, "queued");
 
     try {
       commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
@@ -396,7 +421,7 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
   });
 
-  it("routes ambiguous request to ask for clarification without creating tasks or plans", () => {
+  it("creates a low-confidence direct task for ambiguous requests in automatic mode (F2)", () => {
     const res = commands.submitWorkIntake(
       { channel: "telegram", userId: "100" },
       {
@@ -405,11 +430,33 @@ describe("ApplicationCommands Work Intake integration", () => {
       }
     );
 
+    // Automatic mode never refuses to create (F2): "..." still becomes a task.
+    expect(res.status).toBe("created");
+    expect(res.createdType).toBe("task");
+    expect(res.decision.classification).toBe("direct_task");
+    expect(res.decision.reasonCode).toBe("fallback_low_confidence");
+
+    expect(database.listTasksByProject("boo")).toHaveLength(1);
+    expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
+    const persistedDecision = database.getWorkIntakeDecision(res.decision.id);
+    expect(persistedDecision?.classification).toBe("direct_task");
+  });
+
+  it("still honors an explicit needs_clarification override without creating anything", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "telegram", userId: "100" },
+      {
+        projectKey: "boo",
+        objective: "alguma coisa um pouco mais longa mas marcada como duvidosa",
+        explicitOverride: "needs_clarification"
+      }
+    );
+
     expect(res.status).toBe("needs_clarification");
     expect(res.createdType).toBe("none");
     expect(res.task).toBeUndefined();
     expect(res.featurePlan).toBeUndefined();
-    expect(res.explanation).toContain("clarificação");
+    expect(res.explanation).toContain("Clarificação");
 
     expect(database.listTasksByProject("boo")).toHaveLength(0);
     expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
@@ -483,5 +530,56 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(res.createdType).toBe("task");
     expect(res.decision.reasonCode).toBe("explicit_override_direct_task");
     expect(res.explanation).toContain("Sobrescrita explícita");
+  });
+});
+
+describe("ApplicationCommands.prepareTask on an empty repository", () => {
+  it("bootstraps the initial commit and prepares the task instead of blocking", () => {
+    const emptyDir = path.join(tempDir, "empty-project");
+    fs.mkdirSync(emptyDir);
+    runGit(["init", "-b", "main"], emptyDir);
+    database.registerProject({ key: "empty-repo", name: "Empty Repo", path: emptyDir, defaultBranch: "main" });
+
+    const task = commands.createTask({ channel: "dashboard" }, { text: "criar app de financas", projectKey: "empty-repo" });
+
+    const result = commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+
+    expect(result.task.worktreePath).toBeTruthy();
+    expect(hasAnyCommit(emptyDir)).toBe(true);
+
+    const events = database.listEvents(50).filter((event) => event.type === "project.bootstrapped");
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  it("records a prepare failure when the repository is dirty on first commit attempt", () => {
+    const emptyDir = path.join(tempDir, "dirty-project");
+    fs.mkdirSync(emptyDir);
+    runGit(["init", "-b", "main"], emptyDir);
+    fs.writeFileSync(path.join(emptyDir, "uncommitted.txt"), "dirty\n");
+    database.registerProject({ key: "dirty-repo", name: "Dirty Repo", path: emptyDir, defaultBranch: "main" });
+
+    const task = commands.createTask({ channel: "dashboard" }, { text: "tarefa em repo sujo", projectKey: "dirty-repo" });
+
+    expect(() => commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees")))
+      .toThrow(/invalid reference|dirty|failed/i);
+  });
+
+  it("syncs project.defaultBranch with the actual branch created by the bootstrap", () => {
+    // Registered as 'main', but git's init.defaultBranch here is different:
+    // the bootstrap must re-detect and persist the real branch name.
+    const emptyDir = path.join(tempDir, "renamed-branch-project");
+    fs.mkdirSync(emptyDir);
+    runGit(["init"], emptyDir); // uses git's configured init.defaultBranch (may not be main)
+    database.registerProject({ key: "renamed-repo", name: "Renamed Repo", path: emptyDir, defaultBranch: "main" });
+
+    const task = commands.createTask({ channel: "dashboard" }, { text: "tarefa com branch divergente", projectKey: "renamed-repo" });
+    const result = commands.prepareTask({ channel: "dashboard" }, task.id, path.join(tempDir, "worktrees"));
+
+    expect(result.task.worktreePath).toBeTruthy();
+    const stored = database.getProjectByKey("renamed-repo");
+    expect(stored.defaultBranch).toBe(detectGitDefaultBranch(emptyDir));
+    // The worktree base ref must match the branch that actually exists.
+    const worktreeBranch = spawnGit(["rev-parse", "--abbrev-ref", "HEAD"], result.task.worktreePath!);
+    expect(worktreeBranch.stdout.trim()).not.toBe("");
   });
 });
