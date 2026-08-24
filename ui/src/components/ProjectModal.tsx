@@ -145,14 +145,14 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           type="button"
           className="modal-close"
           onClick={onClose}
-          aria-label="Fechar"
+          aria-label={translate("Close")}
         >
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
 
         <div className="modal-head">
-          <div className="modal-eyebrow">Novo habitat</div>
-          <h3 id="modal-project-title">Registrar projeto</h3>
+          <div className="modal-eyebrow">{translate("New habitat")}</div>
+          <h3 id="modal-project-title">{translate("Register project")}</h3>
           <p>
             {translate("Choose the source. Maestro creates isolated worktrees for each task — your main directory is never changed directly.")}
           </p>
@@ -177,7 +177,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           )}
 
           <div className="mfield">
-            <label htmlFor="field-project-name">Nome do projeto</label>
+            <label htmlFor="field-project-name">{translate("Project name")}</label>
             <input
               id="field-project-name"
               type="text"
@@ -189,7 +189,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           </div>
 
           <div className="mfield">
-            <label>Origem</label>
+            <label>{translate("Source")}</label>
             <div className="origin-tabs">
               <div
                 className={`origin-tab ${mode === "github" ? "active" : ""}`}
@@ -201,7 +201,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.1 3.29 9.4 7.86 10.93.57.1.79-.25.79-.55v-2.1c-3.2.7-3.87-1.36-3.87-1.36-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.38.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 015.79 0c2.2-1.49 3.18-1.18 3.18-1.18.63 1.6.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.16v3.2c0 .3.21.66.8.55A10.52 10.52 0 0023.5 12c0-6.35-5.15-11.5-11.5-11.5z" />
                 </svg>
-                <span>Link do GitHub</span>
+                <span>{translate("GitHub link")}</span>
               </div>
               <div
                 className={`origin-tab ${mode === "localremote" ? "active" : ""}`}
@@ -214,7 +214,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                   <path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
                   <path d="M14 15l4-4m0 0h-3m3 0v3" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                <span>Local + remoto</span>
+                <span>{translate("Local + remote")}</span>
               </div>
               <div
                 className={`origin-tab ${mode === "local" ? "active" : ""}`}
@@ -239,7 +239,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                 <input
                   id="field-gitremote-a"
                   type="text"
-                  placeholder="https://github.com/usuario/repositorio"
+                  placeholder="https://github.com/owner/repository"
                   value={remoteUrl}
                   onChange={(e) => {
                     setRemoteUrl(e.target.value);
@@ -250,7 +250,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               </div>
               <div className="hint-box">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
-                <span>Clonado com <code>git clone</code> para <code>worktrees/projects/&lt;key&gt;</code>. Branch default detectada automaticamente.</span>
+                <span>{translate("Cloned with")} <code>git clone</code> {translate("into")} <code>worktrees/projects/&lt;key&gt;</code>. {translate("Default branch detected automatically.")}</span>
               </div>
             </div>
           )}
@@ -259,7 +259,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           {mode === "localremote" && (
             <div className="origin-fields" id="origin-localremote">
               <div className="mfield">
-                <label htmlFor="field-localpath-b">Caminho local</label>
+                <label htmlFor="field-localpath-b">{translate("Local path")}</label>
                 <div className="path-input">
                   <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>
                   <input
@@ -277,12 +277,12 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               </div>
               <div className="mfield">
                 <label htmlFor="field-gitremote-b">
-                  URL remota <span className="opt">opcional</span>
+                  {translate("Remote URL")} <span className="opt">{translate("optional")}</span>
                 </label>
                 <input
                   id="field-gitremote-b"
                   type="text"
-                  placeholder="https://github.com/usuario/repositorio"
+                  placeholder="https://github.com/owner/repository"
                   value={remoteUrl}
                   onChange={(e) => setRemoteUrl(e.target.value)}
                   disabled={loading}
@@ -299,7 +299,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           {mode === "local" && (
             <div className="origin-fields" id="origin-local">
               <div className="mfield">
-                <label htmlFor="field-localpath-c">Caminho local</label>
+                <label htmlFor="field-localpath-c">{translate("Local path")}</label>
                 <div className="path-input">
                   <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>
                   <input
@@ -317,7 +317,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               </div>
               <div className="hint-box">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
-                <span>Sem remoto configurado. Delivery cai em <code>local://branch</code>.</span>
+                <span>{translate("No remote configured. Delivery uses")} <code>local://branch</code>.</span>
               </div>
             </div>
           )}
@@ -328,7 +328,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               <input
                 id="field-default-branch"
                 type="text"
-                placeholder="Detectar automaticamente (main, master...)"
+                placeholder={translate("Detect automatically (main, master...)")}
                 value={defaultBranch}
                 onChange={(e) => setDefaultBranch(e.target.value)}
                 disabled={loading}
@@ -336,7 +336,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
             </div>
             <div className="mfield">
               <label htmlFor="field-project-key">
-                Identificador <span className="opt">@handle</span>
+                {translate("Identifier")} <span className="opt">@handle</span>
               </label>
               <input
                 id="field-project-key"
@@ -355,7 +355,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
             </label>
             <textarea
               id="field-project-desc"
-              placeholder="Do que se trata este projeto?"
+              placeholder={translate("What is this project about?")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={loading}
@@ -386,7 +386,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               className="btn-new"
               disabled={loading}
             >
-              {loading ? "Registrando..." : "Registrar projeto"}
+              {loading ? translate("Registering…") : translate("Register project")}
             </button>
           </div>
         </form>

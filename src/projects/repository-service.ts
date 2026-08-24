@@ -274,15 +274,21 @@ function readRemoteUrl(repoPath: string): string | null {
 function acquireSyncLock(repoPath: string): { release: () => void } | null {
   const key = crypto.createHash("sha256").update(path.resolve(repoPath)).digest("hex");
   const lockPath = path.join(os.tmpdir(), "maestro-repository-sync", `${key}.lock`);
+  const ownerToken = `${process.pid}:${crypto.randomUUID()}`;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       fs.mkdirSync(lockPath);
-      fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+      fs.writeFileSync(path.join(lockPath, "owner"), `${ownerToken}\n${new Date().toISOString()}\n`, "utf8");
       return {
         release: () => {
-          fs.rmSync(lockPath, { recursive: true, force: true });
+          try {
+            const owner = fs.readFileSync(path.join(lockPath, "owner"), "utf8").split("\n", 1)[0];
+            if (owner === ownerToken) fs.rmSync(lockPath, { recursive: true, force: true });
+          } catch {
+            // The lock was already reclaimed or removed by the owning process.
+          }
         }
       };
     } catch (error) {
@@ -290,8 +296,12 @@ function acquireSyncLock(repoPath: string): { release: () => void } | null {
       try {
         const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
         if (ageMs > SYNC_LOCK_STALE_MS) {
-          fs.rmSync(lockPath, { recursive: true, force: true });
-          continue;
+          const owner = fs.readFileSync(path.join(lockPath, "owner"), "utf8").split("\n", 1)[0];
+          const ownerPid = Number(owner.split(":", 1)[0]);
+          if (!Number.isInteger(ownerPid) || !isProcessAlive(ownerPid)) {
+            fs.rmSync(lockPath, { recursive: true, force: true });
+            continue;
+          }
         }
       } catch {
         // Another process may be acquiring or releasing the lock. Treat the
@@ -301,4 +311,14 @@ function acquireSyncLock(repoPath: string): { release: () => void } | null {
     }
   }
   return null;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
 }

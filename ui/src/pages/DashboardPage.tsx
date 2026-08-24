@@ -8,6 +8,7 @@ import { SectionHeader } from "../components/SectionHeader";
 import { EmptyState } from "../components/EmptyState";
 import { NervousSystem } from "../components/NervousSystem";
 import { taskStatusLabels } from "../helpers";
+import { translate } from "../i18n";
 
 export function HeroConsole({ data }: { data: DashboardData }) {
   const leadTask = data.tasks.find((task) => !["done", "failed", "rejected", "cancelled"].includes(task.status));
@@ -16,22 +17,21 @@ export function HeroConsole({ data }: { data: DashboardData }) {
       <div className="hero-grid" aria-hidden="true" />
       <div className="hero-copy">
         <span className="eyebrow">
-          <span /> sistema vivo
+          <span /> {translate("Live system")}
         </span>
         <h2 id="hero-title">
-          Um cérebro.
+          {translate("A brain.")}
           <br />
-          <em>Braços que decidem.</em>
+          <em>{translate("Arms that decide.")}</em>
         </h2>
         <p>
-          Dois terços dos neurônios de um polvo vivem nos braços. Cada agente provou o próprio trabalho — e você mantém
-          a decisão final enquanto Claude e Codex entram no fluxo.
+          {translate("Two thirds of an octopus's neurons live in its arms. Each agent proves its own work — and you keep the final decision.")}
         </p>
         <div className="hero-chips">
-          <span>{data.summary.activeTasks} tasks ativas</span>
-          <span>{data.summary.projects} projetos locais</span>
-          <span>acesso {data.daemon.access === "restricted" ? "restrito" : "aberto"}</span>
-          <span>autopilot {data.autopilot.enabled ? data.autopilot.state : "desligado"}</span>
+          <span>{data.summary.activeTasks} {translate("active tasks")}</span>
+          <span>{data.summary.projects} {translate("local projects")}</span>
+          <span>{translate("Access")} {data.daemon.access === "restricted" ? translate("restricted") : translate("open")}</span>
+          <span>autopilot {data.autopilot.enabled ? data.autopilot.state : translate("Disabled")}</span>
           {data.runtimeUpdate && (
             <span className={`runtime-update-chip status-${data.runtimeUpdate.status}`} title={data.runtimeUpdate.error ?? undefined}>
               self-update: {data.runtimeUpdate.status} ({data.runtimeUpdate.targetCommit.slice(0, 7)})
@@ -43,14 +43,14 @@ export function HeroConsole({ data }: { data: DashboardData }) {
         <NervousSystem agents={data.agents} />
       </div>
       <div className="hero-now">
-        <span>Agora no Maestro</span>
-        <strong>{leadTask ? `#${leadTask.id} · ${leadTask.text}` : "Fila livre para a próxima missão"}</strong>
+        <span>{translate("Now in Maestro")}</span>
+        <strong>{leadTask ? `#${leadTask.id} · ${leadTask.text}` : translate("Queue is open for the next mission")}</strong>
         <small>
           {leadTask
-            ? `${leadTask.projectKey ?? "sem projeto"} · ${taskStatusLabels[leadTask.status]}`
+            ? `${leadTask.projectKey ?? translate("no project")} · ${taskStatusLabels[leadTask.status]}`
             : data.autopilot.enabled
-            ? "Autopilot aguardando a próxima task válida"
-            : "Crie uma task pelo painel ou Telegram"}
+            ? translate("Autopilot is waiting for the next eligible task")
+            : translate("Create a task from the dashboard or Telegram")}
         </small>
       </div>
     </section>
@@ -59,13 +59,13 @@ export function HeroConsole({ data }: { data: DashboardData }) {
 
 export function SummaryStrip({ data }: { data: DashboardData }) {
   const cards = [
-    ["Projetos", data.summary.projects, "pink", "folder"],
-    ["Em movimento", data.summary.activeTasks, "cyan", "pulse"],
-    ["Na fila", data.summary.queuedTasks, "lime", "queue"],
-    ["Sua decisão", data.summary.humanGates, "violet", "hand"]
+    [translate("Projects"), data.summary.projects, "pink", "folder"],
+    [translate("moving"), data.summary.activeTasks, "cyan", "pulse"],
+    [translate("queued"), data.summary.queuedTasks, "lime", "queue"],
+    [translate("Your decision"), data.summary.humanGates, "violet", "hand"]
   ];
   return (
-    <section className="summary-strip" aria-label="Resumo operacional">
+    <section className="summary-strip" aria-label={translate("Operational summary")}>
       {cards.map(([label, value, tone, icon]) => (
         <article className={`metric-card tone-${tone}`} key={String(label)}>
           <div className="metric-icon">
@@ -92,7 +92,7 @@ export function DashboardPage({ data, activeTasks, onOpenTask, onRefresh }: Dash
   return (
     <div className="dashboard-grid" id="overview">
       <div className="panel provider-status-panel" style={{ padding: "16px 20px" }}>
-        <SectionHeader eyebrow="Status do Sistema" title="Status dos Providers" meta="Status em tempo real" />
+        <SectionHeader eyebrow={translate("System status")} title={translate("Provider status")} meta={translate("Real-time status")} />
         <AgentProviderBar agents={data.agents} />
       </div>
 
@@ -103,10 +103,10 @@ export function DashboardPage({ data, activeTasks, onOpenTask, onRefresh }: Dash
       <SummaryStrip data={data} />
 
       <section className="panel task-board" id="tasks" aria-labelledby="tasks-title">
-        <SectionHeader eyebrow="Execução" title="Tasks Ativas" meta={`${activeTasks.length} ativas`} />
+        <SectionHeader eyebrow={translate("Execution")} title={translate("Active tasks")} meta={`${activeTasks.length} ${translate("active")}`} />
         <div className="task-list">
           {activeTasks.length === 0 ? (
-            <EmptyState icon="spark" title="Tudo em ordem" text="Nenhuma task ativa neste momento." />
+            <EmptyState icon="spark" title={translate("Everything is fine")} text={translate("No active task right now.")} />
           ) : (
             activeTasks.slice(0, 8).map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
           )}

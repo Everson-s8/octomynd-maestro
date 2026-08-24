@@ -22,7 +22,7 @@ export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
                 <strong>{project.activeTaskCount}</strong> {translate("active")}
               </span>
               <span>
-                <strong>{project.taskCount}</strong> total
+                <strong>{project.taskCount}</strong> {translate("total")}
               </span>
               <span>
                 <strong>{project.defaultBranch}</strong> {translate("branch")}
@@ -40,7 +40,7 @@ export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
               )}
             </div>
             <small className="project-path">
-              sync: {project.syncState} · {project.canonicalHeadSha ? project.canonicalHeadSha.slice(0, 8) : "no commit"}
+              {translate("sync")}: {project.syncState} · {project.canonicalHeadSha ? project.canonicalHeadSha.slice(0, 8) : translate("no commit")}
             </small>
             <small className="project-path">{translate("Protected local repository")}</small>
           </article>

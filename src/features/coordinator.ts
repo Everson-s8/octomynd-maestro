@@ -197,8 +197,8 @@ export class FeatureCoordinator {
           status: updated.status,
           reason: completed ? undefined : "repository_sync_pending",
           message: completed
-            ? "Feature PR ja foi mesclado no GitHub."
-            : updated.lastError || "Feature PR foi mesclado, mas o repositorio canonico ainda precisa sincronizar."
+            ? "Feature PR was merged on GitHub."
+            : updated.lastError || "Feature PR was merged, but the canonical repository still needs synchronization."
         };
       }
 

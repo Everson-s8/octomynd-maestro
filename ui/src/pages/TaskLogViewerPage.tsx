@@ -13,7 +13,7 @@ import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
 import { formatRelative, taskStatusLabel } from "../helpers";
 import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
-import { translate } from "../i18n";
+import { getLocale, translate } from "../i18n";
 
 export interface TaskLogViewerPageProps {
   taskIdParam?: number | string;
@@ -239,7 +239,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       await prepareTask(logs.task.id);
       await loadLogs(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao preparar worktree.");
+      setError(err instanceof Error ? err.message : translate("Failed to prepare the worktree."));
     } finally {
       setActionBusy(false);
     }
@@ -257,7 +257,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       }
       await loadLogs(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao iniciar ou retomar goal.");
+      setError(err instanceof Error ? err.message : translate("Failed to start or resume the goal."));
     } finally {
       setActionBusy(false);
     }
@@ -269,8 +269,8 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="task-log-loading" role="status" aria-live="polite">
           <OctoMark large />
           <div className="task-log-loading-text">
-            <b>Sincronizando task #{taskId}</b>
-            <span>Buscando telemetria e eventos locais…</span>
+            <b>{translate("Syncing task")} #{taskId}</b>
+            <span>{translate("Fetching local telemetry and events…")}</span>
           </div>
           <div className="task-log-loading-rail" aria-hidden="true"><i /></div>
         </div>
@@ -283,7 +283,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       <div className="task-log-page">
         <div className="task-log-top-nav">
           <button type="button" className="btn-ghost" onClick={() => onBack ? onBack() : navigate(-1)}>
-            ← Voltar
+            ← {translate("Back")}
           </button>
         </div>
         <div className="task-log-error-card">
@@ -318,7 +318,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <button
             type="button"
             className="task-log-back-btn"
-            title="Voltar ao fluxo de tasks"
+            title={translate("Back to task flow")}
             onClick={() => onBack ? onBack() : navigate("/backlog")}
           >
             ← Voltar
@@ -526,7 +526,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">$</div>
-          <div className="metric-k">Consumo & Tokens</div>
+          <div className="metric-k">{translate("Usage & tokens")}</div>
           <div className="metric-v-v2">{hasMeasuredUsage ? `$${telemetry.totalCostUsd.toFixed(4)}` : translate("Not reported")}</div>
           <span className="metric-sub">{hasMeasuredUsage ? `${measuredTokens.toLocaleString()} tokens` : translate("provider did not report tokens")}</span>
         </div>
@@ -734,7 +734,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                     <span className="t-banner-phase">[{step.phase}]</span>
                     <span className="t-banner-provider">{step.provider}</span>
                     <span className={`t-banner-status status-${step.status}`}>{step.status}</span>
-                    <span className="t-banner-time">{new Date(step.createdAt).toLocaleTimeString("pt-BR")}</span>
+                    <span className="t-banner-time">{new Date(step.createdAt).toLocaleTimeString(getLocale() === "pt-BR" ? "pt-BR" : "en-US")}</span>
                   </div>
                   <div className="terminal-step-summary">&gt; {step.summary}</div>
                   {step.output && (
@@ -817,7 +817,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                   <span className="file-idx">#{i + 1}</span>
                   <span className="file-icon">📄</span>
                   <span className="file-path">{file}</span>
-                  <span className="file-status-tag">modificado</span>
+                  <span className="file-status-tag">{translate("modified")}</span>
                 </div>
               ))}
             </div>

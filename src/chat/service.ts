@@ -523,11 +523,11 @@ export class OperationalChatService {
     }
 
     const summaryParts: string[] = [
-      normalizedKey === GLOBAL_CHAT_PROJECT_KEY ? "Contexto: Maestro (geral)" : `Projeto: @${project.key} (${project.name})`,
-      ...(repositoryState ? [`Repositorio: ${repositoryState.syncState}${repositoryState.detail ? ` — ${repositoryState.detail}` : ""}`] : []),
-      `Tasks (${tasks.length}): ${tasks.map((t) => `#${t.id} [${t.status}]`).join(", ") || "nenhuma"}`,
-      `Feature Plans (${featurePlans.length}): ${featurePlans.map((fp) => `#${fp.id} [${fp.status}]`).join(", ") || "nenhum"}`,
-      `Provedores: ${providers.map((p) => `${p.label}=${p.state}/${p.control.mode}`).join(", ") || "sem provedores"}`
+      normalizedKey === GLOBAL_CHAT_PROJECT_KEY ? "Context: Maestro (general)" : `Project: @${project.key} (${project.name})`,
+      ...(repositoryState ? [`Repository: ${repositoryState.syncState}${repositoryState.detail ? ` — ${repositoryState.detail}` : ""}`] : []),
+      `Tasks (${tasks.length}): ${tasks.map((t) => `#${t.id} [${t.status}]`).join(", ") || "none"}`,
+      `Feature Plans (${featurePlans.length}): ${featurePlans.map((fp) => `#${fp.id} [${fp.status}]`).join(", ") || "none"}`,
+      `Providers: ${providers.map((p) => `${p.label}=${p.state}/${p.control.mode}`).join(", ") || "no providers"}`
     ];
 
     return {

@@ -1,4 +1,5 @@
 import { OctoMark } from "./OctoMark";
+import { translate } from "../i18n";
 
 type LoadingSpinnerProps = {
   label?: string;
@@ -6,8 +7,8 @@ type LoadingSpinnerProps = {
 };
 
 export function LoadingSpinner({
-  label = "Acordando o Maestro",
-  detail = "Conectando providers · isolando worktrees",
+  label = translate("Waking Maestro"),
+  detail = translate("Connecting providers · isolating worktrees"),
 }: LoadingSpinnerProps) {
   return (
     <div className="loading-screen" role="status" aria-live="polite">
