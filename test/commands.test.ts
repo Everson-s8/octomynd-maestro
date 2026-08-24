@@ -391,13 +391,13 @@ class FakeFeatureGitHubGateway implements FeatureGitHubGateway {
 }
 
 describe("ApplicationCommands Work Intake integration", () => {
-  it("previews classification and returns Portuguese explanation", () => {
+  it("previews classification and returns the default English explanation", () => {
     const preview = commands.previewWorkIntake(
       { channel: "dashboard" },
       { projectKey: "boo", objective: "Criar novo assistente de voz" }
     );
     expect(preview.decision.classification).toBe("direct_task");
-    expect(preview.explanation).toContain("Tarefa Direta");
+    expect(preview.explanation).toContain("Direct Task");
   });
 
   it("routes bounded maintenance request to exactly one direct task without feature plan", () => {
@@ -456,7 +456,7 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(res.createdType).toBe("none");
     expect(res.task).toBeUndefined();
     expect(res.featurePlan).toBeUndefined();
-    expect(res.explanation).toContain("Clarificação");
+    expect(res.explanation).toContain("Needs Clarification");
 
     expect(database.listTasksByProject("boo")).toHaveLength(0);
     expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
@@ -529,7 +529,7 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(res.status).toBe("created");
     expect(res.createdType).toBe("task");
     expect(res.decision.reasonCode).toBe("explicit_override_direct_task");
-    expect(res.explanation).toContain("Sobrescrita explícita");
+    expect(res.explanation).toContain("Explicit user override");
   });
 });
 

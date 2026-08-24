@@ -655,7 +655,7 @@ function renderTaskLogs(taskId: number, limit: number): void {
   for (const event of logs.events.slice(-limit)) {
     console.log(`  ${event.createdAt}  ${event.type}  ${event.text}`);
   }
-  console.log("\nExecuções:");
+  console.log("\nRuns:");
   for (const run of logs.runs.slice(-limit)) {
     const outcome = run.lastError
       ?? (run.pullRequestUrl ? `PR ${run.pullRequestUrl}` : null)
@@ -766,8 +766,8 @@ async function providersLoginCommand(argv: string[]): Promise<void> {
     await sleep(1_500);
     const current = broker.get(session.id);
     if (!current) break;
-    if (current.verificationUrl) console.log(`    Página de verificação: ${current.verificationUrl}`);
-    if (current.userCode) console.log(`    Código de verificação : ${current.userCode}`);
+    if (current.verificationUrl) console.log(`    Verification page: ${current.verificationUrl}`);
+    if (current.userCode) console.log(`    Verification code : ${current.userCode}`);
     if (current.detail && current.detail !== lastDetail) {
       console.log(`    ${current.detail}`);
       lastDetail = current.detail;

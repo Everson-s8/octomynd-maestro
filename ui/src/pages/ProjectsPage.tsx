@@ -2,6 +2,7 @@ import { DashboardData } from "../api";
 import { ProjectDeck } from "../components/ProjectDeck";
 import { SectionHeader } from "../components/SectionHeader";
 import { Icon } from "../components/Icon";
+import { translate } from "../i18n";
 
 export interface ProjectsPageProps {
   data: DashboardData;
@@ -11,7 +12,7 @@ export function ProjectsPage({ data }: ProjectsPageProps) {
   return (
     <div className="projects-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <div className="panel projects-health-summary" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow="Workspaces" title="Saúde dos Projetos Registrados" meta={`${data.projects.length} repositórios`} />
+        <SectionHeader eyebrow={translate("Workspace")} title={translate("Project health")} meta={`${data.projects.length} ${translate("repositories")}`} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginTop: "16px" }}>
           {data.environments.map((env) => (
             <div
@@ -35,7 +36,7 @@ export function ProjectsPage({ data }: ProjectsPageProps) {
                     color: env.status === "ready" ? "#4ade80" : "#f87171"
                   }}
                 >
-                  {env.status === "ready" ? "PRONTO" : "ATENÇÃO"}
+                  {env.status === "ready" ? translate("ready").toUpperCase() : translate("attention").toUpperCase()}
                 </span>
               </div>
               <p style={{ fontSize: "13px", color: "#a0a5b5", margin: 0 }}>

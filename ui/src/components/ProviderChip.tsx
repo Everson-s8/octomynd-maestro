@@ -1,4 +1,5 @@
 import { agentStateLabel, heroAgentChip, AgentDisplayState } from "../agentPresentation";
+import { translate } from "../i18n";
 import { DashboardData } from "../api";
 
 export function ProviderChip({
@@ -13,7 +14,7 @@ export function ProviderChip({
   return (
     <span className={`provider-chip provider-${providerId}`}>
       <span className="provider-chip-name">{label}</span>
-      <small>{agentStateLabel(state)}</small>
+      <small>{translate(agentStateLabel(state))}</small>
     </span>
   );
 }

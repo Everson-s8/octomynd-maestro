@@ -242,7 +242,7 @@ function nestedProjectCommandSpecs(workspacePath: string, request: ValidationReq
         ? [viteEntry, "build", "--config", uiViteConfig]
         : [],
       timeoutMs: 180_000,
-      skipReason: uiViteConfig ? undefined : "nenhuma configuração Vite de frontend encontrada"
+      skipReason: uiViteConfig ? undefined : "No frontend Vite configuration was found"
     }
   ];
 }

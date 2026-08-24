@@ -4,10 +4,10 @@ export type AgentPresenceEntry = DashboardData["agents"][number];
 export type AgentDisplayState = AgentPresenceEntry["state"];
 
 const STATE_LABELS: Record<AgentDisplayState, string> = {
-  working: "trabalhando",
-  ready: "pronto",
-  attention: "atenção",
-  offline: "offline"
+  working: "Working",
+  ready: "Ready",
+  attention: "Attention",
+  offline: "Offline"
 };
 
 export function agentStateLabel(state: AgentDisplayState): string {

@@ -145,20 +145,21 @@ maestro start
 - **Environment API Keys**: You can supply provider API keys (`CODEX_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`) via `.env` or standard shell variables without needing global CLI binaries.
 - **Graceful GitHub Fallback**: Setup and goal execution do **NOT** fail if the GitHub CLI (`gh`) is missing or unauthenticated. Maestro falls back to local branch delivery mode seamlessly.
 
-### Conversa e permissões
+### Chat and permissions
 
-No Dashboard, abra **Chat** para conversar com o Maestro sobre um projeto específico ou escolha
-**Maestro (geral)** para dúvidas de providers, configuração e runtime. Use `+` para criar uma
-conversa isolada e a lixeira para removê-la. O seletor **Acesso** controla as ações disponíveis:
+Open **Chat** in the dashboard to talk to Maestro about a specific project, or choose
+**Maestro (general)** for provider, configuration, and runtime questions. Use `+` to create an
+isolated conversation and the trash action to remove it. The **Access** selector controls the
+available actions:
 
-- **Somente leitura** responde e consulta evidências, sem alterar estado.
-- **Standard** permite operações governadas após confirmação explícita.
-- **Full Access** permite todas as operações governadas do Maestro, incluindo cancelamento; não
-  libera um shell irrestrito nem expõe credenciais.
+- **Read-only** answers questions and consults evidence without changing state.
+- **Standard** allows governed operations after explicit confirmation.
+- **Full Access** allows every Maestro-governed operation, including cancellation; it does not
+  grant an unrestricted shell or expose credentials.
 
-O chat continua disponível mesmo quando nenhum projeto foi cadastrado. Para criar uma task nesse
-contexto, cadastre pelo menos um projeto; o Maestro usará o projeto padrão cadastrado e mostrará
-essa associação antes da execução.
+Chat remains available even when no project is registered. To create a task in that context,
+register at least one project; Maestro uses the registered default project and shows that
+association before execution.
 
 ---
 

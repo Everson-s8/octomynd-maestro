@@ -1,8 +1,8 @@
 import { TaskStatus, FeatureStatus } from "../api";
-import { taskStatusLabels, featureStatusLabels } from "../helpers";
+import { taskStatusLabel, featureStatusLabels } from "../helpers";
 
 export function StatusBadge({ status }: { status: TaskStatus }) {
-  return <span className={`status-pill status-${status}`}>{taskStatusLabels[status] ?? status}</span>;
+  return <span className={`status-pill status-${status}`}>{taskStatusLabel(status)}</span>;
 }
 
 export function FeatureStatusBadge({ status }: { status: FeatureStatus }) {

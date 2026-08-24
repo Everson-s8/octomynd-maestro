@@ -336,7 +336,7 @@ export class ApplicationCommands {
         const bootstrap = bootstrapEmptyRepository(projectPath, key);
         if (bootstrap.bootstrapped) {
           warnings.push(
-            "Repositório vazio: o Maestro criou o commit inicial (README + .gitignore)" +
+            "Empty repository: Maestro created the initial commit (README + .gitignore)" +
               (bootstrap.pushed ? " e publicou a branch no remoto." : ".")
           );
           this.database.addEvent({
@@ -382,7 +382,7 @@ export class ApplicationCommands {
         const bootstrap = bootstrapEmptyRepository(projectPath, key);
         if (bootstrap.bootstrapped) {
           warnings.push(
-            "Repositório vazio: o Maestro criou o commit inicial (README + .gitignore)" +
+            "Empty repository: Maestro created the initial commit (README + .gitignore)" +
               (bootstrap.pushed ? " e publicou a branch no remoto." : ".")
           );
           this.database.addEvent({

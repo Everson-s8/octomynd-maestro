@@ -5,6 +5,7 @@ import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function HumanReviewQueue({
   reviews,
@@ -27,7 +28,7 @@ export function HumanReviewQueue({
   const changeSafetyGate = selected?.changeSafetyGate ?? {
     status: "passed" as const,
     code: "secret_scan_passed",
-    message: "Verificacao de segredos concluida sem alertas."
+    message: translate("Secret scan completed without alerts.")
   };
   const isChangeSafetyPassed = changeSafetyGate.status === "passed";
   const hasGitHubPullRequest = selected ? isOpenableExternalUrl(selected.pullRequestUrl) : false;
@@ -41,7 +42,7 @@ export function HumanReviewQueue({
       setNote("");
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "A decisão não foi registrada.");
+      setError(requestError instanceof Error ? requestError.message : translate("The decision was not recorded."));
     } finally {
       setBusy(null);
     }
@@ -49,12 +50,12 @@ export function HumanReviewQueue({
 
   return (
     <section className="panel human-review-queue" id="reviews" aria-labelledby="reviews-title">
-      <SectionHeader eyebrow="Human gate" title="Aguardando revisão" meta={`${reviews.length} pendente(s)`} />
+      <SectionHeader eyebrow="Human gate" title={translate("Awaiting review")} meta={`${reviews.length} ${translate("pending")}`} />
       {reviews.length === 0 ? (
-        <EmptyState icon="shield" title="Nenum PR esperando" text="Novos draft PRs revisados pelos agentes aparecem aqui." />
+        <EmptyState icon="shield" title={translate("No PR awaiting review")} text={translate("New draft PRs reviewed by agents appear here.")} />
       ) : (
         <div className="review-workbench">
-          <div className="review-inbox" role="list" aria-label="Pull requests aguardando revisão">
+          <div className="review-inbox" role="list" aria-label={translate("Pull requests awaiting review")}>
             {reviews.map((item) => (
               <button
                 className={`review-inbox-item ${item.runId === selected?.runId ? "is-selected" : ""}`}
@@ -70,7 +71,7 @@ export function HumanReviewQueue({
                 </span>
                 <strong>{item.demand}</strong>
                 <small>
-                  {item.changedFiles.length} arquivo(s) · {item.agents.join(" + ") || "sem agente"}
+                  {item.changedFiles.length} {translate("file(s)")} · {item.agents.join(" + ") || translate("no agent")}
                 </small>
               </button>
             ))}
@@ -89,25 +90,25 @@ export function HumanReviewQueue({
               <p className="review-summary">{selected.summary}</p>
               <div className="review-facts">
                 <div>
-                  <span>Projeto</span>
+                  <span>{translate("Project")}</span>
                   <strong>@{selected.projectKey}</strong>
                 </div>
                 <div>
-                  <span>Agentes</span>
-                  <strong>{selected.agents.join(", ") || "nenhum"}</strong>
+                  <span>{translate("Agents")}</span>
+                  <strong>{selected.agents.join(", ") || translate("none")}</strong>
                 </div>
                 <div>
                   <span>Commit</span>
-                  <strong>{selected.commitSha?.slice(0, 8) ?? "pendente"}</strong>
+                  <strong>{selected.commitSha?.slice(0, 8) ?? translate("pending")}</strong>
                 </div>
                 <div>
-                  <span>Testes</span>
-                  <strong>{selected.tests.length} etapa(s)</strong>
+                  <span>{translate("Tests")}</span>
+                  <strong>{selected.tests.length} {translate("step(s)")}</strong>
                 </div>
               </div>
               <div className="review-evidence-grid">
                 <div>
-                  <h4>Arquivos alterados</h4>
+                  <h4>{translate("Changed files")}</h4>
                   <ul>
                     {selected.changedFiles.length > 0 ? (
                       selected.changedFiles.map((file) => (
@@ -116,12 +117,12 @@ export function HumanReviewQueue({
                         </li>
                       ))
                     ) : (
-                      <li>Nenhum arquivo identificado.</li>
+                      <li>{translate("No files identified.")}</li>
                     )}
                   </ul>
                 </div>
                 <div>
-                  <h4>Testes executados</h4>
+                  <h4>{translate("Executed tests")}</h4>
                   <ul>
                     {selected.tests.length > 0 ? (
                       selected.tests.map((test, index) => (
@@ -130,7 +131,7 @@ export function HumanReviewQueue({
                         </li>
                       ))
                     ) : (
-                      <li>Nenhuma etapa de teste registrada.</li>
+                      <li>{translate("No test step recorded.")}</li>
                     )}
                   </ul>
                 </div>
@@ -147,17 +148,17 @@ export function HumanReviewQueue({
                 ))}
               </div>
               <div className="review-links">
-                <ReviewExternalLink url={selected.diffUrl} label="Abrir diff" />
-                <ReviewExternalLink url={selected.pullRequestUrl} label="Abrir PR no GitHub" />
+                <ReviewExternalLink url={selected.diffUrl} label={translate("Open diff")} />
+                <ReviewExternalLink url={selected.pullRequestUrl} label={translate("Open PR on GitHub")} />
               </div>
               <label className="review-note">
-                Justificativa da decisão
+                {translate("Decision rationale")}
                 <textarea
                   value={note}
                   onChange={(event) => setNote(event.target.value)}
                   minLength={4}
                   maxLength={1200}
-                  placeholder="Registre por que aprovar, ajustar ou rejeitar."
+                  placeholder={translate("Explain why to approve, request changes, or reject.")}
                 />
               </label>
               {error ? <p className="review-decision-error">{error}</p> : null}
@@ -167,32 +168,32 @@ export function HumanReviewQueue({
                   disabled={busy !== null || note.trim().length < 4 || !hasGitHubPullRequest}
                   onClick={() => void decide("rejected")}
                 >
-                  Rejeitar
+                  {translate("Reject")}
                 </button>
                 <button
                   className="decision-changes"
                   disabled={busy !== null || note.trim().length < 4 || !hasGitHubPullRequest}
                   onClick={() => void decide("changes_requested")}
                 >
-                  Solicitar ajustes
+                  {translate("Request changes")}
                 </button>
                 <button
                   className="decision-approve"
                   disabled={busy !== null || note.trim().length < 4 || !isChangeSafetyPassed || !hasGitHubPullRequest}
                   title={!hasGitHubPullRequest
-                    ? "Não há PR no GitHub para esta execução. Instale/autentique o GitHub CLI e execute a entrega novamente."
+                    ? translate("No GitHub PR exists for this run. Install/authenticate GitHub CLI and run delivery again.")
                     : !isChangeSafetyPassed
                     ? changeSafetyGate.message
                     : undefined}
                   onClick={() => void decide("approved")}
                 >
-                  {busy === "approved" ? "Aprovando..." : "Aprovar para merge"}
+                  {busy === "approved" ? translate("Approving…") : translate("Approve for merge")}
                 </button>
               </div>
               <small className="review-merge-note">
                 {hasGitHubPullRequest
-                  ? "A aprovação prepara e mergeia o PR no GitHub. Solicitar ajustes devolve o PR para draft."
-                  : "Esta execução ficou somente na branch local: não existe PR no GitHub para aprovar ou solicitar ajustes."}
+                  ? translate("Approval prepares and merges the PR on GitHub. Requesting changes returns the PR to draft.")
+                  : translate("This execution stayed on the local branch: there is no GitHub PR to approve or revise.")}
               </small>
             </article>
           ) : null}
@@ -208,9 +209,9 @@ function ReviewExternalLink({ url, label }: { url: string; label: string }) {
     return (
       <span
         className="review-link-disabled"
-        title="Este trabalho não criou um PR no GitHub nesta execução; a entrega ficou apenas na branch local."
+        title={translate("This run did not create a GitHub PR; delivery stayed on the local branch.")}
       >
-        {label} indisponível
+        {label} {translate("unavailable")}
       </span>
     );
   }

@@ -8,6 +8,7 @@ import {
   updateCapabilityRouting,
 } from "../api";
 import { capabilityLabel } from "../helpers";
+import { translate } from "../i18n";
 
 export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   agents: DashboardData["agents"];
@@ -36,7 +37,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
       setLocalPolicy(data);
       setError(null);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Falha ao carregar providers.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to load providers."));
     }
   }, []);
 
@@ -63,7 +64,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
       await loadPolicy();
       onPolicyChanged?.();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Falha ao atualizar roteamento.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to update routing."));
     } finally {
       setBusy(null);
     }
@@ -72,11 +73,11 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   return (
     <section className="panel provider-routing" id="provider-routing">
       <div className="panel-head">
-        <div><div className="lbl">Control plane</div><h3>Prioridade por função</h3></div>
-        <span>persistente</span>
+        <div><div className="lbl">Control plane</div><h3>{translate("Priority by function")}</h3></div>
+        <span>{translate("persistent")}</span>
       </div>
       {error ? <p className="provider-error">{error}</p> : null}
-      <p className="provider-routing-copy">Escolha o primeiro provider, o modelo preferido e a regra de fallback.</p>
+      <p className="provider-routing-copy">{translate("Choose the first provider, preferred model, and fallback rule.")}</p>
           {(policy?.capabilities ?? []).map((routing) => {
             // Resolve the effective "first" to an actually-eligible provider (the
             // configured order may still reference a paused/removed provider).
@@ -87,7 +88,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
             return (
               <div className="routing-row" key={routing.capability}>
                 <div className="rname">{capabilityLabel(routing.capability)}</div>
-                <div><div className="field-lbl">Primeiro</div>
+                <div><div className="field-lbl">{translate("First")}</div>
                   <select className="sel"
                     value={primaryProviderId}
                     disabled={busy !== null}
@@ -107,7 +108,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                     ))}
                   </select>
                 </div>
-                <div><div className="field-lbl">Regra</div><select className="sel"
+                <div><div className="field-lbl">{translate("Rule")}</div><select className="sel"
                     value={routing.requiredProviderId ?? "auto"}
                     disabled={busy !== null}
                     onChange={(event) =>
@@ -119,10 +120,10 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                       )
                     }
                   >
-                    <option value="auto">Fallback automatico</option>
+                    <option value="auto">{translate("Automatic fallback")}</option>
                     {providers.map((provider) => (
                       <option value={provider.id} key={provider.id}>
-                        Somente {provider.label}
+                        {translate("Only {provider}", { provider: provider.label })}
                       </option>
                     ))}
                   </select>

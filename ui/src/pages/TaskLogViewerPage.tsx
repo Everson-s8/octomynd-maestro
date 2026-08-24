@@ -11,8 +11,9 @@ import {
 } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
-import { formatRelative, taskStatusLabels } from "../helpers";
+import { formatRelative, taskStatusLabel } from "../helpers";
 import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
+import { translate } from "../i18n";
 
 export interface TaskLogViewerPageProps {
   taskIdParam?: number | string;
@@ -43,7 +44,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
 
   const loadLogs = useCallback(async (silent = false) => {
     if (!Number.isInteger(taskId) || taskId <= 0) {
-      setError("ID de task inválido.");
+      setError(translate("Invalid task ID."));
       setLoading(false);
       return;
     }
@@ -53,7 +54,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       setLogs(data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar logs da task.");
+      setError(err instanceof Error ? err.message : translate("Unable to load task logs."));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -287,7 +288,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         </div>
         <div className="task-log-error-card">
           <OctoMark />
-          <h3>Não foi possível carregar os logs</h3>
+            <h3>{translate("Unable to load logs")}</h3>
           <p>{error}</p>
           <button type="button" className="btn-new" onClick={() => void loadLogs(false)}>
             Tentar novamente
@@ -339,7 +340,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <button
             type="button"
             className={`btn-ghost btn-sm ${autoRefresh ? "active" : ""}`}
-            title={autoRefresh ? "Pausar atualização automática" : "Ativar atualização automática"}
+            title={autoRefresh ? translate("Pause automatic refresh") : translate("Enable automatic refresh")}
             onClick={() => setAutoRefresh(!autoRefresh)}
           >
             {autoRefresh ? "Auto-sync ON" : "Auto-sync OFF"}
@@ -357,9 +358,9 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             type="button"
             className="btn-ghost btn-sm"
             onClick={copyAllLogs}
-            title="Copiar JSON com todo o histórico de logs"
+            title={translate("Copy JSON with the complete log history")}
           >
-            {copied ? "✓ Copiado!" : "Copiar Logs"}
+            {copied ? `✓ ${translate("Copied")}!` : translate("Copy logs")}
           </button>
           {activeRun?.pullRequestUrl && isOpenableExternalUrl(activeRun.pullRequestUrl) ? (
             <button
@@ -368,14 +369,14 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               title="Ver Pull Request associado a esta task"
               onClick={() => openExternalUrl(activeRun.pullRequestUrl!)}
             >
-              Abrir PR ↗
+              {translate("Open PR")} ↗
             </button>
           ) : activeRun?.pullRequestUrl ? (
             <span
               className="btn-ghost btn-sm"
-              title="Esta execução não criou um PR no GitHub; a entrega ficou apenas na branch local."
+              title={translate("This execution did not create a GitHub PR; delivery stayed on the local branch.")}
             >
-              PR GitHub indisponível
+              {translate("GitHub PR unavailable")}
             </span>
           ) : null}
           {resumableRun && (
@@ -397,7 +398,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="task-log-title-row">
           <div className="task-log-id-pill">#{String(task.id).padStart(2, "0")}</div>
           <span className={`st st-${task.status}`}>
-            {taskStatusLabels[task.status] ?? task.status}
+            {taskStatusLabel(task.status)}
           </span>
           <span className="task-log-project-pill">@{task.projectKey ?? "inbox"}</span>
           {task.branchName && (
@@ -408,10 +409,10 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         </div>
         <h2 className="task-log-heading">{task.title || task.text}</h2>
         <div className="task-log-meta-strip">
-          <span>Criada {formatRelative(task.createdAt)}</span>
+          <span>{translate("Created")} {formatRelative(task.createdAt)}</span>
           <span>·</span>
-          <span>Origem: <b>{task.source}</b></span>
-          {task.worktreePrepared && <span>· Worktree isolada</span>}
+          <span>{translate("Origin")}: <b>{task.source}</b></span>
+          {task.worktreePrepared && <span>· {translate("Isolated worktree")}</span>}
           {runs.length > 0 && <span>· <b>{runs.length}</b> ciclo(s) de goal</span>}
         </div>
       </section>
@@ -442,7 +443,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           />
           <StepperItem
             step="04"
-            label="Implementação"
+            label={translate("Implementation")}
             state={
               task.status === "implementing"
                 ? "current"
@@ -453,7 +454,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           />
           <StepperItem
             step="05"
-            label="Validação / Testes"
+            label={translate("Validation / Testing")}
             state={
               task.status === "testing"
                 ? "current"
@@ -464,7 +465,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           />
           <StepperItem
             step="06"
-            label="Revisão & Entrega"
+            label={translate("Review & Delivery")}
             state={
               ["reviewing", "awaiting_human"].includes(task.status)
                 ? "current"
@@ -483,12 +484,12 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="metric-card-v2">
           <div className="metric-icon-v2">✧</div>
           <div className="metric-k">Provedor Ativo</div>
-          <div className="metric-v-v2">{activeRun?.lastProvider ?? (runs.length > 0 ? "Multi-provider" : "Nenhum")}</div>
+          <div className="metric-v-v2">{activeRun?.lastProvider ?? (runs.length > 0 ? translate("Multi-provider") : translate("none"))}</div>
           {!activeRun && runs.length === 0 ? (
             <>
-              <span className="metric-sub">Nenhum goal foi disparado para esta task ainda.</span>
+              <span className="metric-sub">{translate("No goal has been started for this task yet.")}</span>
               <span style={{ display: "block", fontSize: 12, color: "var(--text-2)", margin: "6px 0 8px" }}>
-                Abra o detalhe da task e clique em “Iniciar goal” — sem isso nenhum provider é acionado.
+                {translate("Open task details and click Start goal — otherwise no provider is activated.")}
               </span>
               <button
                 type="button"
@@ -505,20 +506,20 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               </button>
             </>
           ) : (
-            <span className="metric-sub">{activeRun ? `Fase: ${activeRun.currentPhase}` : "Aguardando disparo"}</span>
+            <span className="metric-sub">{activeRun ? `${translate("Phase")}: ${activeRun.currentPhase}` : translate("Waiting to start")}</span>
           )}
         </div>
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">⌁</div>
-          <div className="metric-k">Etapas de Execução</div>
+          <div className="metric-k">{translate("Execution steps")}</div>
           <div className="metric-v-v2">{telemetry.totalSteps}</div>
           <span className="metric-sub">{runs.length} run(s) de goal</span>
         </div>
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">⏱</div>
-          <div className="metric-k">Tempo de Execução</div>
+          <div className="metric-k">{translate("Execution time")}</div>
           <div className="metric-v-v2">{formatDuration(telemetry.totalDurationMs)}</div>
           <span className="metric-sub">{telemetry.totalDurationMs > 0 ? "auditado por etapa" : "tempo estimado"}</span>
         </div>
@@ -526,22 +527,22 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <div className="metric-card-v2">
           <div className="metric-icon-v2">$</div>
           <div className="metric-k">Consumo & Tokens</div>
-          <div className="metric-v-v2">{hasMeasuredUsage ? `$${telemetry.totalCostUsd.toFixed(4)}` : "Não informado"}</div>
-          <span className="metric-sub">{hasMeasuredUsage ? `${measuredTokens.toLocaleString()} tokens` : "provider não reportou tokens"}</span>
+          <div className="metric-v-v2">{hasMeasuredUsage ? `$${telemetry.totalCostUsd.toFixed(4)}` : translate("Not reported")}</div>
+          <span className="metric-sub">{hasMeasuredUsage ? `${measuredTokens.toLocaleString()} tokens` : translate("provider did not report tokens")}</span>
         </div>
 
         <div className="metric-card-v2">
           <div className="metric-icon-v2">📁</div>
           <div className="metric-k">Arquivos Alterados</div>
           <div className="metric-v-v2">{changedFiles.length}</div>
-          <span className="metric-sub">{changedFiles.length > 0 ? "verificados em checkpoint" : "sem modificações"}</span>
+          <span className="metric-sub">{changedFiles.length > 0 ? translate("verified at checkpoint") : translate("no changes")}</span>
         </div>
       </section>
 
       {/* Runs Selector (if multiple goal runs exist) */}
       {runs.length > 1 && (
         <section className="task-log-run-selector">
-          <span className="run-selector-label">Ciclos de Execução (Goal Runs):</span>
+          <span className="run-selector-label">{translate("Execution cycles (goal runs):")}</span>
           <div className="run-selector-tabs">
             <button
               type="button"
@@ -580,7 +581,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           onClick={() => setActiveTab("terminal")}
         >
           <Icon name="code" />
-          <span>Saída dos Agentes / Terminal</span>
+          <span>{translate("Agent / terminal output")}</span>
         </button>
         <button
           type="button"
@@ -612,7 +613,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           onClick={() => setActiveTab("reviews")}
         >
           <Icon name="hand" />
-          <span>Revisões ({reviews.length})</span>
+          <span>{translate("Reviews")} ({reviews.length})</span>
         </button>
       </div>
 
@@ -622,7 +623,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           <span className="search-icon">🔍</span>
           <input
             type="text"
-            placeholder="Filtrar logs, saídas de agente, comandos ou erros..."
+            placeholder={translate("Filter logs, agent output, commands, or errors…")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -655,12 +656,12 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
           {runs.length === 0 ? (
             <div className="panel empty-log-card">
               <OctoMark />
-              <h3>Nenhuma execução iniciada ainda</h3>
+              <h3>{translate("No execution started yet")}</h3>
               <p>
-                Esta task está no estado <b>{taskStatusLabels[task.status] ?? task.status}</b>.
+                {translate("This task is currently") } <b>{taskStatusLabel(task.status)}</b>.
                 {!task.worktreePrepared
-                  ? " O primeiro passo é preparar a worktree isolada."
-                  : " A worktree está pronta. Você pode iniciar a Goal autônoma."}
+                  ? ` ${translate("The first step is to prepare the isolated worktree.")}`
+                  : ` ${translate("The worktree is ready. You can start the autonomous goal.")}`}
               </p>
               <div className="empty-log-actions">
                 {!task.worktreePrepared && (
@@ -677,7 +678,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             </div>
           ) : filteredSteps.length === 0 ? (
             <div className="panel empty-search">
-              <p>Nenhuma etapa corresponde aos filtros selecionados.</p>
+                <p>{translate("No step matches the selected filters.")}</p>
             </div>
           ) : (
             <div className="task-steps-timeline">
@@ -718,14 +719,14 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                   setTimeout(() => setCopied(false), 2000);
                 }}
               >
-                {copied ? "✓ Copiado" : "Copiar Saída"}
+                {copied ? `✓ ${translate("Copied")}` : translate("Copy output")}
               </button>
             </div>
           </div>
 
           <div className={`terminal-body ${wrapLines ? "wrap-lines" : "no-wrap"}`}>
             {filteredSteps.length === 0 ? (
-              <div className="terminal-empty">Nenhum output registrado para os filtros atuais.</div>
+              <div className="terminal-empty">{translate("No output recorded for the current filters.")}</div>
             ) : (
               filteredSteps.map((step) => (
                 <div className="terminal-step-block" key={step.id}>
@@ -754,7 +755,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <section className="task-log-tools-section panel">
           <div className="panel-head">
             <div>
-              <div className="lbl">Execução de Ferramentas</div>
+              <div className="lbl">{translate("Tool execution")}</div>
               <h3>Tool Calls & Comandos Executados</h3>
             </div>
             <div className="count">{filteredTools.length} chamadas capturadas</div>
@@ -764,8 +765,8 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
             <div className="empty compact">
               <p>
                 {extractedTools.length === 0
-                  ? "Nenhuma chamada de ferramenta explícita registrada nesta task."
-                  : "Nenhuma chamada de ferramenta corresponde à fase selecionada."}
+                  ? translate("No explicit tool call was recorded for this task.")
+                  : translate("No tool call matches the selected phase.")}
               </p>
             </div>
           ) : (
@@ -807,7 +808,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
 
           {changedFiles.length === 0 ? (
             <div className="empty compact">
-              <p>Nenhum arquivo alterado foi detectado nos checkpoints desta task.</p>
+              <p>{translate("No changed file was detected in this task's checkpoints.")}</p>
             </div>
           ) : (
             <div className="files-list">
@@ -872,7 +873,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
 
           {events.length === 0 ? (
             <div className="empty compact">
-              <p>Nenhum evento registrado especificamente para esta task.</p>
+              <p>{translate("No event was recorded specifically for this task.")}</p>
             </div>
           ) : (
             <div className="events-stream">
@@ -909,15 +910,15 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
         <section className="task-log-reviews-section panel">
           <div className="panel-head">
             <div>
-              <div className="lbl">Revisões de Design & Código</div>
-              <h3>Histórico de Revisões</h3>
+              <div className="lbl">{translate("Design & code reviews")}</div>
+              <h3>{translate("Review history")}</h3>
             </div>
-            <div className="count">{reviews.length} revisões</div>
+            <div className="count">{reviews.length} {translate("reviews")}</div>
           </div>
 
           {reviews.length === 0 ? (
             <div className="empty compact">
-              <p>Nenhuma revisão formal foi submetida ainda para esta task.</p>
+              <p>{translate("No formal review has been submitted for this task yet.")}</p>
             </div>
           ) : (
             <div className="reviews-list">
@@ -936,7 +937,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
                     {rev.content ? (
                       <pre className="review-text-content">{rev.content}</pre>
                     ) : (
-                      <p className="review-error">{rev.error ?? "Sem conteúdo adicional."}</p>
+                      <p className="review-error">{rev.error ?? translate("No additional content.")}</p>
                     )}
                   </div>
                 </article>
@@ -1008,7 +1009,7 @@ function StepAccordionCard({ step, index }: { step: TaskLogStep; index: number }
 
           {step.output && (
             <div className="step-output-box">
-              <div className="box-title">Saída do Agente</div>
+              <div className="box-title">{translate("Agent output")}</div>
               <pre className="step-output-text">{step.output}</pre>
             </div>
           )}

@@ -6,6 +6,7 @@ import { TaskCard } from "../components/TaskCard";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { statusOrder } from "../helpers";
+import { translate } from "../i18n";
 
 export interface BacklogPageProps {
   data: DashboardData;
@@ -28,7 +29,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
   return (
     <div className="backlog-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <div className="panel backlog-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px" }}>
-        <SectionHeader eyebrow="Priorização" title="Fila de Tasks Priorizada" meta={`${sortedTasks.length} total`} />
+        <SectionHeader eyebrow={translate("Prioritization")} title={translate("Prioritized task queue")} meta={`${sortedTasks.length} ${translate("total")}`} />
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           <select
             value={filterProject}
@@ -42,7 +43,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
               fontSize: "14px"
             }}
           >
-            <option value="all">Todos os projetos</option>
+            <option value="all">{translate("All projects")}</option>
             {data.projects.map((p) => (
               <option value={p.key} key={p.key}>
                 @{p.key} ({p.name})
@@ -51,7 +52,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
           </select>
           <button className="primary-action" onClick={onCreateTask}>
             <Icon name="plus" />
-            Nova Task
+            {translate("+ New task")}
           </button>
         </div>
       </div>
@@ -59,10 +60,10 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
       <FeaturePlanBoard featurePlans={data.featurePlans} onChanged={onRefresh} />
 
       <section className="panel task-board" id="backlog-active" aria-labelledby="active-tasks-title">
-        <SectionHeader eyebrow="Em Andamento" title="Tasks em Execução" meta={`${activeTasks.length} ativas`} />
+        <SectionHeader eyebrow={translate("In progress")} title={translate("Tasks in progress")} meta={`${activeTasks.length} ${translate("active")}`} />
         <div className="task-list">
           {activeTasks.length === 0 ? (
-            <EmptyState icon="spark" title="Nenhuma task em execução" text="As tasks na fila iniciarão automaticamente." />
+            <EmptyState icon="spark" title={translate("No task in progress")} text={translate("Queued tasks will start automatically.")} />
           ) : (
             activeTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
           )}
@@ -70,10 +71,10 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
       </section>
 
       <section className="panel task-board" id="backlog-queued" aria-labelledby="queued-tasks-title">
-        <SectionHeader eyebrow="Fila" title="Tasks na Fila (Queued)" meta={`${queuedTasks.length} aguardando`} />
+        <SectionHeader eyebrow={translate("Queue")} title={translate("Tasks in queue (Queued)")} meta={`${queuedTasks.length} ${translate("waiting")}`} />
         <div className="task-list">
           {queuedTasks.length === 0 ? (
-            <EmptyState icon="queue" title="Fila vazia" text="Adicione novas demandas para colocar os agentes para trabalhar." />
+            <EmptyState icon="queue" title={translate("Empty queue")} text={translate("Add new requests to put the agents to work.")} />
           ) : (
             queuedTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
           )}
@@ -82,7 +83,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
 
       {completedTasks.length > 0 && (
         <section className="panel task-board" id="backlog-completed" aria-labelledby="completed-tasks-title">
-          <SectionHeader eyebrow="Histórico" title="Tasks Concluídas ou Encerradas" meta={`${completedTasks.length} finalizadas`} />
+        <SectionHeader eyebrow={translate("History")} title={translate("Completed or closed tasks")} meta={`${completedTasks.length} ${translate("finished")}`} />
           <div className="task-list">
             {completedTasks.slice(0, 10).map((task) => (
               <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />

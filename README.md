@@ -36,6 +36,8 @@ with English and Brazilian Portuguese guides. Start with the
 This repository contains the runtime and source-level design notes. Product guides, onboarding
 walkthroughs, and operational documentation live in the separate
 [`Octomynd/octomynd-docs`](https://github.com/Octomynd/octomynd-docs) repository.
+For a local Portuguese quick start, see [`README.pt-BR.md`](README.pt-BR.md) and
+[`INSTALL.pt-BR.md`](INSTALL.pt-BR.md).
 
 ## Desktop app (Windows)
 
@@ -79,7 +81,7 @@ checkout, use `npm run cli -- <command>`; in the installed app, use `maestro.cmd
 
 ```powershell
 maestro.cmd project list
-maestro.cmd task create <project-key> "descreva a tarefa"
+maestro.cmd task create <project-key> "describe the task"
 maestro.cmd task prepare <task-id>
 maestro.cmd task start <task-id>
 maestro.cmd task logs <task-id> --follow

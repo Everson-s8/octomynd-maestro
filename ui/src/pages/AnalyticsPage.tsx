@@ -5,6 +5,7 @@ import { WorkGraphBoard } from "../components/WorkGraphBoard";
 import { SectionHeader } from "../components/SectionHeader";
 import { Icon } from "../components/Icon";
 import { useEffect, useState } from "react";
+import { translate } from "../i18n";
 
 export interface AnalyticsPageProps {
   data: DashboardData;
@@ -46,7 +47,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
   return (
     <div className="analytics-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <div className="panel analytics-overview" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow="Telemetria & Custos" title="Analytics & Métricas Operacionais" meta="Métricas em tempo real" />
+        <SectionHeader eyebrow={translate("Telemetry & costs")} title={translate("Analytics & operational metrics")} meta={translate("Real-time metrics")} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginTop: "20px" }}>
           <CostDisplay costToday={costToday} estimatedTokens={totalTokens} measured />
 
@@ -67,7 +68,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
             </div>
             <div>
               <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>
-                Taxa de Conclusão (Completion Rate)
+                {translate("Completion rate")}
               </span>
               <strong style={{ fontSize: "20px", color: "#ffffff", fontWeight: 700 }}>
                 {completionRate}% <small style={{ fontSize: "13px", color: "#808595" }}>({completedCount}/{totalTasks} tasks)</small>
@@ -102,13 +103,13 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
         </div>
       </div>
 
-      {/* Economics & Charts Section */}
+        {/* Economics and charts section */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: "20px" }}>
-        {/* Token Usage Chart */}
+        {/* Token usage chart */}
         <div className="panel token-chart-panel" style={{ padding: "20px" }}>
-          <SectionHeader eyebrow="Consumo de Tokens" title="Token Usage Chart" meta="Input vs Output tokens por Provider" />
+          <SectionHeader eyebrow={translate("Token consumption")} title={translate("Token Usage Chart")} meta={translate("Input vs output tokens by provider")} />
           <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            {providers.length === 0 ? <div style={{ color: "#64748b", fontSize: "13px" }}>Nenhum token medido hoje. O provider não retornou contadores de input/output.</div> : providers.map((p) => {
+            {providers.length === 0 ? <div style={{ color: "#64748b", fontSize: "13px" }}>{translate("No token measured today")}. {translate("The provider did not return input/output counters.")}</div> : providers.map((p) => {
               const total = p.inputTokens + p.outputTokens;
               const pct = Math.min(100, Math.round((total / maxProviderTokens) * 100));
               const inputPct = total > 0 ? Math.round((p.inputTokens / total) * 100) : 70;
@@ -153,14 +154,14 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
           </div>
         </div>
 
-        {/* Consumo Disponível (Quota) per Provider */}
+        {/* Available quota per provider */}
         <div className="panel cost-chart-panel" style={{ padding: "20px" }}>
-          <SectionHeader eyebrow="Consumo Disponível" title="Quota Usage Chart" meta="% restante de cota por provider e próximo reset" />
+          <SectionHeader eyebrow={translate("Available quota")} title={translate("Quota Usage Chart")} meta={translate("Remaining quota percentage and next reset by provider")} />
           <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            {quotaLoading && <span style={{ color: "#94a3b8", fontSize: "13px" }}>Carregando cotas…</span>}
+            {quotaLoading && <span style={{ color: "#94a3b8", fontSize: "13px" }}>{translate("Loading quotas…")}</span>}
             {!quotaLoading && quota !== null && quota.length === 0 && (
               <span style={{ color: "#64748b", fontSize: "13px" }}>
-                Nenhuma leitura de cota disponível. A conexão pode estar válida, mas o provider pode não expor uma fração de cota ou exigir uma sessão local ativa.
+                {translate("No quota reading available")}. {translate("The provider may be connected without exposing a readable quota, or the required local session may be inactive.")}
               </span>
             )}
             {quota !== null &&
@@ -174,7 +175,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                 .filter((q) => q.status !== "ok" || q.buckets.length === 0)
                 .map((q) => (
                   <div key={q.provider} style={{ color: "#64748b", fontSize: "13px", textTransform: "capitalize" }}>
-                    {q.provider}: {q.error || "indisponível"}
+                    {q.provider}: {q.error || translate("unavailable")}
                   </div>
                 ))}
           </div>
@@ -188,7 +189,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
   );
 }
 
-// Renders the "consumo disponível" bar for one quota bucket (provider/model).
+// Renders the available quota bar for one quota bucket (provider/model).
 function QuotaBar({ bucket, color }: { bucket: QuotaBucket; color: string }) {
   const remaining = bucket.remainingPercent;
   const used = bucket.usedPercent;

@@ -1,23 +1,28 @@
 import { TaskStatus, FeatureStatus, AgentCapability, ReviewQueueItem } from "./api";
+import { getLocale, statusLabel, translate } from "./i18n";
 
 export const taskStatusLabels: Record<TaskStatus, string> = {
-  queued: "na fila",
-  planning: "planejando",
-  implementing: "construindo",
-  testing: "testando",
-  reviewing: "revisando",
-  changes_requested: "ajustes pedidos",
-  awaiting_human: "aprovação humana",
-  ready_to_merge: "pronta para merge",
-  rejected: "rejeitada",
-  waiting_quota: "aguardando cota",
-  waiting_provider: "aguardando provider",
-  waiting_dependency: "aguardando dependencia",
-  blocked: "bloqueada",
-  failed: "falhou",
-  cancelled: "cancelada",
-  done: "concluída"
+  queued: "Queued",
+  planning: "Planning",
+  implementing: "Implementing",
+  testing: "Testing",
+  reviewing: "Reviewing",
+  changes_requested: "Changes requested",
+  awaiting_human: "Awaiting human approval",
+  ready_to_merge: "Ready to merge",
+  rejected: "Rejected",
+  waiting_quota: "Waiting for quota",
+  waiting_provider: "Waiting for provider",
+  waiting_dependency: "Waiting for dependency",
+  blocked: "Blocked",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  done: "Completed"
 };
+
+export function taskStatusLabel(status: TaskStatus): string {
+  return statusLabel(status);
+}
 
 export const statusOrder: TaskStatus[] = [
   "implementing",
@@ -41,13 +46,13 @@ export const statusOrder: TaskStatus[] = [
 export const featureStatusLabels: Record<FeatureStatus, string> = {
   draft: "draft",
   waiting_checks: "checks",
-  reviewing: "review final",
-  waiting_provider: "sem provider",
-  changes_requested: "ajustes",
+  reviewing: "Final review",
+  waiting_provider: "No provider",
+  changes_requested: "Changes requested",
   merging: "merge",
-  completed: "concluida",
-  failed: "falhou",
-  cancelled: "cancelada"
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled"
 };
 
 export const featureStatusOrder: FeatureStatus[] = [
@@ -99,17 +104,31 @@ export function featureProgress(status: FeatureStatus): number {
 
 export function formatRelative(value: string): string {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 10) return "agora";
-  if (seconds < 60) return `há ${seconds}s`;
+  if (seconds < 10) return translate("just now");
+  if (seconds < 60) return getLocale() === "pt-BR" ? `há ${seconds}s` : `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `há ${minutes}min`;
+  if (minutes < 60) return getLocale() === "pt-BR" ? `há ${minutes}min` : `${minutes} min ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `há ${hours}h`;
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(value));
+  if (hours < 24) return getLocale() === "pt-BR" ? `há ${hours}h` : `${hours}h ago`;
+  return new Intl.DateTimeFormat(getLocale() === "pt-BR" ? "pt-BR" : "en-US", { day: "2-digit", month: "short" }).format(new Date(value));
 }
 
 export function humanizeEvent(value: string): string {
   const labels: Record<string, string> = {
+    "task.created": "Task created",
+    "task.prepared": "Worktree prepared",
+    "task.prepare_failed": "Preparation failed",
+    "task.validation_passed": "Validation passed",
+    "project.registered": "Project registered",
+    "command.status": "Status checked",
+    "command.projects": "Projects checked",
+    "command.queue": "Queue checked",
+    "command.start": "Bot started",
+    "feedback.received": "Feedback received",
+    "task.reviewed": "Claude review completed",
+    "task.review_failed": "Claude review failed"
+  };
+  const portugueseLabels: Record<string, string> = {
     "task.created": "Task criada",
     "task.prepared": "Worktree preparada",
     "task.prepare_failed": "Preparação falhou",
@@ -123,19 +142,20 @@ export function humanizeEvent(value: string): string {
     "task.reviewed": "Revisão do Claude concluída",
     "task.review_failed": "Revisão do Claude falhou"
   };
-  return labels[value] ?? value.replaceAll(".", " · ").replaceAll("_", " ");
+  return getLocale() === "pt-BR" ? (portugueseLabels[value] ?? value.replaceAll(".", " · ").replaceAll("_", " ")) : (labels[value] ?? value.replaceAll(".", " · ").replaceAll("_", " "));
 }
 
 export function capabilityLabel(capability: AgentCapability): string {
-  return ({
-    planning: "Planejamento",
-    coding: "Implementacao",
-    testing: "Testes",
-    reviewing: "Review final",
-    improvement_reviewing: "Auto-melhoria",
-    research: "Pesquisa",
-    conversation: "Conversa"
+  const labels = ({
+    planning: "Planning",
+    coding: "Implementation",
+    testing: "Testing",
+    reviewing: "Final review",
+    improvement_reviewing: "Self-improvement",
+    research: "Research",
+    conversation: "Conversation"
   } as Record<AgentCapability, string>)[capability];
+  return translate(labels);
 }
 
 export function changeSafetyGateClass(status: ReviewQueueItem["changeSafetyGate"]["status"]): string {
@@ -147,9 +167,10 @@ export function changeSafetyGateClass(status: ReviewQueueItem["changeSafetyGate"
 }
 
 export function changeSafetyGateLabel(status: ReviewQueueItem["changeSafetyGate"]["status"]): string {
-  return {
-    passed: "guard passou",
-    blocked: "alerta de segurança",
-    unavailable: "verificação indisponível"
+  const label = {
+    passed: "Guard passed",
+    blocked: "Security warning",
+    unavailable: "Verification unavailable"
   }[status];
+  return translate(label);
 }

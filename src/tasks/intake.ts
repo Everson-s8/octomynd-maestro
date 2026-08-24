@@ -16,9 +16,9 @@ export function deriveTaskIntake(originalRequest: string): TaskIntake {
   return {
     title,
     specification: [
-      `Objetivo: ${original}`,
+      `Objective: ${original}`,
       "",
-      "Diretriz de execução: investigar o contexto existente, implementar somente o escopo necessário, validar o resultado e registrar bloqueios ou limitações com evidência."
+      "Execution directive: inspect the existing context, implement only the necessary scope, validate the result, and record blockers or limitations with evidence."
     ].join("\n")
   };
 }

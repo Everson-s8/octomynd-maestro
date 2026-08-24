@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useState } from "react";
 import { registerProject } from "../api";
+import { translate } from "../i18n";
 
 export interface ProjectModalProps {
   open: boolean;
@@ -92,22 +93,22 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
     }
 
     if (!cleanKey) {
-      setError("Identificador do projeto (@handle) é obrigatório.");
+      setError(translate("Project identifier (@handle) is required."));
       return;
     }
 
     if (!/^[a-z0-9][a-z0-9_-]{1,48}$/.test(cleanKey)) {
-      setError("O identificador (@handle) deve ter 2-49 caracteres: letras minúsculas, números, '_' ou '-'.");
+      setError(translate("The identifier (@handle) must contain 2-49 characters: lowercase letters, numbers, '_' or '-'."));
       return;
     }
 
     if (mode === "github" && !remoteUrl.trim()) {
-      setError("URL do repositório é obrigatória para clonagem do GitHub.");
+      setError(translate("Repository URL is required to clone from GitHub."));
       return;
     }
 
     if ((mode === "localremote" || mode === "local") && !localPath.trim()) {
-      setError("Caminho local é obrigatório.");
+      setError(translate("Local path is required."));
       return;
     }
 
@@ -125,7 +126,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
       await onCreated();
       onClose();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Falha ao registrar o projeto.");
+      setError(submitError instanceof Error ? submitError.message : translate("Unable to register the project."));
     } finally {
       setLoading(false);
     }
@@ -153,7 +154,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           <div className="modal-eyebrow">Novo habitat</div>
           <h3 id="modal-project-title">Registrar projeto</h3>
           <p>
-            Escolha a origem. O Maestro cria worktrees isoladas para cada task — seu diretório principal nunca é tocado diretamente.
+            {translate("Choose the source. Maestro creates isolated worktrees for each task — your main directory is never changed directly.")}
           </p>
         </div>
 
@@ -225,7 +226,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
                 </svg>
-                <span>Só local</span>
+                <span>{translate("Local only")}</span>
               </div>
             </div>
           </div>
@@ -234,7 +235,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
           {mode === "github" && (
             <div className="origin-fields" id="origin-github">
               <div className="mfield">
-                <label htmlFor="field-gitremote-a">URL do repositório</label>
+                <label htmlFor="field-gitremote-a">{translate("Repository URL")}</label>
                 <input
                   id="field-gitremote-a"
                   type="text"
@@ -289,12 +290,12 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               </div>
               <div className="hint-box">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
-                <span>Se o repositório local não tiver <code>origin</code>, o Maestro adiciona com essa URL. Se já tiver, usa o existente.</span>
+                <span>{translate("If the local repository has no ")}<code>origin</code>{translate(", Maestro adds it with this URL. If it already exists, Maestro uses it.")}</span>
               </div>
             </div>
           )}
 
-          {/* MODO C: Só local */}
+              {/* Mode C: local only */}
           {mode === "local" && (
             <div className="origin-fields" id="origin-local">
               <div className="mfield">
@@ -323,7 +324,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
 
           <div className="mfield-row">
             <div className="mfield">
-              <label htmlFor="field-default-branch">Branch padrão <span className="opt">opcional</span></label>
+              <label htmlFor="field-default-branch">{translate("Default branch")} <span className="opt">{translate("optional")}</span></label>
               <input
                 id="field-default-branch"
                 type="text"
@@ -350,7 +351,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
 
           <div className="mfield">
             <label htmlFor="field-project-desc">
-              Descrição <span className="opt">opcional</span>
+              {translate("Description")} <span className="opt">{translate("optional")}</span>
             </label>
             <textarea
               id="field-project-desc"
@@ -366,8 +367,8 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               <path d="M9 11V6a3 3 0 016 0v5m-9 0h12l-1 9H7z" stroke="#e8967a" strokeWidth="1.8" />
             </svg>
             <div className="txt">
-              <b>Acesso restrito por padrão</b>
-              <span>worktrees isolam execução · nenhuma mutação sem confirmação</span>
+              <b>{translate("Restricted access by default")}</b>
+              <span>{translate("worktrees isolate execution · no mutation without confirmation")}</span>
             </div>
           </div>
 
@@ -378,7 +379,7 @@ export function ProjectModal({ open, onClose, onCreated }: ProjectModalProps) {
               onClick={onClose}
               disabled={loading}
             >
-              Cancelar
+              {translate("Cancel")}
             </button>
             <button
               type="submit"

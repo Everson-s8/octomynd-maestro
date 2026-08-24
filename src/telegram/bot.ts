@@ -309,37 +309,37 @@ export function createTelegramBot(
       });
       if (result.status === "needs_clarification") {
         await ctx.reply([
-          "Work Intake: Necessita Clarificação.",
-          `Explicação: ${result.explanation}`,
-          "Por favor, especifique critérios de aceite ou use /task para Tarefa Direta ou /feature para Plano de Funcionalidade."
+          "Work Intake: Needs clarification.",
+          `Explanation: ${result.explanation}`,
+          "Please specify acceptance criteria or use /task for a Direct Task or /feature for a Feature Plan."
         ].join("\n"));
         return;
       }
       if (result.createdType === "feature_plan" && result.featurePlan) {
         await ctx.reply([
-          `Feature Plan #${result.featurePlan.plan.id} criado.`,
-          `Explicação: ${result.explanation}`,
-          `Projeto: ${result.featurePlan.plan.projectKey}`,
+          `Feature Plan #${result.featurePlan.plan.id} created.`,
+          `Explanation: ${result.explanation}`,
+          `Project: ${result.featurePlan.plan.projectKey}`,
           `Status: ${result.featurePlan.plan.status}`
         ].join("\n"));
         return;
       }
       if (result.task) {
         await ctx.reply([
-          `Task #${result.task.id} criada.`,
-          `Explicação: ${result.explanation}`,
-          `Projeto: ${result.task.projectKey}`,
+          `Task #${result.task.id} created.`,
+          `Explanation: ${result.explanation}`,
+          `Project: ${result.task.projectKey}`,
           `Estado: ${result.task.status}`
         ].join("\n"));
         return;
       }
-      await ctx.reply(`Demanda processada. Explicação: ${result.explanation}`);
+      await ctx.reply(`Request processed. Explanation: ${result.explanation}`);
     } catch (error) {
       if (error instanceof ApplicationCommandError && error.code === "not_found") {
         await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
         return;
       }
-      await ctx.reply(["Demanda não criada.", ...commandErrorDetails(error)].join("\n"));
+      await ctx.reply(["Request was not created.", ...commandErrorDetails(error)].join("\n"));
     }
   });
 
@@ -356,13 +356,13 @@ export function createTelegramBot(
         objective: taskInput.text
       });
       await ctx.reply([
-        `Análise de Work Intake:`,
-        `Classificação: ${result.decision.classification}`,
-        `Confiança: ${Math.round(result.decision.confidence * 100)}%`,
-        `Explicação: ${result.explanation}`
+        `Work Intake analysis:`,
+        `Classification: ${result.decision.classification}`,
+        `Confidence: ${Math.round(result.decision.confidence * 100)}%`,
+        `Explanation: ${result.explanation}`
       ].join("\n"));
     } catch (error) {
-      await ctx.reply(["Preview indisponível.", ...commandErrorDetails(error)].join("\n"));
+      await ctx.reply(["Preview unavailable.", ...commandErrorDetails(error)].join("\n"));
     }
   });
 
@@ -383,9 +383,9 @@ export function createTelegramBot(
       if (result.task) {
         await ctx.reply(
           [
-            `Task #${result.task.id} criada.`,
-            `Explicação: ${result.explanation}`,
-            `Projeto: ${result.task.projectKey}`,
+            `Task #${result.task.id} created.`,
+            `Explanation: ${result.explanation}`,
+            `Project: ${result.task.projectKey}`,
             `Estado: ${result.task.status}`,
             `Demanda: ${result.task.text}`
           ].join("\n")
@@ -421,7 +421,7 @@ export function createTelegramBot(
         `Demanda: ${task.text}`
       ].join("\n"));
     } catch (error) {
-      await ctx.reply(["Task de continuidade não criada.", ...commandErrorDetails(error)].join("\n"));
+      await ctx.reply(["Follow-up task was not created.", ...commandErrorDetails(error)].join("\n"));
     }
   });
 
@@ -443,9 +443,9 @@ export function createTelegramBot(
       if (result.featurePlan) {
         await ctx.reply(
           [
-            `Feature Plan #${result.featurePlan.plan.id} criado.`,
-            `Explicação: ${result.explanation}`,
-            `Projeto: ${result.featurePlan.plan.projectKey}`,
+            `Feature Plan #${result.featurePlan.plan.id} created.`,
+            `Explanation: ${result.explanation}`,
+            `Project: ${result.featurePlan.plan.projectKey}`,
             `Status: ${result.featurePlan.plan.status}`
           ].join("\n")
         );
@@ -457,7 +457,7 @@ export function createTelegramBot(
         await ctx.reply("Nenhum projeto cadastrado. Use /project_add chave caminho-do-repo.");
         return;
       }
-      await ctx.reply(["Feature Plan não criado.", ...commandErrorDetails(error)].join("\n"));
+        await ctx.reply(["Feature Plan was not created.", ...commandErrorDetails(error)].join("\n"));
     }
   });
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { connectTelegram, DashboardData } from "../api";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function TelegramConnectCard({
   agents,
@@ -22,7 +23,7 @@ export function TelegramConnectCard({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!botToken.trim()) {
-      setError("Cole o HTTP API Token obtido com o @BotFather.");
+      setError(translate("Paste the HTTP API token obtained from @BotFather."));
       return;
     }
 
@@ -37,7 +38,7 @@ export function TelegramConnectCard({
       });
 
       setSuccessMsg(
-        `Bot Telegram @${res.botInfo?.username ?? "desconhecido"} conectado com sucesso! (${res.allowedUserId ? `Restrito ao User ID ${res.allowedUserId}` : "Irrestrito"})`
+        `${translate("Telegram bot @{username} connected successfully!", { username: res.botInfo?.username ?? translate("unknown") })} (${res.allowedUserId ? translate("Restricted to User ID {id}", { id: res.allowedUserId }) : translate("Unrestricted")})`
       );
       setBotToken("");
       setAllowedUserId("");
@@ -46,7 +47,7 @@ export function TelegramConnectCard({
         await onChanged();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao conectar Telegram Bot.");
+      setError(err instanceof Error ? err.message : translate("Unable to connect the Telegram bot."));
     } finally {
       setBusy(false);
     }
@@ -55,21 +56,21 @@ export function TelegramConnectCard({
   return (
     <div className="panel telegram-connect-card" style={{ padding: "20px" }}>
       <SectionHeader
-        eyebrow="Integração Telegram"
-        title="Conexão do Telegram Bot"
-        meta={isConnected ? "Bot Ativo" : "Pendente"}
+        eyebrow={translate("Telegram integration")}
+        title={translate("Telegram bot connection")}
+        meta={isConnected ? translate("Bot active") : translate("Pending")}
       />
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px", marginBottom: "16px" }}>
         <span className={`sync-dot ${isConnected ? "" : "is-offline"}`} />
         <span style={{ color: "#fff", fontWeight: 600 }}>
           {isConnected
-            ? `Telegram Bot Conectado (${telegramAgent?.detail ?? "Ativo"})`
-            : "Telegram Bot Desconectado - Configure abaixo para operar sem CLI."}
+            ? `${translate("Telegram bot connected")} (${telegramAgent?.detail ?? translate("Active")})`
+            : translate("Telegram bot disconnected — configure it below to operate without the CLI.")}
         </span>
       </div>
 
       <p style={{ fontSize: "13px", color: "#a0a5b5", marginBottom: "16px", lineHeight: "1.5" }}>
-        Não precisa editar arquivos <code>.env</code> manualmente! Cole o token obtido no <strong>@BotFather</strong> e seu User ID numerico (do <strong>@userinfobot</strong>).
+        {translate("You do not need to edit .env files manually. Paste the token from @BotFather and your numeric User ID from @userinfobot.")}
       </p>
 
       {error ? (
@@ -87,11 +88,11 @@ export function TelegramConnectCard({
       <form onSubmit={(e) => void handleSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
         <div>
           <label style={{ display: "block", fontSize: "12px", color: "#a0a5b5", marginBottom: "4px" }}>
-            HTTP API Bot Token (@BotFather) *
+            {translate("HTTP API bot token (@BotFather) *")}
           </label>
           <input
             type="password"
-            placeholder="Ex: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+            placeholder={translate("Example: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ")}
             value={botToken}
             onChange={(e) => setBotToken(e.target.value)}
             disabled={busy}
@@ -109,11 +110,11 @@ export function TelegramConnectCard({
 
         <div>
           <label style={{ display: "block", fontSize: "12px", color: "#a0a5b5", marginBottom: "4px" }}>
-            Telegram User ID (@userinfobot) - Opcional para restrição de acesso
+            {translate("Telegram User ID (@userinfobot) — optional access restriction")}
           </label>
           <input
             type="text"
-            placeholder="Ex: 987654321 (deixe em branco para acesso livre)"
+            placeholder={translate("Example: 987654321 (leave blank for unrestricted access)")}
             value={allowedUserId}
             onChange={(e) => setAllowedUserId(e.target.value)}
             disabled={busy}
@@ -148,7 +149,7 @@ export function TelegramConnectCard({
             }}
           >
             <Icon name="pulse" />
-            {busy ? "Validando e Conectando..." : isConnected ? "Atualizar Token do Bot" : "Conectar Bot Telegram"}
+            {busy ? translate("Validating and connecting…") : isConnected ? translate("Update bot token") : translate("Connect Telegram bot")}
           </button>
         </div>
       </form>

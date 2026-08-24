@@ -625,7 +625,7 @@ describe("dashboard", () => {
       expect(previewResponse.status).toBe(200);
       const previewData = await previewResponse.json() as { decision: { classification: string }; explanation: string };
       expect(previewData.decision.classification).toBe("direct_task");
-      expect(previewData.explanation).toContain("Tarefa Direta");
+      expect(previewData.explanation).toContain("Direct Task");
 
       const intakeDirectResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
         method: "POST",
