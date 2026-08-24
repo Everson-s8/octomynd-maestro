@@ -48,7 +48,7 @@ describe("config", () => {
         pollIntervalMs: 6 * 60 * 60_000
       }
     });
-    expect(config.execution.expectedNodeVersion).toBe("20.17.0");
+    expect(config.execution.expectedNodeVersion).toBe("22.12.0");
     expect(config.worktreesPath).toBe(config.execution.worktreesPath);
     expect(config.projectsPath).toBe(path.join(config.execution.worktreesPath, "projects"));
     if (process.platform === "win32") {
@@ -175,12 +175,12 @@ describe("config", () => {
     const root = path.join(process.cwd(), "dedicated-runtime");
     const config = loadConfig(process.cwd(), {
       MAESTRO_EXECUTION_ROOT: root,
-      MAESTRO_NODE_VERSION: "20.17.2"
+      MAESTRO_NODE_VERSION: "22.12.2"
     });
 
     expect(config.execution.rootPath).toBe(root);
     expect(config.worktreesPath).toBe(path.join(root, "worktrees"));
-    expect(config.execution.expectedNodeVersion).toBe("20.17.2");
+    expect(config.execution.expectedNodeVersion).toBe("22.12.2");
   });
 
   it("loads provider models and custom providers with models", () => {

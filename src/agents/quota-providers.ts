@@ -73,7 +73,7 @@ async function fetchWham(url: string, token: string, accountId: string | null): 
 async function codexFetcher(): Promise<QuotaResult> {
   const authPath = homeFile(".codex", "auth.json");
   if (!fs.existsSync(authPath)) {
-    return buildEmptyUnavailable("codex", "~/.codex/auth.json não encontrado");
+    return buildEmptyUnavailable("codex", "~/.codex/auth.json was not found");
   }
   const auth = readJson(authPath) as { tokens?: { access_token?: string; account_id?: string } };
   const token = auth.tokens?.access_token;
@@ -238,7 +238,7 @@ type AntigravityGroup = { displayName?: string; buckets?: AntigravityBucket[] };
 async function antigravityFetcher(deadlineAt: number): Promise<QuotaResult> {
   const ports = findAgyLoopbackPort();
   if (ports.length === 0) {
-    return buildEmptyUnavailable("antigravity", "agy não está rodando (sem sessão Antigravity)");
+    return buildEmptyUnavailable("antigravity", "agy is not running (no Antigravity session)");
   }
 
   // Try each loopback port; the agy exposes the language server over HTTPS on
@@ -302,7 +302,7 @@ async function antigravityQuotaFetcher(): Promise<QuotaResult> {
   // An uninstalled CLI can never produce a quota reading: report the truth
   // ("not installed") instead of registering a fetcher that always fails.
   if (!resolveAntigravityExecutable()) {
-    return buildEmptyUnavailable("antigravity", "CLI 'agy' não está instalada", "not_installed");
+    return buildEmptyUnavailable("antigravity", "CLI 'agy' is not installed", "not_installed");
   }
   // Authentication alone does not create the local language-server session.
   // Start one resumable, prompt-less CLI session on demand for the dashboard.
@@ -311,7 +311,7 @@ async function antigravityQuotaFetcher(): Promise<QuotaResult> {
   if (!(await ensureAntigravitySession(deadlineAt))) {
     return buildEmptyUnavailable(
       "antigravity",
-      "CLI Antigravity autenticada, mas o Maestro não conseguiu manter a sessão local do agy ativa; tente abrir o Antigravity CLI uma vez e atualize a leitura",
+      "Antigravity CLI is authenticated, but Maestro could not keep the local agy session active; open the Antigravity CLI once and refresh the reading",
       "session_down"
     );
   }
@@ -383,7 +383,7 @@ async function claudeCredentials(): Promise<{
 async function claudeFetcher(): Promise<QuotaResult> {
   const creds = await claudeCredentials();
   const token = creds?.token ?? null;
-  if (!token) return buildEmptyUnavailable("claude", "OAuth token do Claude não encontrado (subscription)");
+  if (!token) return buildEmptyUnavailable("claude", "Claude OAuth token was not found (subscription)");
   const planType = creds?.planType ?? null;
   try {
     const res = await fetch(ANTHROPIC_OAUTH_USAGE, {
@@ -519,7 +519,7 @@ async function geminiApiFetcher(): Promise<QuotaResult> {
     if (!res.ok) return buildError("gemini-api", new Error(`gemini models ${res.status}`));
     return buildEmptyUnavailable(
       "gemini-api",
-      "API key válida; a API Gemini não expõe uma fração de cota utilizável neste endpoint"
+      "Valid API key; the Gemini API does not expose a usable quota fraction through this endpoint"
     );
   } catch (error) {
     return buildError("gemini-api", error);
@@ -600,7 +600,7 @@ export function buildQuotaFetchers(options: { providerIds?: ReadonlySet<string> 
   }
   if (allowed("codex") && !fetchers.codex && resolveCustomCliExecutable("codex")) {
     fetchers.codex = async () =>
-      buildEmptyUnavailable("codex", "Codex instalado, mas sem login concluído (~/.codex/auth.json ausente ou vazio)", "not_authenticated");
+      buildEmptyUnavailable("codex", "Codex is installed, but sign-in is incomplete (~/.codex/auth.json is missing or empty)", "not_authenticated");
   }
 
   // Antigravity only when the CLI binary exists; otherwise the dashboard must

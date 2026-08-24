@@ -166,6 +166,15 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
   }
 
+  // Keep an installed project root available for the concrete checks even if
+  // its package layout is not recognized by the discovery heuristic. The
+  // native probe below is authoritative and will report an actual load error;
+  // discarding this root would incorrectly turn a valid toolchain into a
+  // generic "dependencies unavailable" block.
+  if (!dependencyRoot && fs.existsSync(path.join(workspacePath, "node_modules"))) {
+    dependencyRoot = workspacePath;
+  }
+
   checks.push(nativeRuntimeCheck(dependencyRoot));
   checks.push(binaryCheck("typescript", dependencyRoot, executableName("tsc")));
   checks.push(binaryCheck("test_runner", dependencyRoot, executableName("vitest")));
@@ -402,7 +411,21 @@ function isValidationDependencyRootComplete(root: string): boolean {
 }
 
 function hasLoadableNativeDependency(root: string, dependency: string): boolean {
-  return fs.existsSync(path.join(root, "node_modules", dependency, "build", "Release", "better_sqlite3.node"));
+  const dependencyRoot = path.join(root, "node_modules", dependency);
+  const platformTarget = `${process.platform}-${process.arch}`;
+  const legacyBuild = path.join(dependencyRoot, "build", "Release", "better_sqlite3.node");
+  const platformPrebuild = path.join(dependencyRoot, "prebuilds", `${platformTarget}.node`);
+  const platformModule = path.join(dependencyRoot, "lib", `${platformTarget}.js`);
+  const prebuildDirectory = path.join(dependencyRoot, "prebuilds");
+  const hasAnyPrebuild = fs.existsSync(prebuildDirectory)
+    && fs.readdirSync(prebuildDirectory).some((entry) => entry.endsWith(".node"));
+  // better-sqlite3 publishes platform loaders alongside its prebuilds. Keep
+  // the loader as a candidate signal for unusual package layouts; the later
+  // nativeRuntimeCheck still performs the real require() probe.
+  return fs.existsSync(legacyBuild)
+    || fs.existsSync(platformPrebuild)
+    || fs.existsSync(platformModule)
+    || hasAnyPrebuild;
 }
 
 function readPackageJson(root: string): {
@@ -432,11 +455,14 @@ function runCommand(command: string, args: string[], cwd: string, timeout = 15_0
   // under the wrong node major fails or silently skips the binding, which then
   // shows up as a false `environment_blocked`. Pin npm to this process's own node
   // binary so the toolchain is always prepared under the supported runtime.
+  const bundledNpmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
   const nodeBin = process.execPath;
   const invocation =
     process.platform === "win32"
       ? command === "npm"
-        ? { command: nodeBin, args: [path.join(path.dirname(nodeBin), "node_modules", "npm", "bin", "npm-cli.js"), ...args] }
+        ? fs.existsSync(bundledNpmCli)
+          ? { command: nodeBin, args: [bundledNpmCli, ...args] }
+          : { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", executableName("npm"), ...args] }
         : command.endsWith(".cmd")
           ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", command, ...args] }
           : { command, args }

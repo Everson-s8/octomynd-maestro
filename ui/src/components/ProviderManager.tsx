@@ -17,6 +17,7 @@ import {
   testProviderConnection,
   updateProviderControl
 } from "../api";
+import { translate } from "../i18n";
 
 type ConnectStep = "method" | "list-apikey" | "list-account" | "apikey" | "account";
 
@@ -92,7 +93,7 @@ export function ProviderManager({
       setRegistered(presetData.registered);
       updatePolicy(policyData);
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel carregar os providers."));
+      setError(readError(cause, translate("Unable to load providers.")));
     }
   };
 
@@ -117,7 +118,7 @@ export function ProviderManager({
       void fetchProviderAuth(authSession.id).then((session) => {
         setAuthSession(session);
         if (session.state === "failed") setError(session.detail);
-      }).catch((cause) => setError(readError(cause, "Nao foi possivel acompanhar a autenticacao.")));
+      }).catch((cause) => setError(readError(cause, translate("Unable to monitor authentication."))));
     }, 1_200);
     return () => window.clearInterval(timer);
   }, [authSession?.id, authSession?.state]);
@@ -136,7 +137,7 @@ export function ProviderManager({
   const connectedProviders = useMemo<ConnectedProvider[]>(() => {
     // Built-in providers that are paused (control.mode === "disabled") are hidden
     // from the list — a removed/paused provider disappears instead of showing as
-    // "indisponivel". Paused built-ins can be re-enabled via "Conectar provider".
+    // A paused built-in can be re-enabled from the Connect provider flow.
     const builtIns = presets
       .filter((preset) => preset.builtIn)
       .map((preset) => {
@@ -161,10 +162,10 @@ export function ProviderManager({
           providerId: runtimeId,
           label: preset.label,
           detail: paused
-            ? "Pausado — reative pelo botão ACCOUNT ou Conectar provider"
-            : agent?.detail || "Conexao ainda nao verificada nesta maquina",
+            ? translate("Paused — reactivate it with the ACCOUNT button or Connect provider")
+            : agent?.detail || translate("Connection not verified on this machine"),
           type: (preset.category === "api" ? "api" : preset.category === "local" ? "local" : "account") as "account" | "api" | "local",
-          model: activeModel || "Padrao do provider",
+          model: activeModel || translate("Provider default"),
           active: connected && !paused,
           connected,
           paused,
@@ -186,9 +187,9 @@ export function ProviderManager({
         key: `registered:${provider.id}`,
         providerId: provider.id,
         label: provider.label,
-        detail: agent?.detail || (local ? provider.endpointUrl || "Endpoint local" : "Conexao ainda nao verificada nesta maquina"),
+        detail: agent?.detail || (local ? provider.endpointUrl || translate("Local endpoint") : translate("Connection not verified on this machine")),
         type: (category === "local" ? "local" : category === "account" ? "account" : "api") as "account" | "api" | "local",
-        model: activeModel || "Padrao do provider",
+        model: activeModel || translate("Provider default"),
         active: isProviderConnected(agent?.state),
         connected: isProviderConnected(agent?.state),
         paused: control ? control.mode !== "enabled" : false,
@@ -204,11 +205,10 @@ export function ProviderManager({
   }, [agents, presets, registered, policy]);
 
   const groupedProviders = {
-    Conta: connectedProviders.filter((provider) => provider.type === "account"),
+    Account: connectedProviders.filter((provider) => provider.type === "account"),
     API: connectedProviders.filter((provider) => provider.type === "api"),
     Local: connectedProviders.filter((provider) => provider.type === "local")
   };
-  const groupLabels: Record<string, "Conta" | "API" | "Local"> = { Conta: "Conta", API: "API", Local: "Local" };
 
   const detailProvider = connectedProviders.find((provider) => provider.key === detailKey) ?? null;
 
@@ -246,7 +246,7 @@ export function ProviderManager({
       onChanged?.();
       onPolicyChanged?.();
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel atualizar o modelo."));
+      setError(readError(cause, translate("Unable to update the model.")));
     } finally {
       setDetailBusy(false);
     }
@@ -260,27 +260,27 @@ export function ProviderManager({
       if (detailProvider.registeredProvider) {
         const providers = await deleteProvider(detailProvider.registeredProvider.id);
         setRegistered(providers);
-        setNotice(`${detailProvider.label} foi desconectado. Rotas e fallbacks dependentes foram reparados.`);
+        setNotice(translate("{provider} disconnected. Dependent routes and fallbacks were repaired.", { provider: detailProvider.label }));
       } else {
         const control = policy?.controls.find((item) => item.providerId === detailProvider.providerId);
         await updateProviderControl(detailProvider.providerId, {
           mode: "disabled",
           fallbackEnabled: control?.fallbackEnabled ?? false
         });
-        setNotice(`${detailProvider.label} foi pausado e removido das rotas.`);
+        setNotice(translate("{provider} was paused and removed from routing.", { provider: detailProvider.label }));
         await load();
       }
       onChanged?.();
       onPolicyChanged?.();
       closeDetail();
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel desconectar o provider."));
+      setError(readError(cause, translate("Unable to disconnect the provider.")));
     } finally {
       setDetailBusy(false);
     }
   };
 
-  // Quick toggle directly on the card: pause ("conectado mas nao chamado") or
+  // Quick toggle directly on the card: pause (connected but not routable) or
   // re-enable the provider without opening the detail modal. Uses stopPropagation
   // so the card's openDetail click doesn't fire.
   const toggleProvider = async (provider: ConnectedProvider, event: { stopPropagation: () => void; preventDefault: () => void }) => {
@@ -298,9 +298,9 @@ export function ProviderManager({
       await load();
       onChanged?.();
       onPolicyChanged?.();
-      setNotice(nextMode === "paused" ? `${provider.label} pausado (conectado, mas nao sera chamado).` : `${provider.label} ativado.`);
+      setNotice(nextMode === "paused" ? translate("{provider} paused (connected but not routable).", { provider: provider.label }) : translate("{provider} enabled.", { provider: provider.label }));
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel alternar o provider."));
+      setError(readError(cause, translate("Unable to toggle the provider.")));
     } finally {
       setBusyId(null);
     }
@@ -371,14 +371,14 @@ export function ProviderManager({
   const connectApiKey = async () => {
     const preset = wizardPreset;
     if (preset?.builtIn) {
-      setNotice(`${preset.label} ja faz parte do runtime. Use o painel de prioridade para ativar ou pausar.`);
+      setNotice(translate("{provider} is already part of the runtime. Use the priority panel to enable or pause it.", { provider: preset.label }));
       closeWizard();
       return;
     }
-    if (!apiKeyValue.trim()) return setError("Informe a API key.");
-    const label = preset?.label ?? (customLabel.trim() || "Endpoint customizado");
+    if (!apiKeyValue.trim()) return setError(translate("Enter the API key."));
+    const label = preset?.label ?? (customLabel.trim() || translate("Custom endpoint"));
     const id = sanitizeId(preset?.id ?? customLabel ?? label);
-    if (!id) return setError("Informe um nome valido para o provider.");
+    if (!id) return setError(translate("Enter a valid provider name."));
     setWizardBusy(true);
     setError("");
     try {
@@ -395,13 +395,13 @@ export function ProviderManager({
         apiKeyEnv: preset?.apiKeyEnv ?? undefined
       });
       setRegistered(result.providers);
-      setNotice(`${label} foi conectado e ativado sem reiniciar o Maestro.`);
+      setNotice(translate("{provider} connected and enabled without restarting Maestro.", { provider: label }));
       await load();
       onChanged?.();
       onPolicyChanged?.();
       closeWizard();
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel conectar o provider."));
+      setError(readError(cause, translate("Unable to connect the provider.")));
     } finally {
       setWizardBusy(false);
     }
@@ -411,7 +411,7 @@ export function ProviderManager({
     const preset = wizardPreset;
     if (!preset) return;
     // Built-in providers (e.g. gemini/antigravity) can't be re-registered, but
-    // "Já fiz login" should actually activate the provider: if it was paused/
+    // "I already logged in" should also activate the provider when it was paused/
     // disabled, re-enable it so it shows up on the screen again. Otherwise the
     // message would say "pronto" but the card would stay hidden (inconsistent).
     if (preset.builtIn) {
@@ -423,7 +423,7 @@ export function ProviderManager({
           args: preset.authStatusArgs && preset.authStatusArgs.length > 0 ? preset.authStatusArgs : [],
           presetId: preset.id
         });
-        if (!testResult.ok) throw new Error(testResult.detail || "CLI nao encontrado ou nao autenticado.");
+        if (!testResult.ok) throw new Error(testResult.detail || translate("CLI not found or not authenticated."));
         // Re-activate the built-in provider (it may have been paused/disabled).
         const control = policy?.controls.find((item) => item.providerId === preset.id || item.providerId === "antigravity");
         const targetId = preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
@@ -439,7 +439,7 @@ export function ProviderManager({
         onPolicyChanged?.();
         closeWizard();
       } catch (cause) {
-        setError(readError(cause, "Nao foi possivel confirmar a conexao."));
+        setError(readError(cause, translate("Unable to confirm the connection.")));
       } finally {
         setWizardBusy(false);
       }
@@ -450,14 +450,14 @@ export function ProviderManager({
     try {
       // Probe the CLI's authentication status, not its execution args. Using
       // preset.args (e.g. copilot's ["copilot","suggest","{prompt}"]) would run a
-      // wrong command and fail with "Falha ao executar gh". Use authStatusArgs
+      // The wrong command fails with a generic CLI error. Use authStatusArgs.
       // (e.g. gh auth status) which actually confirms the logged-in account.
       const testResult = await testProviderConnection({
         command: preset.command,
         args: preset.authStatusArgs && preset.authStatusArgs.length > 0 ? preset.authStatusArgs : preset.args,
         presetId: preset.id
       });
-      if (!testResult.ok) throw new Error(testResult.detail || "Login ainda nao detectado. Verifique o terminal e tente novamente.");
+      if (!testResult.ok) throw new Error(testResult.detail || translate("Login not detected yet. Check the terminal and try again."));
       const result = await registerProvider({
         id: preset.id,
         label: preset.label,
@@ -475,7 +475,7 @@ export function ProviderManager({
       onPolicyChanged?.();
       closeWizard();
     } catch (cause) {
-      setError(readError(cause, "Nao foi possivel confirmar o login."));
+      setError(readError(cause, translate("Unable to confirm the login.")));
     } finally {
       setWizardBusy(false);
     }
@@ -502,7 +502,7 @@ export function ProviderManager({
         try {
           setAuthSession(await startProviderAuth(preset.id, authFlowId ?? flows.find((f) => f.recommended)?.id ?? flows[0].id));
         } catch (cause) {
-          setError(readError(cause, "Nao foi possivel iniciar a autenticacao."));
+          setError(readError(cause, translate("Unable to start authentication.")));
         } finally {
           setWizardBusy(false);
         }
@@ -518,7 +518,7 @@ export function ProviderManager({
       try {
         setAuthSession(await startProviderAuth(preset.id));
       } catch (cause) {
-        setError(readError(cause, "Nao foi possivel iniciar a autenticacao."));
+        setError(readError(cause, translate("Unable to start authentication.")));
       } finally {
         setWizardBusy(false);
       }
@@ -528,22 +528,22 @@ export function ProviderManager({
   };
 
   const accountPrimaryLabel = () => {
-    if (!wizardPreset) return "Ja fiz login";
+    if (!wizardPreset) return translate("I already logged in");
     const flows = wizardPreset.authFlows ?? [];
     if (flows.length > 0) {
-      if (authSession?.state === "waiting") return "Aguardando autorizacao...";
-      if (authSession?.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
-      if (authSession?.state === "failed") return "Tentar novamente";
-      return wizardBusy ? "Abrindo..." : "Entrar";
+      if (authSession?.state === "waiting") return translate("Waiting for authorization…");
+      if (authSession?.state === "connected") return wizardBusy ? translate("Finishing…") : translate("Finish connection");
+      if (authSession?.state === "failed") return translate("Try again");
+      return wizardBusy ? translate("Opening…") : translate("Sign in");
     }
     const hasAutoLogin = wizardPreset.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
     if (hasAutoLogin) {
-      if (!authSession) return wizardBusy ? "Abrindo..." : "Conectar conta";
-      if (authSession.state === "waiting") return "Aguardando autorizacao...";
-      if (authSession.state === "connected") return wizardBusy ? "Concluindo..." : "Concluir conexao";
-      return "Tentar novamente";
+      if (!authSession) return wizardBusy ? translate("Opening…") : translate("Connect account");
+      if (authSession.state === "waiting") return translate("Waiting for authorization…");
+      if (authSession.state === "connected") return wizardBusy ? translate("Finishing…") : translate("Finish connection");
+      return translate("Try again");
     }
-    return wizardBusy ? "Verificando..." : "Ja fiz login";
+    return wizardBusy ? translate("Verifying…") : translate("I already logged in");
   };
 
   const copyCommand = async (command: string) => {
@@ -559,24 +559,24 @@ export function ProviderManager({
   const wizardCopy = (): { title: string; desc: string } => {
     switch (wizardStep) {
       case "method":
-        return { title: "Conectar provider", desc: "Como voce quer autenticar? A forma de conexao depende do provider escolhido." };
+        return { title: translate("Connect provider"), desc: translate("How do you want to authenticate? The connection method depends on the selected provider.") };
       case "list-apikey":
-        return { title: "Via chave de API", desc: "Escolha o provider que voce quer conectar com API key." };
+        return { title: translate("Via API key"), desc: translate("Choose the provider you want to connect with an API key.") };
       case "list-account":
-        return { title: "Via conta (CLI)", desc: "Escolha o provider — o login acontece pela CLI oficial dele." };
+        return { title: translate("Via account (CLI)"), desc: translate("Choose a provider — sign-in happens through its official CLI.") };
       case "apikey": {
-        const name = wizardPreset?.label ?? "Endpoint customizado";
-        return { title: name, desc: `Cole a chave de API para conectar ${name}.` };
+        const name = wizardPreset?.label ?? translate("Custom endpoint");
+        return { title: name, desc: translate("Paste the API key to connect {provider}.", { provider: name }) };
       }
       case "account": {
-        const name = wizardPreset?.label ?? "este provider";
+        const name = wizardPreset?.label ?? translate("this provider");
         const autoLogin = wizardPreset?.authFlow && wizardPreset.authFlow !== "none" && (wizardPreset.authArgs?.length ?? 0) > 0;
         const desc = autoLogin
-          ? `${name} sera autenticado automaticamente se a CLI oficial ja estiver instalada: clique em "Conectar conta" e o navegador/terminal abrira para voce concluir o login.`
+          ? translate("{provider} will be authenticated automatically when its official CLI is installed: click Connect account and finish sign-in in the browser or terminal.", { provider: name })
           : wizardPreset?.id === "gemini"
-            ? 'Para usar o Antigravity no Maestro e necessario ter o CLI agy baixado e ja conectado com a sua conta Google no terminal. Se voce ja tem, clique em "Ja fiz login" para confirmar e ativar.'
-            : `${name} faz login pela propria CLI. Rode o comando no terminal e depois volte e selecione "Ja fiz login".`;
-        return { title: `Entrar com ${name}`, desc };
+            ? translate("To use Antigravity in Maestro, install the agy CLI and sign in with your Google account in the terminal. When ready, click I already logged in to confirm and enable it.")
+            : translate("{provider} signs in through its own CLI. Run the terminal command, then return and select I already logged in.", { provider: name });
+        return { title: translate("Sign in with {provider}", { provider: name }), desc };
       }
     }
   };
@@ -587,7 +587,7 @@ export function ProviderManager({
     <section className="provider-manager">
       {error ? <div className="provider-feedback error" role="alert">{error}</div> : null}
       {notice ? <div className="provider-feedback success">{notice}</div> : null}
-      {(["Conta", "API", "Local"] as const).map((group) => groupedProviders[group].length ? (
+      {(["Account", "API", "Local"] as const).map((group) => groupedProviders[group].length ? (
         <div key={group}>
           <div className="prov-group-lbl">{group}</div>
           {groupedProviders[group].map((provider) => (
@@ -613,13 +613,13 @@ export function ProviderManager({
                         tabIndex={0}
                         onClick={(event) => { if (provider.connected) void toggleProvider(provider, event); }}
                         onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); if (provider.connected) void toggleProvider(provider, event); } }}
-                        title={provider.connected ? (on ? `Pausar ${provider.label} (conectado, mas nao chamado)` : `Ativar ${provider.label}`) : `${provider.label} nao esta conectado nesta maquina`}
+                        title={provider.connected ? (on ? translate("Pause {provider} (connected but not routable)", { provider: provider.label }) : translate("Enable {provider}", { provider: provider.label })) : translate("{provider} is not connected on this machine", { provider: provider.label })}
                       >
                         <i />
                       </span>
                     );
                   })()}
-                  <label>{!provider.connected ? "nao conectado" : provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? "ativo" : "pausado"}</label>
+                  <label>{!provider.connected ? translate("not connected") : provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? translate("active") : translate("paused")}</label>
                 </div>
                 {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
               </div>
@@ -628,15 +628,15 @@ export function ProviderManager({
         </div>
       ) : null)}
       <button type="button" className="add-provider" onClick={openWizard}>
-        <div className="plus">+</div><b>Conectar provider</b><span>Local, OpenAI-compatible, ou endpoint próprio</span>
+        <div className="plus">+</div><b>{translate("Connect provider")}</b><span>{translate("Local, OpenAI-compatible, or custom endpoint")}</span>
       </button>
 
       {detailProvider ? (
         <div className="modal-overlay active" onMouseDown={(event) => { if (event.currentTarget === event.target) closeDetail(); }}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <button type="button" className="modal-close" onClick={closeDetail} aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+            <button type="button" className="modal-close" onClick={closeDetail} aria-label={translate("Close")}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
             <div className="modal-head">
-              <div className="modal-eyebrow">{detailProvider.type === "account" ? "Conta" : detailProvider.type === "local" ? "Local" : "API"}</div>
+              <div className="modal-eyebrow">{detailProvider.type === "account" ? translate("Account") : detailProvider.type === "local" ? translate("Local") : "API"}</div>
               <div className="pd-head-row">
                 <div className="pd-av" style={{ background: detailProvider.color }}>{detailProvider.label.slice(0, 1).toUpperCase()}</div>
                 <div>
@@ -648,12 +648,12 @@ export function ProviderManager({
             <div className="modal-body">
               {detailProvider.connected ? (
                 <>
-                  <div className="pd-section-lbl">Modelo ativo</div>
+                  <div className="pd-section-lbl">{translate("Active model")}</div>
                   {detailProvider.models.length > 6 ? (
                     <div className="model-search">
                       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-                      <input type="text" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Buscar modelo..." />
-                      <span className="count">{filteredModels.length} de {detailProvider.models.length}</span>
+                      <input type="text" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={translate("Search model…")} />
+                      <span className="count">{filteredModels.length} {translate("of")} {detailProvider.models.length}</span>
                     </div>
                   ) : null}
                   <div className="model-list-scroll">
@@ -665,30 +665,30 @@ export function ProviderManager({
                       >
                         <div className="radio" />
                         <div className="tx"><b>{model}</b></div>
-                        {model === detailProvider.models[0] ? <span className="default-tag">padrão</span> : null}
+                        {model === detailProvider.models[0] ? <span className="default-tag">{translate("default")}</span> : null}
                       </div>
-                    )) : <div className="model-empty">Nenhum modelo encontrado</div>}
+                    )) : <div className="model-empty">{translate("No model found")}</div>}
                   </div>
                 </>
               ) : (
                 <div className="pd-unconfigured">
                   {detailProvider.type === "account"
-                    ? "Instale e autentique a CLI oficial deste provider para escolher o modelo."
-                    : "Conecte uma chave de API válida para escolher o modelo deste provider."}
+                    ? translate("Install and authenticate this provider's official CLI to choose a model.")
+                    : translate("Connect a valid API key to choose this provider's model.")}
                 </div>
               )}
 
               <div className="danger-zone">
                 <button type="button" className="danger-trigger" onClick={() => setDangerConfirm(true)}>
                   <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6" /></svg>
-                  Desconectar provider
+                  {translate("Disconnect provider")}
                 </button>
                 <div className={`danger-confirm${dangerConfirm ? " show" : ""}`}>
-                  <p>Isso remove <b>{detailProvider.label}</b> das suas rotas. Tasks em andamento com fallback automático migram para o próximo da fila.</p>
+                  <p>{translate("This removes")} <b>{detailProvider.label}</b> {translate("from your routes. Running tasks with automatic fallback move to the next provider in the queue.")}</p>
                   <div className="row">
-                    <button type="button" className="btn-ghost" onClick={() => setDangerConfirm(false)}>Cancelar</button>
+                    <button type="button" className="btn-ghost" onClick={() => setDangerConfirm(false)}>{translate("Cancel")}</button>
                     <button type="button" className="btn-danger" onClick={() => void removeProvider()} disabled={detailBusy}>
-                      {detailBusy ? "Removendo..." : detailProvider.registeredProvider ? "Remover conexão" : "Pausar provider"}
+                      {detailBusy ? translate("Removing…") : detailProvider.registeredProvider ? translate("Remove connection") : translate("Pause provider")}
                     </button>
                   </div>
                 </div>
@@ -701,11 +701,11 @@ export function ProviderManager({
       {wizardOpen ? (
         <div className="modal-overlay active" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWizard(); }}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <button type="button" className={`modal-back${wizardHistory.length ? " show" : ""}`} onClick={backStep} aria-label="Voltar"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
-            <button type="button" className="modal-close" onClick={closeWizard} aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+            <button type="button" className={`modal-back${wizardHistory.length ? " show" : ""}`} onClick={backStep} aria-label={translate("Back")}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+            <button type="button" className="modal-close" onClick={closeWizard} aria-label={translate("Close")}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
 
             <div className={`modal-head${wizardHistory.length ? " with-back" : ""}`}>
-              <div className="modal-eyebrow">Novo braço</div>
+              <div className="modal-eyebrow">{translate("New agent arm")}</div>
               <h3>{wizardTitle}</h3>
               <p>{wizardDesc}</p>
             </div>
@@ -717,13 +717,13 @@ export function ProviderManager({
                 <div className="method-grid">
                   <div className="method-card" onClick={() => gotoStep("list-apikey")}>
                     <div className="ico"><svg viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.778-7.778zm0 0L15.5 7.5m0 0L19 4m-3.5 3.5L19 4" /></svg></div>
-                    <b>Via chave de API</b>
-                    <p>Cole uma API key. Bom para OpenAI, Anthropic API, ou qualquer endpoint compatível.</p>
+                    <b>{translate("Via API key")}</b>
+                    <p>{translate("Paste an API key. Works with OpenAI, Anthropic API, or any compatible endpoint.")}</p>
                   </div>
                   <div className="method-card" onClick={() => gotoStep("list-account")}>
                     <div className="ico"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8" /></svg></div>
-                    <b>Via conta (CLI)</b>
-                    <p>Login pela CLI oficial do provider. Nenhuma chave fica salva no Octomynd.</p>
+                    <b>{translate("Via account (CLI)")}</b>
+                    <p>{translate("Sign in through the provider's official CLI. No key is stored by Octomynd.")}</p>
                   </div>
                 </div>
               </div>
@@ -738,7 +738,7 @@ export function ProviderManager({
                 ))}
                 <div className="pick-row" onClick={openApiKeyCustom}>
                   <div className="av" style={{ background: "#5c5347" }}>+</div>
-                  <div className="tx"><b>Endpoint customizado</b><span>compatível com OpenAI · URL + chave</span></div>
+                  <div className="tx"><b>{translate("Custom endpoint")}</b><span>{translate("OpenAI-compatible · URL + key")}</span></div>
                   <svg className="go" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                 </div>
               </div>
@@ -754,11 +754,11 @@ export function ProviderManager({
               </div>
 
               <div className={`cp-step${wizardStep === "apikey" ? " active" : ""}`}>
-                <div className="apikey-hint">A chave é armazenada localmente e nunca sai da sua máquina — o Octomynd é local-first.</div>
+                <div className="apikey-hint">{translate("The key is stored locally and never leaves your machine — Octomynd is local-first.")}</div>
                 {wizardCustomEndpoint ? (
                   <div className="mfield">
-                    <label>Nome</label>
-                    <input value={customLabel} onChange={(event) => setCustomLabel(event.target.value)} placeholder="Meu endpoint" />
+                    <label>{translate("Name")}</label>
+                    <input value={customLabel} onChange={(event) => setCustomLabel(event.target.value)} placeholder={translate("My endpoint")} />
                   </div>
                 ) : null}
                 <div className="mfield">
@@ -766,12 +766,12 @@ export function ProviderManager({
                   <input type="password" value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder="sk-••••••••••••••••••••••••" />
                 </div>
                 <div className="mfield" style={{ display: wizardCustomEndpoint ? "block" : "none" }}>
-                  <label>Base URL</label>
+                  <label>{translate("Base URL")}</label>
                   <input type="text" value={baseUrlValue} onChange={(event) => setBaseUrlValue(event.target.value)} placeholder="https://api.exemplo.com/v1" />
                 </div>
                 <div className="cp-foot">
-                  <button type="button" className="btn-ghost" onClick={closeWizard}>Cancelar</button>
-                  <button type="button" className="btn-new" onClick={() => void connectApiKey()} disabled={wizardBusy}>{wizardBusy ? "Conectando..." : "Conectar"}</button>
+                  <button type="button" className="btn-ghost" onClick={closeWizard}>{translate("Cancel")}</button>
+                  <button type="button" className="btn-new" onClick={() => void connectApiKey()} disabled={wizardBusy}>{wizardBusy ? translate("Connecting…") : translate("Connect")}</button>
                 </div>
               </div>
 
@@ -780,7 +780,7 @@ export function ProviderManager({
                   <div className="term-box">
                     <div className="cmd"><span className="dollar">$</span> <span className="arg">{wizardPreset.setupCommand}</span></div>
                     <button type="button" className={`copy-btn${copyState === "copied" ? " copied" : ""}`} onClick={() => void copyCommand(wizardPreset.setupCommand!)}>
-                      {copyState === "copied" ? "Copiado ✓" : "Copiar"}
+                      {copyState === "copied" ? `${translate("Copied")} ✓` : translate("Copy")}
                     </button>
                   </div>
                 ) : null}
@@ -820,7 +820,7 @@ export function ProviderManager({
                   </a>
                 ) : null}
                 <div className="cp-foot">
-                  <button type="button" className="btn-ghost" onClick={closeWizard}>Cancelar</button>
+                  <button type="button" className="btn-ghost" onClick={closeWizard}>{translate("Cancel")}</button>
                   <button type="button" className="btn-new" onClick={() => void handleAccountPrimary()} disabled={wizardBusy || authSession?.state === "waiting"}>
                     {accountPrimaryLabel()}
                   </button>
@@ -836,22 +836,22 @@ export function ProviderManager({
 
 function AuthSessionPanel({ session }: { session: ProviderAuthSession }) {
   const title = session.state === "waiting"
-    ? "Aguardando sua autorizacao"
+    ? translate("Waiting for your authorization")
     : session.state === "connected"
-      ? "Conta conectada"
+      ? translate("Account connected")
       : session.state === "cancelled"
-        ? "Autorizacao cancelada"
-        : "Falha na autenticacao";
+        ? translate("Authorization cancelled")
+        : translate("Authentication failed");
   return (
     <div className={`provider-auth-session ${session.state}`}>
       <div className="provider-auth-state"><span className="provider-auth-spinner" aria-hidden="true" /><strong>{title}</strong></div>
       <p>{session.detail}</p>
       {session.userCode ? (
-        <div className="provider-device-code" aria-label={`Codigo ${session.userCode}`}>
+        <div className="provider-device-code" aria-label={`${translate("Code")} ${session.userCode}`}>
           {session.userCode.split("").map((character, index) => <span className={character === "-" ? "separator" : ""} key={`${character}-${index}`}>{character}</span>)}
         </div>
       ) : null}
-      {session.verificationUrl ? <a href={session.verificationUrl} target="_blank" rel="noreferrer" className="provider-help-link">Reabrir pagina de verificacao</a> : null}
+      {session.verificationUrl ? <a href={session.verificationUrl} target="_blank" rel="noreferrer" className="provider-help-link">{translate("Reopen verification page")}</a> : null}
     </div>
   );
 }
@@ -864,7 +864,7 @@ function readError(cause: unknown, fallback: string): string {
   const message = cause instanceof Error ? cause.message : fallback;
   const missingCli = message.match(/^provider_cli_not_found(?::(.+))?$/);
   return missingCli
-    ? `A CLI${missingCli[1] ? ` ${missingCli[1]}` : " oficial"} nao esta instalada nesta maquina. Instale-a e tente novamente.`
+    ? translate("The {cli} CLI is not installed on this machine. Install it and try again.", { cli: missingCli[1] || "official" })
     : message;
 }
 

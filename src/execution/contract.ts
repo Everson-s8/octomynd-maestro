@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const EXPECTED_NODE_VERSION = "20.17.0";
-export const SUPPORTED_NODE_RANGE = ">=20.17.0 <25";
+export const EXPECTED_NODE_VERSION = "22.12.0";
+export const SUPPORTED_NODE_RANGE = ">=22.12.0 <25";
 
 export type ExecutionContract = {
   rootPath: string;

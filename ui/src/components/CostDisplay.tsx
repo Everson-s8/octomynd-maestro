@@ -1,4 +1,5 @@
 import { DashboardData, DashboardWorkGraph } from "../api";
+import { translate } from "../i18n";
 import { Icon } from "./Icon";
 
 export function CostDisplay({
@@ -26,11 +27,11 @@ export function CostDisplay({
         <Icon name="dollar" />
       </div>
       <div>
-        <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>{measured ? "Uso registrado hoje" : "Custo Hoje / Tokens"}</span>
+        <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>{measured ? translate("Recorded usage today") : translate("Cost today / tokens")}</span>
         <strong style={{ fontSize: "20px", color: "#ffffff", fontWeight: 700 }}>
-          {measured && !hasUsage ? "Não informado" : <>{formattedCost} <small style={{ fontSize: "13px", color: "#808595", fontWeight: 500 }}>({formattedTokens} tokens)</small></>}
+          {measured && !hasUsage ? translate("Not reported") : <>{formattedCost} <small style={{ fontSize: "13px", color: "#808595", fontWeight: 500 }}>({formattedTokens} tokens)</small></>}
         </strong>
-        {measured && !hasUsage ? <small style={{ display: "block", marginTop: "4px", color: "#808595" }}>O provider não retornou métricas de uso.</small> : null}
+        {measured && !hasUsage ? <small style={{ display: "block", marginTop: "4px", color: "#808595" }}>{translate("The provider did not return usage metrics.")}</small> : null}
       </div>
     </div>
   );

@@ -7,8 +7,13 @@ import { TaskComposer } from "./components/TaskComposer";
 import { ProjectModal } from "./components/ProjectModal";
 import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
+import { useI18n, translate } from "./i18n";
 
 export default function App() {
+  // Subscribe the root to locale changes so legacy presentation components
+  // that use the pure translate helper also rerender immediately.
+  const { locale } = useI18n();
+  void locale;
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -21,7 +26,7 @@ export default function App() {
       setData(await fetchDashboard());
       setError(null);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Falha ao carregar o Maestro.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to load Maestro."));
     } finally {
       setRefreshing(false);
     }

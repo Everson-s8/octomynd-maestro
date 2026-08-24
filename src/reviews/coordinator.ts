@@ -84,7 +84,7 @@ export class ReviewCoordinator {
     if (decision === "approved") {
       await this.github.markReady(item.pullRequestUrl);
       if (mergeAfterApproval) {
-        if (!this.github.merge) throw new Error("O gateway do GitHub não suporta merge automático.");
+        if (!this.github.merge) throw new Error("The GitHub gateway does not support automatic merging.");
         await this.github.merge(item.pullRequestUrl);
       }
     }

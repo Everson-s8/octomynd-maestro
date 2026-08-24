@@ -17,6 +17,7 @@ import { formatRelative } from "../helpers";
 import { isOpenableExternalUrl } from "../external-links";
 import { Icon } from "./Icon";
 import { StatusPill } from "./StatusBadge";
+import { translate } from "../i18n";
 
 export function TaskDetail({
   task,
@@ -82,13 +83,13 @@ export function TaskDetail({
       } catch (goalError) {
         setError(
           goalError instanceof Error
-            ? `Worktree preparada, mas a execução não iniciou: ${goalError.message} Verifique se há um provider conectado em Providers.`
-            : "Worktree preparada, mas a execução não iniciou. Verifique se há um provider conectado."
+            ? `${translate("Worktree prepared, but execution did not start")}: ${goalError.message} ${translate("Check that a provider is connected in Providers.")}`
+            : translate("Worktree prepared, but execution did not start. Check that a provider is connected.")
         );
       }
       await onPrepared();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Não foi possível preparar a task.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to prepare the task."));
     } finally {
       setPreparing(false);
     }
@@ -102,7 +103,7 @@ export function TaskDetail({
       setReviews(await fetchTaskReviews(taskId));
       await onPrepared();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "A revisão do Claude falhou.");
+      setError(requestError instanceof Error ? requestError.message : translate("Claude review failed."));
       setReviews(await fetchTaskReviews(taskId).catch(() => []));
     } finally {
       setReviewing(false);
@@ -120,7 +121,7 @@ export function TaskDetail({
       }
       await onPrepared();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "A goal nao pode ser iniciada.");
+      setError(requestError instanceof Error ? requestError.message : translate("The goal could not be started."));
     } finally {
       setStartingGoal(false);
     }
@@ -137,35 +138,35 @@ export function TaskDetail({
       setFollowUpText("");
       await onPrepared();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Não foi possível criar a continuidade.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to create the follow-up task."));
     } finally {
       setFollowUpBusy(false);
     }
   }
 
   async function handleCancel() {
-    if (!window.confirm(`Cancelar a task #${taskId}? O agente em execucao sera interrompido.`)) return;
+    if (!window.confirm(translate("Cancel task #{id}? The agent will be interrupted.", { id: taskId }))) return;
     setLifecycleBusy("cancel");
     setError(null);
     try {
       await cancelTask(taskId);
       await onPrepared();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar a task.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to cancel task."));
     } finally {
       setLifecycleBusy(null);
     }
   }
 
   async function handleDelete() {
-    if (!window.confirm(`Apagar permanentemente a task #${taskId}? Esta acao nao pode ser desfeita.`)) return;
+    if (!window.confirm(translate("Permanently delete task #{id}? This action cannot be undone.", { id: taskId }))) return;
     setLifecycleBusy("delete");
     setError(null);
     try {
       await deleteTask(taskId);
       await onDeleted();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel apagar a task.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to delete task."));
     } finally {
       setLifecycleBusy(null);
     }
@@ -184,13 +185,13 @@ export function TaskDetail({
       }}
     >
       <aside className="task-detail" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
-        <button className="composer-close" onClick={onClose} aria-label="Fechar detalhes">
+        <button className="composer-close" onClick={onClose} aria-label={translate("Close details")}>
           <Icon name="close" />
         </button>
         <span className="task-detail-id">task #{String(task.id).padStart(2, "0")}</span>
         <StatusPill status={task.status} />
         <h2 id="task-detail-title">{task.title || task.text}</h2>
-        {task.title && task.title !== task.text ? <p className="task-original-request">Pedido original: {task.text}</p> : null}
+        {task.title && task.title !== task.text ? <p className="task-original-request">{translate("Original request")}: {task.text}</p> : null}
         <div className="detail-project">
           <span>@{task.projectKey ?? "inbox"}</span>
           <strong>{task.projectName ?? "Sem projeto"}</strong>
@@ -198,35 +199,35 @@ export function TaskDetail({
 
         <dl className="detail-metadata">
           <div>
-            <dt>Origem</dt>
+            <dt>{translate("Origin")}</dt>
             <dd>{task.source}</dd>
           </div>
           <div>
-            <dt>Criada</dt>
+            <dt>{translate("Created")}</dt>
             <dd>{formatRelative(task.createdAt)}</dd>
           </div>
           <div>
             <dt>Branch</dt>
-            <dd>{task.branchName ?? "ainda não criada"}</dd>
+            <dd>{task.branchName ?? translate("not created yet")}</dd>
           </div>
           <div>
             <dt>Worktree</dt>
-            <dd>{task.worktreePrepared ? "isolada e preparada" : "aguardando preparo"}</dd>
+            <dd>{task.worktreePrepared ? translate("isolated and prepared") : translate("waiting for preparation")}</dd>
           </div>
         </dl>
 
         <div className="detail-flow">
           <span className="is-done">
-            01 <strong>Capturada</strong>
+            01 <strong>{translate("Captured")}</strong>
           </span>
           <span className={task.status !== "queued" ? "is-done" : "is-current"}>
-            02 <strong>Preparada</strong>
+            02 <strong>{translate("Prepared")}</strong>
           </span>
           <span className={task.status === "implementing" ? "is-current" : ""}>
-            03 <strong>Executando</strong>
+            03 <strong>{translate("Running")}</strong>
           </span>
           <span className={task.status === "done" ? "is-done" : ""}>
-            04 <strong>Concluída</strong>
+            04 <strong>{translate("Completed")}</strong>
           </span>
         </div>
 
@@ -234,27 +235,26 @@ export function TaskDetail({
         <button className="detail-primary" disabled={!canPrepare || preparing} onClick={() => void handlePrepare()}>
           <span>
             {preparing
-              ? "Preparando..."
+              ? translate("Preparing…")
               : canPrepare
-              ? "Preparar worktree"
+              ? translate("Prepare worktree")
               : task.worktreePrepared
-              ? "Worktree preparada"
-              : "Ação indisponível"}
+              ? translate("Worktree prepared")
+              : translate("Action unavailable")}
           </span>
           <Icon name={canPrepare ? "arrow" : "shield"} />
         </button>
         <p className="detail-footnote">
-          A preparação cria branch e diretório isolados. Nenhum agente executa código nesta etapa.
+          {translate("Preparation creates an isolated branch and directory. No agent executes code in this step.")}
         </p>
 
         <div className="goal-section">
           <div>
-            <span>Execucao persistente</span>
-            <strong>Goal autonoma</strong>
+            <span>{translate("Persistent execution")}</span>
+            <strong>{translate("Autonomous goal")}</strong>
           </div>
           <p>
-            O Maestro planeja, implementa, testa e revisa. Se a revisao pedir ajustes, ele volta para implementacao sem
-            atualizar a task manualmente.
+            {translate("Maestro plans, implements, tests, and reviews. If review requests changes, it returns to implementation without manually updating the task.")}
           </p>
           <Link
             to={`/tasks/${task.id}/logs`}
@@ -275,28 +275,27 @@ export function TaskDetail({
               fontWeight: 600
             }}
           >
-            <span>Ver logs detalhados de execução</span>
+            <span>{translate("View detailed execution logs")}</span>
             <Icon name="arrow" />
           </Link>
           <form className="task-follow-up" onSubmit={(event) => void handleFollowUpSubmit(event)}>
             <div>
-              <span>Continuidade da task</span>
-              <strong>Criar um ajuste vinculado</strong>
+              <span>{translate("Task continuation")}</span>
+              <strong>{translate("Create a linked follow-up")}</strong>
             </div>
             <p>
-              Registre uma melhoria ou correção sem alterar a evidência da task original. A nova task permanece ligada a
-              esta execução.
+              {translate("Record an improvement or fix without changing the original task evidence. The new task remains linked to this execution.")}
             </p>
-            {task.parentTaskId ? <small>Esta task é continuidade da Task #{task.parentTaskId}.</small> : null}
+            {task.parentTaskId ? <small>{translate("This task continues Task")} #{task.parentTaskId}.</small> : null}
             <textarea
               value={followUpText}
               onChange={(event) => setFollowUpText(event.target.value)}
-              placeholder="Ex.: Corrigir os pontos encontrados na revisão..."
+              placeholder={translate("Example: fix the issues found in review…")}
               rows={3}
-              aria-label="Descreva o ajuste da task de continuidade"
+              aria-label={translate("Describe the follow-up task adjustment")}
             />
             <button type="submit" className="goal-action" disabled={!followUpText.trim() || followUpBusy}>
-              {followUpBusy ? "Criando continuidade..." : "Criar task de continuidade"}
+              {followUpBusy ? translate("Creating follow-up…") : translate("Create follow-up task")}
             </button>
           </form>
           <button
@@ -311,19 +310,19 @@ export function TaskDetail({
           >
             {startingGoal
               ? canResumeGoal
-              ? "Retomando goal..."
-              : "Iniciando goal..."
+              ? translate("Resuming goal…")
+              : translate("Starting goal…")
               : goal?.status === "running"
-              ? `Rodando ${goal.currentPhase} · ${goal.stepCount} etapas`
+              ? `${translate("Running {phase} · {steps} steps", { phase: goal.currentPhase, steps: goal.stepCount })}`
               : goal?.status === "waiting_provider"
-              ? `Aguardando provider · ${goal.stepCount} etapas`
+              ? translate("Waiting for provider · {steps} steps", { steps: goal.stepCount })
               : task.status === "awaiting_human" && goal?.pullRequestUrl
-              ? "Draft PR aguardando merge"
+              ? translate("Draft PR awaiting merge")
               : canResumeGoal
-              ? "Retomar goal do checkpoint"
+              ? translate("Resume goal from checkpoint")
               : task.worktreePrepared
-              ? "Iniciar goal"
-              : "Prepare a worktree primeiro"}
+              ? translate("Start goal")
+              : translate("Prepare the worktree first")}
             <Icon name="pulse" />
           </button>
           {goal ? (
@@ -346,28 +345,28 @@ export function TaskDetail({
                     : goal.lastProvider
                     ? ` · Origem: ${goal.lastProvider}`
                     : ""}
-                  {goal.observability.nextProvider ? ` · Próximo: ${goal.observability.nextProvider}` : ""}
+                  {goal.observability.nextProvider ? ` · ${translate("Next")}: ${goal.observability.nextProvider}` : ""}
                   {goal.observability.checkpointId ? ` · Checkpoint: #${goal.observability.checkpointId}` : ""}
-                  {` · Preservado: ${goal.observability.preservedChanges ? "sim" : "não"}`}
-                  {` · Retomável: ${goal.observability.retryable ? "sim" : "não"}`}
-                  {goal.observability.nextAction ? ` · Ação: ${goal.observability.nextAction}` : ""}
+                  {` · ${translate("Preserved")}: ${goal.observability.preservedChanges ? translate("yes") : translate("no")}`}
+                  {` · ${translate("Resumable")}: ${goal.observability.retryable ? translate("yes") : translate("no")}`}
+                  {goal.observability.nextAction ? ` · ${translate("Action")}: ${goal.observability.nextAction}` : ""}
                 </small>
               ) : goal.status === "waiting_provider" && goal.waitReason ? (
-                <small>
-                  Motivo: {goal.waitReason}
+                  <small>
+                  {translate("Reason")}: {goal.waitReason}
                   {goal.lastProvider ? ` · provider: ${goal.lastProvider}` : ""}
-                  {goal.nextRetryAt ? ` · nova tentativa: ${new Date(goal.nextRetryAt).toLocaleTimeString("pt-BR")}` : ""}
+                  {goal.nextRetryAt ? ` · ${translate("next retry")}: ${new Date(goal.nextRetryAt).toLocaleTimeString()}` : ""}
                 </small>
               ) : null}
               {goal.lastError ? <small>{goal.lastError}</small> : null}
               {goal.pullRequestUrl ? (
                 isOpenableExternalUrl(goal.pullRequestUrl) ? (
                   <a href={goal.pullRequestUrl} target="_blank" rel="noreferrer">
-                    Abrir draft PR
+                    {translate("Open draft PR")}
                   </a>
                 ) : (
-                  <span title="Esta execução não criou um PR no GitHub; a entrega ficou apenas na branch local.">
-                    PR GitHub indisponível (branch local)
+                  <span title={translate("This execution did not create a GitHub PR; delivery stayed on the local branch.")}>
+                    {translate("GitHub PR unavailable (local branch)")}
                   </span>
                 )
               ) : null}
@@ -377,15 +376,15 @@ export function TaskDetail({
 
         <div className="review-section">
           <div>
-            <span>Revisão externa</span>
-            <strong>Claude design review</strong>
+            <span>{translate("External review")}</span>
+            <strong>{translate("Claude design review")}</strong>
           </div>
           <button
             className="review-action"
             disabled={!task.worktreePrepared || reviewing}
             onClick={() => void handleClaudeReview()}
           >
-            {reviewing ? "Claude está analisando..." : task.worktreePrepared ? "Pedir revisão" : "Prepare a worktree primeiro"}
+            {reviewing ? translate("Claude is reviewing…") : task.worktreePrepared ? translate("Request review") : translate("Prepare the worktree first")}
             <Icon name="spark" />
           </button>
           {reviews.map((review) => (
@@ -396,10 +395,10 @@ export function TaskDetail({
               </header>
               <strong>
                 {review.status === "completed"
-                  ? "Revisão concluída"
+                  ? translate("Review completed")
                   : review.status === "auth_required"
-                  ? "Autenticação necessária"
-                  : "Revisão falhou"}
+                  ? translate("Authentication required")
+                  : translate("Review failed")}
               </strong>
               <p>{review.content || review.error}</p>
             </article>
@@ -408,16 +407,16 @@ export function TaskDetail({
 
         <div className="task-danger-zone">
           <div>
-            <span>Controle da task</span>
-            <strong>Cancelar ou apagar</strong>
+            <span>{translate("Task controls")}</span>
+            <strong>{translate("Cancel or delete")}</strong>
           </div>
-          <p>Cancelar interrompe a execucao e preserva o historico. Apagar so e permitido sem worktree e sem historico de goal.</p>
+          <p>{translate("Cancel interrupts execution and preserves history. Deletion is allowed only without a worktree and goal history.")}</p>
           <div className="task-danger-actions">
             <button disabled={!canCancel || lifecycleBusy !== null} onClick={() => void handleCancel()}>
-              {lifecycleBusy === "cancel" ? "Cancelando..." : "Cancelar task"}
+              {lifecycleBusy === "cancel" ? translate("Cancelling…") : translate("Cancel task")}
             </button>
             <button disabled={!canDelete || lifecycleBusy !== null} onClick={() => void handleDelete()}>
-              {lifecycleBusy === "delete" ? "Apagando..." : "Apagar task"}
+              {lifecycleBusy === "delete" ? translate("Deleting…") : translate("Delete task")}
             </button>
           </div>
         </div>

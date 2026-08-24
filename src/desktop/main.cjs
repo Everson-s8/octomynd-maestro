@@ -200,7 +200,7 @@ async function bootstrap() {
     if (!healthy) {
       dialog.showErrorBox(
         "Maestro",
-        "O serviço do Maestro não respondeu a tempo. Verifique os logs e reabra o aplicativo."
+        "The Maestro service did not respond in time. Check the logs and reopen the application."
       );
       stopBackend();
       app.quit();

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { DashboardProject, previewWorkIntake, submitWorkIntake, WorkIntakePreviewResult } from "../api";
+import { translate } from "../i18n";
 
 export function TaskComposer({
   open,
@@ -50,7 +51,7 @@ export function TaskComposer({
       });
       setPreview(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível analisar a demanda.");
+      setError(err instanceof Error ? err.message : translate("Unable to analyze the request."));
     } finally {
       setAnalyzing(false);
     }
@@ -71,7 +72,7 @@ export function TaskComposer({
         // since F2: automatic classification always creates something now.
         setPreview({ decision: result.decision, explanation: result.explanation });
         setError(
-          `Nada foi cadastrado: ${result.explanation} Troque a classificação em Opções avançadas para cadastrar.`
+          `${translate("Nothing was created")}: ${result.explanation} ${translate("Change the classification in Advanced options to create it.")}`
         );
         return;
       }
@@ -81,7 +82,7 @@ export function TaskComposer({
       await onCreated();
       onClose();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Não foi possível submeter a demanda.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to submit the request."));
     } finally {
       setSubmitting(false);
     }
@@ -105,10 +106,10 @@ export function TaskComposer({
         </button>
 
         <div className="modal-head">
-          <div className="modal-eyebrow">Nova missão</div>
+      <div className="modal-eyebrow">{translate("New mission")}</div>
           <h3 id="composer-title">O que colocamos em movimento?</h3>
           <p>
-            Crie uma demanda local. O Maestro classifica o Work Intake, organiza a fila e mantém o projeto isolado.
+            {translate("Create a local request. Maestro classifies the work intake, organizes the queue, and keeps the project isolated.")}
           </p>
         </div>
 
@@ -155,7 +156,7 @@ export function TaskComposer({
                 setText(event.target.value);
                 if (preview) setPreview(null);
               }}
-              placeholder="Ex.: revisar a integração de voz e propor testes de latência"
+              placeholder={translate("Example: review the voice integration and propose latency tests")}
               minLength={4}
               maxLength={2000}
               required
@@ -176,26 +177,26 @@ export function TaskComposer({
             <div className="hint-box" role="status">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
               <span>
-                Classificação: <code>{preview.decision.classification}</code> ({Math.round(preview.decision.confidence * 100)}% confiança) — {preview.explanation}
+                {translate("Classification")}: <code>{preview.decision.classification}</code> ({Math.round(preview.decision.confidence * 100)}% {translate("confidence")}) — {preview.explanation}
               </span>
             </div>
           ) : null}
 
           <details style={{ marginBottom: "12px", fontSize: "13px", color: "var(--text-2)" }}>
-            <summary style={{ cursor: "pointer", userSelect: "none" }}>Opções avançadas</summary>
+            <summary style={{ cursor: "pointer", userSelect: "none" }}>{translate("Advanced options")}</summary>
             <div className="mfield" style={{ marginTop: "10px" }}>
               <label htmlFor="composer-override">
-                Classificação do Work Intake <span className="opt">padrão: automático</span>
+                {translate("Work intake classification")} <span className="opt">{translate("default: automatic")}</span>
               </label>
               <select
                 id="composer-override"
                 value={override}
                 onChange={(e) => setOverride(e.target.value as typeof override)}
               >
-                <option value="automatic">Automático</option>
+                <option value="automatic">{translate("Automatic")}</option>
                 <option value="direct_task">Tarefa direta</option>
                 <option value="feature_plan">Plano de funcionalidade</option>
-                <option value="needs_clarification">Necessita clarificação</option>
+                <option value="needs_clarification">{translate("Needs clarification")}</option>
               </select>
             </div>
           </details>
@@ -207,7 +208,7 @@ export function TaskComposer({
 
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={submitting}>
-              Cancelar
+              {translate("Cancel")}
             </button>
             <button type="submit" className="btn-new" disabled={submitting || !projectKey || text.trim().length < 4}>
               {submitting ? "Criando..." : "Criar Demanda"}

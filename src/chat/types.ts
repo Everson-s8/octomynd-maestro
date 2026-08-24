@@ -5,6 +5,7 @@ import type { AgentProviderId } from "../agents/types.js";
 export type OperationalChatSurface = "dashboard" | "telegram";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
 export type ChatAccessMode = "read_only" | "standard" | "full";
+export type ChatLocale = "en" | "pt-BR";
 
 /** Sentinel used for conversations that are not attached to a project. */
 export const GLOBAL_CHAT_PROJECT_KEY = "__maestro__";
@@ -23,6 +24,7 @@ export type OperationalChatThreadInput = {
   projectKey: string;
   title?: string | null;
   accessMode?: ChatAccessMode | null;
+  locale?: ChatLocale | null;
 };
 
 export type ChatEvidenceTaskFact = {
@@ -158,6 +160,7 @@ export type OperationalChatRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  locale?: ChatLocale | null;
 };
 
 export type OperationalChatResponse = {
@@ -181,6 +184,7 @@ export type OperationalChatActionRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  locale?: ChatLocale | null;
 };
 
 export type OperationalChatActionResponse = {

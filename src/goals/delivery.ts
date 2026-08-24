@@ -150,7 +150,7 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
     "## Controle",
     `- Task do Maestro: #${task.id}`,
     `- Branch: \`${task.branchName}\``,
-    "- PR criado como draft; a revisão e o merge continuam sendo decisões humanas."
+    "- PR is created as a draft; review and merge remain human decisions."
   ].join("\n");
   const created = runGh([
     "pr", "create", "--draft", "--base", task.baseBranch || project.defaultBranch, "--head", task.branchName!,

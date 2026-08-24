@@ -165,7 +165,7 @@ describe("Work Intake domain policy", () => {
     expect(decision.acceptanceCriteria[0]).not.toContain("/home/user");
   });
 
-  it("provides concise Portuguese explanations for internal decisions", () => {
+  it("provides concise English explanations for internal decisions", () => {
     const directDecision = classifyWorkIntake({ objective: "Single bounded bug fix" });
     const featureDecision = classifyWorkIntake({
       objective: "Multi-service feature",
@@ -173,8 +173,8 @@ describe("Work Intake domain policy", () => {
     });
     const clarifyDecision = classifyWorkIntake({ objective: "" });
 
-    expect(explainWorkIntakeDecision(directDecision)).toContain("Tarefa Direta");
-    expect(explainWorkIntakeDecision(featureDecision)).toContain("Plano de Funcionalidade");
-    expect(explainWorkIntakeDecision(clarifyDecision)).toContain("clarificação");
+    expect(explainWorkIntakeDecision(directDecision)).toContain("Direct Task");
+    expect(explainWorkIntakeDecision(featureDecision)).toContain("Feature Plan");
+    expect(explainWorkIntakeDecision(clarifyDecision)).toContain("Clarification");
   });
 });

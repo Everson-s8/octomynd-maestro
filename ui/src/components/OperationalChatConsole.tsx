@@ -15,6 +15,7 @@ import {
 } from "../api";
 import { formatRelative } from "../helpers";
 import { Icon } from "./Icon";
+import { translate, useI18n } from "../i18n";
 
 export function OperationalChatConsole({
   projects,
@@ -23,6 +24,7 @@ export function OperationalChatConsole({
   projects: DashboardProject[];
   onChanged?: () => void;
 }) {
+  const { locale } = useI18n();
   const [selectedProjectKey, setSelectedProjectKey] = useState<string>(
     projects.length > 0 ? projects[0].key : GLOBAL_CHAT_PROJECT_KEY
   );
@@ -61,7 +63,7 @@ export function OperationalChatConsole({
       const selected = nextThreads.find((thread) => thread.id === selectedThreadId) ?? nextThreads[0];
       setAccessMode(selected.accessMode);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar as conversas.");
+      setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
     }
   }, []);
 
@@ -79,7 +81,7 @@ export function OperationalChatConsole({
       setError(null);
       setMessages(await fetchChatMessages(projectKey, 100, threadId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o histórico.");
+      setError(err instanceof Error ? err.message : translate("Unable to load chat history."));
     } finally {
       setHistoryLoading(false);
     }
@@ -119,14 +121,14 @@ export function OperationalChatConsole({
     setThreadBusy(true);
     setError(null);
     try {
-      const thread = await createChatThread(selectedProjectKey, "Nova conversa", accessMode);
+      const thread = await createChatThread(selectedProjectKey, translate("New conversation"), accessMode);
       setThreads((current) => [thread, ...current]);
       setSelectedThreadId(thread.id);
       setMessages([]);
       setAccessMode(thread.accessMode);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao criar uma nova conversa.");
+      setError(err instanceof Error ? err.message : translate("Unable to create a new conversation."));
     } finally {
       setThreadBusy(false);
     }
@@ -152,7 +154,7 @@ export function OperationalChatConsole({
         setMessages([]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao excluir a conversa.");
+      setError(err instanceof Error ? err.message : translate("Unable to delete the conversation."));
     } finally {
       setConfirmDeleteId(null);
       setThreadBusy(false);
@@ -180,14 +182,14 @@ export function OperationalChatConsole({
     setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode);
+      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale);
       await Promise.all([
         loadHistory(selectedProjectKey, selectedThreadId),
         loadThreads(selectedProjectKey)
       ]);
       if (onChanged) onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao enviar mensagem.");
+      setError(err instanceof Error ? err.message : translate("Unable to send the message."));
     } finally {
       setLoading(false);
     }
@@ -205,7 +207,7 @@ export function OperationalChatConsole({
     ].includes(action.type);
     if (requiresConfirmation) {
       const confirmed = window.confirm(
-        `${action.label}\n\n${action.description}\n\nDeseja realmente executar esta ação?`
+        `${action.label}\n\n${action.description}\n\n${translate("Do you really want to run this action?")}`
       );
       if (!confirmed) return;
     }
@@ -215,11 +217,11 @@ export function OperationalChatConsole({
 
     try {
       if (!selectedThreadId) return;
-      await executeChatAction(selectedProjectKey, action, selectedThreadId, accessMode);
+      await executeChatAction(selectedProjectKey, action, selectedThreadId, accessMode, locale);
       await loadHistory(selectedProjectKey, selectedThreadId);
       if (onChanged) onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao executar ação governada.");
+      setError(err instanceof Error ? err.message : translate("Unable to execute the governed action."));
     } finally {
       setActionExecuting(null);
     }
@@ -229,22 +231,22 @@ export function OperationalChatConsole({
     <section className="chat-page" id="chat" aria-labelledby="chat-title">
       <div className="chat-page-top">
         <div>
-          <div className="chat-eyebrow">Orquestrador unificado</div>
+          <div className="chat-eyebrow">{translate("Unified orchestrator")}</div>
           <h1 id="chat-title">Chat</h1>
         </div>
         <label className="chat-project-picker" htmlFor="chat-project-select">
-          <span>Contexto</span>
+          <span>{translate("Context")}</span>
           <select id="chat-project-select" value={selectedProjectKey} onChange={(e) => setSelectedProjectKey(e.target.value)}>
-            <option value={GLOBAL_CHAT_PROJECT_KEY}>Maestro (geral)</option>
+            <option value={GLOBAL_CHAT_PROJECT_KEY}>{translate("Maestro (general)")}</option>
             {projects.map((p) => (
               <option key={p.key} value={p.key}>@{p.key}</option>
             ))}
           </select>
         </label>
         <label className="chat-access-picker" htmlFor="chat-access-select">
-          <span>Acesso</span>
+          <span>{translate("Access")}</span>
           <select id="chat-access-select" value={accessMode} onChange={(e) => setAccessMode(e.target.value as ChatAccessMode)}>
-            <option value="read_only">Somente leitura</option>
+            <option value="read_only">{translate("Read-only")}</option>
             <option value="standard">Standard</option>
             <option value="full">Full Access</option>
           </select>
@@ -252,10 +254,10 @@ export function OperationalChatConsole({
       </div>
 
       <div className="chat-workspace">
-        <aside className="chat-threads" aria-label="Conversas">
+          <aside className="chat-threads" aria-label={translate("Conversations")}>
           <div className="chat-threads-header">
-            <span>Conversas</span>
-            <button type="button" className="chat-new-button" onClick={() => void handleNewChat()} disabled={!selectedProjectKey || threadBusy} title="Novo chat" aria-label="Criar novo chat">
+            <span>{translate("Conversations")}</span>
+            <button type="button" className="chat-new-button" onClick={() => void handleNewChat()} disabled={!selectedProjectKey || threadBusy} title={translate("New chat")} aria-label={translate("Create a new chat")}>
               <Icon name="plus" />
             </button>
           </div>
@@ -274,8 +276,8 @@ export function OperationalChatConsole({
                 <button
                   type="button"
                   className={`chat-thread-delete ${confirmDeleteId === thread.id ? "is-confirm" : ""}`}
-                  title={confirmDeleteId === thread.id ? "Clique novamente para confirmar" : "Excluir conversa"}
-                  aria-label={confirmDeleteId === thread.id ? "Confirmar exclusão" : "Excluir conversa"}
+                  title={confirmDeleteId === thread.id ? translate("Click again to confirm") : translate("Delete conversation")}
+                  aria-label={confirmDeleteId === thread.id ? translate("Confirm deletion") : translate("Delete conversation")}
                   onClick={(event) => void handleDeleteChat(event, thread)}
                 >
                   <Icon name={confirmDeleteId === thread.id ? "check" : "trash"} />
@@ -283,17 +285,17 @@ export function OperationalChatConsole({
               </div>
             ))}
           </div>
-          {threads.length === 0 ? <div className="chat-thread-empty">Clique em + para iniciar uma conversa.</div> : null}
+          {threads.length === 0 ? <div className="chat-thread-empty">{translate("Click + to start a conversation.")}</div> : null}
         </aside>
 
         <div className="chat-main-panel">
           <header className="chat-main-header">
             <div>
-              <strong>{selectedThread?.title ?? "Nenhuma conversa"}</strong>
+              <strong>{selectedThread?.title ?? translate("No conversation")}</strong>
               <span>{projectLabel} · Maestro</span>
             </div>
             <span className="chat-context-badge">
-              {accessMode === "read_only" ? "somente leitura" : accessMode === "full" ? "acesso amplo governado" : "acesso padrão"}
+              {accessMode === "read_only" ? translate("read-only") : accessMode === "full" ? translate("governed full access") : translate("standard access")}
             </span>
           </header>
 
@@ -301,14 +303,14 @@ export function OperationalChatConsole({
 
           <div className="chat-body" ref={chatBodyRef} aria-busy={loading || historyLoading}>
             {historyLoading ? (
-              <div className="chat-loading-history"><span className="chat-spinner" /> Carregando conversa…</div>
+              <div className="chat-loading-history"><span className="chat-spinner" /> {translate("Loading conversation…")}</div>
             ) : messages.length === 0 ? (
               <div className="chat-empty-state">
                 <div className="chat-empty-icon"><Icon name="chat" /></div>
-                <h2>Nova conversa</h2>
+                <h2>{translate("New conversation")}</h2>
                 <p>{selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
-                  ? "Converse com o Maestro sobre providers, projetos e execução."
-                  : "Pergunte sobre este projeto, uma task bloqueada ou qualquer dúvida de implementação."}</p>
+                  ? translate("Talk to Maestro about providers, projects, and execution.")
+                  : translate("Ask about this project, a blocked task, or any implementation question.")}</p>
               </div>
             ) : (
               messages.map((msg) => {
@@ -329,15 +331,15 @@ export function OperationalChatConsole({
                   <div key={msg.id} className={`chat-message ${isUser ? "is-user" : isSystem ? "is-system" : "is-maestro"}`}>
                     <div className="chat-avatar"><Icon name={isUser ? "hand" : isSystem ? "shield" : "ghost"} /></div>
                     <div className="chat-message-content">
-                      <span className="chat-message-label">{isUser ? "Você" : isSystem ? "Sistema" : "Maestro"}</span>
+                      <span className="chat-message-label">{isUser ? translate("You") : isSystem ? translate("System") : "Maestro"}</span>
                       <div className="chat-bubble">{msg.messageText}</div>
                       {actions.length > 0 && !isUser ? (
                         <div className="chat-actions">
-                          <span>Ações disponíveis</span>
+                          <span>{translate("Available actions")}</span>
                           <div>
                             {actions.map((act) => (
                               <button key={act.id} type="button" disabled={actionExecuting === act.id} onClick={() => void handleAction(act)}>
-                                {actionExecuting === act.id ? "Executando…" : act.label}
+                                {actionExecuting === act.id ? translate("Executing…") : act.label}
                               </button>
                             ))}
                           </div>
@@ -353,15 +355,15 @@ export function OperationalChatConsole({
               <div className="chat-thinking" role="status" aria-live="polite">
                 <div className="chat-avatar"><Icon name="ghost" /></div>
                 <div className="chat-thinking-card">
-                  <span>Maestro está respondendo</span>
+                  <span>{translate("Maestro is responding")}</span>
                   <div className="chat-thinking-dots"><i /><i /><i /></div>
                 </div>
               </div>
             ) : null}
           </div>
 
-          <div className="chat-suggestions" aria-label="Sugestões">
-            {["O que está acontecendo no projeto?", "Por que uma task parou?", "Quais providers estão ativos?"] .map((suggestion) => (
+          <div className="chat-suggestions" aria-label={translate("Suggestions")}>
+            {[translate("What is happening in the project?"), translate("Why did a task stop?"), translate("Which providers are active?")] .map((suggestion) => (
               <button type="button" key={suggestion} onClick={() => setInputText(suggestion)}>{suggestion}</button>
             ))}
           </div>
@@ -370,13 +372,13 @@ export function OperationalChatConsole({
             <input
               ref={inputRef}
               type="text"
-              placeholder={loading ? "Maestro está respondendo…" : "Pergunte ao Maestro…"}
+              placeholder={loading ? translate("Maestro is responding") : translate("Ask Maestro…")}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               disabled={loading || historyLoading || !selectedThreadId}
-              aria-label="Mensagem para o Maestro"
+              aria-label={translate("Message Maestro")}
             />
-            <button type="submit" disabled={loading || historyLoading || !inputText.trim() || !selectedThreadId} title="Enviar mensagem" aria-label="Enviar mensagem">
+            <button type="submit" disabled={loading || historyLoading || !inputText.trim() || !selectedThreadId} title={translate("Send message")} aria-label={translate("Send message")}>
               <Icon name="send" />
             </button>
           </form>

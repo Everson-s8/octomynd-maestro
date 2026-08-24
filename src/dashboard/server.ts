@@ -163,7 +163,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
                 type: "backlog.tick_failed",
                 text: error instanceof Error
                   ? error.message
-                  : "Falha ao iniciar o autopilot após criar a task pelo chat.",
+                  : "Failed to start autopilot after creating the task from chat.",
                 taskId
               });
             }
@@ -631,7 +631,7 @@ async function routeRequest(
     return;
   }
 
-  // Quota / rate-limit usage indicator (consumo disponível per provider).
+  // Quota / rate-limit usage indicator per provider.
   if (request.method === "GET" && url.pathname === "/api/quota") {
     const providerIds = await readConnectedProviderIds(options);
     const quota = await fetchAllQuota(buildQuotaFetchers({ providerIds }));
@@ -1489,7 +1489,7 @@ async function routeRequest(
         options.database.addEvent({
           source: "maestro",
           type: "backlog.tick_failed",
-          text: error instanceof Error ? error.message : "Falha ao iniciar o autopilot após criar a task.",
+          text: error instanceof Error ? error.message : "Failed to start autopilot after creating the task.",
           taskId: task.id
         });
       });
@@ -1517,7 +1517,7 @@ async function routeRequest(
         options.database.addEvent({
           source: "maestro",
           type: "backlog.tick_failed",
-          text: error instanceof Error ? error.message : "Falha ao iniciar o autopilot após criar a continuação.",
+          text: error instanceof Error ? error.message : "Failed to start autopilot after creating the follow-up.",
           taskId: task.id
         });
       });
@@ -1627,6 +1627,7 @@ async function routeRequest(
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
     const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
+    const locale = body.locale === "pt-BR" ? "pt-BR" : "en";
 
     if (!message) {
       sendJson(response, 400, { error: "message_is_required" });
@@ -1639,7 +1640,8 @@ async function routeRequest(
         threadId,
         surface: "dashboard",
         message,
-        accessMode
+        accessMode,
+        locale
       });
       sendJson(response, 200, chatResponse);
     } catch (error) {
@@ -1654,6 +1656,7 @@ async function routeRequest(
     const action = body.action as import("../chat/types.js").GovernedChatAction;
     const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
     const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
+    const locale = body.locale === "pt-BR" ? "pt-BR" : "en";
 
     if (!action || !(action as any).type || (action as any).targetId === undefined) {
       sendJson(response, 400, { error: "valid_action_is_required" });
@@ -1666,7 +1669,8 @@ async function routeRequest(
         threadId,
         surface: "dashboard",
         action,
-        accessMode
+        accessMode,
+        locale
       });
       sendJson(response, 200, actionResult);
     } catch (error) {
@@ -2071,7 +2075,7 @@ async function testAgentConnection(command: string, args: string[]): Promise<{ o
   if (!executable) {
     return {
       ok: false,
-      detail: `CLI '${command}' não foi encontrado no PATH.`,
+      detail: `CLI '${command}' was not found on PATH.`,
       executable: null
     };
   }
@@ -2082,7 +2086,7 @@ async function testAgentConnection(command: string, args: string[]): Promise<{ o
       ? { ok: true, detail: `Conectado (${command}).`, executable }
       : { ok: false, detail: `Falha ao executar ${command}.`, executable };
   }
-  return { ok: true, detail: `Executável encontrado (${command}).`, executable };
+  return { ok: true, detail: `Executable found (${command}).`, executable };
 }
 
 /** Runs `command args` asynchronously; resolves true only on exit 0. */

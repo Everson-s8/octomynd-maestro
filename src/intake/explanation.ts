@@ -3,23 +3,23 @@ import { WorkIntakeDecision } from "./types.js";
 export function explainWorkIntakeDecision(decision: WorkIntakeDecision): string {
   switch (decision.reasonCode) {
     case "single_bounded_objective":
-      return "Demanda com objetivo único e delimitado. Classificada como Tarefa Direta.";
+      return "Request has one bounded objective. Classified as a Direct Task.";
     case "coordination_required":
-      return "Demanda requer coordenação de dependências ou múltiplos fluxos paralelos. Classificada como Plano de Funcionalidade.";
+      return "Request requires dependency coordination or multiple parallel flows. Classified as a Feature Plan.";
     case "multiple_acceptance_units":
-      return "Demanda possui múltiplos critérios de aceite ou volume amplo de modificações. Classificada como Plano de Funcionalidade.";
+      return "Request has multiple acceptance units or a broad change volume. Classified as a Feature Plan.";
     case "missing_objective":
-      return "Objetivo ausente ou em branco. Necessita clarificação antes de prosseguir.";
+      return "Objective is missing or blank. Clarification is required before proceeding.";
     case "missing_acceptance_criteria":
-      return "Objetivo vago sem critérios de aceite suficientes. Necessita clarificação.";
+      return "Objective is vague and lacks sufficient acceptance criteria. Clarification is required.";
     case "explicit_override_direct_task":
-      return "Sobrescrita explícita do usuário aplicada: Tarefa Direta.";
+      return "Explicit user override applied: Direct Task.";
     case "explicit_override_feature_plan":
-      return "Sobrescrita explícita do usuário aplicada: Plano de Funcionalidade.";
+      return "Explicit user override applied: Feature Plan.";
     case "explicit_override_needs_clarification":
-      return "Sobrescrita explícita do usuário aplicada: Necessita Clarificação.";
+      return "Explicit user override applied: Needs Clarification.";
     case "fallback_needs_clarification":
     default:
-      return "Classificação incerta. Necessita clarificação.";
+      return "Classification is uncertain. Clarification is required.";
   }
 }

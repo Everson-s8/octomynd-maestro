@@ -19,8 +19,8 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 ## Requirements
 
-- Node.js `>=20.17.0 <25` for the CLI/runtime. The full source checkout and Windows
-  packaging toolchain use Node.js `22.12.x` or newer within that range; see
+- Node.js `>=22.12.0 <25` for the CLI/runtime, source checkout, and Windows
+  packaging toolchain; see
   `.node-version` and `docs/desktop-release.md`.
 - Git for project registration and worktree-based execution.
 - At least one supported provider CLI or API credential for agent execution.
@@ -30,12 +30,14 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 The maintained user documentation is published at [docs.octomynd.com](https://docs.octomynd.com/)
 with English and Brazilian Portuguese guides. Start with the
-[Maestro guide](https://docs.octomynd.com/maestro) or the local
+[Maestro guide](https://docs.octomynd.com/en/) or the local
 [`INSTALL.md`](INSTALL.md) for a development checkout.
 
 This repository contains the runtime and source-level design notes. Product guides, onboarding
 walkthroughs, and operational documentation live in the separate
 [`Octomynd/octomynd-docs`](https://github.com/Octomynd/octomynd-docs) repository.
+For a local Portuguese quick start, see [`README.pt-BR.md`](README.pt-BR.md) and
+[`INSTALL.pt-BR.md`](INSTALL.pt-BR.md).
 
 ## Desktop app (Windows)
 
@@ -79,7 +81,7 @@ checkout, use `npm run cli -- <command>`; in the installed app, use `maestro.cmd
 
 ```powershell
 maestro.cmd project list
-maestro.cmd task create <project-key> "descreva a tarefa"
+maestro.cmd task create <project-key> "describe the task"
 maestro.cmd task prepare <task-id>
 maestro.cmd task start <task-id>
 maestro.cmd task logs <task-id> --follow

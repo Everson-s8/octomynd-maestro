@@ -46,8 +46,8 @@ describe("Unified Operational Chat (Task #52)", () => {
 
     expect(dashResp.projectKey).toBe("maestro");
     expect(dashResp.surface).toBe("dashboard");
-    // Short natural reply: both branches (stuck or not) mention "parada".
-    expect(dashResp.explanation.toLowerCase()).toContain("parada");
+    // Short natural reply: both branches (stuck or not) mention stalled work.
+    expect(dashResp.explanation.toLowerCase()).toContain("stalled");
 
     const tgResp = await chatService.ask({
       projectKey: "maestro",
@@ -133,7 +133,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       message: "Oi"
     });
 
-    expect(response.explanation.toLowerCase()).toMatch(/oi|ajudar/);
+    expect(response.explanation.toLowerCase()).toMatch(/hi|help/);
     expect(response.explanation).not.toContain("task(s) ativa(s)");
     expect(response.actions).toEqual([]);
   });
@@ -147,7 +147,7 @@ describe("Unified Operational Chat (Task #52)", () => {
     });
 
     expect(response.projectKey).toBe("__maestro__");
-    expect(response.evidence.project.name).toBe("Maestro (geral)");
+    expect(response.evidence.project.name).toBe("Maestro (general)");
     expect((await chatService.listThreads("")).length).toBe(1);
     expect((await chatService.getHistory("", 20)).length).toBe(2);
   });
@@ -186,7 +186,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       surface: "dashboard",
       accessMode: "read_only",
       action: cancel!
-    })).rejects.toThrow(/somente leitura/i);
+    })).rejects.toThrow(/read-only/i);
   });
 
   it("exposes resume from checkpoint for a blocked goal instead of only restarting the task", async () => {
@@ -246,7 +246,7 @@ describe("Unified Operational Chat (Task #52)", () => {
     });
 
     expect(actionResult.success).toBe(true);
-    expect(actionResult.resultSummary).toContain(`Task #${task.id} reiniciada`);
+    expect(actionResult.resultSummary).toContain(`Task #${task.id} restarted`);
 
     const updatedTask = database.getTask(task.id);
     expect(updatedTask.status).toBe("queued");
@@ -262,7 +262,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       action: retryAction!
     });
     expect(staleActionResult.success).toBe(false);
-    expect(staleActionResult.resultSummary).toContain("nao e mais aplicavel");
+    expect(staleActionResult.resultSummary).toContain("no longer applicable");
   });
 
   it("recognizes the task wording used by users and queues it only after confirmation", async () => {
@@ -287,7 +287,7 @@ describe("Unified Operational Chat (Task #52)", () => {
     const createAction = response.actions.find((action) => action.type === "create_task");
     expect(createAction).toBeDefined();
     expect(database.listTasks(20)).toHaveLength(0);
-    expect(response.explanation).toContain("Criar Task");
+    expect(response.explanation).toContain("Create task");
 
     const actionResult = await chatService.executeAction({
       projectKey: "maestro",
@@ -295,7 +295,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       action: createAction!
     });
     expect(actionResult.success).toBe(true);
-    expect(actionResult.resultSummary).toContain("enviada para a fila");
+    expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
   });
@@ -381,7 +381,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       projectName: "maestro",
       databasePath: dbPath,
       worktreesPath: tmpDir,
-      execution: { rootPath: tmpDir, worktreesPath: tmpDir, expectedNodeVersion: "20.17.0", supportedNodeRange: ">=20.17.0 <25" },
+      execution: { rootPath: tmpDir, worktreesPath: tmpDir, expectedNodeVersion: "22.12.0", supportedNodeRange: ">=22.12.0 <25" },
       dashboard: { enabled: true, host: "127.0.0.1", port: 0 },
       autopilot: { enabled: false, pollIntervalMs: 5000, maxConcurrentGoals: 1 },
       runtime: { tokenEfficient: true },
@@ -489,7 +489,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       projectName: "maestro",
       databasePath: dbPath,
       worktreesPath: tmpDir,
-      execution: { rootPath: tmpDir, worktreesPath: tmpDir, expectedNodeVersion: "20.17.0", supportedNodeRange: ">=20.17.0 <25" },
+      execution: { rootPath: tmpDir, worktreesPath: tmpDir, expectedNodeVersion: "22.12.0", supportedNodeRange: ">=22.12.0 <25" },
       dashboard: { enabled: false, host: "127.0.0.1", port: 0 },
       autopilot: { enabled: false, pollIntervalMs: 5000, maxConcurrentGoals: 1 },
       runtime: { tokenEfficient: true },

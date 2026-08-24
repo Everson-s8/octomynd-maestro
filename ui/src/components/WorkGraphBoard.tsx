@@ -3,6 +3,7 @@ import { cancelWorkGraph, DashboardWorkGraph } from "../api";
 import { formatWorkGraphDuration, isWorkGraphCancellable } from "../workGraphs";
 import { EmptyState } from "./EmptyState";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function WorkGraphBoard({
   workGraphs,
@@ -16,14 +17,14 @@ export function WorkGraphBoard({
   const active = workGraphs.filter((graph) => !["completed", "cancelled"].includes(graph.status));
 
   async function handleCancel(graph: DashboardWorkGraph) {
-    if (!window.confirm(`Cancelar o Work Graph #${graph.id}? Artefatos e historico serao preservados.`)) return;
+    if (!window.confirm(`${translate("Cancel Work Graph #{id}? Artifacts and history will be preserved.", { id: graph.id })}`)) return;
     setBusyId(graph.id);
     setError(null);
     try {
-      await cancelWorkGraph(graph.id, "Cancelado pelo dashboard.");
+      await cancelWorkGraph(graph.id, translate("Cancelled from the dashboard."));
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar o Work Graph.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to cancel the Work Graph."));
     } finally {
       setBusyId(null);
     }
@@ -37,8 +38,8 @@ export function WorkGraphBoard({
         {workGraphs.length === 0 ? (
           <EmptyState
             icon="spark"
-            title="Nenhum Work Graph"
-            text="Tasks complexas poderao aparecer aqui como DAGs governados."
+            title={translate("No Work Graph")}
+            text={translate("Complex tasks may appear here as governed DAGs.")}
           />
         ) : (
           workGraphs.slice(0, 6).map((graph) => (
@@ -59,12 +60,12 @@ export function WorkGraphBoard({
               <p>{graph.objective}</p>
               <div className="work-graph-evidence">
                 <span>
-                  Adocao <strong>{graph.adoption?.decision ?? "sem evento"}</strong>
+                  {translate("Adoption")} <strong>{graph.adoption?.decision ?? translate("no event")}</strong>
                   {graph.adoption ? ` - ${graph.adoption.reason}` : ""}
                 </span>
                 <span>
-                  Canario <strong>{graph.canary.quality}</strong> - {formatWorkGraphDuration(graph.canary.durationMs)} -
-                  {` ${graph.canary.attempts} attempts - ${graph.canary.fallbacks} fallbacks - ${graph.canary.conflicts} conflitos - ~${graph.canary.estimatedTokens} tokens`}
+                  {translate("Canary")} <strong>{graph.canary.quality}</strong> - {formatWorkGraphDuration(graph.canary.durationMs)} -
+                  {` ${graph.canary.attempts} ${translate("attempts")} - ${graph.canary.fallbacks} ${translate("fallbacks")} - ${graph.canary.conflicts} ${translate("conflicts")} - ~${graph.canary.estimatedTokens} tokens`}
                 </span>
               </div>
               <div className="worker-node-strip">
@@ -97,10 +98,10 @@ export function WorkGraphBoard({
                 <span>Paralelo: {graph.maxParallelReaders} readers</span>
                 {isWorkGraphCancellable(graph) ? (
                   <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
-                    {busyId === graph.id ? "Cancelando..." : "Cancelar graph"}
+                    {busyId === graph.id ? translate("Cancelling…") : translate("Cancel graph")}
                   </button>
                 ) : (
-                  <small>Historico preservado</small>
+                  <small>{translate("History preserved")}</small>
                 )}
               </footer>
             </article>

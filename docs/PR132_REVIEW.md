@@ -83,8 +83,7 @@ provider/task states.
 - Windows binaries are unsigned. GitHub Releases plus SHA-256 checksums are the
   free distribution path; SmartScreen may still show the first-download warning.
 - The full development tree is audited clean with the current Electron/build
-  toolchain. Contributors should use Node 22.12+ for the full checkout; the
-  runtime contract still accepts Node 20.17 through Node 24.
+  toolchain. Contributors and runtime users should use Node 22.12 through Node 24.
 - Full Access is a governed Maestro action policy, not an unrestricted operating-system
   shell. Provider CLIs can still impose their own permission prompts or policies.
 

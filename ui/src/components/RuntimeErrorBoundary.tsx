@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { translate } from "../i18n";
 
 type RuntimeErrorBoundaryProps = { children: ReactNode };
 type RuntimeErrorBoundaryState = { error: Error | null };
@@ -21,10 +22,10 @@ export class RuntimeErrorBoundary extends Component<RuntimeErrorBoundaryProps, R
       <main className="runtime-fatal" role="alert">
         <div className="runtime-fatal-card">
           <div className="eyebrow">Maestro runtime</div>
-          <h1>Esta tela encontrou um erro</h1>
-          <p>O serviço continua protegido. Recarregue a interface para buscar um estado novo.</p>
+          <h1>{translate("This screen encountered an error")}</h1>
+          <p>{translate("The service remains protected. Reload the interface to fetch a fresh state.")}</p>
           <button type="button" className="btn-new" onClick={() => window.location.reload()}>
-            Recarregar interface
+            {translate("Reload interface")}
           </button>
         </div>
       </main>

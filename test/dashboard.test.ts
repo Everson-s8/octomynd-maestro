@@ -38,8 +38,8 @@ beforeEach(() => {
     execution: {
       rootPath: tempDir,
       worktreesPath: path.join(tempDir, "worktrees"),
-      expectedNodeVersion: "20.17.0",
-      supportedNodeRange: ">=20.17.0 <25"
+      expectedNodeVersion: "22.12.0",
+      supportedNodeRange: ">=22.12.0 <25"
     },
     dashboard: { enabled: true, host: "127.0.0.1", port: 4787 },
     autopilot: { enabled: true, pollIntervalMs: 30_000, maxConcurrentGoals: 1 },
@@ -625,7 +625,7 @@ describe("dashboard", () => {
       expect(previewResponse.status).toBe(200);
       const previewData = await previewResponse.json() as { decision: { classification: string }; explanation: string };
       expect(previewData.decision.classification).toBe("direct_task");
-      expect(previewData.explanation).toContain("Tarefa Direta");
+      expect(previewData.explanation).toContain("Direct Task");
 
       const intakeDirectResponse = await fetch(`http://127.0.0.1:${port}/api/work-intake`, {
         method: "POST",

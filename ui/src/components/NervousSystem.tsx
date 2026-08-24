@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { DashboardData, fetchProviderPolicy } from "../api";
 import { agentStateLabel } from "../agentPresentation";
+import { translate } from "../i18n";
 
 type AgentId = DashboardData["agents"][number]["id"];
 
-/** Cores de identificação por provider (paleta tinta & sistema nervoso). */
+/** Provider identity colors (ink and nervous-system palette). */
 const AGENT_COLORS: Partial<Record<AgentId, string>> = {
   codex: "#7c634a",
   claude: "#c4622d",
@@ -19,7 +20,7 @@ const AGENT_LABEL: Partial<Record<AgentId, string>> = {
   telegram: "Telegram",
 };
 
-/** Direções dos braços, espalhadas ao redor do núcleo. */
+/** Arm directions distributed around the core. */
 const ARMS = [
   { bx: 0.42, by: -0.05 },
   { bx: 0.75, by: 0.18 },
@@ -34,9 +35,8 @@ interface NervousSystemProps {
 }
 
 /**
- * Diagrama orgânico: núcleo = Maestro, um braço por provider ativo.
- * Espessura/cor do braço = atividade real (grosso + pigmentado = processando agora;
- * fino + acinzentado = ocioso/pronto). Cada braço termina num ponto com label + estado.
+ * Organic diagram: core = Maestro, one arm per active provider.
+ * Arm width/color reflect real activity. Each arm ends at a point with a label and state.
  */
 export function NervousSystem({ agents }: NervousSystemProps) {
   // Only show connected providers: hide any paused/disabled (mode !== "enabled").
@@ -67,7 +67,7 @@ export function NervousSystem({ agents }: NervousSystemProps) {
     .slice(0, ARMS.length);
 
   return (
-    <svg viewBox="0 0 560 340" role="img" aria-label="Providers ativos do Maestro" className="nervous-system">
+    <svg viewBox="0 0 560 340" role="img" aria-label={translate("Active Maestro providers")} className="nervous-system">
       {/* núcleo = Maestro */}
       <g className="core-breath">
         <ellipse cx="150" cy="175" rx="32" ry="29" fill="#c4622d" />
@@ -97,7 +97,7 @@ export function NervousSystem({ agents }: NervousSystemProps) {
               {label}
             </text>
             <text x={ex + 10} y={ey + 12} fill="#8a7c68" className="arm-label arm-sub">
-              {agentStateLabel(agent.state)}
+              {translate(agentStateLabel(agent.state))}
             </text>
           </g>
         );

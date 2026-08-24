@@ -14,6 +14,7 @@ import {
   OperationalChatRequest,
   OperationalChatResponse,
   ChatAccessMode,
+  ChatLocale,
   GLOBAL_CHAT_PROJECT_KEY
 } from "./types.js";
 import { MaestroDatabase, ProjectRecord } from "../db.js";
@@ -40,7 +41,7 @@ const FULL_ACCESS_ONLY_ACTIONS = new Set<GovernedChatAction["type"]>([
 const GLOBAL_CHAT_PROJECT: ProjectRecord = {
   id: 0,
   key: GLOBAL_CHAT_PROJECT_KEY,
-  name: "Maestro (geral)",
+  name: "Maestro (general)",
   path: "",
   defaultBranch: "main",
   createdAt: "",
@@ -80,11 +81,12 @@ export class OperationalChatService {
     const project = this.resolveChatProject(projectKey);
     const thread = this.resolveThread(projectKey, request.threadId);
     const accessMode = normalizeAccessMode(request.accessMode ?? thread.accessMode);
+    const locale = normalizeChatLocale(request.locale);
     if (thread.accessMode !== accessMode) this.database.updateOperationalChatThreadAccessMode(thread.id, accessMode);
 
     const evidence = await this.gatherEvidenceContext(projectKey);
     const taskIntent = parseTaskCreationIntent(request.message);
-    const actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode);
+    const actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
 
     const savedUserMessage = this.database.saveOperationalChatMessage({
       threadId: thread.id,
@@ -103,7 +105,8 @@ export class OperationalChatService {
       evidence,
       actions,
       conversationHistory,
-      accessMode
+      accessMode,
+      locale
     );
 
     const explanation = redactSensitiveText(routingResult.explanation);
@@ -139,10 +142,11 @@ export class OperationalChatService {
     this.resolveChatProject(projectKey);
     const thread = this.resolveThread(projectKey, request.threadId);
     const accessMode = normalizeAccessMode(request.accessMode ?? thread.accessMode);
+    const locale = normalizeChatLocale(request.locale);
     if (thread.accessMode !== accessMode) this.database.updateOperationalChatThreadAccessMode(thread.id, accessMode);
 
     if (accessMode === "read_only") {
-      throw new Error("O chat está em modo somente leitura. Troque para Standard ou Full Access para executar ações.");
+      throw new Error(locale === "pt-BR" ? "O chat está em modo somente leitura. Troque para Standard ou Full Access para executar ações." : "Chat is read-only. Switch to Standard or Full Access to execute actions.");
     }
 
     const evidence = await this.gatherEvidenceContext(projectKey);
@@ -151,14 +155,16 @@ export class OperationalChatService {
         text: String(request.action.payload?.text ?? "").trim()
       }
       : null;
-    const validActions = this.identifyGovernedActions(evidence, taskIntent?.text ? taskIntent : null, undefined, accessMode);
+    const validActions = this.identifyGovernedActions(evidence, taskIntent?.text ? taskIntent : null, undefined, accessMode, locale);
     const action = validActions.find((a) => a.id === request.action.id && a.type === request.action.type);
 
     if (!action) {
       return {
         success: false,
         actionTaken: request.action.label,
-        resultSummary: `Acao '${request.action.id}' nao e mais aplicavel ao estado atual do projeto.`
+        resultSummary: locale === "pt-BR"
+          ? `A ação '${request.action.id}' não é mais aplicável ao estado atual do projeto.`
+          : `Action '${request.action.id}' is no longer applicable to the current project state.`
       };
     }
 
@@ -175,14 +181,14 @@ export class OperationalChatService {
       switch (action.type) {
         case "create_task": {
           const text = typeof action.payload?.text === "string" ? action.payload.text.trim() : "";
-          if (text.length < 4) throw new Error("O texto da task esta vazio ou muito curto.");
+          if (text.length < 4) throw new Error(chatText(locale, "The task text is empty or too short.", "O texto da task está vazio ou muito curto."));
           const targetProjectKey = typeof action.payload?.projectKey === "string"
             ? action.payload.projectKey
             : projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : projectKey;
-          if (!targetProjectKey) throw new Error("Nenhum projeto está cadastrado para receber a task.");
+          if (!targetProjectKey) throw new Error(chatText(locale, "No project is registered to receive the task.", "Nenhum projeto está cadastrado para receber a task."));
           const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
           await this.actionExecutor?.taskCreated?.(task.id);
-          resultSummary = `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`;
+          resultSummary = chatText(locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`);
           break;
         }
 
@@ -194,9 +200,9 @@ export class OperationalChatService {
               mode: "enabled",
               fallbackEnabled: true
             });
-            resultSummary = `Provedor ${providerId} reabilitado no Provider Control Plane.`;
+            resultSummary = chatText(locale, `Provider ${providerId} enabled in the Provider Control Plane.`, `Provedor ${providerId} reabilitado no Provider Control Plane.`);
           } else {
-            resultSummary = `Nao foi possivel atualizar o provedor ${providerId}: AgentRegistry indisponivel.`;
+            resultSummary = chatText(locale, `Unable to update provider ${providerId}: AgentRegistry is unavailable.`, `Não foi possível atualizar o provedor ${providerId}: AgentRegistry indisponível.`);
             success = false;
           }
           break;
@@ -223,7 +229,7 @@ export class OperationalChatService {
           this.database.addEvent({
             source: request.surface,
             type: "chat.task_retried",
-            text: `Task #${taskId} enviada novamente para execução via Chat Operacional.`,
+            text: chatText(locale, `Task #${taskId} sent for execution again through Operational Chat.`, `Task #${taskId} enviada novamente para execução via Chat Operacional.`),
             userId: request.userId ?? null,
             username: request.username ?? null,
             taskId
@@ -237,8 +243,8 @@ export class OperationalChatService {
             /* queue state is enough; autopilot will start it */
           }
           resultSummary = current.worktreePath
-            ? `Task #${taskId} reiniciada no worktree existente.`
-            : `Task #${taskId} reiniciada e movida para a fila (queued).`;
+            ? chatText(locale, `Task #${taskId} restarted in the existing worktree.`, `Task #${taskId} reiniciada no worktree existente.`)
+            : chatText(locale, `Task #${taskId} restarted and moved to the queue (queued).`, `Task #${taskId} reiniciada e movida para a fila (queued).`);
           break;
         }
 
@@ -253,7 +259,7 @@ export class OperationalChatService {
           this.database.addEvent({
             source: request.surface,
             type: "chat.task_cancelled",
-            text: `Task #${taskId} cancelada via Chat Operacional.`,
+            text: chatText(locale, `Task #${taskId} cancelled through Operational Chat.`, `Task #${taskId} cancelada via Chat Operacional.`),
             userId: request.userId ?? null,
             username: request.username ?? null,
             taskId
@@ -267,7 +273,7 @@ export class OperationalChatService {
               message.includes("environment_blocked");
             if (!benign) throw cancelError;
           }
-          resultSummary = `Task #${taskId} cancelada com sucesso.`;
+          resultSummary = chatText(locale, `Task #${taskId} cancelled successfully.`, `Task #${taskId} cancelada com sucesso.`);
           break;
         }
 
@@ -275,28 +281,28 @@ export class OperationalChatService {
           const runId = Number(action.targetId);
           const run = this.database.getGoalRun(runId);
           this.actionExecutor?.resumeGoal?.(runId);
-          resultSummary = `Goal #${runId} da Task #${run.taskId} retomado do checkpoint na fase ${run.currentPhase}.`;
+          resultSummary = chatText(locale, `Goal #${runId} for Task #${run.taskId} resumed from the checkpoint in phase ${run.currentPhase}.`, `Goal #${runId} da Task #${run.taskId} retomado do checkpoint na fase ${run.currentPhase}.`);
           break;
         }
 
         case "resume_feature_plan": {
           const planId = Number(action.targetId);
           this.commands.resumeFeaturePlan(origin, planId);
-          resultSummary = `Feature Plan #${planId} retomado na fila governada.`;
+          resultSummary = chatText(locale, `Feature Plan #${planId} resumed in the governed queue.`, `Feature Plan #${planId} retomado na fila governada.`);
           break;
         }
 
         case "retry_feature_plan": {
           const planId = Number(action.targetId);
           this.commands.updateFeaturePlanQueueStatus(origin, planId, "queued", "Retentativa solicitada via Chat Operacional");
-          resultSummary = `Feature Plan #${planId} enviado para retentativa (queued).`;
+          resultSummary = chatText(locale, `Feature Plan #${planId} sent for retry (queued).`, `Feature Plan #${planId} enviado para retentativa (queued).`);
           break;
         }
 
         case "cancel_feature_plan": {
           const planId = Number(action.targetId);
           this.commands.cancelFeaturePlan(origin, planId, "Cancelado via Chat Operacional");
-          resultSummary = `Feature Plan #${planId} cancelado.`;
+          resultSummary = chatText(locale, `Feature Plan #${planId} cancelled.`, `Feature Plan #${planId} cancelado.`);
           break;
         }
 
@@ -304,19 +310,19 @@ export class OperationalChatService {
           const taskId = Number(action.targetId);
           this.database.updateTaskStatus(taskId, "reviewing");
           this.actionExecutor?.rerunReview?.(taskId);
-          resultSummary = `Revisao para Task #${taskId} reexecutada.`;
+          resultSummary = chatText(locale, `Review for Task #${taskId} rerun.`, `Revisão para Task #${taskId} reexecutada.`);
           break;
         }
 
         default:
-          throw new Error(`Acao governada desconhecida: ${(action as { type?: string }).type}`);
+          throw new Error(chatText(locale, `Unknown governed action: ${(action as { type?: string }).type}`, `Ação governada desconhecida: ${(action as { type?: string }).type}`));
       }
     } catch (error) {
       success = false;
-      resultSummary = `Falha ao executar acao governada: ${error instanceof Error ? error.message : "Erro desconhecido."}`;
+      resultSummary = chatText(locale, `Governed action failed: ${error instanceof Error ? error.message : "Unknown error."}`, `Falha ao executar ação governada: ${error instanceof Error ? error.message : "Erro desconhecido."}`);
     }
 
-    const actionText = `[Acao Executada] ${action.label}: ${resultSummary}`;
+    const actionText = `[${chatText(locale, "Action executed", "Ação executada")}] ${action.label}: ${resultSummary}`;
     this.database.saveOperationalChatMessage({
       threadId: thread.id,
       projectKey,
@@ -343,7 +349,7 @@ export class OperationalChatService {
   private resolveChatProject(projectKey: string): ProjectRecord {
     if (projectKey === GLOBAL_CHAT_PROJECT_KEY) return { ...GLOBAL_CHAT_PROJECT, path: this.worktreesRoot };
     const project = this.database.findProjectByKey(projectKey);
-    if (!project) throw new Error(`Projeto @${projectKey} nao encontrado.`);
+    if (!project) throw new Error(`Project @${projectKey} was not found.`);
     return project;
   }
 
@@ -525,7 +531,8 @@ export class OperationalChatService {
     evidence: ChatEvidenceContext,
     taskIntent: TaskCreationIntent | null = null,
     userMessage?: string,
-    accessMode: ChatAccessMode = "standard"
+    accessMode: ChatAccessMode = "standard",
+    locale: ChatLocale = "en"
   ): GovernedChatAction[] {
     const actions: GovernedChatAction[] = [];
 
@@ -537,8 +544,8 @@ export class OperationalChatService {
         actions.push({
           id: "create_task",
           type: "create_task",
-          label: "Criar Task",
-          description: `Cria uma nova task em @${targetProjectKey} com o objetivo informado.`,
+          label: chatText(locale, "Create task", "Criar task"),
+          description: chatText(locale, `Create a new task in @${targetProjectKey} with the requested objective.`, `Cria uma nova task em @${targetProjectKey} com o objetivo informado.`),
           targetId: targetProjectKey,
           payload: { text: taskIntent.text, projectKey: targetProjectKey }
         });
@@ -558,8 +565,8 @@ export class OperationalChatService {
         actions.push({
           id: `unblock_provider_${provider.id}`,
           type: "unblock_provider",
-          label: `Habilitar Provedor ${provider.label}`,
-          description: `Altera o status do provedor ${provider.label} de '${provider.control.mode}' para 'enabled'.`,
+          label: chatText(locale, `Enable provider ${provider.label}`, `Habilitar provedor ${provider.label}`),
+          description: chatText(locale, `Changes provider ${provider.label} from '${provider.control.mode}' to 'enabled'.`, `Altera o status do provedor ${provider.label} de '${provider.control.mode}' para 'enabled'.`),
           targetId: provider.id,
           payload: { providerId: provider.id }
         });
@@ -573,8 +580,8 @@ export class OperationalChatService {
         actions.push({
           id: `cancel_task_${task.id}`,
           type: "cancel_task",
-          label: `Cancelar Task #${task.id}`,
-          description: `Marca a Task #${task.id} ('${task.status}') como cancelada.`,
+          label: chatText(locale, `Cancel Task #${task.id}`, `Cancelar task #${task.id}`),
+          description: chatText(locale, `Marks Task #${task.id} ('${task.status}') as cancelled.`, `Marca a Task #${task.id} ('${task.status}') como cancelada.`),
           targetId: task.id
         });
       }
@@ -585,8 +592,8 @@ export class OperationalChatService {
         actions.push({
           id: `retry_task_${task.id}`,
           type: "retry_task",
-          label: `Reiniciar Task #${task.id}`,
-          description: `Retorna a Task #${task.id} ('${task.status}') para a fila governada (queued).`,
+          label: chatText(locale, `Restart Task #${task.id}`, `Reiniciar task #${task.id}`),
+          description: chatText(locale, `Returns Task #${task.id} ('${task.status}') to the governed queue (queued).`, `Retorna a Task #${task.id} ('${task.status}') para a fila governada (queued).`),
           targetId: task.id
         });
       }
@@ -597,8 +604,8 @@ export class OperationalChatService {
         actions.push({
           id: `resume_goal_${goal.runId}`,
           type: "resume_goal",
-          label: `Retomar Goal da Task #${goal.taskId}`,
-          description: `Continua o Goal Run #${goal.runId} da Task #${goal.taskId} no checkpoint e na fase ${goal.phase}, sem iniciar outro planejamento.`,
+          label: chatText(locale, `Resume goal for Task #${goal.taskId}`, `Retomar goal da task #${goal.taskId}`),
+          description: chatText(locale, `Continues Goal Run #${goal.runId} for Task #${goal.taskId} from the checkpoint in phase ${goal.phase}, without starting a new plan.`, `Continua o Goal Run #${goal.runId} da Task #${goal.taskId} no checkpoint e na fase ${goal.phase}, sem iniciar outro planejamento.`),
           targetId: goal.runId,
           payload: { runId: goal.runId, taskId: goal.taskId }
         });
@@ -610,22 +617,22 @@ export class OperationalChatService {
         actions.push({
           id: `resume_feature_plan_${plan.id}`,
           type: "resume_feature_plan",
-          label: `Retomar Feature Plan #${plan.id}`,
-          description: `Retoma a execucao do Feature Plan #${plan.id} na fila governada.`,
+          label: chatText(locale, `Resume Feature Plan #${plan.id}`, `Retomar Feature Plan #${plan.id}`),
+          description: chatText(locale, `Resumes Feature Plan #${plan.id} in the governed queue.`, `Retoma a execução do Feature Plan #${plan.id} na fila governada.`),
           targetId: plan.id
         });
         actions.push({
           id: `retry_feature_plan_${plan.id}`,
           type: "retry_feature_plan",
-          label: `Tentar Novamente Feature Plan #${plan.id}`,
-          description: `Reinicia o Feature Plan #${plan.id} para status 'queued'.`,
+          label: chatText(locale, `Retry Feature Plan #${plan.id}`, `Tentar novamente Feature Plan #${plan.id}`),
+          description: chatText(locale, `Restarts Feature Plan #${plan.id} with status 'queued'.`, `Reinicia o Feature Plan #${plan.id} para status 'queued'.`),
           targetId: plan.id
         });
         actions.push({
           id: `cancel_feature_plan_${plan.id}`,
           type: "cancel_feature_plan",
-          label: `Cancelar Feature Plan #${plan.id}`,
-          description: `Cancela o Feature Plan #${plan.id}.`,
+          label: chatText(locale, `Cancel Feature Plan #${plan.id}`, `Cancelar Feature Plan #${plan.id}`),
+          description: chatText(locale, `Cancels Feature Plan #${plan.id}.`, `Cancela o Feature Plan #${plan.id}.`),
           targetId: plan.id
         });
       }
@@ -636,8 +643,8 @@ export class OperationalChatService {
         actions.push({
           id: `rerun_review_${review.taskId}`,
           type: "rerun_review",
-          label: `Refazer Revisao Task #${review.taskId}`,
-          description: `Executa novamente a revisao para a Task #${review.taskId}.`,
+          label: chatText(locale, `Rerun review for Task #${review.taskId}`, `Refazer revisão da task #${review.taskId}`),
+          description: chatText(locale, `Runs the review again for Task #${review.taskId}.`, `Executa novamente a revisão para a Task #${review.taskId}.`),
           targetId: review.taskId
         });
       }
@@ -651,12 +658,15 @@ export class OperationalChatService {
     evidence: ChatEvidenceContext,
     actions: GovernedChatAction[],
     history: OperationalChatMessageRecord[],
-    accessMode: ChatAccessMode
+    accessMode: ChatAccessMode,
+    locale: ChatLocale
   ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine" }> {
     const taskIntent = parseTaskCreationIntent(userMessage);
     if (taskIntent) {
       return {
-        explanation: `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botao "Criar Task" abaixo para colocar ela na fila.`,
+        explanation: locale === "pt-BR"
+          ? `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botão "Criar Task" abaixo para colocá-la na fila.`
+          : `I understood. I prepared a task with this objective: "${truncateChatText(taskIntent.text)}". Use the "Create task" button below to add it to the queue.`,
         providerId: "deterministic_engine"
       };
     }
@@ -677,29 +687,29 @@ export class OperationalChatService {
           try {
               const promptEvidence = this.sanitizeEvidenceForPrompt(evidence);
               const systemPrompt = [
-                "Voce e o assistente conversacional do usuario dentro do Octomynd Maestro.",
-                "Converse como uma LLM normal: cumprimente, responda perguntas, explique ideias e mantenha o contexto do projeto.",
-                `Modo de acesso atual: ${accessMode}. Ações disponíveis já foram filtradas pelo núcleo do Maestro.`,
-                "Uma mensagem casual como 'oi' deve receber uma resposta casual e acolhedora — nunca um relatorio de tasks.",
-                "Responda em português natural, direto e humano. Use no maximo ~8 linhas quando a pergunta for simples;",
-                "nao force secoes, listas, status ou acoes quando isso nao foi pedido.",
-                "Quando o usuario pedir explicitamente uma acao no Maestro, explique em uma frase o que sera feito e aguarde a confirmacao pelo botao; nunca execute sozinho.",
-                "NUNCA invente estado de runtime que nao esteja presente nas evidencias fornecidas.",
-                "NUNCA exponha caminhos locais de worktree, tokens, senhas ou chaves.",
+                "You are the user's conversational assistant inside Octomynd Maestro.",
+                "Talk like a normal LLM: greet the user, answer questions, explain ideas, and keep project context.",
+                `Current access mode: ${accessMode}. Available actions were filtered by Maestro's core.`,
+                "A casual message such as 'hi' should receive a casual, helpful reply — never a task report.",
+                `Reply in ${locale === "pt-BR" ? "natural Brazilian Portuguese" : "natural English"}, directly and humanely. Keep simple answers to roughly eight lines;`,
+                "do not force sections, lists, status, or actions when they were not requested.",
+                "When the user explicitly asks Maestro to perform an action, explain in one sentence what will happen and wait for the confirmation button; never execute it alone.",
+                "NEVER invent runtime state that is not present in the supplied evidence.",
+                "NEVER expose local worktree paths, tokens, passwords, or keys.",
                 "",
-                "EVIDENCIAS EMPIRICAS DE RUNTIME:",
+                "EMPIRICAL RUNTIME EVIDENCE:",
                 promptEvidence.summaryText,
                 "",
-                "DETALHES DAS TASKS:",
+                "TASK DETAILS:",
                 JSON.stringify(promptEvidence.tasks, null, 2),
                 "",
-                "DETALHES DOS FEATURE PLANS:",
+                "FEATURE PLAN DETAILS:",
                 JSON.stringify(promptEvidence.featurePlans, null, 2),
                 "",
-                "DETALHES DOS PROVEDORES:",
+                "PROVIDER DETAILS:",
                 JSON.stringify(promptEvidence.providers, null, 2),
                 "",
-                "ACOES GOVERNADAS DISPONIVEIS:",
+                "AVAILABLE GOVERNED ACTIONS:",
                 JSON.stringify(actions, null, 2)
               ].join("\n");
 
@@ -729,7 +739,7 @@ export class OperationalChatService {
                 project: evidence.project,
                 previousSteps: [],
                 artifactsRoot: this.worktreesRoot,
-                humanFeedback: `${systemPrompt}\n\nHISTORICO DE CONVERSA:\n${historyText}\n\nPERGUNTA DO USUARIO:\n${userMessage}`,
+                humanFeedback: `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\n\nUSER QUESTION:\n${userMessage}`,
                 signal: timeoutController.signal
               });
               if (result.outcome === "completed" && result.output.trim().length > 0) {
@@ -758,7 +768,7 @@ export class OperationalChatService {
     }
 
     return {
-      explanation: this.generateDeterministicExplanation(userMessage, evidence, actions),
+      explanation: this.generateDeterministicExplanation(userMessage, evidence, actions, locale),
       providerId: "deterministic_engine"
     };
   }
@@ -766,26 +776,29 @@ export class OperationalChatService {
   private generateDeterministicExplanation(
     userMessage: string,
     evidence: ChatEvidenceContext,
-    actions: GovernedChatAction[]
+    actions: GovernedChatAction[],
+    locale: ChatLocale
   ): string {
     const normalized = userMessage.toLowerCase();
     const lines: string[] = [];
 
     const taskIntent = parseTaskCreationIntent(userMessage);
     if (taskIntent) {
-      return `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botao "Criar Task" abaixo para colocar ela na fila.`;
+      return locale === "pt-BR"
+        ? `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botão "Criar Task" abaixo para colocá-la na fila.`
+        : `I understood. I prepared a task with this objective: "${truncateChatText(taskIntent.text)}". Use the "Create task" button below to add it to the queue.`;
     }
 
     if (/provider|conectad|saudav|saudável|offline/.test(normalized)) {
       const ready = evidence.providers.filter((p) => p.health.state === "ready");
       const down = evidence.providers.filter((p) => p.health.state !== "ready");
       lines.push(ready.length > 0
-        ? `Providers ok: ${ready.map((p) => p.label).join(", ")}.`
-        : "Nenhum provider conectado agora.");
+        ? locale === "pt-BR" ? `Providers ok: ${ready.map((p) => p.label).join(", ")}.` : `Ready providers: ${ready.map((p) => p.label).join(", ")}.`
+        : locale === "pt-BR" ? "Nenhum provider conectado agora." : "No provider is connected right now.");
       for (const prov of down) {
         lines.push(`- ${prov.label}: ${prov.health.detail}`);
       }
-      if (down.length === 0) lines.push("Tudo saudável pra executar tasks.");
+      if (down.length === 0) lines.push(locale === "pt-BR" ? "Tudo saudável para executar tasks." : "Everything is healthy for task execution.");
       return lines.join("\n");
     }
 
@@ -794,50 +807,54 @@ export class OperationalChatService {
         ["planning", "queued", "blocked", "waiting_provider", "waiting_quota", "waiting_dependency", "failed"].includes(t.status)
       );
       if (stuck.length === 0) {
-        lines.push("Nenhuma task parada — tudo em movimento ou concluído.");
+        lines.push(locale === "pt-BR" ? "Nenhuma task parada — tudo em movimento ou concluído." : "No stalled tasks — everything is moving or completed.");
         return lines.join("\n");
       }
-      lines.push("Tasks paradas:");
+      lines.push(locale === "pt-BR" ? "Tasks paradas:" : "Stalled tasks:");
       for (const task of stuck.slice(0, 5)) {
         const goal = evidence.goals.find((g) => g.taskId === task.id);
         let reason = task.status === "planning" && !goal
-          ? "worktree preparada mas o goal nunca foi disparado — use Iniciar goal no detalhe da task"
+          ? locale === "pt-BR" ? "worktree preparada mas o goal nunca foi disparado — use Iniciar goal no detalhe da task" : "worktree prepared but the goal was never started — use Start goal in the task details"
           : `status ${task.status}`;
-        if (goal?.error) reason += ` · erro: ${goal.error}`;
+        if (goal?.error) reason += locale === "pt-BR" ? ` · erro: ${goal.error}` : ` · error: ${goal.error}`;
         lines.push(`- #${task.id}: ${reason}`);
       }
       if (actions.length > 0) {
         lines.push("");
-        lines.push("Posso resolver isso pra você — use as ações sugeridas abaixo.");
+        lines.push(locale === "pt-BR" ? "Posso resolver isso para você — use as ações sugeridas abaixo." : "I can help resolve this — use the suggested actions below.");
       }
       return lines.join("\n");
     }
 
     if (/^(oi|ola|olá|hey|hello|bom dia|boa tarde|boa noite)\b/i.test(normalized)) {
-      return "Oi! Como posso ajudar? Posso conversar sobre o projeto, explicar uma task, verificar os providers ou continuar uma execução.";
+      return locale === "pt-BR"
+        ? "Oi! Como posso ajudar? Posso conversar sobre o projeto, explicar uma task, verificar os providers ou continuar uma execução."
+        : "Hi! How can I help? I can talk about the project, explain a task, check providers, or continue an execution.";
     }
 
     if (/\b(obrigad[oa]|valeu|thanks|perfeito)\b/i.test(normalized)) {
-      return "Por nada! Quando quiser, me diga o que você quer entender ou fazer no projeto.";
+      return locale === "pt-BR" ? "Por nada! Quando quiser, me diga o que você quer entender ou fazer no projeto." : "You're welcome! Tell me what you want to understand or do in the project.";
     }
 
     if (/^(ajuda|help|o que voce pode|o que você pode|como voce pode|como você pode)\b/i.test(normalized)) {
-      return "Posso conversar sobre o projeto, explicar logs e tasks, verificar providers e executar ações quando você pedir explicitamente. O que você quer fazer?";
+      return locale === "pt-BR" ? "Posso conversar sobre o projeto, explicar logs e tasks, verificar providers e executar ações quando você pedir explicitamente. O que você quer fazer?" : "I can discuss the project, explain logs and tasks, check providers, and run actions when you explicitly ask. What would you like to do?";
     }
 
     if (/\b(status|resumo|andamento|situacao|situação)\b/i.test(normalized)) {
       const active = evidence.tasks.filter((t) => !["done", "failed", "cancelled", "rejected"].includes(t.status));
-      return `@${evidence.project.key}: ${active.length} task(s) ativa(s), ${evidence.providers.filter((p) => p.health.state === "ready").length} provider(s) ok.`;
+      return locale === "pt-BR"
+        ? `@${evidence.project.key}: ${active.length} task(s) ativa(s), ${evidence.providers.filter((p) => p.health.state === "ready").length} provider(s) ok.`
+        : `@${evidence.project.key}: ${active.length} active task(s), ${evidence.providers.filter((p) => p.health.state === "ready").length} ready provider(s).`;
     }
 
-    return "Entendi. Posso conversar com você sobre este projeto e ajudar a resolver o que precisar. Me conte um pouco mais.";
+    return locale === "pt-BR" ? "Entendi. Posso conversar com você sobre este projeto e ajudar a resolver o que precisar. Me conte um pouco mais." : "I understand. I can talk through this project and help solve what you need. Tell me a little more.";
   }
 
   private resolveThread(projectKey: string, threadId?: number | null) {
     if (threadId !== undefined && threadId !== null) {
       const thread = this.database.getOperationalChatThread(Number(threadId));
       if (!thread || thread.projectKey !== projectKey) {
-        throw new Error("A conversa selecionada nao pertence a este projeto.");
+        throw new Error("The selected conversation does not belong to this project.");
       }
       return thread;
     }
@@ -876,6 +893,14 @@ function normalizeChatProjectKey(value?: string | null): string {
 
 function normalizeAccessMode(value?: ChatAccessMode | string | null): ChatAccessMode {
   return value === "read_only" || value === "full" ? value : "standard";
+}
+
+function normalizeChatLocale(value?: ChatLocale | string | null): ChatLocale {
+  return value === "pt-BR" ? "pt-BR" : "en";
+}
+
+function chatText(locale: ChatLocale, english: string, portuguese: string): string {
+  return locale === "pt-BR" ? portuguese : english;
 }
 
 export type TaskCreationIntent = { text: string };

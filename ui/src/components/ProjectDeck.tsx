@@ -1,11 +1,12 @@
 import { DashboardProject } from "../api";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
   return (
     <section className="panel project-deck" id="projects" aria-labelledby="projects-title">
-      <SectionHeader eyebrow="Workspace" title="Projetos locais" meta={`${projects.length} registrados`} />
+      <SectionHeader eyebrow="Workspace" title={translate("Local projects")} meta={`${projects.length} ${translate("registered")}`} />
       <div className="project-grid">
         {projects.map((project, index) => (
           <article className={`project-card project-tone-${index % 3}`} key={project.key}>
@@ -18,13 +19,13 @@ export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
             </div>
             <div className="project-stats">
               <span>
-                <strong>{project.activeTaskCount}</strong> ativas
+                <strong>{project.activeTaskCount}</strong> {translate("active")}
               </span>
               <span>
                 <strong>{project.taskCount}</strong> total
               </span>
               <span>
-                <strong>{project.defaultBranch}</strong> branch
+                <strong>{project.defaultBranch}</strong> {translate("branch")}
               </span>
             </div>
             <div className="project-live-status">
@@ -35,10 +36,10 @@ export function ProjectDeck({ projects }: { projects: DashboardProject[] }) {
                   </span>
                 ))
               ) : (
-                <span>Nenhum agente trabalhando agora</span>
+                <span>{translate("No agent working now")}</span>
               )}
             </div>
-            <small className="project-path">Repositório local protegido</small>
+            <small className="project-path">{translate("Protected local repository")}</small>
           </article>
         ))}
       </div>

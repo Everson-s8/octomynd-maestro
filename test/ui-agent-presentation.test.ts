@@ -13,10 +13,10 @@ function agent(overrides: Partial<AgentPresenceEntry> = {}): AgentPresenceEntry 
 
 describe("agentStateLabel", () => {
   it("maps every dashboard state to the same labels used across the panels", () => {
-    expect(agentStateLabel("ready")).toBe("pronto");
-    expect(agentStateLabel("working")).toBe("trabalhando");
-    expect(agentStateLabel("attention")).toBe("atenção");
-    expect(agentStateLabel("offline")).toBe("offline");
+    expect(agentStateLabel("ready")).toBe("Ready");
+    expect(agentStateLabel("working")).toBe("Working");
+    expect(agentStateLabel("attention")).toBe("Attention");
+    expect(agentStateLabel("offline")).toBe("Offline");
   });
 });
 

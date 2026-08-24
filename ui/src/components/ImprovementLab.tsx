@@ -3,6 +3,7 @@ import { createImprovement, decideImprovement, ImprovementCategory, ImprovementP
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
+import { translate } from "../i18n";
 
 export function ImprovementLab({
   improvements,
@@ -39,7 +40,7 @@ export function ImprovementLab({
       setEvidence("");
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Falha ao registrar proposta.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to record the proposal."));
     } finally {
       setBusyId(null);
     }
@@ -52,7 +53,7 @@ export function ImprovementLab({
       await decideImprovement(id, status);
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Falha ao decidir proposta.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to decide on the proposal."));
     } finally {
       setBusyId(null);
     }
@@ -61,58 +62,58 @@ export function ImprovementLab({
   const candidates = improvements.filter((item) => item.status === "candidate");
   return (
     <section className="panel improvement-lab" id="learning" aria-labelledby="learning-title">
-      <SectionHeader eyebrow="Evolucao segura" title="Laboratorio de aprendizado" meta={`${candidates.length} aguardando decisao`} />
+      <SectionHeader eyebrow={translate("Safe evolution")} title={translate("Learning lab")} meta={`${candidates.length} ${translate("awaiting decision")}`} />
       <div className="improvement-layout">
         <form className="improvement-form" onSubmit={submit}>
-          <strong>Propor melhoria</strong>
-          <p>O Maestro registra a hipotese e a evidencia. Aprovar nao altera codigo, prompt ou skill automaticamente.</p>
+          <strong>{translate("Propose improvement")}</strong>
+          <p>{translate("Maestro records the hypothesis and evidence. Approval does not automatically change code, prompts, or skills.")}</p>
           <div className="improvement-fields two-columns">
             <label>
-              Categoria
+              {translate("Category")}
               <select value={category} onChange={(event) => setCategory(event.target.value as ImprovementCategory)}>
                 <option value="skill">skill</option>
-                <option value="memory">memoria</option>
-                <option value="routing">roteamento</option>
-                <option value="policy">politica</option>
-                <option value="integration">integracao</option>
+                <option value="memory">{translate("memory")}</option>
+                <option value="routing">{translate("routing")}</option>
+                <option value="policy">{translate("policy")}</option>
+                <option value="integration">{translate("integration")}</option>
               </select>
             </label>
             <label>
-              Risco
+              {translate("Risk")}
               <select value={risk} onChange={(event) => setRisk(event.target.value as ImprovementRisk)}>
-                <option value="low">baixo</option>
-                <option value="medium">medio</option>
-                <option value="high">alto</option>
+                <option value="low">{translate("low")}</option>
+                <option value="medium">{translate("medium")}</option>
+                <option value="high">{translate("high")}</option>
               </select>
             </label>
           </div>
           <label>
-            Titulo
+            {translate("Title")}
             <input value={title} onChange={(event) => setTitle(event.target.value)} minLength={4} required />
           </label>
           <label>
-            Por que mudar?
+            {translate("Why change?")}
             <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} minLength={8} required />
           </label>
           <label>
-            Mudanca proposta
+            {translate("Proposed change")}
             <textarea value={proposedChange} onChange={(event) => setProposedChange(event.target.value)} minLength={8} required />
           </label>
           <label>
-            Evidencias, uma por linha
+            {translate("Evidence, one per line")}
             <textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} minLength={4} required />
           </label>
           {error ? <p className="improvement-error">{error}</p> : null}
           <button type="submit" disabled={busyId !== null}>
-            Registrar candidata <Icon name="arrow" />
+            {translate("Record candidate")} <Icon name="arrow" />
           </button>
         </form>
         <div className="improvement-queue">
           {improvements.length === 0 ? (
             <EmptyState
               icon="spark"
-              title="Nenhuma proposta ainda"
-              text="Aprendizados entram aqui antes de qualquer mutacao persistente."
+              title={translate("No proposal yet")}
+              text={translate("Learnings appear here before any persistent mutation.")}
             />
           ) : (
             improvements.slice(0, 8).map((item) => (
@@ -121,21 +122,21 @@ export function ImprovementLab({
                   <span>
                     #{item.id} · {item.category}
                   </span>
-                  <span className={`risk-${item.risk}`}>risco {item.risk}</span>
+                  <span className={`risk-${item.risk}`}>{translate("risk")} {translate(item.risk)}</span>
                 </header>
                 <strong>{item.title}</strong>
                 <p>{item.rationale}</p>
                 <small>
-                  {item.evidence.length} evidencia(s) · origem {item.source}
-                  {item.confidence === null ? "" : ` · confiança ${Math.round(item.confidence * 100)}%`}
+                  {item.evidence.length} {translate("evidence(s)")} · {translate("source")} {item.source}
+                  {item.confidence === null ? "" : ` · ${translate("confidence")} ${Math.round(item.confidence * 100)}%`}
                 </small>
                 {item.status === "candidate" ? (
                   <div className="improvement-actions">
                     <button onClick={() => void decide(item.id, "rejected")} disabled={busyId !== null}>
-                      Rejeitar
+                      {translate("Reject")}
                     </button>
                     <button onClick={() => void decide(item.id, "approved")} disabled={busyId !== null}>
-                      Aprovar para implementar
+                      {translate("Approve for implementation")}
                     </button>
                   </div>
                 ) : (

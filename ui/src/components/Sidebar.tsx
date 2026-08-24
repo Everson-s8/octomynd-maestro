@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { OctoMark } from "./OctoMark";
 import { Icon } from "./Icon";
+import { translate } from "../i18n";
 
 export interface SidebarProps {
   collapsed?: boolean;
@@ -15,13 +16,13 @@ export function Sidebar({ collapsed: externalCollapsed, onToggleCollapse }: Side
   const toggleCollapse = onToggleCollapse ?? (() => setInternalCollapsed(!internalCollapsed));
 
   const links = [
-    { to: "/", label: "Visão geral", icon: "grid", end: true },
-    { to: "/backlog", label: "Fluxo de tasks", icon: "pulse" },
-    { to: "/reviews", label: "Aguardando revisão", icon: "hand" },
-    { to: "/projects", label: "Projetos", icon: "folder" },
-    { to: "/providers", label: "Providers", icon: "spark" },
-    { to: "/analytics", label: "Analytics & Consumo", icon: "timeline" },
-    { to: "/settings", label: "Configurações", icon: "settings" }
+    { to: "/", label: translate("Overview"), icon: "grid", end: true },
+    { to: "/backlog", label: translate("Task flow"), icon: "pulse" },
+    { to: "/reviews", label: translate("Awaiting review"), icon: "hand" },
+    { to: "/projects", label: translate("Projects"), icon: "folder" },
+    { to: "/providers", label: translate("Providers"), icon: "spark" },
+    { to: "/analytics", label: translate("Analytics & Usage"), icon: "timeline" },
+    { to: "/settings", label: translate("Settings"), icon: "settings" }
   ];
 
   return (
@@ -38,14 +39,14 @@ export function Sidebar({ collapsed: externalCollapsed, onToggleCollapse }: Side
         <button
           className="sidebar-toggle-btn"
           onClick={toggleCollapse}
-          aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
-          title={collapsed ? "Expandir menu" : "Recolher menu"}
+          aria-label={collapsed ? translate("Expand menu") : translate("Collapse menu")}
+          title={collapsed ? translate("Expand menu") : translate("Collapse menu")}
         >
           <Icon name={collapsed ? "chevronRight" : "chevronLeft"} />
         </button>
       </div>
 
-      <nav aria-label="Navegação principal">
+      <nav aria-label={translate("Main navigation")}>
         {links.map((link) => (
           <NavLink
             key={link.to}
@@ -66,7 +67,7 @@ export function Sidebar({ collapsed: externalCollapsed, onToggleCollapse }: Side
           <span className="live-orb" />
           <div>
             <strong>Local-first</strong>
-            <small>127.0.0.1 · acesso privado</small>
+            <small>127.0.0.1 · {translate("private access")}</small>
           </div>
         </div>
       ) : (

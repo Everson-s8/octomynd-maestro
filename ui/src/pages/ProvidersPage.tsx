@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { AgentDock } from "../components/AgentDock";
 import { ProviderManager } from "../components/ProviderManager";
+import { translate } from "../i18n";
 
 export interface ProvidersPageProps {
   data: DashboardData;
@@ -81,7 +82,7 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
       await onRefresh?.();
       await refreshPolicy();
     } catch (error) {
-      setRefreshError(error instanceof Error ? error.message : "Falha ao reexaminar providers.");
+      setRefreshError(error instanceof Error ? error.message : translate("Unable to rescan providers."));
     } finally {
       setScanning(false);
     }
@@ -89,16 +90,16 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
 
   const handleConfigureAntigravityPermissions = useCallback(async () => {
     const accepted = window.confirm(
-      "Permitir que o Antigravity execute comandos comuns de desenvolvimento (git, node, npm, npx e gerenciadores de projeto) sem pedir confirmacao a cada etapa?"
+      translate("Allow Antigravity to run common development commands (git, node, npm, npx, and project managers) without asking for confirmation at every step?")
     );
     if (!accepted) return;
     setPermissionsBusy(true);
     setRefreshError("");
     try {
       setAntigravityPermissions(await configureAntigravityPermissions());
-      setScanSummary("Antigravity configurado para executar tarefas de desenvolvimento sem interrupcoes.");
+      setScanSummary(translate("Antigravity is configured to run development tasks without interruptions."));
     } catch (error) {
-      setRefreshError(error instanceof Error ? error.message : "Nao foi possivel configurar as permissoes do Antigravity.");
+      setRefreshError(error instanceof Error ? error.message : translate("Unable to configure Antigravity permissions."));
     } finally {
       setPermissionsBusy(false);
     }
@@ -115,18 +116,16 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
           <span className="provider-summary">{installed.length} CLI(s) detectado(s) · {ready.length} pronto(s) para uso</span>
           {antigravityInstalled && !antigravityPermissions?.configured ? (
             <button type="button" className="btn-ghost" onClick={() => void handleConfigureAntigravityPermissions()} disabled={permissionsBusy}>
-              {permissionsBusy ? "Configurando…" : "Permitir execução do Antigravity"}
+              {permissionsBusy ? translate("Configuring…") : translate("Allow Antigravity execution")}
             </button>
           ) : null}
           <button type="button" className="btn-ghost" onClick={() => void handleRescan()} disabled={scanning}>
-            {scanning ? "Reexaminando…" : "Atualizar providers"}
+            {scanning ? translate("Rescanning…") : translate("Refresh providers")}
           </button>
         </div>
       </div>
       <p className="desc">
-        Conecte quantos providers quiser — modelos de nuvem, locais ou endpoints customizados — e
-        defina a ordem de prioridade por função. Instalou um CLI agora? Clique em “Atualizar
-        providers” — não precisa reiniciar o Maestro.
+        {translate("Connect as many providers as you want — cloud models, local models, or custom endpoints — and define priority by function. Installed a CLI? Click Refresh providers; Maestro does not need to restart.")}
       </p>
       {scanSummary ? <div className="provider-feedback success" role="status">{scanSummary}</div> : null}
       {refreshError ? <div className="provider-feedback error" role="alert">{refreshError}</div> : null}
