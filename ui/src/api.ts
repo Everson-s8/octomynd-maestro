@@ -25,6 +25,9 @@ export type DashboardTask = {
   specification?: string;
   status: TaskStatus;
   source: string;
+  baseCommitSha: string | null;
+  headCommitSha: string | null;
+  mergedCommitSha: string | null;
   branchName: string | null;
   worktreePrepared: boolean;
   parentTaskId: number | null;
@@ -252,6 +255,10 @@ export type DashboardProject = {
   key: string;
   name: string;
   defaultBranch: string;
+  canonicalHeadSha: string | null;
+  remoteHeadSha: string | null;
+  syncState: string;
+  lastFetchAt: string | null;
   taskCount: number;
   activeTaskCount: number;
   workingAgents: string[];

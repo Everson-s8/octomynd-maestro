@@ -4,6 +4,7 @@ import { buildReviewQueueItem, listReviewQueue, ReviewQueueItem } from "./eviden
 import { GhReviewGateway, ReviewGitHubGateway } from "./github.js";
 import { containsSensitiveText } from "../security/redaction.js";
 import { PullRequestState } from "./github.js";
+import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 
 export type ReviewDecisionNotifier = (
   item: ReviewQueueItem,
@@ -24,7 +25,8 @@ export class ReviewCoordinator {
     private readonly github: ReviewGitHubGateway = new GhReviewGateway(),
     private readonly notify?: ReviewDecisionNotifier,
     private readonly notifySync?: ReviewSyncNotifier,
-    private readonly pollIntervalMs = 15_000
+    private readonly pollIntervalMs = 15_000,
+    private readonly repositoryService?: ProjectRepositoryService
   ) {}
 
   list(): ReviewQueueItem[] {
@@ -81,11 +83,35 @@ export class ReviewCoordinator {
       throw new Error("High-severity security alerts must be resolved before approval.");
     }
 
+    let mergeReconciliationPending = false;
     if (decision === "approved") {
       await this.github.markReady(item.pullRequestUrl);
       if (mergeAfterApproval) {
         if (!this.github.merge) throw new Error("The GitHub gateway does not support automatic merging.");
         await this.github.merge(item.pullRequestUrl);
+        if (this.repositoryService) {
+          try {
+            const project = this.database.getProjectByKey(item.projectKey);
+            const repositoryState = this.repositoryService.reconcileAfterMerge(project);
+            this.database.updateTaskRepositoryMetadata({
+              id: item.taskId,
+              mergedCommitSha: repositoryState.canonicalHeadSha
+            });
+          } catch (error) {
+            // GitHub has already accepted the merge. Preserve the human review
+            // and let the normal reconciliation poll retry the local checkout.
+            mergeReconciliationPending = true;
+            this.database.addEvent({
+              source: "github",
+              type: "repository.reconcile_failed",
+              text: error instanceof RepositorySyncError
+                ? error.message
+                : error instanceof Error ? error.message : "Repository reconciliation failed after merge.",
+              taskId: item.taskId,
+              metadata: { runId, pullRequestUrl: item.pullRequestUrl, mergeAfterApproval: true }
+            });
+          }
+        }
       }
     }
     if (decision === "changes_requested") await this.github.markDraft(item.pullRequestUrl);
@@ -100,7 +126,12 @@ export class ReviewCoordinator {
       metadata: { runId, reviewId: review.id, decision, mergeAfterApproval }
     });
 
-    if (decision === "approved") this.database.updateTaskStatus(item.taskId, mergeAfterApproval ? "done" : "ready_to_merge");
+    if (decision === "approved") {
+      this.database.updateTaskStatus(
+        item.taskId,
+        mergeAfterApproval && !mergeReconciliationPending ? "done" : "ready_to_merge"
+      );
+    }
     if (decision === "rejected") this.database.updateTaskStatus(item.taskId, "rejected");
     if (decision === "changes_requested") this.goals.requestChanges(runId);
 
@@ -138,6 +169,25 @@ export class ReviewCoordinator {
         let syncState: ReviewSyncState | null = null;
 
         if (state.state === "MERGED") {
+          if (this.repositoryService) {
+            const project = this.database.getProjectByKey(task.projectKey!);
+            try {
+              const repositoryState = this.repositoryService.reconcileAfterMerge(project);
+              this.database.updateTaskRepositoryMetadata({
+                id: task.id,
+                mergedCommitSha: repositoryState.canonicalHeadSha
+              });
+            } catch (error) {
+              this.database.addEvent({
+                source: "github",
+                type: "repository.reconcile_failed",
+                text: error instanceof RepositorySyncError ? error.message : error instanceof Error ? error.message : "Repository reconciliation failed.",
+                taskId: task.id,
+                metadata: { runId: run.id, pullRequestUrl: run.pullRequestUrl }
+              });
+              continue;
+            }
+          }
           nextStatus = "done";
           syncState = "MERGED";
         } else if (state.state === "CLOSED") {

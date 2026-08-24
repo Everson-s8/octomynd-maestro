@@ -137,21 +137,21 @@ function determineNextAction(input: {
       return `Retomada automatica agendada para ${timeStr}.`;
     }
     if (input.nextProvider) {
-      return `Aguardando liberacao do provedor ${input.nextProvider}.`;
+      return `Waiting for provider ${input.nextProvider} to become available.`;
     }
-    return "Aguardando liberacao de cota ou capacidade do provedor.";
+    return "Waiting for provider quota or capacity.";
   }
   if (input.retryable) {
-    return "Falha transitoria detectada. Maestro agendou nova tentativa.";
+    return "A transient failure was detected. Maestro scheduled another attempt.";
   }
   if (input.waitReason === "budget_exhausted") {
-    return "O trabalho preservado atingiu o limite de etapas da Goal. Continue a Goal a partir do checkpoint ou aumente o budget apos revisar o escopo.";
+    return "The preserved work reached the Goal step limit. Resume from the checkpoint or increase the budget after reviewing the scope.";
   }
-  return "Interrupcao definitiva. Requer intervencao manual ou alteracao de politicas de provider.";
+  return "Permanent interruption. Manual intervention or a provider policy change is required.";
 }
 
 function formatRetryTime(nextRetryAt: string): string {
   const date = new Date(nextRetryAt);
   if (!Number.isFinite(date.getTime())) return nextRetryAt;
-  return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }

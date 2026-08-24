@@ -177,7 +177,7 @@ describe("Goal Observability", () => {
       expect(obs.checkpointId).toBe(5);
       expect(obs.preservedChanges).toBe(true);
       expect(obs.retryable).toBe(true);
-      expect(obs.nextAction).toContain("Falha transitoria");
+      expect(obs.nextAction).toContain("A transient failure was detected");
     } finally {
       database.close();
     }
@@ -229,7 +229,7 @@ describe("Goal Observability", () => {
       expect(observation.classifiedReasonLabel).toBe("orcamento de etapas da Goal esgotado");
       expect(observation.sourceProvider).toBeNull();
       expect(observation.preservedChanges).toBe(true);
-      expect(observation.nextAction).toContain("Continue a Goal a partir do checkpoint");
+      expect(observation.nextAction).toContain("Resume from the checkpoint");
     } finally {
       database.close();
     }

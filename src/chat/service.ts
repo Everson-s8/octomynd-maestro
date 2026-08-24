@@ -22,6 +22,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
 // normal conversational reply look like a provider failure and immediately
@@ -59,6 +60,7 @@ export type OperationalChatServiceOptions = {
   commands?: ApplicationCommands;
   worktreesRoot?: string;
   actionExecutor?: ChatActionExecutor;
+  repositoryService?: ProjectRepositoryService;
 };
 
 export class OperationalChatService {
@@ -67,6 +69,7 @@ export class OperationalChatService {
   private readonly commands: ApplicationCommands;
   private readonly worktreesRoot: string;
   private readonly actionExecutor?: ChatActionExecutor;
+  private readonly repositoryService: ProjectRepositoryService;
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
@@ -74,6 +77,7 @@ export class OperationalChatService {
     this.commands = options.commands ?? new ApplicationCommands(options.database);
     this.worktreesRoot = options.worktreesRoot ?? process.cwd();
     this.actionExecutor = options.actionExecutor;
+    this.repositoryService = options.repositoryService ?? new ProjectRepositoryService(options.database);
   }
 
   async ask(request: OperationalChatRequest): Promise<OperationalChatResponse> {
@@ -386,7 +390,18 @@ export class OperationalChatService {
 
   async gatherEvidenceContext(projectKey: string): Promise<ChatEvidenceContext> {
     const normalizedKey = normalizeChatProjectKey(projectKey);
-    const project = this.resolveChatProject(normalizedKey);
+    let project = this.resolveChatProject(normalizedKey);
+    let repositoryState = null;
+    if (normalizedKey !== GLOBAL_CHAT_PROJECT_KEY) {
+      try {
+        repositoryState = this.repositoryService.synchronize(project);
+      } catch (error) {
+        repositoryState = error instanceof RepositorySyncError
+          ? error.state
+          : this.repositoryService.inspect(project, false);
+      }
+      project = this.database.getProjectByKey(project.key);
+    }
 
     const rawTasks = normalizedKey === GLOBAL_CHAT_PROJECT_KEY
       ? this.database.listTasks(50)
@@ -508,10 +523,11 @@ export class OperationalChatService {
     }
 
     const summaryParts: string[] = [
-      normalizedKey === GLOBAL_CHAT_PROJECT_KEY ? "Contexto: Maestro (geral)" : `Projeto: @${project.key} (${project.name})`,
-      `Tasks (${tasks.length}): ${tasks.map((t) => `#${t.id} [${t.status}]`).join(", ") || "nenhuma"}`,
-      `Feature Plans (${featurePlans.length}): ${featurePlans.map((fp) => `#${fp.id} [${fp.status}]`).join(", ") || "nenhum"}`,
-      `Provedores: ${providers.map((p) => `${p.label}=${p.state}/${p.control.mode}`).join(", ") || "sem provedores"}`
+      normalizedKey === GLOBAL_CHAT_PROJECT_KEY ? "Context: Maestro (general)" : `Project: @${project.key} (${project.name})`,
+      ...(repositoryState ? [`Repository: ${repositoryState.syncState}${repositoryState.detail ? ` — ${repositoryState.detail}` : ""}`] : []),
+      `Tasks (${tasks.length}): ${tasks.map((t) => `#${t.id} [${t.status}]`).join(", ") || "none"}`,
+      `Feature Plans (${featurePlans.length}): ${featurePlans.map((fp) => `#${fp.id} [${fp.status}]`).join(", ") || "none"}`,
+      `Providers: ${providers.map((p) => `${p.label}=${p.state}/${p.control.mode}`).join(", ") || "no providers"}`
     ];
 
     return {
@@ -523,6 +539,7 @@ export class OperationalChatService {
       providers,
       outbox,
       workGraphs,
+      repositoryState,
       summaryText: summaryParts.join("\n")
     };
   }

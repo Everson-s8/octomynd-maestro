@@ -17,7 +17,7 @@ export type GoalPromptOutputFormat = {
 };
 
 export const TEXT_GOAL_PROMPT_OUTPUT: GoalPromptOutputFormat = {
-  output: "Answer in Portuguese with changed files, tests, blockers and evidence.",
+  output: "Answer in English with changed files, tests, blockers and evidence.",
   reviewingVerdict: "Finish with one exact line: FINAL_REVIEW_DECISION: approved OR FINAL_REVIEW_DECISION: changes_requested."
 };
 

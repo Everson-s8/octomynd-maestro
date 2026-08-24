@@ -74,7 +74,7 @@ export function TaskDetail({
     setError(null);
     try {
       await prepareTask(taskId);
-      // Prepare alone leaves the task parked in "planejando" with no provider
+      // Prepare alone leaves the task parked in "planning" with no provider
       // attached — users reported it as "nothing happens". Fire the goal right
       // away so the flow actually starts; a failure here is non-fatal because
       // the user can still press "Iniciar goal" manually.
@@ -194,7 +194,7 @@ export function TaskDetail({
         {task.title && task.title !== task.text ? <p className="task-original-request">{translate("Original request")}: {task.text}</p> : null}
         <div className="detail-project">
           <span>@{task.projectKey ?? "inbox"}</span>
-          <strong>{task.projectName ?? "Sem projeto"}</strong>
+          <strong>{task.projectName ?? translate("No project")}</strong>
         </div>
 
         <dl className="detail-metadata">
@@ -331,19 +331,19 @@ export function TaskDetail({
                 goal #{goal.id} · {goal.status}
               </span>
               <strong>
-                {goal.currentPhase} · {goal.stepCount} etapas executadas
+                {goal.currentPhase} · {goal.stepCount} {translate("steps executed")}
               </strong>
               {goal.observability ? (
                 <small className="goal-observability">
                   {goal.observability.classifiedReasonLabel
-                    ? `Motivo: ${goal.observability.classifiedReasonLabel}`
+                    ? `${translate("Reason")}: ${goal.observability.classifiedReasonLabel}`
                     : goal.waitReason
-                    ? `Motivo: ${goal.waitReason}`
+                    ? `${translate("Reason")}: ${goal.waitReason}`
                     : ""}
                   {goal.observability.sourceProvider
-                    ? ` · Origem: ${goal.observability.sourceProvider}`
+                    ? ` · ${translate("Source")}: ${goal.observability.sourceProvider}`
                     : goal.lastProvider
-                    ? ` · Origem: ${goal.lastProvider}`
+                    ? ` · ${translate("Source")}: ${goal.lastProvider}`
                     : ""}
                   {goal.observability.nextProvider ? ` · ${translate("Next")}: ${goal.observability.nextProvider}` : ""}
                   {goal.observability.checkpointId ? ` · Checkpoint: #${goal.observability.checkpointId}` : ""}

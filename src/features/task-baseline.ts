@@ -14,12 +14,13 @@ export function prepareFeatureTaskBaseline(
   database: MaestroDatabase,
   task: TaskRecord,
   project: ProjectRecord,
-  worktreesRoot: string
+  worktreesRoot: string,
+  canonicalBase?: { baseRef: string; baseBranch: string }
 ): FeatureTaskBaseline {
   const details = database.findFeaturePlanDetailsByTask(task.id);
-  if (!details) return defaultBaseline(project);
+  if (!details) return defaultBaseline(project, canonicalBase);
   const dependencyTaskIds = transitiveDependencyIds(details.tasks, task.id);
-  if (dependencyTaskIds.length === 0) return defaultBaseline(project);
+  if (dependencyTaskIds.length === 0) return defaultBaseline(project, canonicalBase);
 
   const commits = dependencyTaskIds.map((dependencyTaskId) => {
     const dependency = database.getTask(dependencyTaskId);
@@ -41,12 +42,13 @@ export function prepareFeatureTaskBaseline(
   const baselinePath = path.resolve(baselineRoot, `task-${task.id}`);
   assertManagedPath(baselineRoot, baselinePath);
 
+  const canonicalRef = canonicalBase?.baseRef ?? `origin/${project.defaultBranch}`;
   requireGit(runGit(["fetch", "origin", project.defaultBranch], project.path), `fetch origin/${project.defaultBranch}`);
   const remoteExists = runGit(["ls-remote", "--exit-code", "--heads", "origin", baseBranch], project.path).ok;
   if (remoteExists) {
     requireGit(runGit(["fetch", "origin", baseBranch], project.path), `fetch ${baseBranch}`);
     const isUpToDate = runGit(
-      ["merge-base", "--is-ancestor", `origin/${project.defaultBranch}`, `origin/${baseBranch}`],
+      ["merge-base", "--is-ancestor", canonicalRef, `origin/${baseBranch}`],
       project.path
     ).ok;
     if (isUpToDate) {
@@ -65,7 +67,7 @@ export function prepareFeatureTaskBaseline(
   }
   fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
   requireGit(
-    runGit(["worktree", "add", "-b", baseBranch, baselinePath, `origin/${project.defaultBranch}`], project.path),
+    runGit(["worktree", "add", "-b", baseBranch, baselinePath, canonicalRef], project.path),
     `create Feature baseline for Task #${task.id}`
   );
   try {
@@ -93,8 +95,15 @@ export function prepareFeatureTaskBaseline(
   return { baseRef: `origin/${baseBranch}`, baseBranch, dependencyTaskIds };
 }
 
-function defaultBaseline(project: ProjectRecord): FeatureTaskBaseline {
-  return { baseRef: project.defaultBranch, baseBranch: project.defaultBranch, dependencyTaskIds: [] };
+function defaultBaseline(
+  project: ProjectRecord,
+  canonicalBase?: { baseRef: string; baseBranch: string }
+): FeatureTaskBaseline {
+  return {
+    baseRef: canonicalBase?.baseRef ?? project.defaultBranch,
+    baseBranch: canonicalBase?.baseBranch ?? project.defaultBranch,
+    dependencyTaskIds: []
+  };
 }
 
 function ensureCommitAvailable(

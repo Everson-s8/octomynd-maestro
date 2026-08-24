@@ -217,6 +217,11 @@ function parseTaskId(value: string | undefined, usage: string): number {
 function printProject(project: ProjectRecord): void {
   console.log(`  @${project.key}  ${project.name}  (${project.defaultBranch})`);
   console.log(`      ${project.path}`);
+  console.log(`      sync=${project.syncState ?? "unknown"} canonical=${shortSha(project.canonicalHeadSha)} remote=${shortSha(project.remoteHeadSha)}`);
+}
+
+function shortSha(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 12) : "n/a";
 }
 
 function printTask(task: TaskRecord): void {

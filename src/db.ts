@@ -115,6 +115,10 @@ export type ProjectRecord = {
   name: string;
   path: string;
   defaultBranch: string;
+  canonicalHeadSha?: string | null;
+  remoteHeadSha?: string | null;
+  syncState?: string;
+  lastFetchAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -141,6 +145,9 @@ export type TaskRecord = {
   branchName: string | null;
   worktreePath: string | null;
   baseBranch?: string | null;
+  baseCommitSha?: string | null;
+  headCommitSha?: string | null;
+  mergedCommitSha?: string | null;
   parentTaskId?: number | null;
   createdAt: string;
   updatedAt: string;
@@ -152,6 +159,15 @@ export type TaskWorktreeUpdate = {
   branchName: string;
   worktreePath: string;
   baseBranch?: string | null;
+  baseCommitSha?: string | null;
+};
+
+export type ProjectSyncStateUpdate = {
+  projectKey: string;
+  canonicalHeadSha: string | null;
+  remoteHeadSha: string | null;
+  syncState: string;
+  lastFetchAt?: string | null;
 };
 
 export type EventRecord = {
@@ -765,8 +781,25 @@ export function createDatabase(databasePath: string) {
         branch_name = @branchName,
         worktree_path = @worktreePath,
         base_branch = @baseBranch,
+        base_commit_sha = CASE WHEN @baseCommitSha IS NULL THEN base_commit_sha ELSE @baseCommitSha END,
         updated_at = @now
     WHERE id = @id
+  `);
+  const updateTaskRepositoryStatement = db.prepare(`
+    UPDATE tasks
+    SET head_commit_sha = CASE WHEN @headCommitSha IS NULL THEN head_commit_sha ELSE @headCommitSha END,
+        merged_commit_sha = CASE WHEN @mergedCommitSha IS NULL THEN merged_commit_sha ELSE @mergedCommitSha END,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const updateProjectSyncStateStatement = db.prepare(`
+    UPDATE projects
+    SET canonical_head_sha = @canonicalHeadSha,
+        remote_head_sha = @remoteHeadSha,
+        sync_state = @syncState,
+        last_fetch_at = @lastFetchAt,
+        updated_at = @now
+    WHERE key = @projectKey
   `);
   const addTaskReviewStatement = db.prepare(`
     INSERT INTO task_reviews (task_id, provider, status, content, error, created_at)
@@ -828,6 +861,12 @@ export function createDatabase(databasePath: string) {
         pull_request_url = @pullRequestUrl,
         updated_at = @now
     WHERE id = @id
+  `);
+  const updateTaskHeadFromGoalStatement = db.prepare(`
+    UPDATE tasks
+    SET head_commit_sha = @commitSha,
+        updated_at = @now
+    WHERE id = (SELECT task_id FROM goal_runs WHERE id = @id)
   `);
   const createGoalStepStatement = db.prepare(`
     INSERT INTO goal_steps (
@@ -1099,6 +1138,19 @@ export function createDatabase(databasePath: string) {
       return this.getProjectByKey(project.key);
     },
 
+    updateProjectSyncState(input: ProjectSyncStateUpdate): ProjectRecord {
+      const current = this.getProjectByKey(input.projectKey);
+      updateProjectSyncStateStatement.run({
+        projectKey: current.key,
+        canonicalHeadSha: input.canonicalHeadSha,
+        remoteHeadSha: input.remoteHeadSha,
+        syncState: input.syncState,
+        lastFetchAt: input.lastFetchAt ?? null,
+        now: new Date().toISOString()
+      });
+      return this.getProjectByKey(current.key);
+    },
+
     getProjectByKey(key: string): ProjectRecord {
       const row = db.prepare("SELECT * FROM projects WHERE key = ?").get(key) as ProjectRow | undefined;
       if (!row) {
@@ -1183,7 +1235,27 @@ export function createDatabase(databasePath: string) {
 
     updateTaskWorktree(input: TaskWorktreeUpdate): TaskRecord {
       const now = new Date().toISOString();
-      updateTaskWorktreeStatement.run({ ...input, baseBranch: input.baseBranch ?? null, now });
+      updateTaskWorktreeStatement.run({
+        ...input,
+        baseBranch: input.baseBranch ?? null,
+        baseCommitSha: input.baseCommitSha ?? null,
+        now
+      });
+      return this.getTask(input.id);
+    },
+
+    updateTaskRepositoryMetadata(input: {
+      id: number;
+      headCommitSha?: string | null;
+      mergedCommitSha?: string | null;
+    }): TaskRecord {
+      this.getTask(input.id);
+      updateTaskRepositoryStatement.run({
+        id: input.id,
+        headCommitSha: input.headCommitSha ?? null,
+        mergedCommitSha: input.mergedCommitSha ?? null,
+        now: new Date().toISOString()
+      });
       return this.getTask(input.id);
     },
 
@@ -1745,6 +1817,11 @@ export function createDatabase(databasePath: string) {
       this.getGoalRun(input.id);
       updateGoalDeliveryStatement.run({
         ...input,
+        now: new Date().toISOString()
+      });
+      updateTaskHeadFromGoalStatement.run({
+        id: input.id,
+        commitSha: input.commitSha,
         now: new Date().toISOString()
       });
       return this.getGoalRun(input.id);
@@ -3097,6 +3174,10 @@ function migrate(db: Database.Database) {
       name TEXT NOT NULL,
       path TEXT NOT NULL,
       default_branch TEXT NOT NULL DEFAULT 'main',
+      canonical_head_sha TEXT,
+      remote_head_sha TEXT,
+      sync_state TEXT NOT NULL DEFAULT 'unknown',
+      last_fetch_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -3112,6 +3193,9 @@ function migrate(db: Database.Database) {
       branch_name TEXT,
       worktree_path TEXT,
       base_branch TEXT,
+      base_commit_sha TEXT,
+      head_commit_sha TEXT,
+      merged_commit_sha TEXT,
       parent_task_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -3497,6 +3581,13 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "tasks", "branch_name", "TEXT");
   addColumnIfMissing(db, "tasks", "worktree_path", "TEXT");
   addColumnIfMissing(db, "tasks", "base_branch", "TEXT");
+  addColumnIfMissing(db, "tasks", "base_commit_sha", "TEXT");
+  addColumnIfMissing(db, "tasks", "head_commit_sha", "TEXT");
+  addColumnIfMissing(db, "tasks", "merged_commit_sha", "TEXT");
+  addColumnIfMissing(db, "projects", "canonical_head_sha", "TEXT");
+  addColumnIfMissing(db, "projects", "remote_head_sha", "TEXT");
+  addColumnIfMissing(db, "projects", "sync_state", "TEXT NOT NULL DEFAULT 'unknown'");
+  addColumnIfMissing(db, "projects", "last_fetch_at", "TEXT");
   addColumnIfMissing(db, "tasks", "parent_task_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
@@ -3546,6 +3637,10 @@ type ProjectRow = {
   name: string;
   path: string;
   default_branch: string;
+  canonical_head_sha: string | null;
+  remote_head_sha: string | null;
+  sync_state: string | null;
+  last_fetch_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -3563,6 +3658,9 @@ type TaskRow = {
   branch_name: string | null;
   worktree_path: string | null;
   base_branch: string | null;
+  base_commit_sha: string | null;
+  head_commit_sha: string | null;
+  merged_commit_sha: string | null;
   parent_task_id: number | null;
   created_at: string;
   updated_at: string;
@@ -4193,6 +4291,10 @@ function mapProject(row: ProjectRow): ProjectRecord {
     name: row.name,
     path: row.path,
     defaultBranch: row.default_branch,
+    canonicalHeadSha: row.canonical_head_sha ?? null,
+    remoteHeadSha: row.remote_head_sha ?? null,
+    syncState: row.sync_state ?? "unknown",
+    lastFetchAt: row.last_fetch_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -4212,6 +4314,9 @@ function mapTask(row: TaskRow): TaskRecord {
     branchName: row.branch_name,
     worktreePath: row.worktree_path,
     baseBranch: row.base_branch,
+    baseCommitSha: row.base_commit_sha ?? null,
+    headCommitSha: row.head_commit_sha ?? null,
+    mergedCommitSha: row.merged_commit_sha ?? null,
     parentTaskId: row.parent_task_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at

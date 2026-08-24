@@ -12,6 +12,7 @@ import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
 import { OperationalChatService } from "../chat/service.js";
+import { ProjectRepositoryService } from "../projects/repository-service.js";
 import { formatCurrencyUsd } from "../agents/economics.js";
 
 export type TelegramBotOptions = {
@@ -23,6 +24,7 @@ export type TelegramBotOptions = {
   workGraphRuntime?: WorkGraphRuntimeCommands;
   featureCoordinator?: FeatureCoordinator;
   chatService?: OperationalChatService;
+  repositoryService?: ProjectRepositoryService;
   triggerSelfUpdate?: () => Promise<RuntimeUpdateRecord>;
 };
 
@@ -127,11 +129,14 @@ export function createTelegramBot(
     options.featureGithub,
     options.workGraphRuntime,
     undefined,
-    options.featureCoordinator
+    options.featureCoordinator,
+    undefined,
+    options.repositoryService
   );
   const chatService = options.chatService ?? new OperationalChatService({
     database,
-    commands
+    commands,
+    repositoryService: options.repositoryService
   });
 
   bot.use(async (ctx, next) => {

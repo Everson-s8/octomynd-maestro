@@ -18,6 +18,7 @@ import {
   featureChecksPassed
 } from "./github.js";
 import { revalidateQueuedFeaturePlansWithAudit } from "./task-scheduler.js";
+import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 
 const REVIEW_SUMMARY_MAX_LENGTH = 2_000;
 
@@ -78,7 +79,8 @@ export class FeatureCoordinator {
     private readonly notifyCompleted?: FeatureNotificationHandler,
     private readonly notifyBlocked?: FeatureBlockedNotificationHandler,
     private readonly pollIntervalMs = 15_000,
-    private readonly onFeatureMerged?: (feature: FeatureRecord, headSha: string) => Promise<void>
+    private readonly onFeatureMerged?: (feature: FeatureRecord, headSha: string) => Promise<void>,
+    private readonly repositoryService?: ProjectRepositoryService
   ) {}
 
   start(): void {
@@ -186,14 +188,17 @@ export class FeatureCoordinator {
       const state = await this.github.inspect(feature.pullRequestUrl);
 
       if (state.state === "MERGED") {
-        await this.completeFeature(feature, state);
+        const completed = await this.completeFeature(feature, state);
         const updated = this.database.getFeature(feature.id);
         return {
-          success: true,
+          success: completed,
           feature: updated,
           prState: state,
-          status: "completed",
-          message: "Feature PR ja foi mesclado no GitHub."
+          status: updated.status,
+          reason: completed ? undefined : "repository_sync_pending",
+          message: completed
+            ? "Feature PR was merged on GitHub."
+            : updated.lastError || "Feature PR was merged, but the canonical repository still needs synchronization."
         };
       }
 
@@ -530,9 +535,31 @@ export class FeatureCoordinator {
     }
   }
 
-  private async completeFeature(feature: FeatureRecord, state: FeaturePullRequestState): Promise<void> {
-    if (feature.status === "completed") return;
+  private async completeFeature(feature: FeatureRecord, state: FeaturePullRequestState): Promise<boolean> {
+    if (feature.status === "completed") return true;
     const project = this.database.getProjectByKey(feature.projectKey);
+    const repositoryState = this.repositoryService
+      ? (() => {
+        try {
+          return this.repositoryService.reconcileAfterMerge(project);
+        } catch (error) {
+          const message = error instanceof RepositorySyncError
+            ? error.message
+            : error instanceof Error ? error.message : "Repository reconciliation after Feature merge failed.";
+          const waiting = this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
+          this.addEvent(waiting, "feature.repository_reconcile_failed", message);
+          return null;
+        }
+      })()
+      : null;
+    if (this.repositoryService && !repositoryState) {
+      return false;
+    }
+    if (repositoryState) {
+      for (const item of this.database.listFeatureItems(feature.id)) {
+        this.database.updateTaskRepositoryMetadata({ id: item.taskId, mergedCommitSha: repositoryState.canonicalHeadSha });
+      }
+    }
     const issueLinks = feature.featurePlanId === null
       ? { featureIssueNumber: null, taskIssueNumbers: {} as Record<number, number> }
       : this.database.getFeaturePlanIssueLinks(feature.featurePlanId);
@@ -587,7 +614,7 @@ export class FeatureCoordinator {
       const message = "Feature merged, but one or more integrated branches or issues still need cleanup.";
       this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
       this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
-      return;
+      return false;
     }
 
     try {
@@ -608,7 +635,7 @@ export class FeatureCoordinator {
       const message = "Feature merged, but its branch or GitHub issue still needs cleanup.";
       this.database.updateFeature({ id: feature.id, status: "merging", lastError: message });
       this.addEvent(feature, "feature.work_pr_cleanup_pending", message);
-      return;
+      return false;
     }
 
     const completed = this.database.withTransaction(() => {
@@ -644,6 +671,7 @@ export class FeatureCoordinator {
         this.addEvent(completed, "feature.self_update_failed", safeSummary(error));
       }
     }
+    return true;
   }
 
   private buildReviewRequest(feature: FeatureRecord, state: FeaturePullRequestState): AgentExecutionRequest {
