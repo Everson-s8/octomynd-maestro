@@ -684,10 +684,10 @@ describe("Feature Plan Queue Scheduler Block 3", () => {
       reason: "Dependency conflict"
     });
 
-    expect(notificationText).toContain("Feature Plan #42 - ⚠️ Bloqueado");
-    expect(notificationText).toContain("Projeto: @boo");
-    expect(notificationText).toContain("Bloqueio: Dependency conflict");
-    expect(notificationText).toContain("Proxima acao: Resolva o motivo do bloqueio e execute /feature_retry id.");
+    expect(notificationText).toContain("Feature Plan #42 - ⚠️ Blocked");
+    expect(notificationText).toContain("Project: @boo");
+    expect(notificationText).toContain("Blocker: Dependency conflict");
+    expect(notificationText).toContain("Next action: Resolve the blocking reason and run /feature_retry id.");
   });
 
   it("delivers new lifecycle events once and resumes without duplicates after restart", async () => {

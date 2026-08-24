@@ -78,7 +78,7 @@ export function buildReviewQueueItem(
     projectName: project.name,
     demand: redactSensitiveText(task.text),
     status: latestDecision,
-    summary: redactSensitiveText(reviewSummary || `Goal concluida em ${run.stepCount} passos.`),
+    summary: redactSensitiveText(reviewSummary || `Goal completed in ${run.stepCount} steps.`),
     agents: [...new Set(steps.map((step) => step.provider))],
     changedFiles,
     tests: steps
@@ -112,7 +112,7 @@ function inspectChangedFiles(worktreePath: string | null, baseBranch: string): C
     return {
       status: "unavailable",
       code: "worktree_unavailable",
-      message: "Worktree indisponivel para nova verificacao."
+      message: "Worktree unavailable for a new verification."
     };
   }
   const safeDirectory = `safe.directory=${path.resolve(worktreePath)}`;
@@ -165,7 +165,7 @@ function inspectChangeSafety(
     const gate = {
       status: "unavailable" as const,
       code: "worktree_unavailable",
-      message: "Worktree indisponivel para nova verificacao."
+      message: "Worktree unavailable for a new verification."
     };
     return {
       gate,
@@ -183,7 +183,7 @@ function inspectChangeSafety(
     const gate = {
       status: "passed" as const,
       code: "secret_scan_passed",
-      message: "Verificacao de segredos concluida sem alertas."
+      message: "Secret scan completed without alerts."
     };
     return {
       gate,
@@ -200,7 +200,7 @@ function inspectChangeSafety(
     gate: {
       status: "blocked",
       code: "sensitive_change",
-      message: "Arquivo alterado requer revisao de seguranca antes da aprovacao."
+      message: "Changed files require a security review before approval."
     },
     alerts: findings.map(secretFindingToAlert)
   };
@@ -210,7 +210,7 @@ function secretFindingToAlert(finding: SecretScanFinding): ReviewSecurityAlert {
   return {
     severity: "high",
     code: "sensitive_change",
-    message: "Arquivo alterado requer revisao de seguranca antes da aprovacao.",
+    message: "Changed files require a security review before approval.",
     file: normalizeRelativePath(finding.relativePath)
   };
 }

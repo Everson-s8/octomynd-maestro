@@ -68,7 +68,7 @@ export function TaskComposer({
         explicitOverride: override === "automatic" ? null : override
       });
       if (result.status === "needs_clarification" || result.createdType === "none") {
-        // Only reachable with an explicit "Necessita clarificação" override
+        // Only reachable with an explicit "Needs clarification" override
         // since F2: automatic classification always creates something now.
         setPreview({ decision: result.decision, explanation: result.explanation });
         setError(
@@ -101,13 +101,13 @@ export function TaskComposer({
       }}
     >
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="composer-title">
-        <button type="button" className="modal-close" onClick={onClose} aria-label="Fechar">
+        <button type="button" className="modal-close" onClick={onClose} aria-label={translate("Close")}>
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
 
         <div className="modal-head">
       <div className="modal-eyebrow">{translate("New mission")}</div>
-          <h3 id="composer-title">O que colocamos em movimento?</h3>
+          <h3 id="composer-title">{translate("What should we set in motion?")}</h3>
           <p>
             {translate("Create a local request. Maestro classifies the work intake, organizes the queue, and keeps the project isolated.")}
           </p>
@@ -132,7 +132,7 @@ export function TaskComposer({
           )}
 
           <div className="mfield">
-            <label htmlFor="composer-project">Projeto</label>
+            <label htmlFor="composer-project">{translate("Project")}</label>
             <select
               id="composer-project"
               value={projectKey}
@@ -148,7 +148,7 @@ export function TaskComposer({
           </div>
 
           <div className="mfield">
-            <label htmlFor="composer-demand">Demanda</label>
+            <label htmlFor="composer-demand">{translate("Request")}</label>
             <textarea
               id="composer-demand"
               value={text}
@@ -170,7 +170,7 @@ export function TaskComposer({
             disabled={analyzing || !projectKey || text.trim().length < 4}
             style={{ alignSelf: "flex-start", marginBottom: "12px" }}
           >
-            {analyzing ? "Analisando..." : "Analisar Work Intake"}
+            {analyzing ? translate("Analyzing…") : translate("Analyze Work Intake")}
           </button>
 
           {preview ? (
@@ -194,8 +194,8 @@ export function TaskComposer({
                 onChange={(e) => setOverride(e.target.value as typeof override)}
               >
                 <option value="automatic">{translate("Automatic")}</option>
-                <option value="direct_task">Tarefa direta</option>
-                <option value="feature_plan">Plano de funcionalidade</option>
+                <option value="direct_task">{translate("Direct task")}</option>
+                <option value="feature_plan">{translate("Feature plan")}</option>
                 <option value="needs_clarification">{translate("Needs clarification")}</option>
               </select>
             </div>
@@ -203,7 +203,7 @@ export function TaskComposer({
 
           <div className="hint-box">
             <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z" /></svg>
-            <span>O Maestro classifica e isola cada demanda na fila governada.</span>
+            <span>{translate("The Maestro classifies and isolates each request in the governed queue.")}</span>
           </div>
 
           <div className="modal-actions">
@@ -211,7 +211,7 @@ export function TaskComposer({
               {translate("Cancel")}
             </button>
             <button type="submit" className="btn-new" disabled={submitting || !projectKey || text.trim().length < 4}>
-              {submitting ? "Criando..." : "Criar Demanda"}
+              {submitting ? translate("Creating…") : translate("Create request")}
             </button>
           </div>
         </form>

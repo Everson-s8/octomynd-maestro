@@ -4,7 +4,7 @@
  * Update flow (matches Hermes/VS Code semantics the user expects):
  *  - The packaged app checks the GitHub Releases feed on boot and every 6h.
  *  - When a newer version is found it is downloaded in the background.
- *  - The user is told once ("Atualização baixada — reinicie para aplicar");
+ *  - The user is told once ("Update downloaded — restart to apply");
  *    quitAndInstall() replaces the app in place. User data under userData
  *    is preserved, exactly like the manual Setup-over-Setup flow.
  *

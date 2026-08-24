@@ -1163,7 +1163,7 @@ describe("goal runner", () => {
     await waitFor(() => database.getGoalRun(run.id).status === "completed");
 
     expect(implementationResumeContext).toContain("partial.ts");
-    expect(implementationResumeContext).toContain("Nao reverta nem refaca trabalho valido");
+    expect(implementationResumeContext).toContain("Do not revert or redo valid work");
     expect(database.getTask(task.id).status).toBe("done");
     expect(database.listEvents().some((event) => event.type === "goal.recovered_after_restart")).toBe(true);
     await coordinator.shutdown();
@@ -1363,7 +1363,7 @@ describe("goal runner", () => {
     ].join("\n");
     const codex = new FakeProvider("codex", ["planning"], () => ({
       outcome: "failed",
-      summary: "Codex (planning): erro desconhecido.",
+      summary: "Codex (planning): unknown error.",
       output: hugeLeakyError,
       error: hugeLeakyError,
       durationMs: 1,
@@ -1378,7 +1378,7 @@ describe("goal runner", () => {
     );
 
     expect(run.status).toBe("failed");
-    expect(run.lastError).toBe("Codex (planning): erro desconhecido.");
+    expect(run.lastError).toBe("Codex (planning): unknown error.");
     expect(run.lastError!.length).toBeLessThan(300);
     expect(run.lastError).not.toContain(fakeSecret);
     expect(run.lastError).not.toContain("C:\\Users\\evers");

@@ -54,11 +54,11 @@ export async function requestDashboardJson<T>(
   } catch (error) {
     if (error instanceof DashboardRequestError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
-      throw new DashboardRequestError("O dashboard nao respondeu dentro do tempo limite.");
+      throw new DashboardRequestError("The dashboard did not respond before the timeout.");
     }
     const detail = error instanceof Error ? error.message : String(error);
     throw new DashboardRequestError(
-      `Nao foi possivel conectar ao dashboard em ${dashboardUrl("/api/health", options)}: ${detail}. Inicie o Maestro antes (ex.: "maestro start" ou abrindo o app).`
+      `Unable to connect to the dashboard at ${dashboardUrl("/api/health", options)}: ${detail}. Start Maestro first (for example, with "maestro start" or by opening the app).`
     );
   } finally {
     clearTimeout(timeout);
@@ -79,5 +79,5 @@ function apiErrorMessage(payload: unknown, status: number): string {
     );
     if (message) return message;
   }
-  return `Dashboard respondeu com HTTP ${status}.`;
+  return `Dashboard returned HTTP ${status}.`;
 }

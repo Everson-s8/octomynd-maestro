@@ -88,6 +88,6 @@ describe("runProviderReview", () => {
 
     expect(result.status).toBe("failed");
     expect(result.provider).toBe("maestro");
-    expect(result.error).toContain("Nenhum provider");
+    expect(result.error).toContain("No enabled provider");
   });
 });

@@ -159,9 +159,9 @@ export class AntigravityProvider implements AgentProvider {
     const executable = resolveAntigravityExecutable(this.executablePath);
     let health: AgentHealth;
     if (!executable) {
-      health = { state: "offline", detail: "Antigravity CLI nao encontrado", checkedAt: new Date().toISOString() };
+      health = { state: "offline", detail: "Antigravity CLI not found", checkedAt: new Date().toISOString() };
     } else if (!this.healthProbe) {
-      health = { state: "ready", detail: "Antigravity CLI disponivel", checkedAt: new Date().toISOString() };
+      health = { state: "ready", detail: "Antigravity CLI available", checkedAt: new Date().toISOString() };
     } else {
       const probe = await runAgentProcess({
         command: executable,
@@ -183,10 +183,10 @@ export class AntigravityProvider implements AgentProvider {
         spawnErrorCode: probe.spawnErrorCode
       });
       health = category === "auth_required"
-        ? { state: "auth_required", detail: "Antigravity precisa de login.", checkedAt: new Date().toISOString() }
+        ? { state: "auth_required", detail: "Antigravity requires sign-in.", checkedAt: new Date().toISOString() }
         : probe.exitCode === 0
-          ? { state: "ready", detail: "Antigravity CLI autenticado", checkedAt: new Date().toISOString() }
-          : { state: "offline", detail: "Antigravity CLI indisponivel.", checkedAt: new Date().toISOString() };
+          ? { state: "ready", detail: "Antigravity CLI authenticated", checkedAt: new Date().toISOString() }
+          : { state: "offline", detail: "Antigravity CLI unavailable.", checkedAt: new Date().toISOString() };
     }
     this.cacheHealth(health, 30_000);
     return health;
@@ -198,8 +198,8 @@ export class AntigravityProvider implements AgentProvider {
     const selectedModel = request.model ?? this.model;
     if (!executable || !fs.existsSync(cwd)) {
       const detail = !executable
-        ? "Antigravity CLI nao encontrado."
-        : `Workspace nao existe: ${cwd}`;
+        ? "Antigravity CLI not found."
+        : `Workspace does not exist: ${cwd}`;
       return failure(detail);
     }
 
@@ -208,7 +208,7 @@ export class AntigravityProvider implements AgentProvider {
         configureAntigravityAutonomousPermissions();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        return failure(`Nao foi possivel preparar as permissoes do Antigravity: ${detail}`, "permission_denied");
+        return failure(`Unable to prepare Antigravity permissions: ${detail}`, "permission_denied");
       }
     }
 
@@ -288,7 +288,7 @@ export class AntigravityProvider implements AgentProvider {
 
     this.cacheHealth({
       state: "ready",
-      detail: "Antigravity CLI autenticado",
+      detail: "Antigravity CLI authenticated",
       checkedAt: new Date().toISOString()
     }, 30_000);
     const output = processResult.stdout.trim();
@@ -300,9 +300,9 @@ export class AntigravityProvider implements AgentProvider {
       outcome: changesRequested ? "changes_requested" : "completed",
       summary: changesRequested
         ? reviewDecision === "changes_requested"
-          ? "Antigravity solicitou ajustes concretos."
-          : "Antigravity nao aprovou explicitamente a revisao final."
-        : `Antigravity concluiu a fase ${request.phase}.`,
+          ? "Antigravity requested concrete changes."
+          : "Antigravity did not explicitly approve the final review."
+        : `Antigravity completed the ${request.phase} phase.`,
       structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
       artifactsProduced: [],
       output,
@@ -322,8 +322,8 @@ export class AntigravityProvider implements AgentProvider {
     const selectedModel = this.model;
     if (!executable || !fs.existsSync(request.workspacePath)) {
       const error = !executable
-        ? "Antigravity CLI nao encontrado."
-        : `Workspace nao existe: ${request.workspacePath}`;
+        ? "Antigravity CLI not found."
+        : `Workspace does not exist: ${request.workspacePath}`;
       return improvementFailure(error, false);
     }
     if (this.autoConfigurePermissions) {
@@ -331,7 +331,7 @@ export class AntigravityProvider implements AgentProvider {
         configureAntigravityAutonomousPermissions();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        return improvementFailure(`Nao foi possivel preparar as permissoes do Antigravity: ${detail}`, false);
+        return improvementFailure(`Unable to prepare Antigravity permissions: ${detail}`, false);
       }
     }
     const processResult = await runAgentProcess({

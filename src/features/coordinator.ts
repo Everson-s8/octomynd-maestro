@@ -114,31 +114,31 @@ export class FeatureCoordinator {
 
     if (feature.status === "completed") {
       isReady = false;
-      notReadyReason = "Feature PR ja foi concluido e integrado.";
+      notReadyReason = "Feature PR was already completed and integrated.";
     } else if (feature.status === "cancelled") {
       isReady = false;
-      notReadyReason = "Feature PR foi cancelado.";
+      notReadyReason = "Feature PR was cancelled.";
     } else if (isReviewActive) {
       isReady = false;
-      notReadyReason = "Revisao final ja esta em andamento.";
+      notReadyReason = "Final review is already in progress.";
     } else if (prState.state === "CLOSED") {
       isReady = false;
-      notReadyReason = "Feature PR foi fechado no GitHub.";
+      notReadyReason = "Feature PR was closed on GitHub.";
     } else if (prState.state === "MERGED") {
       isReady = false;
-      notReadyReason = "Feature PR ja foi mesclado no GitHub.";
+      notReadyReason = "Feature PR was already merged on GitHub.";
     } else if (prState.isDraft) {
       isReady = false;
-      notReadyReason = "Feature PR esta em draft no GitHub.";
+      notReadyReason = "Feature PR is still a draft on GitHub.";
     } else if (prState.mergeable === "CONFLICTING") {
       isReady = false;
-      notReadyReason = "Feature PR possui conflitos de merge.";
+      notReadyReason = "Feature PR has merge conflicts.";
     } else if (prState.mergeable !== "MERGEABLE") {
       isReady = false;
-      notReadyReason = "GitHub ainda nao confirmou se o Feature PR e mesclavel.";
+      notReadyReason = "GitHub has not confirmed that the Feature PR is mergeable yet.";
     } else if (!featureChecksPassed(prState)) {
       isReady = false;
-      notReadyReason = "Checks obrigatorios do GitHub nao passaram.";
+      notReadyReason = "Required GitHub checks have not passed.";
     }
 
     return {
@@ -159,7 +159,7 @@ export class FeatureCoordinator {
         feature,
         status: feature.status,
         reason: "already_completed",
-        message: "Feature PR ja foi concluido e integrado."
+        message: "Feature PR was already completed and integrated."
       };
     }
 
@@ -169,7 +169,7 @@ export class FeatureCoordinator {
         feature,
         status: feature.status,
         reason: "cancelled",
-        message: "Feature PR foi cancelado."
+        message: "Feature PR was cancelled."
       };
     }
 
@@ -179,7 +179,7 @@ export class FeatureCoordinator {
         feature,
         status: feature.status,
         reason: "already_in_progress",
-        message: `Revisao final ja esta em andamento para a Feature #${feature.id}.`
+        message: `Final review is already in progress for Feature #${feature.id}.`
       };
     }
 
@@ -218,7 +218,7 @@ export class FeatureCoordinator {
       }
 
       if (state.isDraft) {
-        const message = "Feature PR esta em draft. Altere para 'Ready for review' no GitHub antes da revisao final.";
+        const message = "Feature PR is still a draft. Mark it as 'Ready for review' on GitHub before the final review.";
         const updated = this.database.updateFeature({ id: feature.id, status: "draft", lastError: message });
         this.addEvent(updated, "feature.manual_review_rejected", message);
         return {
@@ -246,7 +246,7 @@ export class FeatureCoordinator {
       }
 
       if (state.mergeable !== "MERGEABLE") {
-        const message = "GitHub ainda nao confirmou se o Feature PR e mesclavel.";
+        const message = "GitHub has not confirmed that the Feature PR is mergeable yet.";
         const updated = this.database.updateFeature({ id: feature.id, status: "waiting_checks", lastError: message });
         this.addEvent(updated, "feature.waiting_mergeability", message);
         return {
@@ -260,7 +260,7 @@ export class FeatureCoordinator {
       }
 
       if (!featureChecksPassed(state)) {
-        const message = "Checks obrigatorios do GitHub nao passaram.";
+        const message = "Required GitHub checks have not passed.";
         const updated = this.database.updateFeature({ id: feature.id, status: "waiting_checks", lastError: message });
         this.addEvent(updated, "feature.waiting_checks", message);
         return {
@@ -290,7 +290,7 @@ export class FeatureCoordinator {
           status: "completed",
           providerId: (finalFeature.reviewerProvider as AgentProviderId) || undefined,
           summary: finalFeature.reviewSummary || undefined,
-          message: "Revisao final aprovada e Feature PR mesclado com sucesso!"
+          message: "Final review approved and the Feature PR was merged successfully!"
         };
       }
 
@@ -303,7 +303,7 @@ export class FeatureCoordinator {
           providerId: (finalFeature.reviewerProvider as AgentProviderId) || undefined,
           summary: finalFeature.reviewSummary || undefined,
           reason: "changes_requested",
-          message: `Revisao final solicitou ajustes: ${finalFeature.reviewSummary || "sem detalhes"}`
+          message: `Final review requested changes: ${finalFeature.reviewSummary || "no details"}`
         };
       }
 
@@ -314,7 +314,7 @@ export class FeatureCoordinator {
           prState: state,
           status: "waiting_provider",
           reason: "waiting_provider",
-          message: finalFeature.lastError || "Aguardando provider de revisao disponivel."
+          message: finalFeature.lastError || "Waiting for an available review provider."
         };
       }
 
@@ -324,7 +324,7 @@ export class FeatureCoordinator {
         prState: state,
         status: finalFeature.status,
         reason: finalFeature.status,
-        message: finalFeature.lastError || `Revisao concluida com estado: ${finalFeature.status}`
+        message: finalFeature.lastError || `Review completed with status: ${finalFeature.status}`
       };
     } finally {
       this.active.delete(feature.id);

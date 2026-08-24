@@ -56,11 +56,11 @@ export class OpenAICompatibleProvider implements AgentProvider {
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
     let health: AgentHealth;
     if (!endpoint) {
-      health = { state: "offline", detail: `${this.label}: endpoint nao configurado`, checkedAt: new Date().toISOString() };
+      health = { state: "offline", detail: `${this.label}: endpoint not configured`, checkedAt: new Date().toISOString() };
     } else if (!key) {
-      health = { state: "auth_required", detail: `${this.label}: chave de API (${this.apiKeyEnv ?? "?"}) nao configurada`, checkedAt: new Date().toISOString() };
+      health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
     } else {
-      health = { state: "ready", detail: `${this.label}: endpoint pronto (${endpoint})`, checkedAt: new Date().toISOString() };
+      health = { state: "ready", detail: `${this.label}: endpoint ready (${endpoint})`, checkedAt: new Date().toISOString() };
     }
     this.healthExpiresAt = Date.now() + 30_000;
     this.cachedHealth = health;
@@ -75,8 +75,8 @@ export class OpenAICompatibleProvider implements AgentProvider {
 
     if (!endpoint || !key) {
       const errorText = !endpoint
-        ? "Endpoint nao configurado para este provider."
-        : `API key (${this.apiKeyEnv}) nao configurada. Configure-a na pagina de Providers.`;
+        ? "Endpoint is not configured for this provider."
+        : `API key (${this.apiKeyEnv}) is not configured. Configure it in Providers.`;
       const category: FailureCategory = key ? "unknown" : "auth_required";
       this.cacheHealth(category === "auth_required" ? "auth_required" : "offline", errorText);
       return {
@@ -118,7 +118,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        const errorText = `Endpoint ${endpoint} respondeu HTTP ${response.status}: ${body.slice(0, 300)}`;
+        const errorText = `Endpoint ${endpoint} returned HTTP ${response.status}: ${body.slice(0, 300)}`;
         const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: response.status, timedOut: false, aborted: false, breakerReason: null, spawnErrorCode: null });
         return {
           outcome: "failed", summary: errorText, structuredPayload: null,
@@ -138,9 +138,9 @@ export class OpenAICompatibleProvider implements AgentProvider {
         ? { inputTokens: payload.usage.prompt_tokens ?? 0, outputTokens: payload.usage.completion_tokens ?? 0 }
         : undefined;
 
-      this.cacheHealth("ready", `${this.label}: endpoint autenticado`);
+      this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
       return {
-        outcome: "completed", summary: `${this.label} concluiu a fase ${request.phase}.`,
+        outcome: "completed", summary: `${this.label} completed the ${request.phase} phase.`,
         structuredPayload: { phase: request.phase }, artifactsProduced: [],
         output: content, error: null, durationMs: Date.now() - startedAt,
         retryable: false, tokenUsage, model: selectedModel

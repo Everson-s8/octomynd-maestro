@@ -535,7 +535,7 @@ describe("dashboard", () => {
     database.finishGoalStep({
       id: step.id,
       status: "failed",
-      summary: "Codex (planning): erro desconhecido.",
+      summary: "Codex (planning): unknown error.",
       output: fullDetail,
       error: fullDetail,
       durationMs: 5

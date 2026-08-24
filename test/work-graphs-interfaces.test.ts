@@ -74,7 +74,7 @@ describe("Work Graph interfaces", () => {
 
     const telegram = formatWorkGraphs(new ApplicationCommands(database).listWorkGraphs());
     expect(telegram).toContain(`Graph #${graph.id} @fixture`);
-    expect(telegram).toContain("tentativas 0/2");
+    expect(telegram).toContain("attempts 0/2");
     expect(formatStatus("Maestro", database)).toContain(`graph #${graph.id} [draft]`);
   });
 

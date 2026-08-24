@@ -6,7 +6,7 @@ function agent(overrides: Partial<AgentPresenceEntry> = {}): AgentPresenceEntry 
     id: "codex",
     label: "Codex",
     state: "ready",
-    detail: "Codex CLI disponivel",
+    detail: "Codex CLI available",
     ...overrides
   };
 }

@@ -68,7 +68,7 @@ export function NervousSystem({ agents }: NervousSystemProps) {
 
   return (
     <svg viewBox="0 0 560 340" role="img" aria-label={translate("Active Maestro providers")} className="nervous-system">
-      {/* núcleo = Maestro */}
+      {/* core = Maestro */}
       <g className="core-breath">
         <ellipse cx="150" cy="175" rx="32" ry="29" fill="#c4622d" />
         <ellipse cx="150" cy="175" rx="32" ry="29" fill="none" stroke="#e8967a" strokeWidth="1" opacity="0.35" />

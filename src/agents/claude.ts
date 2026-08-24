@@ -156,16 +156,16 @@ export class ClaudeProvider implements AgentProvider {
     const envKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
     const oauth = readClaudeOAuthToken();
     const health: AgentHealth = envKey
-      ? { state: "ready", detail: "Claude API Key disponivel via ENV", checkedAt: new Date().toISOString() }
+      ? { state: "ready", detail: "Claude API key available through ENV", checkedAt: new Date().toISOString() }
       : !cli
         ? {
           state: "offline",
-          detail: withRemediation("claude", "offline", "Claude CLI ou API Key nao encontrado."),
+          detail: withRemediation("claude", "offline", "Claude CLI or API key not found."),
           checkedAt: new Date().toISOString()
         }
         : oauth
-          ? { state: "ready", detail: "Claude CLI autenticado", checkedAt: new Date().toISOString() }
-          : { state: "auth_required", detail: "Claude CLI instalado, mas a conta ainda nao foi autenticada.", checkedAt: new Date().toISOString() };
+          ? { state: "ready", detail: "Claude CLI authenticated", checkedAt: new Date().toISOString() }
+          : { state: "auth_required", detail: "Claude CLI is installed, but the account is not authenticated.", checkedAt: new Date().toISOString() };
     this.cacheHealth(health, 30_000);
     return health;
   }
@@ -222,7 +222,7 @@ export class ClaudeProvider implements AgentProvider {
       } else if (category === "timeout") {
         this.cacheHealth({
           state: "ready",
-          detail: "Claude CLI disponivel; a ultima execucao atingiu o limite de tempo.",
+          detail: "Claude CLI available; the last execution reached its time limit.",
           checkedAt: new Date().toISOString()
         }, 15_000);
       } else {
@@ -251,7 +251,7 @@ export class ClaudeProvider implements AgentProvider {
 
     this.cacheHealth({
       state: "ready",
-      detail: "Claude CLI autenticado",
+      detail: "Claude CLI authenticated",
       checkedAt: new Date().toISOString()
     }, 30_000);
     const content = result.stdout.trim();
@@ -261,9 +261,9 @@ export class ClaudeProvider implements AgentProvider {
       outcome: requestsChanges ? "changes_requested" : "completed",
       summary: requestsChanges
         ? reviewDecision === "changes_requested"
-          ? "Claude solicitou ajustes concretos."
-          : "Claude nao aprovou explicitamente a revisao final."
-        : `Claude concluiu a fase ${request.phase}.`,
+          ? "Claude requested concrete changes."
+          : "Claude did not explicitly approve the final review."
+        : `Claude completed the ${request.phase} phase.`,
       structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
       artifactsProduced: [],
       output: content,
@@ -283,7 +283,7 @@ export class ClaudeProvider implements AgentProvider {
     const cli = resolveClaudeCliCommand();
     if (!cli) return improvementFailure("Claude Code CLI was not found.", startedAt, false);
     if (!fs.existsSync(request.workspacePath)) {
-      return improvementFailure(`Workspace nao existe: ${request.workspacePath}`, startedAt, false);
+      return improvementFailure(`Workspace does not exist: ${request.workspacePath}`, startedAt, false);
     }
     const result = await runAgentProcess({
       command: cli.command,
@@ -414,7 +414,7 @@ export const reviewTaskWithClaude = async (
     status: authenticationFailed ? "auth_required" : "failed",
     content: "",
     error: authenticationFailed
-      ? "Claude Code precisa ser reautenticado antes da revisao."
+      ? "Claude Code must be re-authenticated before the review."
       : errorText || "Claude review failed without output.",
     durationMs: Date.now() - startedAt
   };

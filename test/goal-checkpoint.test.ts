@@ -54,7 +54,7 @@ describe("Goal checkpoint", () => {
 
     expect(checkpoint.changedFiles).toContain("partial.ts");
     expect(database.getLatestGoalCheckpoint(run.id)?.id).toBe(checkpoint.id);
-    expect(formatCheckpointForResume(checkpoint)).toContain("Nao reverta nem refaca trabalho valido");
+    expect(formatCheckpointForResume(checkpoint)).toContain("Do not revert or redo valid work");
   });
 
   it("checkpoint round-trip preserves all enriched semantic context fields", () => {
@@ -125,26 +125,26 @@ describe("Goal checkpoint", () => {
 
     const prompt = formatCheckpointForResume(checkpoint);
     expect(prompt).toBeDefined();
-    expect(prompt).toContain("Checkpoint persistente #42 (interrupted)");
-    expect(prompt).toContain("Provider anterior: claude");
-    expect(prompt).toContain("Fase anterior: testing");
-    expect(prompt).toContain("Objetivo: Enrich goal checkpoints with semantic context");
-    expect(prompt).toContain("Resumo: Interrupted during testing phase execution");
-    expect(prompt).toContain("O que foi realizado (concluido):");
+    expect(prompt).toContain("Persistent checkpoint #42 (interrupted)");
+    expect(prompt).toContain("Previous provider: claude");
+    expect(prompt).toContain("Previous phase: testing");
+    expect(prompt).toContain("Objective: Enrich goal checkpoints with semantic context");
+    expect(prompt).toContain("Summary: Interrupted during testing phase execution");
+    expect(prompt).toContain("Completed work:");
     expect(prompt).toContain("- Implemented checkpoint schema");
-    expect(prompt).toContain("Decisoes tomadas:");
+    expect(prompt).toContain("Decisions made:");
     expect(prompt).toContain("- Preserve backward compatibility for missing columns");
-    expect(prompt).toContain("Testes executados:");
+    expect(prompt).toContain("Tests run:");
     expect(prompt).toContain("- [npm test]: 429 passed");
-    expect(prompt).toContain("Falhas conhecidas:");
+    expect(prompt).toContain("Known failures:");
     expect(prompt).toContain("- Network error when fetching external schema");
-    expect(prompt).toContain("Trabalho restante:");
+    expect(prompt).toContain("Remaining work:");
     expect(prompt).toContain("- Verify round-trip persistence");
-    expect(prompt).toContain("Arquivos presentes no workspace:");
+    expect(prompt).toContain("Files present in the workspace:");
     expect(prompt).toContain("- src/goals/checkpoint.ts");
-    expect(prompt).toContain("Evidencias persistidas:");
+    expect(prompt).toContain("Persisted evidence:");
     expect(prompt).toContain("- artifact:artifact-1.txt");
-    expect(prompt).toContain("Continue a partir do workspace atual. Nao reverta nem refaca trabalho valido");
+    expect(prompt).toContain("Continue from the current workspace. Do not revert or redo valid work");
   });
 
   it("maintains backward compatibility with old checkpoints lacking semantic fields", () => {
@@ -164,17 +164,17 @@ describe("Goal checkpoint", () => {
 
     const prompt = formatCheckpointForResume(legacyCheckpoint);
     expect(prompt).toBeDefined();
-    expect(prompt).toContain("Checkpoint persistente #1 (completed)");
-    expect(prompt).toContain("Resumo: Legacy checkpoint summary");
-    expect(prompt).toContain("O que foi realizado (concluido):");
-    expect(prompt).toContain("- nenhum item registrado");
-    expect(prompt).toContain("Decisoes tomadas:");
-    expect(prompt).toContain("- nenhuma decisao registrada");
-    expect(prompt).toContain("Testes executados:");
-    expect(prompt).toContain("- nenhum teste registrado");
-    expect(prompt).toContain("Falhas conhecidas:");
-    expect(prompt).toContain("- nenhuma falha registrada");
-    expect(prompt).toContain("Trabalho restante:");
-    expect(prompt).toContain("- nenhum trabalho pendente registrado");
+    expect(prompt).toContain("Persistent checkpoint #1 (completed)");
+    expect(prompt).toContain("Summary: Legacy checkpoint summary");
+    expect(prompt).toContain("Completed work:");
+    expect(prompt).toContain("- no items recorded");
+    expect(prompt).toContain("Decisions made:");
+    expect(prompt).toContain("- no decisions recorded");
+    expect(prompt).toContain("Tests run:");
+    expect(prompt).toContain("- no tests recorded");
+    expect(prompt).toContain("Known failures:");
+    expect(prompt).toContain("- no failures recorded");
+    expect(prompt).toContain("Remaining work:");
+    expect(prompt).toContain("- no pending work recorded");
   });
 });

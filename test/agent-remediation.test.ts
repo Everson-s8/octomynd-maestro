@@ -4,27 +4,27 @@ import { remediationHint, withRemediation } from "../src/agents/remediation.js";
 describe("provider remediation hints", () => {
   it("tells codex users the exact install and login commands when offline", () => {
     expect(remediationHint("codex", "offline")).toBe(
-      'Instale com "npm install -g @openai/codex" e depois autentique com "codex login".'
+      'Install with "npm install -g @openai/codex" and then authenticate with "codex login".'
     );
   });
 
   it("tells codex users to authenticate when auth is required", () => {
-    expect(remediationHint("codex", "auth_required")).toBe('Autentique com "codex login".');
+    expect(remediationHint("codex", "auth_required")).toBe('Authenticate with "codex login".');
   });
 
   it("tells claude users the exact install and login commands when offline", () => {
     expect(remediationHint("claude", "offline")).toBe(
-      'Instale com "npm install -g @anthropic-ai/claude-code" e depois autentique com "claude login".'
+      'Install with "npm install -g @anthropic-ai/claude-code" and then authenticate with "claude login".'
     );
   });
 
   it("tells claude users to authenticate when auth is required", () => {
-    expect(remediationHint("claude", "auth_required")).toBe('Autentique com "claude login".');
+    expect(remediationHint("claude", "auth_required")).toBe('Authenticate with "claude login".');
   });
 
   it("tells users to wait out a quota window for either provider", () => {
-    expect(remediationHint("codex", "quota")).toContain("cota do provider");
-    expect(remediationHint("claude", "quota")).toContain("cota do provider");
+    expect(remediationHint("codex", "quota")).toContain("provider quota");
+    expect(remediationHint("claude", "quota")).toContain("provider quota");
   });
 
   it("has no remediation hint when a provider is ready", () => {
@@ -37,8 +37,8 @@ describe("provider remediation hints", () => {
   });
 
   it("appends the hint to the base detail without altering it when there is nothing to add", () => {
-    expect(withRemediation("codex", "auth_required", "Codex (planning): autenticacao necessaria."))
-      .toBe('Codex (planning): autenticacao necessaria. Autentique com "codex login".');
-    expect(withRemediation("codex", "ready", "Codex CLI disponivel")).toBe("Codex CLI disponivel");
+    expect(withRemediation("codex", "auth_required", "Codex (planning): authentication required"))
+      .toBe('Codex (planning): authentication required. Authenticate with "codex login".');
+    expect(withRemediation("codex", "ready", "Codex CLI available")).toBe("Codex CLI available");
   });
 });

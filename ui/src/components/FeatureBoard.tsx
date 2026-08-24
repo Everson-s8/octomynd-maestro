@@ -5,6 +5,7 @@ import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
 import { FeatureStatusPill } from "./StatusBadge";
+import { translate } from "../i18n";
 
 export function FeatureBoard({
   features,
@@ -41,17 +42,20 @@ export function FeatureBoard({
   async function handleCancel(feature: DashboardFeature) {
     if (
       !window.confirm(
-        `Cancelar a Feature #${feature.id} (${feature.name}) antes do merge? O historico e o PR consolidado sao preservados para auditoria.`
+        translate(
+          "Cancel Feature #{id} ({name}) before merge? The history and consolidated PR are preserved for audit.",
+          { id: feature.id, name: feature.name }
+        )
       )
     )
       return;
     setBusyId(feature.id);
     setError(null);
     try {
-      await cancelFeature(feature.id, "Cancelada pelo dashboard.");
+      await cancelFeature(feature.id, translate("Cancelled from the dashboard."));
       await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Nao foi possivel cancelar a Feature.");
+      setError(requestError instanceof Error ? requestError.message : translate("Unable to cancel the Feature."));
     } finally {
       setBusyId(null);
     }
@@ -59,12 +63,12 @@ export function FeatureBoard({
 
   return (
     <section className="panel feature-board" id="features" aria-labelledby="features-title">
-      <SectionHeader eyebrow="Feature PRs" title="Runtime de features" meta={`${features.length} registradas`} />
-      <div className="feature-status-strip" aria-label="Estados de feature">
+      <SectionHeader eyebrow={translate("Feature PRs")} title={translate("Feature runtime")} meta={`${features.length} ${translate("registered")}`} />
+      <div className="feature-status-strip" aria-label={translate("Feature states")}>
         {featureStatusOrder.map((status) => (
           <span className={`feature-status-count status-${status}`} key={status}>
             <strong>{counts[status]}</strong>
-            {featureStatusLabels[status]}
+            {translate(featureStatusLabels[status])}
           </span>
         ))}
       </div>
@@ -73,8 +77,8 @@ export function FeatureBoard({
         {sortedFeatures.length === 0 ? (
           <EmptyState
             icon="folder"
-            title="Nenhuma Feature PR"
-            text="Features registradas aparecem aqui durante checks, review final e merge."
+            title={translate("No Feature PR")}
+            text={translate("Registered features appear here during checks, final review, and merge.")}
           />
         ) : (
           sortedFeatures.slice(0, 6).map((feature) => (
@@ -88,11 +92,11 @@ export function FeatureBoard({
                 <strong>{feature.name}</strong>
                 <p>{feature.lastError ?? feature.reviewSummary ?? feature.objective}</p>
                 <small>
-                  {feature.itemCount} Work PR(s) - {feature.branchName}
+                  {feature.itemCount} {translate("Work PR(s)")} - {feature.branchName}
                 </small>
-                {feature.status === "cancelled" && feature.cancelReason ? <small>Cancelada: {feature.cancelReason}</small> : null}
+                {feature.status === "cancelled" && feature.cancelReason ? <small>{translate("Cancelled:")} {feature.cancelReason}</small> : null}
               </div>
-              <div className="feature-progress" aria-label={`Status: ${featureStatusLabels[feature.status]}`}>
+              <div className="feature-progress" aria-label={`${translate("Status")}: ${translate(featureStatusLabels[feature.status])}`}>
                 <span>
                   <i style={{ width: `${featureProgress(feature.status)}%` }} />
                 </span>
@@ -102,11 +106,11 @@ export function FeatureBoard({
                 {feature.cancellable ? (
                   <button
                     className="row-action row-action-danger"
-                    aria-label={`Cancelar Feature ${feature.id}`}
+                    aria-label={translate("Cancel Feature {id}", { id: feature.id })}
                     disabled={busyId !== null}
                     onClick={() => void handleCancel(feature)}
                   >
-                    {busyId === feature.id ? "..." : "Cancelar"}
+                    {busyId === feature.id ? "..." : translate("Cancel")}
                   </button>
                 ) : null}
                 <a
@@ -114,7 +118,7 @@ export function FeatureBoard({
                   href={feature.pullRequestUrl}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label={`Abrir Feature PR ${feature.id}`}
+                  aria-label={translate("Open Feature PR {id}", { id: feature.id })}
                 >
                   <Icon name="arrow" />
                 </a>

@@ -1016,7 +1016,7 @@ export async function runTaskGoal(
             "blocked",
             phase,
             stepCount,
-            "A revisao solicitou alteracoes, mas esta task nao permite iteracao automatica. Continue a Goal apos revisar o feedback.",
+            "The review requested changes, but this task does not allow automatic iteration. Continue the Goal after reviewing the feedback.",
             task.id
           );
         }

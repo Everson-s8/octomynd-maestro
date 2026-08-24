@@ -161,11 +161,11 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
   console.log("\n=======================================================");
   console.log("  Octomynd Maestro - Telegram Bot Connect Wizard");
   console.log("=======================================================\n");
-  console.log("Este assistente conecta seu bot do Telegram ao Maestro.\n");
+  console.log("This assistant connects your Telegram bot to Maestro.\n");
   console.log("Como obter as credenciais:");
   console.log("  1. No Telegram, converse com @BotFather.");
   console.log("  2. Use /newbot ou escolha um bot existente e copie o HTTP API Token.");
-  console.log("  3. Para restringir o bot apenas para você, converse com @userinfobot no Telegram e copie seu ID numerico.\n");
+    console.log("  3. To restrict the bot to yourself, message @userinfobot on Telegram and copy your numeric ID.\n");
 
   const rl = readline.createInterface({ input, output });
 
@@ -178,7 +178,7 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
       const validation = validateTelegramBotToken(rawToken);
 
       if (!validation.valid) {
-        console.log(`[!] Erro de validacao: ${validation.error}\n`);
+        console.log(`[!] Validation error: ${validation.error}\n`);
         continue;
       }
 
@@ -187,9 +187,9 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
         const testResult = await testTelegramBotToken(rawToken);
 
         if (!testResult.ok) {
-          console.log(`[!] Erro ao conectar com o Telegram: ${testResult.error}`);
-          const retryChoice = await rl.question("Deseja tentar outro token? (s/n): ");
-          if (retryChoice.toLowerCase().trim() !== "s") {
+          console.log(`[!] Telegram connection failed: ${testResult.error}`);
+          const retryChoice = await rl.question("Try another token? (y/n): ");
+          if (retryChoice.toLowerCase().trim() !== "y") {
             rl.close();
             return {
               success: false,
@@ -203,7 +203,7 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
         }
 
         botInfo = testResult.botInfo;
-        console.log(`[+] Bot verificado com sucesso: @${botInfo?.username ?? "desconhecido"} (${botInfo?.first_name ?? ""})`);
+        console.log(`[+] Bot verified successfully: @${botInfo?.username ?? "unknown"} (${botInfo?.first_name ?? ""})`);
       }
 
       botToken = rawToken.trim();
@@ -212,11 +212,11 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
 
     let allowedUserId = "";
     while (true) {
-      const rawUserId = await rl.question("\n2. Informe seu Telegram User ID para acesso restrito (opcional, Pressione Enter para ir irrestrito): ");
+      const rawUserId = await rl.question("\n2. Enter your Telegram User ID for restricted access (optional; press Enter for unrestricted access): ");
       const validation = validateTelegramUserId(rawUserId);
 
       if (!validation.valid) {
-        console.log(`[!] Erro de validacao: ${validation.error}`);
+        console.log(`[!] Validation error: ${validation.error}`);
         continue;
       }
 
@@ -234,10 +234,10 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
     });
 
     console.log("\n=======================================================");
-    console.log("[+] Telegram Bot configurado com sucesso!");
-    console.log(`    Arquivo atualizado: ${updateResult.envPath}`);
+    console.log("[+] Telegram bot configured successfully!");
+    console.log(`    Updated file: ${updateResult.envPath}`);
     if (botInfo) {
-      console.log(`    Bot conectado: @${botInfo.username}`);
+          console.log(`    Bot connected: @${botInfo.username}`);
     }
     console.log(`    Acesso: ${allowedUserId ? `Restrito ao User ID ${allowedUserId}` : "Irrestrito"}`);
     console.log("=======================================================\n");
@@ -252,7 +252,7 @@ export async function runTelegramConnectWizard(options: WizardOptions = {}): Pro
   } catch (err) {
     rl.close();
     const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error(`[!] Ocorreu um erro no assistente: ${errorMessage}`);
+    console.error(`[!] Assistant error: ${errorMessage}`);
     return {
       success: false,
       botToken: "",

@@ -104,7 +104,7 @@ function readSettings(settingsPath: string): JsonObject {
     // Do not overwrite a malformed settings file through an implicit repair.
     // The caller gets a clear failure from the write operation instead of
     // silently destroying a user's Antigravity configuration.
-    throw new Error("O settings.json do Antigravity nao contem JSON valido.");
+    throw new Error("Antigravity settings.json does not contain valid JSON.");
   }
 }
 

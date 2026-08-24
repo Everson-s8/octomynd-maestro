@@ -103,7 +103,7 @@ export function extractSemanticContext(params: {
   }
 
   if (params.interrupted && remaining.length === 0) {
-    remaining.push(`Retomar execucao da fase ${params.phase} via ${params.provider}`);
+    remaining.push(`Resume the ${params.phase} phase through ${params.provider}`);
   }
 
   return {
@@ -120,53 +120,53 @@ export function formatCheckpointForResume(checkpoint: GoalCheckpointRecord | nul
 
   const files = checkpoint.changedFiles && checkpoint.changedFiles.length > 0
     ? checkpoint.changedFiles.map((file) => `- ${file}`).join("\n")
-    : "- nenhum arquivo detectado";
+    : "- no files detected";
 
   const artifacts = checkpoint.artifactKeys && checkpoint.artifactKeys.length > 0
     ? checkpoint.artifactKeys.map((key) => `- artifact:${key}`).join("\n")
-    : "- nenhum artifact";
+    : "- no artifacts";
 
   const doneList = checkpoint.done && checkpoint.done.length > 0
     ? checkpoint.done.map((item) => `- ${item}`).join("\n")
-    : "- nenhum item registrado";
+    : "- no items recorded";
 
   const decisionsList = checkpoint.decisions && checkpoint.decisions.length > 0
     ? checkpoint.decisions.map((item) => `- ${item}`).join("\n")
-    : "- nenhuma decisao registrada";
+    : "- no decisions recorded";
 
   const testsList = checkpoint.testsRun && checkpoint.testsRun.length > 0
     ? checkpoint.testsRun.map((t) => `- [${t.command}]: ${t.result}`).join("\n")
-    : "- nenhum teste registrado";
+    : "- no tests recorded";
 
   const failuresList = checkpoint.knownFailures && checkpoint.knownFailures.length > 0
     ? checkpoint.knownFailures.map((item) => `- ${item}`).join("\n")
-    : "- nenhuma falha registrada";
+    : "- no failures recorded";
 
   const remainingList = checkpoint.remaining && checkpoint.remaining.length > 0
     ? checkpoint.remaining.map((item) => `- ${item}`).join("\n")
-    : "- nenhum trabalho pendente registrado";
+    : "- no pending work recorded";
 
   const lines = [
-    `Checkpoint persistente #${checkpoint.id} (${checkpoint.status})`,
-    `Provider anterior: ${checkpoint.provider}`,
-    `Fase anterior: ${checkpoint.phase}`,
-    ...(checkpoint.objective ? [`Objetivo: ${checkpoint.objective}`] : []),
-    `Resumo: ${checkpoint.summary}`,
-    "O que foi realizado (concluido):",
+    `Persistent checkpoint #${checkpoint.id} (${checkpoint.status})`,
+    `Previous provider: ${checkpoint.provider}`,
+    `Previous phase: ${checkpoint.phase}`,
+    ...(checkpoint.objective ? [`Objective: ${checkpoint.objective}`] : []),
+    `Summary: ${checkpoint.summary}`,
+    "Completed work:",
     doneList,
-    "Decisoes tomadas:",
+    "Decisions made:",
     decisionsList,
-    "Testes executados:",
+    "Tests run:",
     testsList,
-    "Falhas conhecidas:",
+    "Known failures:",
     failuresList,
-    "Trabalho restante:",
+    "Remaining work:",
     remainingList,
-    "Arquivos presentes no workspace:",
+    "Files present in the workspace:",
     files,
-    "Evidencias persistidas:",
+    "Persisted evidence:",
     artifacts,
-    "Continue a partir do workspace atual. Nao reverta nem refaca trabalho valido sem evidencia concreta."
+    "Continue from the current workspace. Do not revert or redo valid work without concrete evidence."
   ];
 
   return lines.join("\n");

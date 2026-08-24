@@ -31,11 +31,11 @@ export function createTelegramTaskBlockedNotifier(
   return async (task, reason, details) => {
     const explanation = details.length > 0 ? details.join("\n") : reason;
     await sendMessage(chatId, [
-      `Task #${task.id} bloqueada.`,
-      `Projeto: ${task.projectKey ? `@${task.projectKey}` : "sem projeto"}`,
-      `Motivo: ${reason}`,
-      `Detalhe: ${redactSensitiveText(explanation)}`,
-      "Acao: corrija a causa e tente novamente."
+      `Task #${task.id} blocked.`,
+      `Project: ${task.projectKey ? `@${task.projectKey}` : "no project"}`,
+      `Reason: ${reason}`,
+      `Details: ${redactSensitiveText(explanation)}`,
+      "Action: fix the cause and try again."
     ].join("\n"));
     database.addEvent({
       source: "telegram",
@@ -56,15 +56,15 @@ export function createTelegramImprovementCandidateNotifier(
   if (!chatId) return undefined;
   return async (proposal) => {
     await sendMessage(chatId, truncate([
-      `Nova melhoria candidata #${proposal.id}: ${proposal.title}`,
-      `Projeto: @${proposal.projectKey ?? "nao definido"}`,
-      `Risco: ${proposal.risk}`,
-      `Confianca: ${proposal.confidence === null ? "nao informada" : `${Math.round(proposal.confidence * 100)}%`}`,
-      `Motivo: ${redactSensitiveText(proposal.rationale)}`,
+      `New improvement candidate #${proposal.id}: ${proposal.title}`,
+      `Project: @${proposal.projectKey ?? "not set"}`,
+      `Risk: ${proposal.risk}`,
+      `Confidence: ${proposal.confidence === null ? "not reported" : `${Math.round(proposal.confidence * 100)}%`}`,
+      `Reason: ${redactSensitiveText(proposal.rationale)}`,
       "",
-      `Aprovar: /improve_approve ${proposal.id}`,
-      `Rejeitar: /improve_reject ${proposal.id}`,
-      "A aprovacao cria uma nova Task e Feature Plan; nao altera o sistema diretamente."
+      `Approve: /improve_approve ${proposal.id}`,
+      `Reject: /improve_reject ${proposal.id}`,
+      "Approval creates a new Task and Feature Plan; it does not change the system directly."
     ].join("\n"), 4_000));
     database.addEvent({
       source: "telegram",
@@ -84,11 +84,11 @@ export function createTelegramSkillCuratorCandidateNotifier(
   if (!chatId) return undefined;
   return async (eventType, candidate, detail) => {
     const actionLabels: Record<string, string> = {
-      candidate_created: "💡 Nova proposta de self-correction",
-      candidate_evaluated: "🧪 Candidato avaliado",
-      candidate_promoted: "🚀 Candidato ativado (Low-risk)",
-      candidate_rejected: "❌ Candidato rejeitado",
-      candidate_rolled_back: "⏪ Skill revertida por regressao"
+      candidate_created: "💡 New self-correction proposal",
+      candidate_evaluated: "🧪 Candidate evaluated",
+      candidate_promoted: "🚀 Candidate promoted (low risk)",
+      candidate_rejected: "❌ Candidate rejected",
+      candidate_rolled_back: "⏪ Skill rolled back after regression"
     };
 
     const text = truncate([
@@ -146,11 +146,11 @@ export function createTelegramGoalProgressNotifier(
   return async (run, providerId) => {
     const task = database.getTask(run.taskId);
     const text = [
-      `Task #${task.id} em andamento.`,
-      `Projeto: ${task.projectKey ? `@${task.projectKey}` : "sem projeto"}`,
-      `Agente: ${providerId}`,
-      `Fase: ${run.currentPhase}`,
-      `Etapas executadas: ${run.stepCount}`
+      `Task #${task.id} in progress.`,
+      `Project: ${task.projectKey ? `@${task.projectKey}` : "no project"}`,
+      `Agent: ${providerId}`,
+      `Phase: ${run.currentPhase}`,
+      `Steps executed: ${run.stepCount}`
     ].join("\n");
     await sendMessage(chatId, text);
     database.addEvent({
@@ -164,30 +164,30 @@ export function createTelegramGoalProgressNotifier(
 }
 
 export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord, database?: MaestroDatabase): string {
-  const project = task.projectKey ? `@${task.projectKey}` : "sem projeto";
+  const project = task.projectKey ? `@${task.projectKey}` : "no project";
 
   if (run.status === "completed" && run.pullRequestUrl) {
     return [
-      `Task #${task.id} pronta para review.`,
-      `Projeto: ${project}`,
+      `Task #${task.id} ready for review.`,
+      `Project: ${project}`,
       `Goal #${run.id}: completed`,
       `PR: ${run.pullRequestUrl}`,
-      "Acao: revise e faca merge ou solicite ajustes."
+      "Action: review and merge, or request changes."
     ].join("\n");
   }
 
   if (run.status === "completed") {
     return [
-      `Task #${task.id} concluida.`,
-      `Projeto: ${project}`,
+      `Task #${task.id} completed.`,
+      `Project: ${project}`,
       `Goal #${run.id}: completed`
     ].join("\n");
   }
 
   if (run.status === "cancelled") {
     return [
-      `Task #${task.id} cancelada.`,
-      `Projeto: ${project}`,
+      `Task #${task.id} cancelled.`,
+      `Project: ${project}`,
       `Goal #${run.id}: cancelled`
     ].join("\n");
   }
@@ -195,28 +195,28 @@ export function formatGoalNotification(run: GoalRunRecord, task: TaskRecord, dat
   const obs = database ? buildGoalObservability(database, run) : null;
   const reasonLabel = obs?.classifiedReasonLabel
     ?? (run.waitReason ? redactSensitiveText(run.waitReason) : null)
-    ?? (run.lastError ? truncate(redactSensitiveText(run.lastError), 240) : "Erro de provedor/execucao");
-  const sourceProv = obs?.sourceProvider ?? run.lastProvider ?? "desconhecido";
-  const nextProv = obs?.nextProvider ?? (run.status === "waiting_provider" ? "aguardando cota/liberacao" : "nenhum");
+    ?? (run.lastError ? truncate(redactSensitiveText(run.lastError), 240) : "Provider/execution error");
+  const sourceProv = obs?.sourceProvider ?? run.lastProvider ?? "unknown";
+  const nextProv = obs?.nextProvider ?? (run.status === "waiting_provider" ? "waiting for quota/release" : "none");
   const preservedStr = obs
-    ? (obs.preservedChanges ? `sim (${obs.preservedFiles.length} arquivos)` : "nao")
-    : "desconhecido";
-  const checkpointStr = obs?.checkpointId ? `#${obs.checkpointId}` : "nao disponivel";
-  const retryableStr = obs ? (obs.retryable ? "sim" : "nao") : (run.status === "waiting_provider" ? "sim" : "nao");
+    ? (obs.preservedChanges ? `yes (${obs.preservedFiles.length} files)` : "no")
+    : "unknown";
+  const checkpointStr = obs?.checkpointId ? `#${obs.checkpointId}` : "not available";
+  const retryableStr = obs ? (obs.retryable ? "yes" : "no") : (run.status === "waiting_provider" ? "yes" : "no");
   const nextAction = obs?.nextAction
-    ?? (run.status === "waiting_provider" ? "Retomada automatica agendada pelo Maestro." : "Requer intervencao manual.");
+    ?? (run.status === "waiting_provider" ? "Automatic resume scheduled by Maestro." : "Manual intervention required.");
 
   return [
-    `Task #${task.id} requer atencao.`,
-    `Projeto: ${project}`,
+    `Task #${task.id} needs attention.`,
+    `Project: ${project}`,
     `Goal #${run.id}: ${run.status}`,
-    `Motivo: ${reasonLabel}`,
-    `Provedor origem: ${sourceProv}`,
-    `Proximo provedor: ${nextProv}`,
-    `Alteracoes preservadas: ${preservedStr}`,
+    `Reason: ${reasonLabel}`,
+    `Source provider: ${sourceProv}`,
+    `Next provider: ${nextProv}`,
+    `Changes preserved: ${preservedStr}`,
     `Checkpoint: ${checkpointStr}`,
-    `Retomavel: ${retryableStr}`,
-    `Proxima acao: ${nextAction}`
+    `Retryable: ${retryableStr}`,
+    `Next action: ${nextAction}`
   ].join("\n");
 }
 
@@ -230,15 +230,15 @@ export function createTelegramReviewNotifier(
 
   return async (item, decision) => {
     const labels = {
-      approved: "aprovada e pronta para merge",
-      changes_requested: "devolvida para ajustes",
-      rejected: "rejeitada"
+      approved: "approved and ready to merge",
+      changes_requested: "returned for changes",
+      rejected: "rejected"
     } as const;
     const text = [
       `Task #${item.taskId} ${labels[decision.decision]}.`,
-      `Projeto: @${item.projectKey}`,
+      `Project: @${item.projectKey}`,
       `Goal #${item.runId}`,
-      `Justificativa: ${truncate(redactSensitiveText(decision.note), 240)}`,
+      `Rationale: ${truncate(redactSensitiveText(decision.note), 240)}`,
       `PR: ${item.pullRequestUrl}`
     ].join("\n");
     await sendMessage(chatId, text);
@@ -262,15 +262,15 @@ export function createTelegramReviewSyncNotifier(
 
   return async (item, state) => {
     const labels = {
-      READY: "marcada como pronta para merge no GitHub",
-      DRAFT: "devolvida para draft no GitHub",
-      MERGED: "mergeada no GitHub e concluida no Maestro",
-      CLOSED: "fechada no GitHub",
-      OPEN: "aberta no GitHub"
+      READY: "marked ready to merge on GitHub",
+      DRAFT: "returned to draft on GitHub",
+      MERGED: "merged on GitHub and completed in Maestro",
+      CLOSED: "closed on GitHub",
+      OPEN: "opened on GitHub"
     } as const;
     await sendMessage(chatId, [
       `Task #${item.taskId} ${labels[state]}.`,
-      `Projeto: @${item.projectKey}`,
+      `Project: @${item.projectKey}`,
       `PR: ${item.pullRequestUrl}`
     ].join("\n"));
     database.addEvent({
@@ -312,16 +312,16 @@ export function formatFeatureCompletionNotification(completion: FeatureCompletio
     `- Task #${task.id} | ${item.branchName} | PR ${item.pullRequestUrl} | cleanup ${cleanup}`
   ));
   return truncate([
-    `✅ Feature concluida: ${feature.name}`,
-    `Projeto: @${feature.projectKey}`,
-    `Objetivo: ${truncate(redactSensitiveText(feature.objective), 500)}`,
-    `Feature PR mergeado: ${feature.pullRequestUrl}`,
-    `Revisor final: ${feature.reviewerProvider ?? "registrado pelo GitHub"}`,
+    `✅ Feature completed: ${feature.name}`,
+    `Project: @${feature.projectKey}`,
+    `Objective: ${truncate(redactSensitiveText(feature.objective), 500)}`,
+    `Feature PR merged: ${feature.pullRequestUrl}`,
+    `Final reviewer: ${feature.reviewerProvider ?? "recorded by GitHub"}`,
     "",
-    "Tasks e branches integradas:",
+    "Integrated tasks and branches:",
     ...work,
     "",
-    "Os Work PRs associados foram encerrados como superseded. O Maestro esta livre para a proxima Feature."
+    "Associated Work PRs were closed as superseded. Maestro is ready for the next Feature."
   ].join("\n"), 4_000);
 }
 
@@ -345,23 +345,23 @@ export function createTelegramFeatureBlockedNotifier(
 }
 
 const featureBlockedReasonLabels: Record<FeatureBlockedReason, string> = {
-  conflict: "conflito de merge no PR consolidado",
-  changes_requested: "revisao final pediu ajustes",
-  waiting_provider: "sem agente de revisao disponivel",
-  closed_without_merge: "PR consolidado fechado sem merge",
-  failed: "falha no fluxo automatico da Feature"
+  conflict: "merge conflict in the consolidated PR",
+  changes_requested: "final review requested changes",
+  waiting_provider: "no review agent available",
+  closed_without_merge: "consolidated PR closed without merge",
+  failed: "automatic Feature flow failed"
 };
 
 export function formatFeatureBlockedNotification(event: FeatureBlockedEvent): string {
   const feature = event.feature;
   return truncate([
-    `⚠️ Feature bloqueada: ${feature.name}`,
-    `Projeto: @${feature.projectKey}`,
-    `Motivo: ${featureBlockedReasonLabels[event.reason]}`,
-    `Detalhe: ${truncate(redactSensitiveText(event.message), 500)}`,
+    `⚠️ Feature blocked: ${feature.name}`,
+    `Project: @${feature.projectKey}`,
+    `Reason: ${featureBlockedReasonLabels[event.reason]}`,
+    `Details: ${truncate(redactSensitiveText(event.message), 500)}`,
     `Feature PR: ${feature.pullRequestUrl}`,
     "",
-    "Revise apenas este PR consolidado; os Work PRs individuais permanecem como evidencia."
+    "Review only this consolidated PR; individual Work PRs remain as evidence."
   ].join("\n"), 4_000);
 }
 
@@ -402,34 +402,34 @@ export function formatFeaturePlanLifecycleNotification(event: FeaturePlanLifecyc
   const { plan, action, reason } = event;
   const project = `@${plan.projectKey}`;
   const actionLabels: Record<string, string> = {
-    admitted: "🚀 Admitido na fila de escrita",
-    paused: "⏸️ Pausado pelo operador",
-    resumed: "▶️ Retomado para a fila",
-    blocked: "⚠️ Bloqueado",
-    retried: "🔄 Retomado (Retry) para a fila",
-    cancelled: "❌ Cancelado",
-    priority_updated: `⬆️ Prioridade atualizada para ${plan.priority}`
+    admitted: "🚀 Admitted to the write queue",
+    paused: "⏸️ Paused by the operator",
+    resumed: "▶️ Resumed to the queue",
+    blocked: "⚠️ Blocked",
+    retried: "🔄 Retried and returned to the queue",
+    cancelled: "❌ Cancelled",
+    priority_updated: `⬆️ Priority updated to ${plan.priority}`
   };
 
   const nextActions: Record<string, string> = {
-    admitted: "As tasks estao prontas para inicio pelo Maestro.",
-    paused: "O plano nao sera executado ate ser retomado.",
-    resumed: "Aguardando liberacao de dependencias/recursos.",
-    blocked: "Resolva o motivo do bloqueio e execute /feature_retry id.",
-    retried: "Aguardando revalidacao da fila e admissao.",
-    cancelled: "O historico e evidencias foram preservados.",
-    priority_updated: "A ordem de admissao na fila foi reordenada."
+    admitted: "Tasks are ready to be started by Maestro.",
+    paused: "The plan will not run until it is resumed.",
+    resumed: "Waiting for dependencies/resources to be released.",
+    blocked: "Resolve the blocking reason and run /feature_retry id.",
+    retried: "Waiting for queue revalidation and admission.",
+    cancelled: "History and evidence were preserved.",
+    priority_updated: "The queue admission order was updated."
   };
 
   const lines = [
     `Feature Plan #${plan.id} - ${actionLabels[action] ?? action}`,
-    `Projeto: ${project}`,
+    `Project: ${project}`,
     `Objetivo: ${truncate(redactSensitiveText(plan.objective), 200)}`,
-    `Status: ${plan.status}${plan.isPaused ? " (pausado)" : ""}`,
-    `Prioridade: ${plan.priority ?? 0}`,
-    reason ? `Motivo: ${redactSensitiveText(reason)}` : null,
-    plan.blockedReason ? `Bloqueio: ${redactSensitiveText(plan.blockedReason)}` : null,
-    `Proxima acao: ${nextActions[action] ?? "Verifique a fila com /queue."}`
+    `Status: ${plan.status}${plan.isPaused ? " (paused)" : ""}`,
+    `Priority: ${plan.priority ?? 0}`,
+    reason ? `Reason: ${redactSensitiveText(reason)}` : null,
+    plan.blockedReason ? `Blocker: ${redactSensitiveText(plan.blockedReason)}` : null,
+    `Next action: ${nextActions[action] ?? "Check the queue with /queue."}`
   ].filter(Boolean) as string[];
 
   return truncate(lines.join("\n"), 4_000);
@@ -451,26 +451,26 @@ export function createTelegramFeatureAssemblyNotifier(
 export function formatFeatureAssemblyNotification(event: FeatureAssemblyEvent): string {
   if (event.type === "started") {
     return truncate([
-      `🚀 Integracao iniciada: Feature Plan #${event.plan.id}`,
-      `Projeto: @${event.plan.projectKey}`,
-      `Objetivo: ${truncate(redactSensitiveText(event.plan.objective), 500)}`,
-      "O Maestro esta montando o PR consolidado a partir dos Work PRs prontos."
+      `🚀 Integration started: Feature Plan #${event.plan.id}`,
+      `Project: @${event.plan.projectKey}`,
+      `Objective: ${truncate(redactSensitiveText(event.plan.objective), 500)}`,
+      "Maestro is assembling the consolidated PR from ready Work PRs."
     ].join("\n"), 4_000);
   }
   if (event.type === "draft_ready") {
     return truncate([
-      `📝 Draft Feature PR pronto: ${event.feature.name}`,
-      `Projeto: @${event.feature.projectKey}`,
+      `📝 Draft Feature PR ready: ${event.feature.name}`,
+      `Project: @${event.feature.projectKey}`,
       `Feature Plan #${event.plan.id}`,
       `PR: ${event.feature.pullRequestUrl}`,
       "",
-      "Revise apenas este PR consolidado. Os Work PRs individuais ficam como evidencia e nao exigem revisao separada."
+      "Review only this consolidated PR. Individual Work PRs remain as evidence and do not require separate review."
     ].join("\n"), 4_000);
   }
   return truncate([
-    `⚠️ Integracao bloqueada: Feature Plan #${event.plan.id}`,
-    `Projeto: @${event.plan.projectKey}`,
-    `Detalhe: ${truncate(redactSensitiveText(event.message), 500)}`
+    `⚠️ Integration blocked: Feature Plan #${event.plan.id}`,
+    `Project: @${event.plan.projectKey}`,
+    `Details: ${truncate(redactSensitiveText(event.message), 500)}`
   ].join("\n"), 4_000);
 }
 
@@ -497,36 +497,36 @@ export function formatSelfUpdateNotification(event: SelfUpdateNotificationEvent)
   switch (event.type) {
     case "start":
       return truncate([
-        "🔄 Self-update do Maestro iniciado.",
-        `Commit de destino: ${event.targetCommit.slice(0, 8)}`,
+        "🔄 Maestro self-update started.",
+        `Target commit: ${event.targetCommit.slice(0, 8)}`,
         event.pullRequestUrl ? `PR: ${event.pullRequestUrl}` : null,
-        "O Maestro aplicara o merge fast-forward e iniciara o supervised restart."
+        "Maestro will apply the fast-forward merge and start the supervised restart."
       ].filter(Boolean).join("\n"), 4_000);
     case "commit":
       return truncate([
-        "📦 Main branch atualizada com sucesso.",
-        `Commit resultante: ${event.resultingCommit.slice(0, 8)}`,
-        "Iniciando verificacao de saude do novo runtime..."
+        "📦 Main branch updated successfully.",
+        `Resulting commit: ${event.resultingCommit.slice(0, 8)}`,
+        "Starting health verification for the new runtime..."
       ].join("\n"), 4_000);
     case "success":
       return truncate([
-        "✅ Self-update e supervised restart concluidos com sucesso!",
-        `Commit atual: ${event.resultingCommit.slice(0, 8)}`,
-        "Maestro runtime operacional."
+        "✅ Self-update and supervised restart completed successfully!",
+        `Current commit: ${event.resultingCommit.slice(0, 8)}`,
+        "Maestro runtime is operational."
       ].filter(Boolean).join("\n"), 4_000);
     case "failure":
       return truncate([
-        "⚠️ Falha no self-update do Maestro.",
+        "⚠️ Maestro self-update failed.",
         `Commit: ${event.commit.slice(0, 8)}`,
         `Motivo: ${redactSensitiveText(event.error)}`,
-        "Nenhuma alteracao destrutiva foi realizada."
+        "No destructive changes were made."
       ].join("\n"), 4_000);
     case "rollback":
       return truncate([
-        "⏪ Startup do novo runtime falhou. Rollback executado.",
-        `Commit restaurado: ${event.previousCommit.slice(0, 8)}`,
-        `Erro de startup: ${redactSensitiveText(event.error)}`,
-        "O Maestro foi restaurado para a versao anterior conhecida e saudavel."
+        "⏪ New runtime startup failed. Rollback completed.",
+        `Restored commit: ${event.previousCommit.slice(0, 8)}`,
+        `Startup error: ${redactSensitiveText(event.error)}`,
+        "Maestro was restored to the previous known-good version."
       ].join("\n"), 4_000);
   }
 }

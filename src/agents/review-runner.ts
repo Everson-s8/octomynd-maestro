@@ -47,7 +47,7 @@ export async function runProviderReview(
       status: "failed",
       provider: "maestro",
       content: "",
-      error: "Nenhum provider habilitado e pronto para revisao.",
+      error: "No enabled provider is ready for review.",
       durationMs: Date.now() - startedAt
     };
   }

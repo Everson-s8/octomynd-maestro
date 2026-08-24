@@ -75,7 +75,7 @@ describe("codex provider", () => {
 
     const prompt = buildCodexGoalPrompt(request);
 
-    expect(prompt).toContain("compacto:");
+    expect(prompt).toContain("compact:");
     expect(prompt).toContain("npm test PASS");
     expect(prompt).not.toContain("RAW-DETAIL");
   });
@@ -127,12 +127,12 @@ describe("codex provider telemetry", () => {
     const result = await provider.execute(executionRequest(cwd, "implementing"));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Codex (implementing): cota do provedor esgotada.");
+    expect(result.summary).toBe("Codex (implementing): provider quota exhausted.");
     expect(result.retryable).toBe(true);
     expect(result.error).toContain("usage limit");
     expect(await provider.health()).toMatchObject({
       state: "quota",
-      detail: expect.stringContaining("cota do provider")
+        detail: expect.stringContaining("provider quota exhausted")
     });
   });
 
@@ -142,7 +142,7 @@ describe("codex provider telemetry", () => {
     const result = await provider.execute(executionRequest(cwd, "planning"));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Codex (planning): autenticacao necessaria.");
+    expect(result.summary).toBe("Codex (planning): authentication required.");
     expect(result.retryable).toBe(true);
     expect(await provider.health()).toMatchObject({
       state: "auth_required",
@@ -187,7 +187,7 @@ describe("codex provider telemetry", () => {
     const result = await new CodexProvider(150).execute(executionRequest(cwd, "testing"));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Codex (testing): tempo limite excedido.");
+    expect(result.summary).toBe("Codex (testing): time limit exceeded.");
     expect(result.retryable).toBe(true);
   }, 10_000);
 
@@ -196,7 +196,7 @@ describe("codex provider telemetry", () => {
     const result = await new CodexProvider(5_000).execute(executionRequest(cwd, "reviewing"));
 
     expect(result.outcome).toBe("failed");
-    expect(result.summary).toBe("Codex (reviewing): erro desconhecido.");
+    expect(result.summary).toBe("Codex (reviewing): unknown error.");
     expect(result.retryable).toBe(false);
     expect(result.structuredPayload).toBeNull();
     expect(result.artifactsProduced).toEqual([]);

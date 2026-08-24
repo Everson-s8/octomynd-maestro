@@ -275,7 +275,7 @@ export function buildDashboardSnapshot(
           : "active";
       const blockers = tasks
         .filter((task) => lifecycleStatus === "active" && task.taskStatus !== "awaiting_human")
-        .map((task) => `Task #${task.taskId} esta ${task.taskStatus}, aguardando Draft Work PR entregue.`);
+        .map((task) => `Task #${task.taskId} is ${task.taskStatus}, waiting for the delivered Draft Work PR.`);
       if (!eligibility.eligible) {
         blockers.unshift(eligibility.reason);
       }
@@ -379,13 +379,13 @@ function defaultAgentPresence(
       id: "codex",
       label: "Codex",
       state: "attention",
-      detail: "Estado do provider disponivel apenas no runtime completo"
+      detail: "Provider state is available only in the full runtime."
     },
     working.get("claude") ?? {
       id: "claude",
       label: "Claude",
       state: "attention",
-      detail: "Estado do provider disponivel apenas no runtime completo"
+      detail: "Provider state is available only in the full runtime."
     },
     telegramPresence(config)
   ];
@@ -430,9 +430,9 @@ function telegramPresence(config: MaestroConfig): AgentPresence {
     state: isConfigured ? "ready" : "offline",
     detail: isConfigured
       ? config.telegram.allowedUserId
-        ? "Bot restrito ao usuario autorizado"
-        : "Bot ativo (restricao pendente)"
-      : "Bot desconectado (configure via UI/CLI)"
+        ? "Bot restricted to the authorized user."
+        : "Bot active (access restriction pending)."
+      : "Bot disconnected (configure it through the UI or CLI)."
   };
 }
 
