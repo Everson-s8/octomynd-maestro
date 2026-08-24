@@ -11,7 +11,8 @@ The maintained product documentation is available at
 
 ## 1. Prerequisites
 
-- **Node.js**: `v20.17.x` (or `>=20.17.0 <21`)
+- **Node.js**: `>=20.17.0 <25` for the CLI/runtime. Use `v22.12.x` or newer for a
+  full development checkout, because the Electron packaging toolchain requires it.
 - **Git**: Installed and available in your PATH
 
 ---

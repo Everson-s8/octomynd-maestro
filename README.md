@@ -19,8 +19,9 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 ## Requirements
 
-- Node.js 20.17.x for local development and CI. `.node-version`, `package.json`,
-  and GitHub Actions share the same runtime contract.
+- Node.js `>=20.17.0 <25` for the CLI/runtime. The full source checkout and Windows
+  packaging toolchain use Node.js `22.12.x` or newer within that range; see
+  `.node-version` and `docs/desktop-release.md`.
 - Git for project registration and worktree-based execution.
 - At least one supported provider CLI or API credential for agent execution.
 - A Telegram bot token from BotFather only if Telegram control is enabled.

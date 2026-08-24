@@ -196,8 +196,10 @@ service can still enforce the limits of the user's plan.
 - `.maestro-execution.json` records the versioned execution contract without
   storing private host paths. Startup emits a sanitized environment fingerprint
   containing only versions, availability flags and path hashes.
-- Node `20.17.x` is the pinned runtime line for local execution and CI. A
-  divergent major/minor blocks startup before a long Goal can begin.
+- Node `>=20.17.0 <25` is supported by the runtime. The repository pins Node
+  `22.12.x` for development and CI because the secure Electron packaging
+  toolchain requires Node 22 or newer. A runtime outside the supported range
+  blocks startup before a long Goal can begin.
 - `EnvironmentDoctor` is the single readiness seam used by Goal preflight,
   Dashboard and Telegram. It verifies execution/worktree writes, Git, Node,
   npm, dependency preparation, native runtime bindings, TypeScript, Vitest and

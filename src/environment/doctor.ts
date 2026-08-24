@@ -117,10 +117,18 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     git.ok ? "Git workspace is readable." : compactFailure(git.output),
     git.ok ? undefined : "environment_blocked"));
 
-  checks.push(check("node", isSupportedNodeVersion(process.version, input.config.execution.expectedNodeVersion)
+  checks.push(check("node", isSupportedNodeVersion(
+    process.version,
+    input.config.execution.expectedNodeVersion,
+    input.config.execution.supportedNodeRange
+  )
     ? "passed" : "failed",
-  `Node ${process.version}; expected >=${input.config.execution.expectedNodeVersion} and <21.`,
-  isSupportedNodeVersion(process.version, input.config.execution.expectedNodeVersion) ? undefined : "environment_blocked"));
+  `Node ${process.version}; supported range ${input.config.execution.supportedNodeRange}.`,
+  isSupportedNodeVersion(
+    process.version,
+    input.config.execution.expectedNodeVersion,
+    input.config.execution.supportedNodeRange
+  ) ? undefined : "environment_blocked"));
 
   if (packagedRuntime) {
     checks.push(check(

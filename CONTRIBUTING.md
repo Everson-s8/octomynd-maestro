@@ -14,7 +14,8 @@ should preserve observable execution, human review gates, isolated worktrees, an
 
 ## Local development
 
-Use Node.js `>=20.17.0 <21` and Git:
+Use Node.js `>=20.17.0 <25` and Git. The repository's development version is
+`22.12.x` because the Electron packaging toolchain requires Node 22 or newer:
 
 ```powershell
 npm ci

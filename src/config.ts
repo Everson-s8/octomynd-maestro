@@ -179,9 +179,13 @@ export function validateRuntimeConfig(
     errors.push("MAESTRO_DASHBOARD_HOST must stay local: use 127.0.0.1 or localhost.");
   }
 
-  if (!isSupportedNodeVersion(process.version, config.execution.expectedNodeVersion)) {
+  if (!isSupportedNodeVersion(
+    process.version,
+    config.execution.expectedNodeVersion,
+    config.execution.supportedNodeRange
+  )) {
     errors.push(
-      `Node >=${config.execution.expectedNodeVersion} and <21 is required; current runtime is ${process.version}.`
+      `Node ${config.execution.supportedNodeRange} is required; current runtime is ${process.version}.`
     );
   }
 

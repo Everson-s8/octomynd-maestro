@@ -58,7 +58,8 @@ configured (`createTelegramBot` also tolerates an empty token).
 
 ## Building (on a build machine with the toolchain)
 
-Prerequisites on the **build** machine only (not the target): Node 20.17.x,
+Prerequisites on the **build** machine only (not the target): Node 22.12.x or newer
+(within the repository's supported `<25` range),
 npm, and the Windows build tools electron-builder needs to rebuild
 `better-sqlite3` (Visual Studio Build Tools / Python, per electron-builder docs).
 

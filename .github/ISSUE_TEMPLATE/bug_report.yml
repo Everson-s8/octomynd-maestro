@@ -19,7 +19,7 @@ body:
     id: environment
     attributes:
       label: Operating system and runtime
-      placeholder: Windows 11, packaged desktop / Node 20.17
+      placeholder: Windows 11, packaged desktop / Node 22.12
     validations:
       required: true
   - type: input

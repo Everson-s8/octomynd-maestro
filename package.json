@@ -27,7 +27,7 @@
     "maestro": "./src/cli/bin.cjs"
   },
   "engines": {
-    "node": ">=20.17.0 <21"
+    "node": ">=20.17.0 <25"
   },
   "scripts": {
     "setup": "tsx src/wizard.ts",
@@ -56,24 +56,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.7",
     "electron-updater": "^6.6.2",
     "grammy": "^1.35.0",
-    "octomynd-maestro": "file:.tmp-cli-install/octomynd-maestro-0.3.3.tgz",
     "tsx": "^4.19.3",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.6.1",
+    "@electron/rebuild": "^4.2.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.14",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "concurrently": "^9.2.0",
-    "electron": "^34.2.0",
-    "electron-builder": "^25.1.8",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
     "rcedit": "^4.0.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -82,7 +81,10 @@
     "vite": "^6.2.7",
     "vitest": "^3.0.8"
   },
+  "overrides": {
+    "tar": "7.5.22"
+  },
   "allowScripts": {
-    "better-sqlite3@11.10.0": true
+    "better-sqlite3@12.11.1": true
   }
 }

@@ -8,7 +8,7 @@ review of the integration, not a user-facing feature contract.
 
 - Branch: `maestro/task-149-preparar-o-maestro-para-ser-distribuido-como-apl`
 - Base: `main`
-- Review target before final consolidation: `0dc8451`
+- Review target before final consolidation: `d7eeb40` plus the dependency/runtime hardening in the final commit
 - Surfaces: shared core, CLI, dashboard/API, desktop packaging, providers, task
   intake/execution, chat, GitHub delivery and open-source onboarding.
 
@@ -42,9 +42,9 @@ review of the integration, not a user-facing feature contract.
 | UI | `npm run typecheck:ui`; `npm run build:ui` | PASS |
 | Core tests | `npm test -- --reporter=dot` (79 files, 680 tests) | PASS |
 | Runtime smoke | `npm run smoke` (3 providers, GitHub readiness and routing) | PASS |
-| Runtime dependency security | `npm audit --omit=dev --audit-level=high` | PASS: 0 vulnerabilities |
+| Runtime/development dependency security | `npm audit --omit=dev --audit-level=high`; `npm audit --audit-level=high` | PASS: 0 vulnerabilities |
 | Diff hygiene | `git diff --check`; secret-pattern scan | PASS |
-| Windows desktop | `npm run dist:win` produced `release/Maestro-Setup-0.3.3-x64.exe`; SHA-256 `9CA5EAAD04D9777D48A1C18C14CC90B231BEDC3D8A7EEF9638A841E71CBE01B4` | PASS for packaging; signing/SmartScreen remains a documented limitation |
+| Windows desktop | `npm run dist:win` with Electron 43.4.1 and `better-sqlite3` 12.11.1 produced `release/Maestro-Setup-0.3.3-x64.exe`; SHA-256 `50254DB398F49FF1ED0B766DFAC40D680293982B43219664A855027E87A7264F`; packaged CLI smoke passed | PASS for packaging; signing/SmartScreen remains a documented limitation |
 
 ## Gate result
 
@@ -82,9 +82,9 @@ provider/task states.
 
 - Windows binaries are unsigned. GitHub Releases plus SHA-256 checksums are the
   free distribution path; SmartScreen may still show the first-download warning.
-- The full development tree reports vulnerabilities in the Electron/build toolchain
-  under `npm audit`; the runtime-only audit is clean. Do not claim the development
-  toolchain is vulnerability-free until those upgrades are evaluated.
+- The full development tree is audited clean with the current Electron/build
+  toolchain. Contributors should use Node 22.12+ for the full checkout; the
+  runtime contract still accepts Node 20.17 through Node 24.
 - Full Access is a governed Maestro action policy, not an unrestricted operating-system
   shell. Provider CLIs can still impose their own permission prompts or policies.
 
