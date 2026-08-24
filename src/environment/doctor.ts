@@ -166,6 +166,15 @@ export function runEnvironmentDoctor(input: EnvironmentDoctorInput): Environment
     dependencyRoot = findPreparedDependencyRoot(workspacePath, input.project.path);
   }
 
+  // Keep an installed project root available for the concrete checks even if
+  // its package layout is not recognized by the discovery heuristic. The
+  // native probe below is authoritative and will report an actual load error;
+  // discarding this root would incorrectly turn a valid toolchain into a
+  // generic "dependencies unavailable" block.
+  if (!dependencyRoot && fs.existsSync(path.join(workspacePath, "node_modules"))) {
+    dependencyRoot = workspacePath;
+  }
+
   checks.push(nativeRuntimeCheck(dependencyRoot));
   checks.push(binaryCheck("typescript", dependencyRoot, executableName("tsc")));
   checks.push(binaryCheck("test_runner", dependencyRoot, executableName("vitest")));
