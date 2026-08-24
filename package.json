@@ -1,6 +1,6 @@
 {
   "name": "octomynd-maestro",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Chat-first local orchestrator for Octomynd AI workflows.",
   "author": "Octomynd Contributors",
   "type": "module",
@@ -72,7 +72,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "concurrently": "^10.0.5",
     "electron": "^43.4.1",
-    "electron-builder": "26.13.0",
+    "electron-builder": "26.15.0",
     "rcedit": "^5.0.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
