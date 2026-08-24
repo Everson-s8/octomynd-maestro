@@ -79,7 +79,7 @@
     "react-router-dom": "^7.18.2",
     "typescript": "^5.8.2",
     "vite": "^6.2.7",
-    "vitest": "^3.0.8"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "tar": "7.5.22"
