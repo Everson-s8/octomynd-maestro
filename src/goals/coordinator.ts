@@ -3,7 +3,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
-import { computeTaskDNAFromText } from "./task-dna.js";
+import { computeLegacyTaskDNAFromText, computeTaskDNAFromText } from "./task-dna.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
@@ -13,6 +13,7 @@ import type { DeterministicValidationRunner } from "../validation/runner.js";
 import type { SkillRuntime } from "../skills/runtime.js";
 import { captureGoalCheckpoint } from "./checkpoint.js";
 import { captureWorkspaceProgress } from "./circuit-breaker.js";
+import type { TaskSizingResult } from "./task-sizing.js";
 
 const RESTART_RETRY_DELAY_MS = 5_000;
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000;
@@ -60,7 +61,8 @@ export class GoalCoordinator {
     private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">,
     private readonly goalDeadlineMs?: number,
     private readonly workGraphAdoption?: GoalRunnerOptions["workGraphAdoption"],
-    private readonly workGraphRunner?: GoalRunnerOptions["workGraphRunner"]
+    private readonly workGraphRunner?: GoalRunnerOptions["workGraphRunner"],
+    private readonly taskSizing?: (taskId: number) => Promise<TaskSizingResult>
   ) {}
 
   start(taskId: number, maxSteps = 12): GoalRunRecord {
@@ -76,7 +78,7 @@ export class GoalCoordinator {
     if (!task.worktreePath) throw new Error(`Task #${taskId} must be prepared before starting a goal.`);
 
     // ── Compute TaskDNA for maxSteps ──────────────────────
-    const taskDNA = computeTaskDNAFromText(task.text);
+    const taskDNA = this.database.getTaskDNA(task.id)?.dna ?? computeLegacyTaskDNAFromText(task.text);
     const dnaMaxSteps = taskDNA
       ? Object.values(taskDNA.phaseBudgets).reduce((a, b) => a + b, 0) + 5
       : maxSteps;
@@ -413,37 +415,53 @@ export class GoalCoordinator {
     this.retryTimers.delete(run.id);
     const controller = new AbortController();
 
-    // ── Compute TaskDNA from task text ──────────────────────
+    // ── Resolve TaskDNA once, using the configured sizing provider when available ──
     const task = this.database.getTask(run.taskId);
-    const taskDNA = computeTaskDNAFromText(task.text);
-
-    const promise = runTaskGoal(this.database, this.registry, run.taskId, {
-      artifactsRoot: this.artifactsRoot,
-      maxSteps: run.maxSteps,
-      existingRun: run,
-      taskDNA,
-      delivery: this.delivery,
-      tokenRuntime: this.tokenRuntime,
-      validationRunner: this.validationRunner,
-      skillRuntime: this.skillRuntime,
-      deadlineMs: this.goalDeadlineMs,
-      workGraphAdoption: this.workGraphAdoption,
-      workGraphRunner: this.workGraphRunner,
-      signal: controller.signal,
-      onProgress: (progressRun, providerId) => {
-        if (this.shuttingDown) return;
-        if (!this.notifyProgress) return;
-        void this.notifyProgress(progressRun, providerId).catch((error) => {
-          this.database.addEvent({
-            source: "maestro",
-            type: "goal.progress_notification_failed",
-            text: error instanceof Error ? error.message : "Unknown progress notification error.",
-            taskId: progressRun.taskId,
-            metadata: { runId: progressRun.id, phase: progressRun.currentPhase, providerId }
+    const runWithDNA = (taskDNA: ReturnType<typeof computeTaskDNAFromText>) => runTaskGoal(this.database, this.registry, run.taskId, {
+        artifactsRoot: this.artifactsRoot,
+        maxSteps: run.maxSteps,
+        existingRun: run,
+        taskDNA,
+        delivery: this.delivery,
+        tokenRuntime: this.tokenRuntime,
+        validationRunner: this.validationRunner,
+        skillRuntime: this.skillRuntime,
+        deadlineMs: this.goalDeadlineMs,
+        workGraphAdoption: this.workGraphAdoption,
+        workGraphRunner: this.workGraphRunner,
+        signal: controller.signal,
+        onProgress: (progressRun, providerId) => {
+          if (this.shuttingDown) return;
+          if (!this.notifyProgress) return;
+          void this.notifyProgress(progressRun, providerId).catch((error) => {
+            this.database.addEvent({
+              source: "maestro",
+              type: "goal.progress_notification_failed",
+              text: error instanceof Error ? error.message : "Unknown progress notification error.",
+              taskId: progressRun.taskId,
+              metadata: { runId: progressRun.id, phase: progressRun.currentPhase, providerId }
+            });
           });
-        });
-      }
-    });
+        }
+      });
+    const persistedDNA = this.database.getTaskDNA(task.id)?.dna;
+    let promise: Promise<GoalRunRecord>;
+    if (persistedDNA) {
+      promise = runWithDNA(persistedDNA);
+    } else if (this.taskSizing) {
+      promise = (async () => runWithDNA(await this.resolveTaskDNA(task.id)))();
+    } else {
+      const taskDNA = computeLegacyTaskDNAFromText(task.text);
+      this.database.saveTaskDNA({
+        taskId: task.id,
+        dna: taskDNA,
+        source: "offline_estimate",
+        providerId: null,
+        model: null,
+        warning: null
+      });
+      promise = runWithDNA(taskDNA);
+    }
     this.active.set(run.taskId, { promise, controller });
     void promise.then(
       (result) => {
@@ -466,6 +484,43 @@ export class GoalCoordinator {
       },
       () => this.active.delete(run.taskId)
     );
+  }
+
+  private async resolveTaskDNA(taskId: number) {
+    const persisted = this.database.getTaskDNA(taskId);
+    if (persisted) return persisted.dna;
+    const dnaResult = this.taskSizing
+      ? await this.taskSizing(taskId)
+      : {
+        dna: computeTaskDNAFromText(this.database.getTask(taskId).text),
+        source: "offline_estimate" as const,
+        providerId: null,
+        model: null,
+        warning: null
+      };
+    this.database.saveTaskDNA({
+      taskId,
+      dna: dnaResult.dna,
+      source: dnaResult.source,
+      providerId: dnaResult.providerId,
+      model: dnaResult.model,
+      warning: dnaResult.warning
+    });
+    if (dnaResult.warning) {
+      this.database.addEvent({
+        source: "maestro",
+        type: "goal.task_sizing_estimated",
+        text: dnaResult.warning,
+        taskId,
+        metadata: {
+          source: dnaResult.source,
+          providerId: dnaResult.providerId,
+          model: dnaResult.model,
+          rationale: dnaResult.dna.rationale
+        }
+      });
+    }
+    return dnaResult.dna;
   }
 
   private recoverInterruptedRun(run: GoalRunRecord): void {

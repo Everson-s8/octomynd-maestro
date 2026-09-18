@@ -21,6 +21,7 @@ describe("config", () => {
     });
     expect(config.runtime).toEqual({
       tokenEfficient: true,
+      taskSizingOffline: false,
       selfUpdatePollIntervalMs: 300_000,
       antigravityEnabled: true,
       antigravityModel: null,
@@ -111,6 +112,14 @@ describe("config", () => {
     });
 
     expect(config.runtime.tokenEfficient).toBe(false);
+  });
+
+  it("allows permanently preferring offline task sizing", () => {
+    const config = loadConfig(process.cwd(), {
+      MAESTRO_TASK_SIZING_OFFLINE: "true"
+    });
+
+    expect(config.runtime.taskSizingOffline).toBe(true);
   });
 
   it("configures Work Graph adoption behind a governed mode", () => {

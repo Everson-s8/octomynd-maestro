@@ -29,7 +29,8 @@ export type OperationalChatThreadInput = {
   projectKey: string;
   title?: string | null;
   accessMode?: ChatAccessMode | null;
-  locale?: ChatLocale | null;
+  /** UI language for labels and governed system messages; not conversation language. */
+  uiLocale?: ChatLocale | null;
   providerId?: AgentProviderId | null;
   model?: string | null;
 };
@@ -190,6 +191,9 @@ export type OperationalChatRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  /** UI language for labels and governed system messages; the model observes the user's message language. */
+  uiLocale?: ChatLocale | null;
+  /** @deprecated Use uiLocale. Kept for clients from before the language split. */
   locale?: ChatLocale | null;
   /** Explicit selection for this request; omitted means use the thread selection. */
   providerId?: AgentProviderId | null;
@@ -218,6 +222,8 @@ export type OperationalChatActionRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  uiLocale?: ChatLocale | null;
+  /** @deprecated Use uiLocale. */
   locale?: ChatLocale | null;
 };
 

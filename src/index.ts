@@ -38,6 +38,7 @@ import type { SkillLifecycleRuntime } from "./skills/lifecycle.js";
 import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
 import { stopAntigravitySession } from "./agents/antigravity-session.js";
 import { ProjectRepositoryService } from "./projects/repository-service.js";
+import { sizeTaskWithModel } from "./goals/task-sizing.js";
 
 if (process.argv.includes("telegram") && process.argv.includes("connect")) {
   const { runTelegramConnectWizard } = await import("./telegram/connect.js");
@@ -215,7 +216,14 @@ goalCoordinator = new GoalCoordinator(
   skillBootstrap?.runtime,
   config.runtime.goalDeadlineMs,
   { mode: config.workGraph.adoptionMode },
-  workGraphCoordinator
+  workGraphCoordinator,
+  (taskId) => {
+    const task = database.getTask(taskId);
+    if (!task.projectKey) throw new Error(`Task #${taskId} has no project.`);
+    return sizeTaskWithModel(agentRegistry, task, database.getProjectByKey(task.projectKey), {
+      offline: config.runtime.taskSizingOffline ?? false
+    });
+  }
 );
 const reviewNotifier = createTelegramReviewNotifier(
   config,
@@ -289,7 +297,12 @@ const dashboardServer = config.dashboard.enabled
     workGraphRuntime: workGraphCoordinator,
     skillLifecycle: skillLifecycleRuntime,
     telegramManager,
-    repositoryService
+    repositoryService,
+    taskSizer: ({ task, project, providerId, model }) => sizeTaskWithModel(agentRegistry, task, project, {
+      providerId,
+      model,
+      offline: config.runtime.taskSizingOffline ?? false
+    })
   })
   : null;
 backlogAutopilot.start();

@@ -30,6 +30,7 @@ import {
   migrateOperationalChatPersistence
 } from "./chat/persistence.js";
 import { deriveTaskIntake } from "./tasks/intake.js";
+import type { TaskDNA } from "./goals/task-dna.js";
 export type {
   OperationalChatMessageInput,
   OperationalChatMessageRecord,
@@ -149,6 +150,17 @@ export type TaskRecord = {
   headCommitSha?: string | null;
   mergedCommitSha?: string | null;
   parentTaskId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TaskDNARecord = {
+  taskId: number;
+  dna: TaskDNA;
+  source: "model" | "offline_estimate";
+  providerId: string | null;
+  model: string | null;
+  warning: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -1211,6 +1223,43 @@ export function createDatabase(databasePath: string) {
         now
       });
       return this.getTask(Number(result.lastInsertRowid));
+    },
+
+    getTaskDNA(taskId: number): TaskDNARecord | null {
+      const row = db.prepare("SELECT * FROM task_dna WHERE task_id = ?").get(taskId) as TaskDNARow | undefined;
+      return row ? mapTaskDNA(row) : null;
+    },
+
+    saveTaskDNA(input: {
+      taskId: number;
+      dna: TaskDNA;
+      source: TaskDNARecord["source"];
+      providerId?: string | null;
+      model?: string | null;
+      warning?: string | null;
+    }): TaskDNARecord {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO task_dna (task_id, dna_json, source, provider_id, model, warning, created_at, updated_at)
+        VALUES (@taskId, @dnaJson, @source, @providerId, @model, @warning, @createdAt, @updatedAt)
+        ON CONFLICT(task_id) DO UPDATE SET
+          dna_json = excluded.dna_json,
+          source = excluded.source,
+          provider_id = excluded.provider_id,
+          model = excluded.model,
+          warning = excluded.warning,
+          updated_at = excluded.updated_at
+      `).run({
+        taskId: input.taskId,
+        dnaJson: JSON.stringify(input.dna),
+        source: input.source,
+        providerId: input.providerId ?? null,
+        model: input.model ?? null,
+        warning: input.warning ?? null,
+        createdAt: now,
+        updatedAt: now
+      });
+      return this.getTaskDNA(input.taskId) as TaskDNARecord;
     },
 
     /** F3: durable work-intake idempotency. Returns the previously recorded
@@ -3246,6 +3295,17 @@ function migrate(db: Database.Database) {
       FOREIGN KEY (project_id) REFERENCES projects(id),
       FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
     );
+    CREATE TABLE IF NOT EXISTS task_dna (
+      task_id INTEGER PRIMARY KEY,
+      dna_json TEXT NOT NULL,
+      source TEXT NOT NULL,
+      provider_id TEXT,
+      model TEXT,
+      warning TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
@@ -3714,6 +3774,17 @@ type TaskRow = {
   head_commit_sha: string | null;
   merged_commit_sha: string | null;
   parent_task_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type TaskDNARow = {
+  task_id: number;
+  dna_json: string;
+  source: string;
+  provider_id: string | null;
+  model: string | null;
+  warning: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -4372,6 +4443,25 @@ function mapTask(row: TaskRow): TaskRecord {
     headCommitSha: row.head_commit_sha ?? null,
     mergedCommitSha: row.merged_commit_sha ?? null,
     parentTaskId: row.parent_task_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapTaskDNA(row: TaskDNARow): TaskDNARecord {
+  let dna: TaskDNA;
+  try {
+    dna = JSON.parse(row.dna_json) as TaskDNA;
+  } catch {
+    throw new Error(`Task DNA for task #${row.task_id} is corrupt.`);
+  }
+  return {
+    taskId: row.task_id,
+    dna,
+    source: row.source === "model" ? "model" : "offline_estimate",
+    providerId: row.provider_id,
+    model: row.model,
+    warning: row.warning,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

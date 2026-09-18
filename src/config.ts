@@ -36,6 +36,7 @@ export type MaestroConfig = {
   };
   runtime: {
     tokenEfficient: boolean;
+    taskSizingOffline?: boolean;
     antigravityEnabled?: boolean;
     antigravityModel?: string | null;
     codexModel?: string | null;
@@ -101,6 +102,7 @@ export function loadConfig(cwd = process.cwd(), env = process.env): MaestroConfi
     },
     runtime: {
       tokenEfficient: normalizeBoolean(env.MAESTRO_TOKEN_RUNTIME_ENABLED, true),
+      taskSizingOffline: normalizeBoolean(env.MAESTRO_TASK_SIZING_OFFLINE, false),
       selfUpdatePollIntervalMs: normalizePositiveInteger(
         env.MAESTRO_SELF_UPDATE_POLL_MS,
         5 * 60_000,

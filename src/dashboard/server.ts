@@ -47,7 +47,7 @@ import { ProviderAuthBroker } from "../agents/provider-auth.js";
 import { fetchAllQuota, buildQuotaFetchers } from "../agents/quota-providers.js";
 import type { SkillLifecycleRuntime } from "../skills/lifecycle.js";
 import { SkillCurator } from "../skills/curator.js";
-import { OperationalChatService } from "../chat/service.js";
+import { OperationalChatService, type OperationalChatServiceOptions } from "../chat/service.js";
 import { ProjectRepositoryService } from "../projects/repository-service.js";
 import { GLOBAL_CHAT_PROJECT_KEY } from "../chat/types.js";
 import type { ChatAccessMode } from "../chat/types.js";
@@ -131,6 +131,7 @@ export type DashboardServerOptions = {
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
   chatService?: OperationalChatService;
+  taskSizer?: OperationalChatServiceOptions["taskSizer"];
   repositoryService?: ProjectRepositoryService;
   telegramManager?: Pick<TelegramSubsystemManager, "restart" | "getBotInfo">;
 };
@@ -156,6 +157,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
     commands,
     worktreesRoot: options.config.worktreesPath,
     repositoryService: options.repositoryService,
+    taskSizer: options.taskSizer,
     actionExecutor: options.goalCoordinator
       ? {
           taskCreated: async (taskId) => {
@@ -1666,7 +1668,7 @@ async function routeRequest(
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
     const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
-    const locale = body.locale === "pt-BR" ? "pt-BR" : "en";
+    const uiLocale = (body.uiLocale ?? body.locale) === "pt-BR" ? "pt-BR" : "en";
     const providerId = typeof body.providerId === "string" && body.providerId.trim() ? body.providerId.trim() as AgentProviderId : body.providerId === null ? null : undefined;
     const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : body.model === null ? null : undefined;
 
@@ -1682,7 +1684,7 @@ async function routeRequest(
         surface: "dashboard",
         message,
         accessMode,
-        locale,
+        uiLocale,
         providerId,
         model
       });
@@ -1699,7 +1701,7 @@ async function routeRequest(
     const action = body.action as import("../chat/types.js").GovernedChatAction;
     const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
     const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
-    const locale = body.locale === "pt-BR" ? "pt-BR" : "en";
+    const uiLocale = (body.uiLocale ?? body.locale) === "pt-BR" ? "pt-BR" : "en";
 
     if (!action || !(action as any).type || (action as any).targetId === undefined) {
       sendJson(response, 400, { error: "valid_action_is_required" });
@@ -1713,7 +1715,7 @@ async function routeRequest(
         surface: "dashboard",
         action,
         accessMode,
-        locale
+        uiLocale
       });
       sendJson(response, 200, actionResult);
     } catch (error) {

@@ -21,6 +21,20 @@ new goal or losing the completed steps.
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
 
+## Semantic task sizing
+
+Before a new task starts, Maestro makes one small structured planning call through the same
+provider/model routing policy used by the rest of the runtime. The provider returns bounded intake
+facts (estimated files, workstreams, dependencies, review gates, and acceptance criteria); the
+existing `TaskDNA` policy converts those facts into phase budgets. Task text is redacted before it
+is sent to the sizing provider, and the result is persisted so a resume does not pay for sizing
+again. If the provider is unavailable, over quota, or returns invalid output, Maestro records the
+reason and uses an explicit offline estimate instead of silently spending the old medium budget.
+
+Set `MAESTRO_TASK_SIZING_OFFLINE=true` to make the offline estimate permanent for a local runtime.
+The estimate is intentionally cheaper under uncertainty; it is not presented as model analysis.
+The chat's selected provider/model is reused when a task is created from the dashboard chat.
+
 ## Token-efficient handoff runtime
 
 Goal handoffs between phases use a token-efficient runtime. Each completed step keeps the sanitized
