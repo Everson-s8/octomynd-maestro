@@ -199,6 +199,45 @@ export class AgentRegistry {
     return null;
   }
 
+  /** Acquire one explicitly selected provider without silently falling back. */
+  async acquireProvider(
+    providerId: AgentProviderId,
+    capability: AgentCapability
+  ): Promise<AgentLease | null> {
+    const provider = this.providers.get(providerId);
+    const control = this.policySnapshot().controls.find((item) => item.providerId === providerId);
+    if (!provider || !provider.capabilities.has(capability) || control?.mode === "paused" || control?.mode === "disabled") {
+      return null;
+    }
+    const limit = Math.max(1, this.providerLimits[providerId] ?? 1);
+    if ((this.activeLeases.get(providerId) ?? 0) >= limit) return null;
+    const health = await provider.health();
+    if (health.state !== "ready" || (this.activeLeases.get(providerId) ?? 0) >= limit) return null;
+    this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
+    let released = false;
+    const model = this.resolveModelForExecution(providerId, capability);
+    return {
+      provider,
+      health,
+      model,
+      release: (feedback) => {
+        if (released) return;
+        released = true;
+        const remaining = Math.max(0, (this.activeLeases.get(providerId) ?? 1) - 1);
+        if (remaining === 0) this.activeLeases.delete(providerId);
+        else this.activeLeases.set(providerId, remaining);
+        if (feedback?.retryable && feedback.retryAfterMs) {
+          const retryAfterMs = Math.max(1_000, feedback.retryAfterMs);
+          this.cooldowns.set(providerId, {
+            until: this.now() + retryAfterMs,
+            detail: feedback.summary || "Provider is in cooldown after a transient failure.",
+            reason: feedback.failureCategory ?? "unknown"
+          });
+        }
+      }
+    };
+  }
+
   activeCount(providerId: AgentProviderId): number {
     return this.activeLeases.get(providerId) ?? 0;
   }

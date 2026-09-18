@@ -51,7 +51,7 @@ const GLOBAL_CHAT_PROJECT: ProjectRecord = {
 
 export type OperationalChatAgentRegistry = Pick<AgentRegistry, "snapshot"> & Partial<Pick<
   AgentRegistry,
-  "route" | "acquire" | "updateProviderControl"
+  "route" | "acquire" | "acquireProvider" | "updateProviderControl"
 >>;
 
 export type OperationalChatServiceOptions = {
@@ -87,6 +87,15 @@ export class OperationalChatService {
     const accessMode = normalizeAccessMode(request.accessMode ?? thread.accessMode);
     const locale = normalizeChatLocale(request.locale);
     if (thread.accessMode !== accessMode) this.database.updateOperationalChatThreadAccessMode(thread.id, accessMode);
+    const selectedProviderId = request.providerId === undefined
+      ? thread.providerId
+      : normalizeSelectedProviderId(request.providerId);
+    const selectedModel = request.model === undefined
+      ? thread.model
+      : normalizeSelectedModel(request.model);
+    if (thread.providerId !== selectedProviderId || thread.model !== selectedModel) {
+      this.database.updateOperationalChatThreadSelection(thread.id, selectedProviderId, selectedModel);
+    }
 
     const evidence = await this.gatherEvidenceContext(projectKey);
     const taskIntent = parseTaskCreationIntent(request.message);
@@ -110,7 +119,9 @@ export class OperationalChatService {
       actions,
       conversationHistory,
       accessMode,
-      locale
+      locale,
+      selectedProviderId,
+      selectedModel
     );
 
     const explanation = redactSensitiveText(routingResult.explanation);
@@ -122,7 +133,9 @@ export class OperationalChatService {
       senderRole: "orchestrator",
       messageText: explanation,
       evidenceJson: JSON.stringify(this.sanitizeEvidenceForStorage(evidence)),
-      actionTaken: actions.length > 0 ? JSON.stringify(actions) : null
+      actionTaken: actions.length > 0 ? JSON.stringify(actions) : null,
+      providerId: routingResult.providerId,
+      model: routingResult.model
     });
 
     this.database.pruneOperationalChatMessages(projectKey, 100, thread.id);
@@ -136,6 +149,7 @@ export class OperationalChatService {
       evidence,
       actions,
       providerId: routingResult.providerId,
+      model: routingResult.model,
       accessMode,
       createdAt: savedOrchestratorMessage.createdAt
     };
@@ -380,6 +394,35 @@ export class OperationalChatService {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
     return this.database.createOperationalChatThread({ projectKey: normalizedKey, title, accessMode });
+  }
+
+  async listConversationProviders() {
+    return this.agentRegistry?.snapshot() ?? [];
+  }
+
+  async selectThreadProvider(
+    projectKey: string,
+    threadId: number,
+    providerId: AgentProviderId | null,
+    model: string | null
+  ) {
+    const normalizedKey = normalizeChatProjectKey(projectKey);
+    this.resolveChatProject(normalizedKey);
+    const thread = this.resolveThread(normalizedKey, threadId);
+    const normalizedProviderId = normalizeSelectedProviderId(providerId);
+    const normalizedModel = normalizeSelectedModel(model);
+    if (normalizedProviderId) {
+      const providers = await this.listConversationProviders();
+      const provider = providers.find((item) => item.id === normalizedProviderId);
+      if (!provider) throw new Error(`Provider '${normalizedProviderId}' is not registered.`);
+      if (provider.health.state !== "ready" || provider.control.mode !== "enabled") {
+        throw new Error(`Provider '${provider.label}' is not ready: ${provider.health.detail}`);
+      }
+      if (normalizedModel && provider.models?.length && !provider.models.includes(normalizedModel)) {
+        throw new Error(`Model '${normalizedModel}' is not available for provider '${provider.label}'.`);
+      }
+    }
+    return this.database.updateOperationalChatThreadSelection(thread.id, normalizedProviderId, normalizedModel);
   }
 
   deleteThread(projectKey: string, threadId: number): boolean {
@@ -676,28 +719,53 @@ export class OperationalChatService {
     actions: GovernedChatAction[],
     history: OperationalChatMessageRecord[],
     accessMode: ChatAccessMode,
-    locale: ChatLocale
-  ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine" }> {
+    locale: ChatLocale,
+    selectedProviderId: AgentProviderId | null,
+    selectedModel: string | null
+  ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine"; model: string | null }> {
     const taskIntent = parseTaskCreationIntent(userMessage);
     if (taskIntent) {
       return {
         explanation: locale === "pt-BR"
           ? `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botão "Criar Task" abaixo para colocá-la na fila.`
           : `I understood. I prepared a task with this objective: "${truncateChatText(taskIntent.text)}". Use the "Create task" button below to add it to the queue.`,
-        providerId: "deterministic_engine"
+        providerId: "deterministic_engine",
+        model: null
       };
     }
 
     if (this.agentRegistry?.acquire) {
       const excluded = new Set<AgentProviderId>();
+      let selectedLease = selectedProviderId && this.agentRegistry.acquireProvider
+        ? await this.agentRegistry.acquireProvider(selectedProviderId, "conversation")
+        : null;
+      if (selectedProviderId) {
+        const provider = evidence.providers.find((item) => item.id === selectedProviderId);
+        if (!provider) {
+          return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, "Provider is not registered in this Maestro runtime.");
+        }
+        if (provider.health.state !== "ready" || provider.control.mode !== "enabled") {
+          return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, `${provider.label} is ${provider.health.state}: ${provider.health.detail}`);
+        }
+        if (selectedModel && provider.models?.length && !provider.models.includes(selectedModel)) {
+          return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, `Model '${selectedModel}' is not available for ${provider.label}.`);
+        }
+        if (!selectedLease) {
+          return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, "The provider is busy or could not be acquired.");
+        }
+      }
+      let selectedLeaseUsed = false;
       try {
         // Conversation must have the same provider resilience as a goal. If
         // Antigravity is enabled but cannot obtain a headless command
         // permission, the chat immediately tries the next provider instead of
         // leaving the input apparently frozen until the user restarts Maestro.
         while (true) {
-          const lease = await this.agentRegistry.acquire("conversation", excluded);
+          const lease = selectedProviderId
+            ? (selectedLeaseUsed ? null : selectedLease)
+            : await this.agentRegistry.acquire("conversation", excluded);
           if (!lease) break;
+          selectedLeaseUsed = true;
           const providerId = lease.provider.id;
           const timeoutController = new AbortController();
           const timeoutId = setTimeout(() => timeoutController.abort(), CHAT_PROVIDER_TIMEOUT_MS);
@@ -757,37 +825,60 @@ export class OperationalChatService {
                 previousSteps: [],
                 artifactsRoot: this.worktreesRoot,
                 humanFeedback: `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\n\nUSER QUESTION:\n${userMessage}`,
-                signal: timeoutController.signal
+                signal: timeoutController.signal,
+                model: selectedModel ?? lease.model ?? null
               });
               if (result.outcome === "completed" && result.output.trim().length > 0) {
                 lease.release();
                 return {
                   explanation: result.output.trim(),
-                  providerId
+                  providerId,
+                  model: selectedModel ?? result.model ?? lease.model ?? null
                 };
+              }
+              if (selectedProviderId) {
+                const reason = result.error || result.summary || "The selected provider did not return a completed response.";
+                lease.release({ retryable: false, summary: reason });
+                return this.selectedProviderFailure(providerId, selectedModel ?? result.model ?? lease.model ?? null, locale, reason);
               }
               excluded.add(providerId);
               lease.release();
           } catch (error) {
             const isTimeout = error instanceof Error && error.name === "AbortError";
             excluded.add(providerId);
+            const reason = isTimeout ? "The provider timed out." : error instanceof Error ? error.message : "Unknown provider error.";
             lease.release({
               retryable: false,
-              summary: isTimeout ? "Timeout na chamada de conversacao." : "Falha na chamada de conversacao."
+              summary: reason
             });
+            if (selectedProviderId) return this.selectedProviderFailure(providerId, selectedModel ?? lease.model ?? null, locale, reason);
           } finally {
             clearTimeout(timeoutId);
           }
         }
       } catch (_) {
+        if (selectedProviderId) return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, "The selected provider could not be called.");
         // Fall back cleanly to deterministic explanation engine
       }
     }
 
     return {
       explanation: this.generateDeterministicExplanation(userMessage, evidence, actions, locale),
-      providerId: "deterministic_engine"
+      providerId: "deterministic_engine",
+      model: null
     };
+  }
+
+  private selectedProviderFailure(
+    providerId: AgentProviderId,
+    model: string | null,
+    locale: ChatLocale,
+    reason: string
+  ): { explanation: string; providerId: AgentProviderId; model: string | null } {
+    const message = locale === "pt-BR"
+      ? `Não consegui responder usando ${providerId}${model ? ` (${model})` : ""}. Motivo: ${reason} Nenhum fallback foi usado.`
+      : `I could not answer using ${providerId}${model ? ` (${model})` : ""}. Reason: ${reason} No fallback was used.`;
+    return { explanation: message, providerId, model };
   }
 
   private generateDeterministicExplanation(
@@ -914,6 +1005,16 @@ function normalizeAccessMode(value?: ChatAccessMode | string | null): ChatAccess
 
 function normalizeChatLocale(value?: ChatLocale | string | null): ChatLocale {
   return value === "pt-BR" ? "pt-BR" : "en";
+}
+
+function normalizeSelectedProviderId(value?: AgentProviderId | string | null): AgentProviderId | null {
+  const providerId = String(value ?? "").trim();
+  return providerId ? providerId as AgentProviderId : null;
+}
+
+function normalizeSelectedModel(value?: string | null): string | null {
+  const model = String(value ?? "").trim();
+  return model ? model.slice(0, 200) : null;
 }
 
 function chatText(locale: ChatLocale, english: string, portuguese: string): string {

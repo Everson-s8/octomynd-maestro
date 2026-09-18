@@ -19,6 +19,8 @@ export type OperationalChatThreadRecord = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  providerId: AgentProviderId | null;
+  model: string | null;
 };
 
 export type OperationalChatThreadInput = {
@@ -26,6 +28,8 @@ export type OperationalChatThreadInput = {
   title?: string | null;
   accessMode?: ChatAccessMode | null;
   locale?: ChatLocale | null;
+  providerId?: AgentProviderId | null;
+  model?: string | null;
 };
 
 export type ChatEvidenceTaskFact = {
@@ -140,6 +144,8 @@ export type OperationalChatMessageRecord = {
   messageText: string;
   evidenceJson: string | null;
   actionTaken: string | null;
+  providerId: AgentProviderId | "deterministic_engine" | null;
+  model: string | null;
   createdAt: string;
 };
 
@@ -151,6 +157,8 @@ export type OperationalChatMessageInput = {
   messageText: string;
   evidenceJson?: string | null;
   actionTaken?: string | null;
+  providerId?: AgentProviderId | "deterministic_engine" | null;
+  model?: string | null;
   createdAt?: string;
 };
 
@@ -163,6 +171,9 @@ export type OperationalChatRequest = {
   username?: string | null;
   accessMode?: ChatAccessMode | null;
   locale?: ChatLocale | null;
+  /** Explicit selection for this request; omitted means use the thread selection. */
+  providerId?: AgentProviderId | null;
+  model?: string | null;
 };
 
 export type OperationalChatResponse = {
@@ -174,6 +185,7 @@ export type OperationalChatResponse = {
   evidence: ChatEvidenceContext;
   actions: GovernedChatAction[];
   providerId: AgentProviderId | "deterministic_engine";
+  model: string | null;
   accessMode: ChatAccessMode;
   createdAt: string;
 };
