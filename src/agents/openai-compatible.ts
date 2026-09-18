@@ -73,13 +73,29 @@ export class OpenAICompatibleProvider implements AgentProvider {
     } else if (!key) {
       health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
     } else {
-      // F03: presence of a URL and key proves the adapter is *configured*, not
-      // that the endpoint is reachable or the credential is valid. Reporting
-      // "ready" here would let a dead endpoint masquerade as an executable
-      // agent. "configured" is surfaced as offline-with-detail so the UI never
-      // claims live capability without a verified probe, and a real failure
-      // surfaces the truth after the first execute.
-      health = { state: "offline", detail: `${this.label}: endpoint configured but not yet verified`, checkedAt: new Date().toISOString() };
+      // F03: configuration is not evidence that the endpoint works. Probe the
+      // read-only models route before allowing the registry to route work to
+      // this provider. This keeps a dead endpoint out of the ready pool while
+      // avoiding a token-consuming chat completion just to check health.
+      try {
+        const response = await fetch(`${endpoint}/models`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${key}` },
+          signal: AbortSignal.timeout(10_000)
+        });
+        const body = response.ok ? "" : await response.text().catch(() => "");
+        const detail = body.trim().slice(0, 180);
+        health = response.ok
+          ? { state: "ready", detail: `${this.label}: endpoint authenticated`, checkedAt: new Date().toISOString() }
+          : response.status === 401 || response.status === 403
+            ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}`, checkedAt: new Date().toISOString() }
+            : response.status === 429
+              ? { state: "quota", detail: `${this.label}: endpoint rate limited the health probe.`, checkedAt: new Date().toISOString() }
+              : { state: "offline", detail: `${this.label}: health probe returned HTTP ${response.status}.`, checkedAt: new Date().toISOString() };
+      } catch (cause) {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        health = { state: "offline", detail: `${this.label}: health probe failed (${detail.slice(0, 140)}).`, checkedAt: new Date().toISOString() };
+      }
     }
     this.healthExpiresAt = Date.now() + 30_000;
     this.cachedHealth = health;
@@ -137,12 +153,16 @@ export class OpenAICompatibleProvider implements AgentProvider {
       { role: "user", content: prompt }
     ];
 
+    // F03: combine the inbound cancellation signal with the provider timeout
+    // and the phase deadline so a cancel or deadline aborts the in-flight
+    // request (and reports 'cancelled'/'timed out') instead of a fixed 10-min
+    // timeout that ignores cancellation.
+    const timeoutMs = request.deadlineAt === undefined
+      ? 600_000
+      : Math.min(600_000, Math.max(0, request.deadlineAt - Date.now()));
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+
     try {
-      // F03: combine the inbound cancellation signal with the provider timeout
-      // and the phase deadline so a cancel or deadline aborts the in-flight
-      // request (and reports 'cancelled'/'timed out') instead of a fixed 10-min
-      // timeout that ignores cancellation.
-      const timeoutSignal = AbortSignal.timeout(600_000);
       const signal = request.signal
         ? AbortSignal.any([request.signal, timeoutSignal])
         : timeoutSignal;
@@ -207,8 +227,11 @@ export class OpenAICompatibleProvider implements AgentProvider {
       };
     } catch (cause) {
       const errorText = cause instanceof Error ? cause.message : String(cause);
-      const aborted = request.signal?.aborted || errorText.toLowerCase().includes("abort");
-      const timedOut = !aborted && (errorText.toLowerCase().includes("timeout"));
+      // A timeout signal also rejects fetch with an AbortError in some Node
+      // versions. Use the originating signals, not the exception wording, so
+      // an internal deadline is not misreported as a user cancellation.
+      const aborted = request.signal?.aborted === true;
+      const timedOut = !aborted && timeoutSignal.aborted;
       const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: 0, timedOut, aborted, breakerReason: null, spawnErrorCode: null });
       return {
         outcome: aborted ? "cancelled" : "failed",

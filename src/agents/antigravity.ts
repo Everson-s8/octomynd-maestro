@@ -252,20 +252,18 @@ export class AntigravityProvider implements AgentProvider {
     // stderr carrying a permission denial) must NOT be reported as success.
     // Antigravity's headless contract explicitly allows denial with exit 0, so
     // a green exit code is not by itself proof that the phase completed.
-    const softDenial = classifyFailure(diagnostics, {
-      provider: this.id,
-      phase: request.phase,
+    const softDenial = isSoftPermissionDenial({
       exitCode: processResult.exitCode,
-      timedOut: processResult.timedOut,
-      aborted: processResult.aborted,
-      breakerReason: processResult.breakerReason,
-      spawnErrorCode: processResult.spawnErrorCode
+      stdout: processResult.stdout,
+      stderr: processResult.stderr
     });
-    if (processResult.exitCode === 0 && softDenial === "permission_denied") {
+    if (softDenial) {
       const summary = buildFailureSummary(this.label, request.phase, "permission_denied");
-      this.cacheHealth({ state: "offline", detail: summary, checkedAt: new Date().toISOString() }, 30_000);
       return {
-        outcome: "blocked",
+        // This is a provider-level failure, not a terminal goal block. Keep
+        // the permission category for diagnostics, but let the runner try its
+        // configured fallback provider instead of killing the whole task.
+        outcome: "failed",
         summary,
         structuredPayload: null,
         failureCategory: "permission_denied",
@@ -426,6 +424,27 @@ export class AntigravityProvider implements AgentProvider {
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + ttlMs;
   }
+}
+
+/**
+ * Detect Antigravity's headless soft-denial contract without treating normal
+ * successful prose that mentions permissions as a failed execution.
+ */
+export function isSoftPermissionDenial(input: {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}): boolean {
+  if (input.exitCode !== 0 || !input.stdout.trim() || !input.stderr.trim()) return false;
+  const stdoutSaysItCouldNotAct = /(?:could\s+(?:not|n't)|unable\s+to|not\s+able\s+to|failed\s+to|cannot|can't|blocked\s+from)\b[\s\S]{0,160}\b(?:run|execute|complete|perform|write|command|tool|task|request|change)\b/i.test(input.stdout);
+  const stderrIsPermissionFailure = classifyFailure(input.stderr, {
+    exitCode: 0,
+    timedOut: false,
+    aborted: false,
+    breakerReason: null,
+    spawnErrorCode: null
+  }) === "permission_denied";
+  return stdoutSaysItCouldNotAct && stderrIsPermissionFailure;
 }
 
 export function buildAntigravityArgs(

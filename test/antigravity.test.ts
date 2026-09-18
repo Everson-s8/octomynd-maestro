@@ -6,6 +6,7 @@ import {
   ANTIGRAVITY_AUTH_PROBE_ARGS,
   AntigravityProvider,
   buildAntigravityArgs,
+  isSoftPermissionDenial,
   resolveAntigravityExecutable
 } from "../src/agents/antigravity.js";
 import type { AgentExecutionRequest } from "../src/agents/types.js";
@@ -56,12 +57,11 @@ describe("Antigravity provider", () => {
 
   it("omits --effort when the model id already encodes the effort in its suffix", () => {
     const coding = request("implementing", "coding");
-    // gemini-3.7-flash-high already pins the effort; --effort would conflict.
+    // gemini-3.7-flash-high already pins the reasoning effort.
     const withSuffix = buildAntigravityArgs(coding, "gemini-3.7-flash-high", "high");
     expect(withSuffix).toContain("--model");
     expect(withSuffix).toContain("gemini-3.7-flash-high");
     expect(withSuffix).not.toContain("--effort");
-    // vanilla model keeps the explicit --effort.
     const vanilla = buildAntigravityArgs(coding, "gemini-1.5-pro", "medium");
     expect(vanilla).toContain("--effort");
     expect(vanilla).toContain("medium");
@@ -101,6 +101,24 @@ describe("Antigravity provider", () => {
     });
   });
 
+  it("detects a headless soft permission denial without false positives (F04)", () => {
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not execute the requested command.",
+      stderr: "jetski: permission denied in headless mode"
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "Completed successfully. The response explains the permission model.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 1,
+      stdout: "I could not execute the requested command.",
+      stderr: "permission denied"
+    })).toBe(false);
+  });
+
   it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", { timeout: 20_000 }, async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-hang-"));
     tempPaths.push(tempDir);
@@ -117,9 +135,7 @@ describe("Antigravity provider", () => {
     const provider = new AntigravityProvider({
       executablePath: scriptPath,
       healthProbe: false,
-      executionLimits: {
-        inactivityTimeoutMs: 150
-      }
+      executionLimits: { inactivityTimeoutMs: 150 }
     });
 
     const req = request("implementing", "coding");

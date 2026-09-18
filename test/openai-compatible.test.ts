@@ -53,13 +53,11 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.outcome).toBe("completed");
     expect(result.output).toBe("DONE");
     expect(result.tokenUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
-    // check the request
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.test.local/v1/chat/completions");
     expect(init.headers.Authorization).toBe("Bearer sk-test");
     const body = JSON.parse(init.body);
     expect(body.model).toBe("m1");
-    // the goal prompt carries the task text into the user message
     expect(body.messages[1].content.length).toBeGreaterThan(50);
   });
 
@@ -97,7 +95,6 @@ describe("OpenAICompatibleProvider", () => {
 
   it("does not advertise coding/testing capabilities it cannot actually execute (F02)", () => {
     const provider = new OpenAICompatibleProvider(baseConfig);
-    // The bridge is chat-completions only; it must not claim implement/run-tests.
     expect(provider.capabilities.has("coding")).toBe(false);
     expect(provider.capabilities.has("testing")).toBe(false);
     expect(provider.capabilities.has("planning")).toBe(false);
@@ -127,11 +124,52 @@ describe("OpenAICompatibleProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("reports the endpoint as configured-but-unverified, not ready, before any probe (F03)", async () => {
+  it("probes the endpoint before reporting it ready (F03)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
     const provider = new OpenAICompatibleProvider(baseConfig);
     const health = await provider.health();
-    // URL + key are present but never probed; must not claim live "ready".
-    expect(health.state).toBe("offline");
-    expect(health.detail).toContain("not yet verified");
+    expect(health.state).toBe("ready");
+    expect(health.detail).toContain("authenticated");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.test.local/v1/models",
+      expect.objectContaining({
+        method: "GET",
+        headers: { Authorization: "Bearer sk-test" }
+      })
+    );
+  });
+
+  it("classifies a rejected health probe as authentication required (F03)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "invalid key"
+    }));
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await expect(provider.health()).resolves.toMatchObject({ state: "auth_required" });
+  });
+
+  it("uses the phase deadline when composing the request abort signal (F03)", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("deadline", "TimeoutError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation", deadlineAt: Date.now() + 5 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not turn an internal timeout into user cancellation (F03)", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation", deadlineAt: Date.now() + 5 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
   });
 });
