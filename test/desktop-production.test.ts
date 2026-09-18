@@ -1,12 +1,61 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { loadConfig, validateRuntimeConfig } from "../src/config.js";
+import { parse } from "yaml";
 
 const require = createRequire(import.meta.url);
 const production = require("../src/desktop/production.cjs") as typeof import("../src/desktop/production.cjs");
+const updater = require("../src/desktop/auto-updater.cjs") as {
+  initAutoUpdate: (options: Record<string, unknown>) => unknown;
+};
 
 describe("desktop production runtime logic", () => {
+  it("packages the updater entry without broad desktop source globs", () => {
+    const builderConfig = parse(fs.readFileSync(path.resolve(process.cwd(), "electron-builder.yml"), "utf8")) as {
+      files: string[];
+    };
+
+    expect(builderConfig.files).toContain("src/desktop/auto-updater.cjs");
+    expect(builderConfig.files).not.toContain("src/desktop/**/*");
+    expect(builderConfig.files).toContain("!**/*.map");
+    expect(builderConfig.files).toContain("!**/*.ts");
+    expect(builderConfig.files).toContain("!test/**");
+    expect(() => require("../src/desktop/auto-updater.cjs")).not.toThrow();
+  });
+
+  it("surfaces updater check failures to the desktop window and error log", async () => {
+    const listeners = new Map<string, (payload?: unknown) => void>();
+    const sent: unknown[] = [];
+    const errors: unknown[][] = [];
+    const fakeUpdater = {
+      autoDownload: false,
+      autoInstallOnAppQuit: false,
+      disableWebInstaller: false,
+      on(event: string, listener: (payload?: unknown) => void) {
+        listeners.set(event, listener);
+        return this;
+      },
+      checkForUpdates: () => Promise.reject(new Error("GitHub release feed unavailable"))
+    };
+
+    updater.initAutoUpdate({
+      updater: fakeUpdater,
+      logger: { error: (...args: unknown[]) => errors.push(args) },
+      mainWindow: {
+        webContents: {
+          send: (_channel: string, payload: unknown) => sent.push(payload)
+        }
+      }
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(errors).toContainEqual(["[maestro] automatic update failed:", "GitHub release feed unavailable"]);
+    expect(sent).toContainEqual({ event: "error", message: "GitHub release feed unavailable" });
+    expect(listeners.has("error")).toBe(true);
+  });
+
   it("resolves packaged backend and UI paths from the app root", () => {
     const paths = production.resolveDesktopRuntimePaths({
       isPackaged: true,
