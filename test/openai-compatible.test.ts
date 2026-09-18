@@ -98,6 +98,7 @@ describe("OpenAICompatibleProvider", () => {
     expect(provider.capabilities.has("coding")).toBe(false);
     expect(provider.capabilities.has("testing")).toBe(false);
     expect(provider.capabilities.has("planning")).toBe(false);
+    expect(provider.capabilities.has("improvement_reviewing")).toBe(false);
     expect(provider.capabilities.has("conversation")).toBe(true);
   });
 
@@ -141,6 +142,24 @@ describe("OpenAICompatibleProvider", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("deduplicates concurrent health probes (F03)", async () => {
+    let resolveFetch!: (value: { ok: boolean; status: number }) => void;
+    const pendingResponse = new Promise<{ ok: boolean; status: number }>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pendingResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const first = provider.health();
+    const second = provider.health();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    resolveFetch({ ok: true, status: 200 });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" })
+    ]);
   });
 
   it("returns failed (not completed) on an empty completion (F02)", async () => {

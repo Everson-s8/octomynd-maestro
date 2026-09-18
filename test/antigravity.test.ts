@@ -143,6 +143,11 @@ describe("Antigravity provider", () => {
       stderr: ""
     })).toBe(false);
     expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not execute the legacy migration script directly because the sandbox reports permission denied for that path, so I documented the limitation in the README.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
       exitCode: 1,
       stdout: "I could not execute the requested command.",
       stderr: "permission denied"

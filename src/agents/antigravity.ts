@@ -451,7 +451,7 @@ export function isSoftPermissionDenial(input: {
   const actionSentence = input.stdout.slice(sentenceStart, sentenceEnd);
   const directPermissionFollowup = /^(?:\s*(?:because|as|due\s+to|when|while|and)?\s*[,;:.-]?\s*)permission(?:\s+was)?\s+denied/i.test(textAfterDenial);
   const completedBeforeDenial = /\b(?:completed\s+successfully|successfully\s+completed|finished\s+the\s+(?:task|request|work)|(?:the\s+)?(?:task|request|work|implementation|changes)\s+(?:is|are)\s+(?:complete|completed|done|finished)|all\s+tests\s+pass(?:ed)?)\b/i.test(textBeforeDenial);
-  const recoveredAfterDenial = /\b(?:so|but|then|and)\b[\s\S]{0,180}\b(?:completed|successfully|done|implemented|finished|applied|created|passed)\b/i.test(textAfterDenial);
+  const recoveredAfterDenial = /\b(?:so|but|then|and)\b[\s\S]{0,180}\b(?:completed|successfully|done|implemented|finished|applied|created|passed|documented|explained|reported|reviewed|summarized|noted|continued|delivered)\b/i.test(textAfterDenial);
   const stdoutPermissionNearAction = permissionFailurePattern.test(actionSentence) || directPermissionFollowup;
   // Keep this narrower than classifyFailure's general-purpose diagnostic
   // classifier. A successful response may mention a generic 403/access-denied

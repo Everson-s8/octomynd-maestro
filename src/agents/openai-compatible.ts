@@ -13,8 +13,7 @@ const HEALTH_PROBE_CACHE_TTL_MS = 120_000;
 const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
   "conversation",
   "research",
-  "reviewing",
-  "improvement_reviewing"
+  "reviewing"
 ]);
 
 /**
@@ -43,6 +42,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
   private readonly ignoredCapabilities: AgentCapability[];
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private healthProbePromise: Promise<AgentHealth> | null = null;
 
   constructor(config: CustomCliProviderConfig) {
     this.config = config;
@@ -69,6 +69,17 @@ export class OpenAICompatibleProvider implements AgentProvider {
 
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
+    if (this.healthProbePromise) return this.healthProbePromise;
+    const probePromise = this.probeHealth();
+    this.healthProbePromise = probePromise;
+    try {
+      return await probePromise;
+    } finally {
+      if (this.healthProbePromise === probePromise) this.healthProbePromise = null;
+    }
+  }
+
+  private async probeHealth(): Promise<AgentHealth> {
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
     const capabilityNote = this.ignoredCapabilities.length > 0
