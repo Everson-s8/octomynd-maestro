@@ -6,7 +6,8 @@ import {
   OperationalChatThreadRecord,
   OperationalChatSenderRole,
   OperationalChatSurface,
-  ChatAccessMode
+  ChatAccessMode,
+  OperationalChatMemoryRecord
 } from "./types.js";
 
 type OperationalChatMessageRow = {
@@ -33,6 +34,16 @@ type OperationalChatThreadRow = {
   message_count: number;
   provider_id: string | null;
   model: string | null;
+};
+
+type OperationalChatMemoryRow = {
+  id: number;
+  project_key: string;
+  memory_text: string;
+  memory_kind: string;
+  source_thread_id: number | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export function migrateOperationalChatPersistence(db: Database.Database): void {
@@ -66,6 +77,18 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
       ON operational_chat_messages(project_key);
     CREATE INDEX IF NOT EXISTS idx_operational_chat_messages_created
       ON operational_chat_messages(created_at);
+    CREATE TABLE IF NOT EXISTS operational_chat_memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_key TEXT NOT NULL,
+      memory_text TEXT NOT NULL,
+      memory_kind TEXT NOT NULL DEFAULT 'decision',
+      source_thread_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project_key, memory_text)
+    );
+    CREATE INDEX IF NOT EXISTS idx_operational_chat_memories_project
+      ON operational_chat_memories(project_key, updated_at DESC);
   `);
 
   const threadColumns = db.prepare("PRAGMA table_info(operational_chat_threads)").all() as Array<{ name: string }>;
@@ -212,6 +235,25 @@ export function createOperationalChatPersistence(db: Database.Database) {
     )
   `);
 
+  const insertMemoryStatement = db.prepare(`
+    INSERT INTO operational_chat_memories (
+      project_key, memory_text, memory_kind, source_thread_id, created_at, updated_at
+    ) VALUES (@projectKey, @memoryText, @memoryKind, @sourceThreadId, @createdAt, @updatedAt)
+    ON CONFLICT(project_key, memory_text) DO UPDATE SET
+      memory_kind = excluded.memory_kind,
+      source_thread_id = excluded.source_thread_id,
+      updated_at = excluded.updated_at
+  `);
+  const listMemoriesStatement = db.prepare(`
+    SELECT * FROM operational_chat_memories
+    WHERE project_key = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `);
+  const deleteMemoryStatement = db.prepare(`
+    DELETE FROM operational_chat_memories WHERE project_key = ? AND id = ?
+  `);
+
   return {
     createOperationalChatThread(input: OperationalChatThreadInput): OperationalChatThreadRecord {
       const now = new Date().toISOString();
@@ -332,6 +374,39 @@ export function createOperationalChatPersistence(db: Database.Database) {
         Math.max(10, keepCount)
       );
       return info.changes;
+    },
+
+    saveOperationalChatMemory(input: {
+      projectKey: string;
+      text: string;
+      kind?: OperationalChatMemoryRecord["kind"];
+      sourceThreadId?: number | null;
+    }): OperationalChatMemoryRecord {
+      const projectKey = input.projectKey.trim().toLowerCase();
+      const text = input.text.replace(/\s+/g, " ").trim().slice(0, 500);
+      if (!projectKey || !text) throw new Error("Chat memory cannot be empty.");
+      const now = new Date().toISOString();
+      insertMemoryStatement.run({
+        projectKey,
+        memoryText: text,
+        memoryKind: input.kind ?? "decision",
+        sourceThreadId: input.sourceThreadId ?? null,
+        createdAt: now,
+        updatedAt: now
+      });
+      const row = db.prepare(`
+        SELECT * FROM operational_chat_memories WHERE project_key = ? AND memory_text = ?
+      `).get(projectKey, text) as OperationalChatMemoryRow;
+      return mapRowToMemory(row);
+    },
+
+    listOperationalChatMemories(projectKey: string, limit = 30): OperationalChatMemoryRecord[] {
+      const rows = listMemoriesStatement.all(projectKey.trim().toLowerCase(), Math.max(1, Math.min(50, limit))) as OperationalChatMemoryRow[];
+      return rows.map(mapRowToMemory);
+    },
+
+    deleteOperationalChatMemory(projectKey: string, memoryId: number): boolean {
+      return deleteMemoryStatement.run(projectKey.trim().toLowerCase(), memoryId).changes > 0;
     }
   };
 }
@@ -363,6 +438,17 @@ function mapRowToThread(row: OperationalChatThreadRow): OperationalChatThreadRec
     messageCount: Number(row.message_count ?? 0),
     providerId: (row.provider_id as OperationalChatThreadRecord["providerId"]) ?? null,
     model: row.model ?? null
+  };
+}
+
+function mapRowToMemory(row: OperationalChatMemoryRow): OperationalChatMemoryRecord {
+  return {
+    id: row.id,
+    text: row.memory_text,
+    kind: row.memory_kind === "preference" || row.memory_kind === "constraint" ? row.memory_kind : "decision",
+    sourceThreadId: row.source_thread_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 
