@@ -2126,7 +2126,11 @@ class FakeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest) {
-    return this.handler(request);
+    const result = this.handler(request);
+    if (request.phase === "testing" && result.outcome === "completed" && result.structuredPayload === null) {
+      return { ...result, structuredPayload: { testsPassed: true } };
+    }
+    return result;
   }
 }
 
@@ -2134,7 +2138,7 @@ function completed(summary: string): AgentExecutionResult {
   return {
     outcome: "completed",
     summary,
-    structuredPayload: { testsPassed: true },
+    structuredPayload: null,
     output: summary,
     error: null,
     durationMs: 1,

@@ -201,7 +201,7 @@ export async function runTaskGoal(
         stepCount,
         "Tests are required, but the current implementation has no passing validation.",
         task.id,
-        phase === "testing" || lastValidationPassed === false ? "budget_exhausted" : undefined
+        "budget_exhausted"
       );
     }
 
@@ -322,11 +322,7 @@ export async function runTaskGoal(
       const dnaBudgetLimit = dnaPhaseBudgets[phase as GoalPhase];
       const phaseStepCount = database.listGoalSteps(run.id).filter((s) => (
         s.phase === phase
-          && (
-            phase !== run.currentPhase
-            || phaseBudgetStartStepId === null
-            || s.id > phaseBudgetStartStepId
-          )
+          && (phaseBudgetStartStepId === null || s.id > phaseBudgetStartStepId)
       )).length;
       if (dnaBudgetLimit !== undefined && phaseStepCount >= dnaBudgetLimit) {
         // Check if this is the last phase — if so, deliver

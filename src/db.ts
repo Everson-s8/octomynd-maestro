@@ -3266,12 +3266,6 @@ function migrate(db: Database.Database) {
       ON events(CAST(json_extract(metadata_json, '$.taskId') AS INTEGER));
     CREATE INDEX IF NOT EXISTS idx_events_metadata_deleted_task_id
       ON events(CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER));
-    CREATE INDEX IF NOT EXISTS idx_events_goal_step_completed
-      ON events(
-        CAST(json_extract(metadata_json, '$.runId') AS INTEGER),
-        CAST(json_extract(metadata_json, '$.stepId') AS INTEGER)
-      ) WHERE type = 'goal.step_completed';
-
     /* F3: durable idempotency for work-intake submissions. The previous scheme
        scanned the last 200 events for task.created metadata — once the window
        rolled over the same demand created duplicate tasks. A dedicated column
