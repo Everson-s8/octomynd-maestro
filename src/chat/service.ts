@@ -22,7 +22,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
-import { ProjectRepositoryService } from "../projects/repository-service.js";
+import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import { inspectProjectContext } from "./project-context.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
@@ -98,7 +98,7 @@ export class OperationalChatService {
       this.database.updateOperationalChatThreadSelection(thread.id, selectedProviderId, selectedModel);
     }
 
-    const evidence = await this.gatherEvidenceContext(projectKey, request.message);
+    const evidence = await this.gatherEvidenceContext(projectKey, request.message, accessMode !== "read_only");
     const taskIntent = parseTaskCreationIntent(request.message);
     const actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
 
@@ -432,12 +432,22 @@ export class OperationalChatService {
     return this.database.deleteOperationalChatThread(normalizedKey, threadId);
   }
 
-  async gatherEvidenceContext(projectKey: string, userMessage = ""): Promise<ChatEvidenceContext> {
+  async gatherEvidenceContext(projectKey: string, userMessage = "", allowRepositorySync = true): Promise<ChatEvidenceContext> {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     let project = this.resolveChatProject(normalizedKey);
     let repositoryState = null;
     if (normalizedKey !== GLOBAL_CHAT_PROJECT_KEY) {
-      repositoryState = this.repositoryService.inspect(project, false);
+      if (allowRepositorySync) {
+        try {
+          repositoryState = this.repositoryService.synchronize(project);
+        } catch (error) {
+          repositoryState = error instanceof RepositorySyncError
+            ? error.state
+            : this.repositoryService.inspect(project, false);
+        }
+      } else {
+        repositoryState = this.repositoryService.inspect(project, false);
+      }
       project = this.database.getProjectByKey(project.key);
     }
     const projectContext = inspectProjectContext(project.path, userMessage);
