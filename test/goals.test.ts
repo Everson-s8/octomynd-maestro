@@ -1945,18 +1945,7 @@ describe("goal runner", () => {
     const run = database.createGoalRun(task.id, 8);
     const testingStep = database.createGoalStep(run.id, "testing", "codex");
     database.finishGoalStep({ id: testingStep.id, status: "completed", summary: "provider tests passed", durationMs: 1 });
-    database.addEvent({
-      source: "codex",
-      type: "goal.step_completed",
-      text: "provider tests passed",
-      taskId: task.id,
-      metadata: {
-        runId: run.id,
-        stepId: testingStep.id,
-        phase: "testing",
-        structuredPayload: { testsPassed: true }
-      }
-    });
+    database.setGoalRunValidation(run.id, true);
     database.updateGoalRun({
       id: run.id,
       status: "waiting_provider",
@@ -1990,6 +1979,7 @@ describe("goal runner", () => {
     });
 
     expect(resumed.status).toBe("completed");
+    expect(resumed.validationPassed).toBe(true);
   });
 
   it("invalidates persisted validation after a later implementation step", async () => {
