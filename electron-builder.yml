@@ -34,6 +34,7 @@ files:
   - "src/desktop/preload.cjs"
   - "src/desktop/production.cjs"
   - "src/desktop/index.js"
+  - "src/desktop/auto-updater.cjs"
   - ".env.example"
   - "package.json"
   - "!**/*.map"

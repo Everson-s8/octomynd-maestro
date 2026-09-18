@@ -216,7 +216,14 @@ async function bootstrap() {
       const { initAutoUpdate } = require("./auto-updater.cjs");
       initAutoUpdate({ mainWindow: BrowserWindow.getAllWindows()[0] ?? null });
     } catch (updateError) {
-      console.error("[maestro] auto-update unavailable:", updateError?.message ?? updateError);
+      const detail = updateError?.message ?? String(updateError);
+      console.error("[maestro] automatic update initialization failed:", detail);
+      void dialog.showMessageBox({
+        type: "warning",
+        title: "Automatic updates unavailable",
+        message: "Maestro could not start automatic updates.",
+        detail: `${detail}\n\nYou can continue using Maestro, but install future updates manually from the official release page.`
+      });
     }
   }
 

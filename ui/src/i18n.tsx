@@ -24,6 +24,8 @@ const portuguese: Record<string, string> = {
   "Failed": "falhou",
   "Running": "rodando",
   "Unable to load Maestro.": "Falha ao carregar o Maestro.",
+  "Automatic updates are unavailable.": "As atualizações automáticas estão indisponíveis.",
+  "Dismiss": "Dispensar",
   "Cancel task": "Cancelar a task",
   "Any current execution will be interrupted.": "Qualquer execução em curso será interrompida.",
   "Unable to cancel task": "Não foi possível cancelar a task",

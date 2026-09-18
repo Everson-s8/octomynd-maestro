@@ -1,5 +1,13 @@
+export type DesktopUpdateStatus = {
+  event: "checking" | "up_to_date" | "downloading" | "progress" | "ready" | "error";
+  message?: string | null;
+  version?: string | null;
+  percent?: number;
+};
+
 type DesktopBridge = {
   openExternal?: (url: string) => Promise<unknown>;
+  onUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => (() => void) | void;
 };
 
 type DesktopWindow = Window & {

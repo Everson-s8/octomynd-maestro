@@ -8,6 +8,15 @@ import { ProjectModal } from "./components/ProjectModal";
 import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
 import { useI18n, translate } from "./i18n";
+import { DesktopUpdateStatus } from "./external-links";
+
+function getDesktopBridge() {
+  return (window as Window & {
+    maestroDesktop?: {
+      onUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => (() => void) | void;
+    };
+  }).maestroDesktop;
+}
 
 export default function App() {
   // Subscribe the root to locale changes so legacy presentation components
@@ -19,6 +28,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const refresh = useCallback(async (activity = false) => {
     if (activity) setRefreshing(true);
@@ -38,6 +48,13 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
+  useEffect(() => {
+    const unsubscribe = getDesktopBridge()?.onUpdateStatus?.((status) => {
+      setUpdateError(status.event === "error" ? status.message || translate("Automatic updates are unavailable.") : null);
+    });
+    return typeof unsubscribe === "function" ? unsubscribe : undefined;
+  }, []);
+
   const handleRefresh = useCallback(() => refresh(true), [refresh]);
   const handleCreate = useCallback(() => setComposerOpen(true), []);
   const handleRegisterProject = useCallback(() => setProjectModalOpen(true), []);
@@ -45,6 +62,10 @@ export default function App() {
   if (!data && !error) return <LoadingSpinner />;
   return <RuntimeErrorBoundary><BrowserRouter>
     {error ? <ErrorBanner message={error} onRetry={() => void refresh(true)} /> : null}
+    {updateError ? <div className="error-banner" role="alert">
+      <span>{translate("Automatic updates are unavailable.")} {updateError}</span>
+      <button onClick={() => setUpdateError(null)}>{translate("Dismiss")}</button>
+    </div> : null}
     {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
     <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
