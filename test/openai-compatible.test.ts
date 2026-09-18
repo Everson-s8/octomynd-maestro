@@ -137,8 +137,9 @@ describe("OpenAICompatibleProvider", () => {
       const provider = new OpenAICompatibleProvider(baseConfig);
       await provider.execute({ ...request(), capability: "conversation" });
       vi.advanceTimersByTime(31_000);
-      await provider.health();
+      const health = await provider.health();
       expect(fetchMock).toHaveBeenCalledOnce();
+      expect(health.detail).toContain("Ignored unsupported capabilities: planning, coding, testing");
     } finally {
       vi.useRealTimers();
     }

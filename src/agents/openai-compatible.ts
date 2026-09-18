@@ -317,7 +317,10 @@ export class OpenAICompatibleProvider implements AgentProvider {
   }
 
   private cacheHealth(state: "ready" | "auth_required" | "offline" | "quota", detail: string) {
-    this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
+    const capabilityNote = this.ignoredCapabilities.length > 0
+      ? ` Ignored unsupported capabilities: ${this.ignoredCapabilities.join(", ")}.`
+      : "";
+    this.cachedHealth = { state, detail: `${detail}${capabilityNote}`, checkedAt: new Date().toISOString() };
     this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
   }
 }

@@ -148,6 +148,11 @@ describe("Antigravity provider", () => {
       stderr: ""
     })).toBe(false);
     expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "The formatter could not run because the binary is missing. Everything else works fine.",
+      stderr: "permission denied writing to /var/lock (ignored, non-fatal)"
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
       exitCode: 1,
       stdout: "I could not execute the requested command.",
       stderr: "permission denied"
