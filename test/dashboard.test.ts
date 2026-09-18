@@ -976,6 +976,7 @@ const successfulGoalProvider: AgentProvider = {
   execute: async (request) => ({
     outcome: "completed",
     summary: `${request.phase} completed`,
+    structuredPayload: request.phase === "testing" ? { testsPassed: true } : { phase: request.phase },
     output: "ok",
     error: null,
     durationMs: 1,

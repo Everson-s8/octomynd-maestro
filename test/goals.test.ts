@@ -1805,6 +1805,308 @@ describe("goal runner", () => {
       `Goal #${run.id} is not blocked by budget-exhausted (category: loop); refusing to auto-retry other failures.`
     );
   });
+
+  it("blocks instead of delivering when the test budget exhausts without a passing validation (F01)", async () => {
+    const projectDir = path.join(tempDir, "f01-budget-project");
+    const worktreeDir = path.join(tempDir, "f01-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01", path: projectDir });
+    const task = database.createTask("Add one settings field", "dashboard", "f01");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    // A provider that always "completes", a validation that always FAILS, and a
+    // small-task DNA whose test budget (2) is consumed by the failing run. The
+    // runner must not ship unverified code: delivery must never be called.
+    const provider = new FakeProvider("codex", ["planning", "coding", "testing"], () => completed("done"));
+    const taskDNA: TaskDNA = {
+      complexity: "small",
+      phases: ["implementing", "testing"],
+      phaseBudgets: { implementing: 3, testing: 2 },
+      requireReview: false,
+      requireTests: true,
+      allowIteration: false,
+      rationale: "F01 regression"
+    };
+    let deliveryCalls = 0;
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "abc123", pullRequestUrl: "https://github.com/example/repo/pull/9", branchName: "maestro/f01" };
+      },
+      validationRunner: { run: async () => validationReport("failed") }
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(run.failureCategory).toBe("budget_exhausted");
+    expect(deliveryCalls).toBe(0);
+    expect(database.getTask(task.id).status).not.toBe("awaiting_human");
+    expect(database.listGoalSteps(run.id).some((step) => step.phase === "testing" && step.status === "failed")).toBe(true);
+  });
+
+  it("resumes a validation-budget block through the coordinator without replaying the old phase budget", async () => {
+    const projectDir = path.join(tempDir, "f01-resume-budget-project");
+    const worktreeDir = path.join(tempDir, "f01-resume-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-resume-budget", path: projectDir });
+    const task = database.createTask("Create a feature and also test it", "dashboard", "f01-resume-budget");
+    database.updateTaskWorktree({ id: task.id, status: "testing", branchName: "task", worktreePath: worktreeDir });
+
+    const run = database.createGoalRun(task.id, 10);
+    for (let index = 0; index < 2; index += 1) {
+      const step = database.createGoalStep(run.id, "testing", "codex");
+      database.finishGoalStep({ id: step.id, status: "completed", summary: "validation attempt failed", durationMs: 1 });
+    }
+    database.setGoalRunValidation(run.id, false);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "testing",
+      stepCount: 2,
+      lastError: "Tests are required, but the current implementation has no passing validation.",
+      failureCategory: "budget_exhausted"
+    });
+
+    const provider = new FakeProvider("claude", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts"),
+      15_000,
+      async () => ({
+        commitSha: "resumed-validation-commit",
+        pullRequestUrl: "https://example.invalid/resumed-validation",
+        branchName: "task"
+      }),
+      undefined,
+      undefined,
+      new ManualScheduler(),
+      undefined,
+      undefined,
+      { run: async () => validationReport("passed") }
+    );
+
+    const reopened = coordinator.resumeExistingRun(run.id);
+    expect(reopened.id).toBe(run.id);
+    expect(reopened.phaseBudgetStartStepId).toBe(2);
+    for (let attempt = 0; attempt < 100 && coordinator.isActive(task.id); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const completedRun = database.getGoalRun(run.id);
+    expect(completedRun.status).toBe("completed");
+    expect(completedRun.validationPassed).toBe(true);
+    expect(completedRun.pullRequestUrl).toBe("https://example.invalid/resumed-validation");
+    await coordinator.shutdown();
+  });
+
+  it("blocks reviewer approval when required validation evidence is missing", async () => {
+    const projectDir = path.join(tempDir, "f01-review-project");
+    const worktreeDir = path.join(tempDir, "f01-review-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-review", path: projectDir });
+    const task = database.createTask("Deliver only after tests", "dashboard", "f01-review");
+    database.updateTaskWorktree({ id: task.id, status: "implementing", branchName: "task", worktreePath: worktreeDir });
+
+    const provider = new FakeProvider("codex", ["coding", "reviewing"], (request) => (
+      request.phase === "reviewing"
+        ? { ...completed("approved"), structuredPayload: { reviewDecision: "approved" } }
+        : completed("implemented")
+    ));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["implementing", "reviewing"],
+      phaseBudgets: { implementing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 reviewer shortcut regression"
+    };
+    let deliveryCalls = 0;
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "should-not-deliver", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(run.lastError).toContain("no passing validation");
+    expect(run.failureCategory).not.toBe("budget_exhausted");
+    expect(deliveryCalls).toBe(0);
+  });
+
+  it("rebuilds passing validation evidence when resuming a review", async () => {
+    const projectDir = path.join(tempDir, "f01-resume-project");
+    const worktreeDir = path.join(tempDir, "f01-resume-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-resume", path: projectDir });
+    const task = database.createTask("Resume after validation", "dashboard", "f01-resume");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const validationStep = database.createGoalStep(run.id, "testing", "maestro-validation");
+    database.finishGoalStep({ id: validationStep.id, status: "completed", summary: "tests passed", durationMs: 1 });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 1,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("codex", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["testing", "reviewing"],
+      phaseBudgets: { testing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 resume regression"
+    };
+    let deliveryCalls = 0;
+
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "resume-commit", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(resumed.status).toBe("completed");
+    expect(deliveryCalls).toBe(1);
+  });
+
+  it("rebuilds explicit provider-backed test evidence after a restart", async () => {
+    const projectDir = path.join(tempDir, "f01-provider-resume-project");
+    const worktreeDir = path.join(tempDir, "f01-provider-resume-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-provider-resume", path: projectDir });
+    const task = database.createTask("Resume provider validation", "dashboard", "f01-provider-resume");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const testingStep = database.createGoalStep(run.id, "testing", "codex");
+    database.finishGoalStep({ id: testingStep.id, status: "completed", summary: "provider tests passed", durationMs: 1 });
+    // Simulate a run created before the durable validation column existed.
+    database.addEvent({
+      source: "codex",
+      type: "goal.step_completed",
+      text: "provider tests passed",
+      taskId: task.id,
+      metadata: {
+        runId: run.id,
+        stepId: testingStep.id,
+        phase: "testing",
+        structuredPayload: { testsPassed: true }
+      }
+    });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 1,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("claude", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA: {
+        complexity: "medium",
+        phases: ["testing", "reviewing"],
+        phaseBudgets: { testing: 1, reviewing: 1 },
+        requireReview: true,
+        requireTests: true,
+        allowIteration: true,
+        rationale: "F01 provider-backed resume regression"
+      },
+      delivery: async () => ({
+        commitSha: "provider-resume-commit",
+        pullRequestUrl: "https://example.invalid/provider-resume",
+        branchName: "task"
+      })
+    });
+
+    expect(resumed.status).toBe("completed");
+    expect(resumed.validationPassed).toBe(null);
+  });
+
+  it("invalidates persisted validation after a later implementation step", async () => {
+    const projectDir = path.join(tempDir, "f01-stale-project");
+    const worktreeDir = path.join(tempDir, "f01-stale-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-stale", path: projectDir });
+    const task = database.createTask("Do not deliver stale validation", "dashboard", "f01-stale");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const validationStep = database.createGoalStep(run.id, "testing", "maestro-validation");
+    database.finishGoalStep({ id: validationStep.id, status: "completed", summary: "tests passed", durationMs: 1 });
+    const implementationStep = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({ id: implementationStep.id, status: "completed", summary: "changed implementation", durationMs: 1 });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 2,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("codex", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["implementing", "reviewing"],
+      phaseBudgets: { implementing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 stale evidence regression"
+    };
+    let deliveryCalls = 0;
+
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "should-not-deliver", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(resumed.status).toBe("blocked");
+    expect(resumed.lastError).toContain("no passing validation");
+    expect(deliveryCalls).toBe(0);
+  });
 });
 
 class FakeProvider implements AgentProvider {
@@ -1825,7 +2127,11 @@ class FakeProvider implements AgentProvider {
   }
 
   async execute(request: AgentExecutionRequest) {
-    return this.handler(request);
+    const result = this.handler(request);
+    if (request.phase === "testing" && result.outcome === "completed" && result.structuredPayload === null) {
+      return { ...result, structuredPayload: { testsPassed: true } };
+    }
+    return result;
   }
 }
 
@@ -1833,6 +2139,7 @@ function completed(summary: string): AgentExecutionResult {
   return {
     outcome: "completed",
     summary,
+    structuredPayload: null,
     output: summary,
     error: null,
     durationMs: 1,
