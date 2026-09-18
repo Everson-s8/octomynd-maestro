@@ -105,6 +105,12 @@ export async function runTaskGoal(
     : (dna?.phases[0] as GoalPhase) ?? run.currentPhase;
   let stepCount = run.stepCount;
   let excluded = initialExcludedProviders(database, run, phase);
+  // ── F01 guard: track whether the last completed validation pass actually
+  // passed. A failed (or never-run) validation must never be masked by phase
+  // budget exhaustion into a "deliver anyway" transition. When requireTests is
+  // true and the test phase ran without a green result, delivery is refused and
+  // the run blocks (resumable) instead of shipping unverified code.
+  let lastValidationPassed: boolean | null = null;
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
@@ -285,7 +291,22 @@ export async function runTaskGoal(
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
         if (phaseIndex === dnaPhases.length - 1) {
-          // Last phase budget exhausted — deliver via the single completion path.
+          // Last phase budget exhausted. F01: a task that requires tests must
+          // NOT deliver on an exhausted budget if the validation never passed.
+          // Exhaustion means "no more budget to fix it", not "it works" — refuse
+          // delivery (block, resumable) instead of shipping unverified code.
+          if (dna?.requireTests && lastValidationPassed !== true) {
+            return finishRun(
+              database,
+              currentRun,
+              "blocked",
+              phase,
+              stepCount,
+              "Test phase budget exhausted without a passing validation.",
+              task.id
+            );
+          }
+          // Otherwise deliver via the single completion path.
           return await deliverGoal();
         }
         // Not last phase — move to next DNA phase
@@ -402,10 +423,12 @@ export async function runTaskGoal(
           });
         });
         if (validation.status === "passed") {
+          lastValidationPassed = true;
           phase = "reviewing";
           excluded = new Set();
           continue;
         }
+        lastValidationPassed = false;
       }
       const completedWorkGraphStep = database.listGoalSteps(run.id).some((step) => (
         step.phase === "implementing" && step.provider === "work-graph" && step.status === "completed"

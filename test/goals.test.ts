@@ -1805,6 +1805,46 @@ describe("goal runner", () => {
       `Goal #${run.id} is not blocked by budget-exhausted (category: loop); refusing to auto-retry other failures.`
     );
   });
+
+  it("blocks instead of delivering when the test budget exhausts without a passing validation (F01)", async () => {
+    const projectDir = path.join(tempDir, "f01-budget-project");
+    const worktreeDir = path.join(tempDir, "f01-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01", path: projectDir });
+    const task = database.createTask("Add one settings field", "dashboard", "f01");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    // A provider that always "completes", a validation that always FAILS, and a
+    // small-task DNA whose test budget (2) is consumed by the failing run. The
+    // runner must not ship unverified code: delivery must never be called.
+    const provider = new FakeProvider("codex", ["planning", "coding", "testing"], () => completed("done"));
+    const taskDNA: TaskDNA = {
+      complexity: "small",
+      phases: ["implementing", "testing"],
+      phaseBudgets: { implementing: 3, testing: 2 },
+      requireReview: false,
+      requireTests: true,
+      allowIteration: false,
+      rationale: "F01 regression"
+    };
+    let deliveryCalls = 0;
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "abc123", pullRequestUrl: "https://github.com/example/repo/pull/9", branchName: "maestro/f01" };
+      },
+      validationRunner: { run: async () => validationReport("failed") }
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(deliveryCalls).toBe(0);
+    expect(database.getTask(task.id).status).not.toBe("awaiting_human");
+    expect(database.listGoalSteps(run.id).some((step) => step.phase === "testing" && step.status === "failed")).toBe(true);
+  });
 });
 
 class FakeProvider implements AgentProvider {
