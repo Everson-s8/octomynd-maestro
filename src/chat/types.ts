@@ -130,7 +130,9 @@ export type GovernedChatActionType =
   | "resume_feature_plan"
   | "retry_feature_plan"
   | "cancel_feature_plan"
-  | "cancel_task";
+  | "cancel_task"
+  | "code_change_worktree"
+  | "code_change_task";
 
 export type GovernedChatAction = {
   id: string;

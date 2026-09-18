@@ -9,7 +9,8 @@ import { parseTaskCreationIntent } from "../src/chat/service.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { createTelegramBot } from "../src/telegram/bot.js";
 import { MaestroConfig } from "../src/config.js";
-import type { AgentProvider } from "../src/agents/types.js";
+import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
+import { runGit } from "../src/git.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -500,6 +501,70 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect((await strictService.getHistory("maestro", 20, strictThread.id)).at(-1)?.providerId).toBe("antigravity");
   });
 
+  it("offers governed or direct worktree code paths and verifies the direct change", async () => {
+    expect(runGit(["init", "-b", "main"], tmpDir).ok).toBe(true);
+    fs.writeFileSync(path.join(tmpDir, "README.md"), "chat code change test\n", "utf8");
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "test-maestro.db*\n.worktrees/\n", "utf8");
+    expect(runGit(["add", "README.md", ".gitignore"], tmpDir).ok).toBe(true);
+    expect(runGit(["-c", "user.name=Chat Test", "-c", "user.email=chat@test.local", "commit", "-m", "initial"], tmpDir).ok).toBe(true);
+    const changedWorktreePaths: string[] = [];
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "implemented",
+      output: "Implemented in the worktree.",
+      error: null,
+      retryable: false
+    }, {
+      capabilities: ["conversation", "coding"],
+      onExecute: (request) => {
+        if (request.task.worktreePath) {
+          fs.writeFileSync(path.join(request.task.worktreePath, "implemented.ts"), "export const implemented = true;\n", "utf8");
+          changedWorktreePaths.push(request.task.worktreePath);
+        }
+      }
+    });
+    const createdTaskIds: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: path.join(tmpDir, ".worktrees"),
+      actionExecutor: { taskCreated: (taskId) => { createdTaskIds.push(taskId); } }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Corrija o bug no arquivo src/demo.ts",
+      providerId: "claude"
+    });
+    const worktreeAction = response.actions.find((action) => action.type === "code_change_worktree");
+    const taskAction = response.actions.find((action) => action.type === "code_change_task");
+    expect(worktreeAction).toBeDefined();
+    expect(taskAction).toBeDefined();
+
+    const direct = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      action: worktreeAction!,
+      accessMode: "standard"
+    });
+    expect(direct.success).toBe(true);
+    expect(direct.resultSummary).toContain("worktree");
+    expect(changedWorktreePaths).toHaveLength(1);
+    expect(fs.existsSync(path.join(changedWorktreePaths[0], "implemented.ts"))).toBe(true);
+    expect(database.listTasks(10).some((task) => task.status === "awaiting_human")).toBe(true);
+
+    const governed = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      action: taskAction!,
+      accessMode: "standard"
+    });
+    expect(governed.success).toBe(true);
+    expect(createdTaskIds).toHaveLength(1); // governed task is handed to the queue callback
+    expect(database.listTasks(10).some((task) => task.status === "queued")).toBe(true);
+  });
+
   it("serves operational chat endpoints through dashboard server", async () => {
     const mockConfig: MaestroConfig = {
       projectName: "maestro",
@@ -643,11 +708,11 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}, options: { models?: string[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
+}, options: { models?: string[]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
   return {
     id,
     label: id,
-    capabilities: new Set(["conversation"]),
+    capabilities: new Set(options.capabilities ?? ["conversation"]),
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
     models: async () => options.models ?? [],
     execute: async (request) => {

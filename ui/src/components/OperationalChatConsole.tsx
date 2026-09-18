@@ -252,7 +252,9 @@ export function OperationalChatConsole({
       "cancel_task",
       "cancel_feature_plan",
       "resume_goal",
-      "unblock_provider"
+      "unblock_provider",
+      "code_change_worktree",
+      "code_change_task"
     ].includes(action.type);
     if (requiresConfirmation) {
       const confirmed = window.confirm(
