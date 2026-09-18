@@ -113,7 +113,7 @@ export async function runTaskGoal(
   // Rebuild the evidence on resume instead of trusting in-memory state. A
   // validation only remains valid until a later implementing step changes the
   // workspace.
-  let lastValidationPassed = validationPassedForCurrentImplementation(database, run.id);
+  let lastValidationPassed = validationPassedForCurrentImplementation(database, run.id, task.id);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
@@ -310,22 +310,8 @@ export async function runTaskGoal(
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
         if (phaseIndex === dnaPhases.length - 1) {
-          // Last phase budget exhausted. F01: a task that requires tests must
-          // NOT deliver on an exhausted budget if the validation never passed.
-          // Exhaustion means "no more budget to fix it", not "it works" — refuse
-          // delivery (block, resumable) instead of shipping unverified code.
-          if (dna?.requireTests && lastValidationPassed !== true) {
-            return finishRun(
-              database,
-              currentRun,
-              "blocked",
-              phase,
-              stepCount,
-              "Test phase budget exhausted without a passing validation.",
-              task.id
-            );
-          }
-          // Otherwise deliver via the single completion path.
+          // Delivery performs the F01 validation check centrally, so this
+          // budget path cannot diverge from reviewer and shortcut paths.
           return await deliverGoal();
         }
         // Not last phase — move to next DNA phase
@@ -1074,12 +1060,11 @@ export async function runTaskGoal(
       // If the reviewer approved (or tests passed and no review needed),
       // treat this as completion regardless of remaining phases.
       if (result.outcome === "completed") {
-        // When no deterministic validation runner is configured, a provider
-        // completing the testing phase is the validation evidence available
-        // to this run. Preserve that contract for existing provider-backed
-        // test phases while keeping deterministic validation authoritative.
+        // When no deterministic validation runner is configured, only an
+        // explicit provider-backed `testsPassed: true` result is validation
+        // evidence. Never infer a pass from a generic completed response.
         if (phase === "testing" && !options.validationRunner) {
-          lastValidationPassed = result.structuredPayload?.testsPassed === false ? false : true;
+          lastValidationPassed = result.structuredPayload?.testsPassed === true;
         }
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
@@ -1093,18 +1078,9 @@ export async function runTaskGoal(
           const prevCp = database.getLatestGoalCheckpoint(run.id);
           const hasFileChanges = wf !== null && prevCp !== null && wf !== prevCp.workspaceFingerprint;
           if (dna.complexity === "trivial" && !hasFileChanges) {
-            database.updateTaskStatus(task.id, "done");
-            return database.withTransaction(() => {
-              const updated = database.updateGoalRun({
-                id: run.id, status: "completed", currentPhase: phase, stepCount
-              });
-              database.addEvent({
-                source: "maestro", type: "goal.completed",
-                text: `Goal #${run.id} completed (trivial, no changes needed).`,
-                taskId: task.id, metadata: { runId: run.id, stepCount, trivial: true }
-              });
-              return updated;
-            });
+            // Keep the trivial no-change shortcut behind the same validation
+            // gate as every other completion route.
+            return await deliverGoal();
           }
           // Has changes or not trivial — continue to delivery (don't break here,
           // the !nextPhase check below handles delivery)
@@ -1444,19 +1420,34 @@ function sanitizeForRunSummary(text: string): string {
  */
 function validationPassedForCurrentImplementation(
   database: MaestroDatabase,
-  runId: number
+  runId: number,
+  taskId: number
 ): boolean | null {
   const steps = database.listGoalSteps(runId);
   const latestValidation = [...steps]
     .reverse()
-    .find((step) => step.phase === "testing" && step.provider === "maestro-validation");
+    .find((step) => step.phase === "testing");
   if (!latestValidation) return null;
 
   const implementationAfterValidation = steps.some((step) => (
     step.phase === "implementing" && step.id > latestValidation.id
   ));
   if (implementationAfterValidation) return false;
-  return latestValidation.status === "completed";
+  if (latestValidation.status !== "completed") return false;
+  if (latestValidation.provider === "maestro-validation") return true;
+
+  // Provider-backed testing evidence is persisted in the step-completed event
+  // metadata, unlike the in-memory result object. Reconstruct only an
+  // explicit testsPassed=true claim after a restart.
+  const event = database.listEventsForTask(taskId, 500).find((candidate) => (
+    candidate.type === "goal.step_completed"
+      && candidate.metadata.runId === runId
+      && candidate.metadata.stepId === latestValidation.id
+  ));
+  const payload = event?.metadata.structuredPayload;
+  return typeof payload === "object"
+    && payload !== null
+    && (payload as Record<string, unknown>).testsPassed === true;
 }
 
 function nextPhaseAfter(phase: GoalPhase, dnaPhases?: GoalPhase[]): GoalPhase | null {

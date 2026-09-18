@@ -1934,6 +1934,64 @@ describe("goal runner", () => {
     expect(deliveryCalls).toBe(1);
   });
 
+  it("rebuilds explicit provider-backed test evidence after a restart", async () => {
+    const projectDir = path.join(tempDir, "f01-provider-resume-project");
+    const worktreeDir = path.join(tempDir, "f01-provider-resume-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-provider-resume", path: projectDir });
+    const task = database.createTask("Resume provider validation", "dashboard", "f01-provider-resume");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const testingStep = database.createGoalStep(run.id, "testing", "codex");
+    database.finishGoalStep({ id: testingStep.id, status: "completed", summary: "provider tests passed", durationMs: 1 });
+    database.addEvent({
+      source: "codex",
+      type: "goal.step_completed",
+      text: "provider tests passed",
+      taskId: task.id,
+      metadata: {
+        runId: run.id,
+        stepId: testingStep.id,
+        phase: "testing",
+        structuredPayload: { testsPassed: true }
+      }
+    });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 1,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("claude", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA: {
+        complexity: "medium",
+        phases: ["testing", "reviewing"],
+        phaseBudgets: { testing: 1, reviewing: 1 },
+        requireReview: true,
+        requireTests: true,
+        allowIteration: true,
+        rationale: "F01 provider-backed resume regression"
+      },
+      delivery: async () => ({
+        commitSha: "provider-resume-commit",
+        pullRequestUrl: "https://example.invalid/provider-resume",
+        branchName: "task"
+      })
+    });
+
+    expect(resumed.status).toBe("completed");
+  });
+
   it("invalidates persisted validation after a later implementation step", async () => {
     const projectDir = path.join(tempDir, "f01-stale-project");
     const worktreeDir = path.join(tempDir, "f01-stale-worktree");
@@ -2013,6 +2071,7 @@ function completed(summary: string): AgentExecutionResult {
   return {
     outcome: "completed",
     summary,
+    structuredPayload: { testsPassed: true },
     output: summary,
     error: null,
     durationMs: 1,
