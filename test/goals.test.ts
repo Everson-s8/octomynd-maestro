@@ -1841,9 +1841,70 @@ describe("goal runner", () => {
     });
 
     expect(run.status).toBe("blocked");
+    expect(run.failureCategory).toBe("budget_exhausted");
     expect(deliveryCalls).toBe(0);
     expect(database.getTask(task.id).status).not.toBe("awaiting_human");
     expect(database.listGoalSteps(run.id).some((step) => step.phase === "testing" && step.status === "failed")).toBe(true);
+  });
+
+  it("resumes a validation-budget block through the coordinator without replaying the old phase budget", async () => {
+    const projectDir = path.join(tempDir, "f01-resume-budget-project");
+    const worktreeDir = path.join(tempDir, "f01-resume-budget-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-resume-budget", path: projectDir });
+    const task = database.createTask("Create a feature and also test it", "dashboard", "f01-resume-budget");
+    database.updateTaskWorktree({ id: task.id, status: "testing", branchName: "task", worktreePath: worktreeDir });
+
+    const run = database.createGoalRun(task.id, 10);
+    for (let index = 0; index < 2; index += 1) {
+      const step = database.createGoalStep(run.id, "testing", "codex");
+      database.finishGoalStep({ id: step.id, status: "completed", summary: "validation attempt failed", durationMs: 1 });
+    }
+    database.setGoalRunValidation(run.id, false);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "testing",
+      stepCount: 2,
+      lastError: "Tests are required, but the current implementation has no passing validation.",
+      failureCategory: "budget_exhausted"
+    });
+
+    const provider = new FakeProvider("claude", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([provider]),
+      path.join(tempDir, "artifacts"),
+      15_000,
+      async () => ({
+        commitSha: "resumed-validation-commit",
+        pullRequestUrl: "https://example.invalid/resumed-validation",
+        branchName: "task"
+      }),
+      undefined,
+      undefined,
+      new ManualScheduler(),
+      undefined,
+      undefined,
+      { run: async () => validationReport("passed") }
+    );
+
+    const reopened = coordinator.resumeExistingRun(run.id);
+    expect(reopened.id).toBe(run.id);
+    expect(reopened.phaseBudgetStartStepId).toBe(2);
+    for (let attempt = 0; attempt < 100 && coordinator.isActive(task.id); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const completedRun = database.getGoalRun(run.id);
+    expect(completedRun.status).toBe("completed");
+    expect(completedRun.validationPassed).toBe(true);
+    expect(completedRun.pullRequestUrl).toBe("https://example.invalid/resumed-validation");
+    await coordinator.shutdown();
   });
 
   it("blocks reviewer approval when required validation evidence is missing", async () => {
@@ -1945,7 +2006,19 @@ describe("goal runner", () => {
     const run = database.createGoalRun(task.id, 8);
     const testingStep = database.createGoalStep(run.id, "testing", "codex");
     database.finishGoalStep({ id: testingStep.id, status: "completed", summary: "provider tests passed", durationMs: 1 });
-    database.setGoalRunValidation(run.id, true);
+    // Simulate a run created before the durable validation column existed.
+    database.addEvent({
+      source: "codex",
+      type: "goal.step_completed",
+      text: "provider tests passed",
+      taskId: task.id,
+      metadata: {
+        runId: run.id,
+        stepId: testingStep.id,
+        phase: "testing",
+        structuredPayload: { testsPassed: true }
+      }
+    });
     database.updateGoalRun({
       id: run.id,
       status: "waiting_provider",
@@ -1979,7 +2052,7 @@ describe("goal runner", () => {
     });
 
     expect(resumed.status).toBe("completed");
-    expect(resumed.validationPassed).toBe(true);
+    expect(resumed.validationPassed).toBe(null);
   });
 
   it("invalidates persisted validation after a later implementation step", async () => {

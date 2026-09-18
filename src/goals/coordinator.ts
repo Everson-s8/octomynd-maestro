@@ -152,6 +152,8 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) return run;
 
     const reopened = this.database.withTransaction(() => {
+      const steps = this.database.listGoalSteps(run.id);
+      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
       const updated = this.database.updateGoalRun({
         id: run.id,
         status: "waiting_provider",
@@ -159,7 +161,10 @@ export class GoalCoordinator {
         stepCount: run.stepCount,
         maxSteps: run.maxSteps,
         lastError: null,
-        nextRetryAt: null
+        nextRetryAt: null,
+        // A human-initiated continuation gets a fresh budget window for the
+        // phase that was blocked, while preserving all historical steps.
+        phaseBudgetStartStepId: lastStepId
       });
       this.database.updateTaskStatus(run.taskId, run.currentPhase);
       this.database.addEvent({
@@ -216,6 +221,8 @@ export class GoalCoordinator {
     }
     const newMaxSteps = elevatedMaxStepsAtLeast(run.maxSteps);
     const reopened = this.database.withTransaction(() => {
+      const steps = this.database.listGoalSteps(run.id);
+      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
       if (newMaxSteps > run.maxSteps) {
         this.database.addEvent({
           source: "human",
@@ -238,7 +245,8 @@ export class GoalCoordinator {
         stepCount: run.stepCount,
         maxSteps: newMaxSteps,
         lastError: null,
-        nextRetryAt: null
+        nextRetryAt: null,
+        phaseBudgetStartStepId: lastStepId
       });
       this.database.updateTaskStatus(run.taskId, "planning");
       this.database.addEvent({

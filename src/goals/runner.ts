@@ -124,6 +124,10 @@ export async function runTaskGoal(
   let lastValidationPassed = run.validationPassed !== null && run.validationPassed !== undefined
     ? run.validationPassed
     : validationPassedForCurrentImplementation(database, run.id);
+  // A resumed/retried run may start a fresh budget window for its current
+  // phase. Historical steps remain visible and auditable, but must not consume
+  // the continuation's entire phase budget before one new attempt can run.
+  const phaseBudgetStartStepId = run.phaseBudgetStartStepId ?? null;
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
@@ -196,7 +200,8 @@ export async function runTaskGoal(
         phase,
         stepCount,
         "Tests are required, but the current implementation has no passing validation.",
-        task.id
+        task.id,
+        phase === "testing" ? "budget_exhausted" : undefined
       );
     }
 
@@ -315,7 +320,14 @@ export async function runTaskGoal(
       // ── Phase budget check: DNA-aware ────────────────────
       // DNA phase budgets take precedence over circuit breaker defaults
       const dnaBudgetLimit = dnaPhaseBudgets[phase as GoalPhase];
-      const phaseStepCount = database.listGoalSteps(run.id).filter((s) => s.phase === phase).length;
+      const phaseStepCount = database.listGoalSteps(run.id).filter((s) => (
+        s.phase === phase
+          && (
+            phase !== run.currentPhase
+            || phaseBudgetStartStepId === null
+            || s.id > phaseBudgetStartStepId
+          )
+      )).length;
       if (dnaBudgetLimit !== undefined && phaseStepCount >= dnaBudgetLimit) {
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
@@ -436,8 +448,8 @@ export async function runTaskGoal(
               }
             }
           });
+          database.setGoalRunValidation(run.id, validation.status === "passed");
         });
-        database.setGoalRunValidation(run.id, validation.status === "passed");
         if (validation.status === "passed") {
           lastValidationPassed = true;
           phase = "reviewing";
@@ -802,6 +814,12 @@ export async function runTaskGoal(
             }
           }
         });
+        if (phase === "testing" && !options.validationRunner && result.outcome === "completed") {
+          database.setGoalRunValidation(run.id, result.structuredPayload?.testsPassed === true);
+        }
+        if (phase === "reviewing" && result.outcome === "changes_requested") {
+          database.setGoalRunValidation(run.id, false);
+        }
       });
       if (tracksWorkspaceProgress) {
         const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
@@ -1062,7 +1080,6 @@ export async function runTaskGoal(
         // Any new implementation invalidates the previous validation result.
         // The next testing phase must produce fresh evidence for the new code.
         lastValidationPassed = false;
-        database.setGoalRunValidation(run.id, false);
         phase = "implementing";
         excluded = new Set();
         continue;
@@ -1077,7 +1094,6 @@ export async function runTaskGoal(
         // evidence. Never infer a pass from a generic completed response.
         if (phase === "testing" && !options.validationRunner) {
           lastValidationPassed = result.structuredPayload?.testsPassed === true;
-          database.setGoalRunValidation(run.id, lastValidationPassed);
         }
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
@@ -1434,9 +1450,14 @@ function validationPassedForCurrentImplementation(
   if (latestValidation.status !== "completed") return false;
   if (latestValidation.provider === "maestro-validation") return true;
 
-  // Provider-backed evidence is persisted directly on goal_runs for new
-  // executions. Legacy provider-backed runs cannot be safely inferred here.
-  return null;
+  // New executions persist provider-backed evidence directly on goal_runs. A
+  // step-specific lookup keeps legacy/in-flight runs recoverable without
+  // scanning a capped task event window.
+  const event = database.findGoalStepCompletedEvent(runId, latestValidation.id);
+  const payload = event?.metadata.structuredPayload;
+  return typeof payload === "object"
+    && payload !== null
+    && (payload as Record<string, unknown>).testsPassed === true;
 }
 
 function nextPhaseAfter(phase: GoalPhase, dnaPhases?: GoalPhase[]): GoalPhase | null {
