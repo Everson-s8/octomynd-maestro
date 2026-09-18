@@ -1845,6 +1845,146 @@ describe("goal runner", () => {
     expect(database.getTask(task.id).status).not.toBe("awaiting_human");
     expect(database.listGoalSteps(run.id).some((step) => step.phase === "testing" && step.status === "failed")).toBe(true);
   });
+
+  it("blocks reviewer approval when required validation evidence is missing", async () => {
+    const projectDir = path.join(tempDir, "f01-review-project");
+    const worktreeDir = path.join(tempDir, "f01-review-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-review", path: projectDir });
+    const task = database.createTask("Deliver only after tests", "dashboard", "f01-review");
+    database.updateTaskWorktree({ id: task.id, status: "implementing", branchName: "task", worktreePath: worktreeDir });
+
+    const provider = new FakeProvider("codex", ["coding", "reviewing"], (request) => (
+      request.phase === "reviewing"
+        ? { ...completed("approved"), structuredPayload: { reviewDecision: "approved" } }
+        : completed("implemented")
+    ));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["implementing", "reviewing"],
+      phaseBudgets: { implementing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 reviewer shortcut regression"
+    };
+    let deliveryCalls = 0;
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "should-not-deliver", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(run.status).toBe("blocked");
+    expect(run.lastError).toContain("no passing validation");
+    expect(deliveryCalls).toBe(0);
+  });
+
+  it("rebuilds passing validation evidence when resuming a review", async () => {
+    const projectDir = path.join(tempDir, "f01-resume-project");
+    const worktreeDir = path.join(tempDir, "f01-resume-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-resume", path: projectDir });
+    const task = database.createTask("Resume after validation", "dashboard", "f01-resume");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const validationStep = database.createGoalStep(run.id, "testing", "maestro-validation");
+    database.finishGoalStep({ id: validationStep.id, status: "completed", summary: "tests passed", durationMs: 1 });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 1,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("codex", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["testing", "reviewing"],
+      phaseBudgets: { testing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 resume regression"
+    };
+    let deliveryCalls = 0;
+
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "resume-commit", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(resumed.status).toBe("completed");
+    expect(deliveryCalls).toBe(1);
+  });
+
+  it("invalidates persisted validation after a later implementation step", async () => {
+    const projectDir = path.join(tempDir, "f01-stale-project");
+    const worktreeDir = path.join(tempDir, "f01-stale-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "f01-stale", path: projectDir });
+    const task = database.createTask("Do not deliver stale validation", "dashboard", "f01-stale");
+    database.updateTaskWorktree({ id: task.id, status: "reviewing", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 8);
+    const validationStep = database.createGoalStep(run.id, "testing", "maestro-validation");
+    database.finishGoalStep({ id: validationStep.id, status: "completed", summary: "tests passed", durationMs: 1 });
+    const implementationStep = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({ id: implementationStep.id, status: "completed", summary: "changed implementation", durationMs: 1 });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "reviewing",
+      stepCount: 2,
+      lastError: null,
+      failureCategory: null
+    });
+
+    const provider = new FakeProvider("codex", ["reviewing"], () => ({
+      ...completed("approved"),
+      structuredPayload: { reviewDecision: "approved" }
+    }));
+    const taskDNA: TaskDNA = {
+      complexity: "medium",
+      phases: ["implementing", "reviewing"],
+      phaseBudgets: { implementing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: "F01 stale evidence regression"
+    };
+    let deliveryCalls = 0;
+
+    const resumed = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      existingRun: run,
+      taskDNA,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "should-not-deliver", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(resumed.status).toBe("blocked");
+    expect(resumed.lastError).toContain("no passing validation");
+    expect(deliveryCalls).toBe(0);
+  });
 });
 
 class FakeProvider implements AgentProvider {

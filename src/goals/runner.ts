@@ -110,7 +110,10 @@ export async function runTaskGoal(
   // budget exhaustion into a "deliver anyway" transition. When requireTests is
   // true and the test phase ran without a green result, delivery is refused and
   // the run blocks (resumable) instead of shipping unverified code.
-  let lastValidationPassed: boolean | null = null;
+  // Rebuild the evidence on resume instead of trusting in-memory state. A
+  // validation only remains valid until a later implementing step changes the
+  // workspace.
+  let lastValidationPassed = validationPassedForCurrentImplementation(database, run.id);
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
@@ -169,6 +172,22 @@ export async function runTaskGoal(
     // scheduler tick, retry, or resume must not create a second PR).
     if (currentRun.commitSha || currentRun.pullRequestUrl || currentRun.status === "completed") {
       return currentRun;
+    }
+
+    // F01: every delivery route, including reviewer approval and the
+    // no-review shortcut, must prove that the current implementation passed
+    // validation. Keeping this check here prevents a future shortcut from
+    // bypassing the budget-exhaustion guard below.
+    if (dna?.requireTests && lastValidationPassed !== true) {
+      return finishRun(
+        database,
+        currentRun,
+        "blocked",
+        phase,
+        stepCount,
+        "Tests are required, but the current implementation has no passing validation.",
+        task.id
+      );
     }
 
     const worktreePath = task.worktreePath;
@@ -1043,6 +1062,9 @@ export async function runTaskGoal(
             task.id
           );
         }
+        // Any new implementation invalidates the previous validation result.
+        // The next testing phase must produce fresh evidence for the new code.
+        lastValidationPassed = null;
         phase = "implementing";
         excluded = new Set();
         continue;
@@ -1052,6 +1074,13 @@ export async function runTaskGoal(
       // If the reviewer approved (or tests passed and no review needed),
       // treat this as completion regardless of remaining phases.
       if (result.outcome === "completed") {
+        // When no deterministic validation runner is configured, a provider
+        // completing the testing phase is the validation evidence available
+        // to this run. Preserve that contract for existing provider-backed
+        // test phases while keeping deterministic validation authoritative.
+        if (phase === "testing" && !options.validationRunner) {
+          lastValidationPassed = result.structuredPayload?.testsPassed === false ? false : true;
+        }
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
           // Reviewer approved — complete through the single delivery path.
@@ -1405,6 +1434,29 @@ function pauseRun(
 
 function sanitizeForRunSummary(text: string): string {
   return truncateForDisplay(redactSensitiveText(text), LAST_ERROR_MAX_LENGTH);
+}
+
+/**
+ * Reconstruct validation evidence for a resumed run. Validation is tied to the
+ * implementation generation: an implementing step created after the latest
+ * validation invalidates that validation, while a reviewing-only resume may
+ * safely retain it.
+ */
+function validationPassedForCurrentImplementation(
+  database: MaestroDatabase,
+  runId: number
+): boolean | null {
+  const steps = database.listGoalSteps(runId);
+  const latestValidation = [...steps]
+    .reverse()
+    .find((step) => step.phase === "testing" && step.provider === "maestro-validation");
+  if (!latestValidation) return null;
+
+  const implementationAfterValidation = steps.some((step) => (
+    step.phase === "implementing" && step.id > latestValidation.id
+  ));
+  if (implementationAfterValidation) return false;
+  return latestValidation.status === "completed";
 }
 
 function nextPhaseAfter(phase: GoalPhase, dnaPhases?: GoalPhase[]): GoalPhase | null {
