@@ -201,7 +201,7 @@ export async function runTaskGoal(
         stepCount,
         "Tests are required, but the current implementation has no passing validation.",
         task.id,
-        phase === "testing" ? "budget_exhausted" : undefined
+        phase === "testing" || lastValidationPassed === false ? "budget_exhausted" : undefined
       );
     }
 

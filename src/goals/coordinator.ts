@@ -268,7 +268,18 @@ export class GoalCoordinator {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
     }
     const reopened = this.database.withTransaction(() => {
-      const run = this.database.reopenGoalRun(runId);
+      const reopenedRun = this.database.reopenGoalRun(runId);
+      const steps = this.database.listGoalSteps(reopenedRun.id);
+      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
+      const run = this.database.updateGoalRun({
+        id: reopenedRun.id,
+        status: "running",
+        currentPhase: reopenedRun.currentPhase,
+        stepCount: reopenedRun.stepCount,
+        maxSteps: reopenedRun.maxSteps,
+        validationPassed: false,
+        phaseBudgetStartStepId: lastStepId
+      });
       this.database.updateTaskStatus(run.taskId, "changes_requested");
       this.database.addEvent({
         source: "human",
