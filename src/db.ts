@@ -1773,6 +1773,9 @@ export function createDatabase(databasePath: string) {
       const existing = this.getGoalRun(input.id);
       const now = new Date().toISOString();
       const waiting = input.status === "waiting_provider";
+      const validationPassed = input.validationPassed === undefined
+        ? existing.validationPassed ?? null
+        : input.validationPassed;
       updateGoalRunStatement.run({
         ...input,
         maxSteps: input.maxSteps ?? existing.maxSteps,
@@ -1782,11 +1785,7 @@ export function createDatabase(databasePath: string) {
         nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
         lastProvider: input.lastProvider ?? existing.lastProvider,
         now,
-        validationPassed: input.validationPassed === undefined
-          ? existing.validationPassed === undefined || existing.validationPassed === null
-            ? null
-            : existing.validationPassed ? 1 : 0
-          : input.validationPassed === null ? null : input.validationPassed ? 1 : 0,
+        validationPassed: validationPassed === null ? null : validationPassed ? 1 : 0,
         phaseBudgetStartStepId: input.phaseBudgetStartStepId === undefined
           ? existing.phaseBudgetStartStepId ?? null
           : input.phaseBudgetStartStepId,

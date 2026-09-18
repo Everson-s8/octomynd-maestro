@@ -152,8 +152,7 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) return run;
 
     const reopened = this.database.withTransaction(() => {
-      const steps = this.database.listGoalSteps(run.id);
-      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
+      const lastStepId = latestGoalStepId(this.database, run.id);
       const updated = this.database.updateGoalRun({
         id: run.id,
         status: "waiting_provider",
@@ -221,8 +220,7 @@ export class GoalCoordinator {
     }
     const newMaxSteps = elevatedMaxStepsAtLeast(run.maxSteps);
     const reopened = this.database.withTransaction(() => {
-      const steps = this.database.listGoalSteps(run.id);
-      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
+      const lastStepId = latestGoalStepId(this.database, run.id);
       if (newMaxSteps > run.maxSteps) {
         this.database.addEvent({
           source: "human",
@@ -269,8 +267,7 @@ export class GoalCoordinator {
     }
     const reopened = this.database.withTransaction(() => {
       const reopenedRun = this.database.reopenGoalRun(runId);
-      const steps = this.database.listGoalSteps(reopenedRun.id);
-      const lastStepId = steps.length > 0 ? steps[steps.length - 1].id : null;
+      const lastStepId = latestGoalStepId(this.database, reopenedRun.id);
       const run = this.database.updateGoalRun({
         id: reopenedRun.id,
         status: "running",
@@ -623,6 +620,11 @@ export class GoalCoordinator {
     }, delayMs);
     this.retryTimers.set(run.id, timer);
   }
+}
+
+function latestGoalStepId(database: MaestroDatabase, runId: number): number | null {
+  const steps = database.listGoalSteps(runId);
+  return steps[steps.length - 1]?.id ?? null;
 }
 
 function elapsedDurationMs(createdAt: string): number {

@@ -123,7 +123,13 @@ export async function runTaskGoal(
   // predate the durable validation state.
   let lastValidationPassed = run.validationPassed !== null && run.validationPassed !== undefined
     ? run.validationPassed
-    : validationPassedForCurrentImplementation(database, run.id);
+    : options.existingRun
+      ? validationPassedForCurrentImplementation(database, run.id)
+      : null;
+  const setValidationState = (passed: boolean | null) => {
+    lastValidationPassed = passed;
+    database.setGoalRunValidation(run.id, passed);
+  };
   // A resumed/retried run may start a fresh budget window for its current
   // phase. Historical steps remain visible and auditable, but must not consume
   // the continuation's entire phase budget before one new attempt can run.
@@ -193,6 +199,14 @@ export async function runTaskGoal(
     // validation. Keeping this check here prevents a future shortcut from
     // bypassing the budget-exhaustion guard below.
     if (dna?.requireTests && lastValidationPassed !== true) {
+      const steps = database.listGoalSteps(run.id);
+      const latestImplementationStepId = [...steps]
+        .reverse()
+        .find((step) => step.phase === "implementing")?.id ?? 0;
+      const validationBoundary = Math.max(phaseBudgetStartStepId ?? 0, latestImplementationStepId);
+      const hasValidationAttempt = steps.some((step) => (
+        step.phase === "testing" && step.id > validationBoundary
+      ));
       return finishRun(
         database,
         currentRun,
@@ -201,7 +215,7 @@ export async function runTaskGoal(
         stepCount,
         "Tests are required, but the current implementation has no passing validation.",
         task.id,
-        "budget_exhausted"
+        hasValidationAttempt ? "budget_exhausted" : undefined
       );
     }
 
@@ -444,15 +458,13 @@ export async function runTaskGoal(
               }
             }
           });
-          database.setGoalRunValidation(run.id, validation.status === "passed");
+          setValidationState(validation.status === "passed");
         });
         if (validation.status === "passed") {
-          lastValidationPassed = true;
           phase = "reviewing";
           excluded = new Set();
           continue;
         }
-        lastValidationPassed = false;
       }
       const completedWorkGraphStep = database.listGoalSteps(run.id).some((step) => (
         step.phase === "implementing" && step.provider === "work-graph" && step.status === "completed"
@@ -810,11 +822,17 @@ export async function runTaskGoal(
             }
           }
         });
-        if (phase === "testing" && !options.validationRunner && result.outcome === "completed") {
-          database.setGoalRunValidation(run.id, result.structuredPayload?.testsPassed === true);
+        if (
+          phase === "testing"
+          && !options.validationRunner
+          && ["completed", "failed", "blocked"].includes(result.outcome)
+        ) {
+          setValidationState(
+            result.outcome === "completed" && result.structuredPayload?.testsPassed === true
+          );
         }
         if (phase === "reviewing" && result.outcome === "changes_requested") {
-          database.setGoalRunValidation(run.id, false);
+          setValidationState(false);
         }
       });
       if (tracksWorkspaceProgress) {
@@ -1075,7 +1093,6 @@ export async function runTaskGoal(
         }
         // Any new implementation invalidates the previous validation result.
         // The next testing phase must produce fresh evidence for the new code.
-        lastValidationPassed = false;
         phase = "implementing";
         excluded = new Set();
         continue;
@@ -1085,12 +1102,6 @@ export async function runTaskGoal(
       // If the reviewer approved (or tests passed and no review needed),
       // treat this as completion regardless of remaining phases.
       if (result.outcome === "completed") {
-        // When no deterministic validation runner is configured, only an
-        // explicit provider-backed `testsPassed: true` result is validation
-        // evidence. Never infer a pass from a generic completed response.
-        if (phase === "testing" && !options.validationRunner) {
-          lastValidationPassed = result.structuredPayload?.testsPassed === true;
-        }
         const reviewDecision = result.structuredPayload?.reviewDecision;
         if (reviewDecision === "approved") {
           // Reviewer approved — complete through the single delivery path.
