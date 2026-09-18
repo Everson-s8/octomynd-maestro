@@ -109,8 +109,18 @@ describe("Antigravity provider", () => {
     })).toBe(true);
     expect(isSoftPermissionDenial({
       exitCode: 0,
+      stdout: "I couldn't execute the requested command.",
+      stderr: "jetski: permission denied in headless mode"
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
       stdout: "Completed successfully. The response explains the permission model.",
       stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not confirm the upstream API, so I completed the implementation.",
+      stderr: "a retried sub-tool reported access denied before succeeding"
     })).toBe(false);
     expect(isSoftPermissionDenial({
       exitCode: 1,

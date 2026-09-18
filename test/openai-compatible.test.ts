@@ -111,6 +111,7 @@ describe("OpenAICompatibleProvider", () => {
     const result = await provider.execute({ ...request(), capability: "conversation" });
     expect(result.outcome).toBe("failed");
     expect(result.failureCategory).toBe("invalid_output");
+    expect(result.retryable).toBe(false);
   });
 
   it("returns cancelled without calling the endpoint when the signal is already aborted (F03)", async () => {
@@ -148,6 +149,23 @@ describe("OpenAICompatibleProvider", () => {
     }));
     const provider = new OpenAICompatibleProvider(baseConfig);
     await expect(provider.health()).resolves.toMatchObject({ state: "auth_required" });
+  });
+
+  it("supports gateways that expose chat completions but not /models (F03)", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => "not found" })
+      .mockResolvedValueOnce({ ok: false, status: 405, text: async () => "method not allowed" });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await expect(provider.health()).resolves.toMatchObject({
+      state: "ready",
+      detail: expect.stringContaining("chat endpoint reachable")
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.test.local/v1/chat/completions",
+      expect.objectContaining({ method: "GET" })
+    );
   });
 
   it("uses the phase deadline when composing the request abort signal (F03)", async () => {

@@ -436,15 +436,12 @@ export function isSoftPermissionDenial(input: {
   stderr: string;
 }): boolean {
   if (input.exitCode !== 0 || !input.stdout.trim() || !input.stderr.trim()) return false;
-  const stdoutSaysItCouldNotAct = /(?:could\s+(?:not|n't)|unable\s+to|not\s+able\s+to|failed\s+to|cannot|can't|blocked\s+from)\b[\s\S]{0,160}\b(?:run|execute|complete|perform|write|command|tool|task|request|change)\b/i.test(input.stdout);
-  const stderrIsPermissionFailure = classifyFailure(input.stderr, {
-    exitCode: 0,
-    timedOut: false,
-    aborted: false,
-    breakerReason: null,
-    spawnErrorCode: null
-  }) === "permission_denied";
-  return stdoutSaysItCouldNotAct && stderrIsPermissionFailure;
+  const stdoutSaysItCouldNotAct = /(?:could(?:\s+not|n't)|unable\s+to|not\s+able\s+to|failed\s+to|cannot|can't)\s+(?:run|execute|complete|perform|write|invoke|apply|use|carry\s+out)\b|(?:blocked|denied)\s+(?:from|by)\s+(?:running|executing|writing|using)\b/i.test(input.stdout);
+  // Keep this narrower than classifyFailure's general-purpose diagnostic
+  // classifier. A successful response may mention a generic 403/access-denied
+  // example while the CLI's actual headless denial has these explicit markers.
+  const stderrIsHeadlessPermissionFailure = /permission\s+denied|permission\s+check\s+failed|user\s+denied\s+permission|auto[- ]denied|headless\s+mode\s+cannot\s+prompt|tool\s+required[^\n]{0,100}\bpermission\b/i.test(input.stderr);
+  return stdoutSaysItCouldNotAct && stderrIsHeadlessPermissionFailure;
 }
 
 export function buildAntigravityArgs(

@@ -78,15 +78,29 @@ export class OpenAICompatibleProvider implements AgentProvider {
       // this provider. This keeps a dead endpoint out of the ready pool while
       // avoiding a token-consuming chat completion just to check health.
       try {
-        const response = await fetch(`${endpoint}/models`, {
+        let response = await fetch(`${endpoint}/models`, {
           method: "GET",
           headers: { Authorization: `Bearer ${key}` },
           signal: AbortSignal.timeout(10_000)
         });
+        let usedChatFallback = false;
+        if (response.status === 404 || response.status === 405) {
+          // Minimal OpenAI-compatible gateways often implement only
+          // /chat/completions and intentionally omit /models. Probe that
+          // route without a body so health remains read-only and does not
+          // consume completion tokens.
+          usedChatFallback = true;
+          response = await fetch(`${endpoint}/chat/completions`, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(10_000)
+          });
+        }
         const body = response.ok ? "" : await response.text().catch(() => "");
         const detail = body.trim().slice(0, 180);
-        health = response.ok
-          ? { state: "ready", detail: `${this.label}: endpoint authenticated`, checkedAt: new Date().toISOString() }
+        const endpointReachable = response.ok || (usedChatFallback && (response.status === 400 || response.status === 405));
+        health = endpointReachable
+          ? { state: "ready", detail: usedChatFallback ? `${this.label}: chat endpoint reachable; models route not exposed` : `${this.label}: endpoint authenticated`, checkedAt: new Date().toISOString() }
           : response.status === 401 || response.status === 403
             ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}`, checkedAt: new Date().toISOString() }
             : response.status === 429
@@ -211,8 +225,8 @@ export class OpenAICompatibleProvider implements AgentProvider {
         this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
         return {
           outcome: "failed", summary: errorText, structuredPayload: null,
-          failureCategory: "invalid_output", retryable: true,
-          retryAfterMs: 15_000, artifactsProduced: [],
+          failureCategory: "invalid_output", retryable: false,
+          retryAfterMs: undefined, artifactsProduced: [],
           output: "", error: errorText, durationMs: Date.now() - startedAt,
           tokenUsage, model: selectedModel
         };
