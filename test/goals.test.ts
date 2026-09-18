@@ -1943,6 +1943,7 @@ describe("goal runner", () => {
 
     expect(run.status).toBe("blocked");
     expect(run.lastError).toContain("no passing validation");
+    expect(run.failureCategory).not.toBe("budget_exhausted");
     expect(deliveryCalls).toBe(0);
   });
 
