@@ -25,17 +25,21 @@ import { redactSensitiveText } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import { inspectProjectContext } from "./project-context.js";
 import { executeChatCommand, formatChatCommandEvidence, planChatCommand } from "./project-command.js";
+import { runGit } from "../git.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
 // normal conversational reply look like a provider failure and immediately
 // dropped the user into the terse deterministic fallback.
 const CHAT_PROVIDER_TIMEOUT_MS = 60_000;
+const CHAT_CODE_CHANGE_TIMEOUT_MS = 10 * 60_000;
 const HIGH_IMPACT_ACTIONS = new Set<GovernedChatAction["type"]>([
   "create_task",
   "cancel_task",
   "cancel_feature_plan",
   "resume_goal",
-  "unblock_provider"
+  "unblock_provider",
+  "code_change_worktree",
+  "code_change_task"
 ]);
 const FULL_ACCESS_ONLY_ACTIONS = new Set<GovernedChatAction["type"]>([
   "cancel_task",
@@ -185,7 +189,17 @@ export class OperationalChatService {
         text: String(request.action.payload?.text ?? "").trim()
       }
       : null;
-    const validActions = this.identifyGovernedActions(evidence, taskIntent?.text ? taskIntent : null, undefined, accessMode, locale);
+    const actionMessage = request.action.type.startsWith("code_change_")
+      ? String(request.action.payload?.text ?? "")
+      : undefined;
+    const validActions = this.identifyGovernedActions(
+      evidence,
+      taskIntent?.text ? taskIntent : null,
+      actionMessage,
+      accessMode,
+      locale,
+      { providerId: thread.providerId, model: thread.model }
+    );
     const action = validActions.find((a) => a.id === request.action.id && a.type === request.action.type);
 
     if (!action) {
@@ -219,6 +233,45 @@ export class OperationalChatService {
           const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
           await this.actionExecutor?.taskCreated?.(task.id);
           resultSummary = chatText(locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`);
+          break;
+        }
+
+        case "code_change_task": {
+          const text = String(action.payload?.text ?? "").trim();
+          const targetProjectKey = typeof action.payload?.projectKey === "string"
+            ? action.payload.projectKey
+            : projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : projectKey;
+          if (text.length < 4 || !targetProjectKey) {
+            throw new Error(chatText(locale, "A project and a code-change request are required.", "Um projeto e um pedido de alteração são necessários."));
+          }
+          const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
+          await this.actionExecutor?.taskCreated?.(task.id);
+          resultSummary = chatText(
+            locale,
+            `Task #${task.id} created for @${targetProjectKey}; the governed queue will prepare and validate it.`,
+            `Task #${task.id} criada para @${targetProjectKey}; a fila governada vai preparar e validar a alteração.`
+          );
+          break;
+        }
+
+        case "code_change_worktree": {
+          const text = String(action.payload?.text ?? "").trim();
+          const targetProjectKey = typeof action.payload?.projectKey === "string"
+            ? action.payload.projectKey
+            : projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : projectKey;
+          if (text.length < 4 || !targetProjectKey) {
+            throw new Error(chatText(locale, "A project and a code-change request are required.", "Um projeto e um pedido de alteração são necessários."));
+          }
+          const directResult = await this.executeCodeChangeInWorktree({
+            projectKey: targetProjectKey,
+            text,
+            providerId: typeof action.payload?.providerId === "string" ? action.payload.providerId as AgentProviderId : null,
+            model: typeof action.payload?.model === "string" ? action.payload.model : null,
+            origin,
+            locale
+          });
+          success = directResult.success;
+          resultSummary = directResult.summary;
           break;
         }
 
@@ -374,6 +427,125 @@ export class OperationalChatService {
 
   isHighImpactAction(action: GovernedChatAction): boolean {
     return HIGH_IMPACT_ACTIONS.has(action.type);
+  }
+
+  private async executeCodeChangeInWorktree(input: {
+    projectKey: string;
+    text: string;
+    providerId: AgentProviderId | null;
+    model: string | null;
+    origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null };
+    locale: ChatLocale;
+  }): Promise<{ success: boolean; summary: string }> {
+    if (!this.agentRegistry) {
+      throw new Error(chatText(input.locale, "Agent registry is unavailable.", "O registro de providers está indisponível."));
+    }
+
+    const lease = input.providerId
+      ? this.agentRegistry.acquireProvider
+        ? await this.agentRegistry.acquireProvider(input.providerId, "coding")
+        : null
+      : this.agentRegistry.acquire
+        ? await this.agentRegistry.acquire("coding")
+        : null;
+    if (!lease) {
+      throw new Error(chatText(
+        input.locale,
+        input.providerId
+          ? `The selected provider '${input.providerId}' is not ready for coding; no fallback was used.`
+          : "No ready coding provider is available.",
+        input.providerId
+          ? `O provider selecionado '${input.providerId}' não está pronto para codificação; nenhum fallback foi usado.`
+          : "Nenhum provider pronto para codificação está disponível."
+      ));
+    }
+
+    let taskId: number | null = null;
+    try {
+      const task = this.commands.createTask(this.originForCommand(input.origin), {
+        text: input.text,
+        projectKey: input.projectKey
+      });
+      taskId = task.id;
+      const prepared = this.commands.prepareTask(this.originForCommand(input.origin), task.id, this.worktreesRoot);
+      const project = this.database.getProjectByKey(input.projectKey);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), CHAT_CODE_CHANGE_TIMEOUT_MS);
+      let result;
+      try {
+        result = await lease.provider.execute({
+          runId: 0,
+          stepNumber: 1,
+          phase: "implementing",
+          capability: "coding",
+          task: prepared.task,
+          project,
+          previousSteps: [],
+          artifactsRoot: this.worktreesRoot,
+          humanFeedback: [
+            "Implement the user's requested code change in this prepared Maestro worktree.",
+            "Keep all changes inside the worktree and do not merge or push.",
+            `User request: ${input.text}`
+          ].join("\n"),
+          signal: controller.signal,
+          model: input.model ?? lease.model ?? null
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      lease.release(result);
+
+      const status = runGit(["status", "--short"], prepared.worktreePath, { timeoutMs: 5_000 });
+      const head = runGit(["rev-parse", "HEAD"], prepared.worktreePath, { timeoutMs: 5_000 });
+      const changed = (status.ok && status.stdout.trim().length > 0)
+        || (head.ok && prepared.task.baseCommitSha !== head.stdout.trim());
+      const completed = result.outcome === "completed" && changed;
+      this.database.updateTaskStatus(task.id, completed ? "awaiting_human" : "blocked");
+      this.database.addEvent({
+        source: input.origin.channel,
+        type: completed ? "chat.code_change_completed" : "chat.code_change_failed",
+        text: completed
+          ? `Provider ${lease.provider.id} changed Task #${task.id} in its prepared worktree.`
+          : `Provider ${lease.provider.id} did not produce a verified code change for Task #${task.id}.`,
+        userId: input.origin.userId,
+        username: input.origin.username,
+        taskId: task.id,
+        metadata: {
+          providerId: lease.provider.id,
+          model: input.model ?? lease.model ?? null,
+          outcome: result.outcome,
+          workspaceChanged: changed,
+          branchName: prepared.branchName,
+          output: result.output.slice(0, 2_000),
+          error: result.error
+        }
+      });
+      return {
+        success: completed,
+        summary: completed
+          ? chatText(input.locale, `Provider ${lease.provider.label} implemented the change in Task #${task.id} on branch ${prepared.branchName}. The worktree is preserved for review; nothing was merged.`, `O provider ${lease.provider.label} implementou a alteração na Task #${task.id} na branch ${prepared.branchName}. O worktree foi preservado para revisão; nada foi mergeado.`)
+          : chatText(input.locale, `The provider finished with '${result.outcome}', but Maestro could not verify a workspace change for Task #${task.id}; the task is blocked and the worktree was preserved.`, `O provider terminou com '${result.outcome}', mas o Maestro não conseguiu verificar uma alteração no workspace da Task #${task.id}; a task foi bloqueada e o worktree foi preservado.`)
+      };
+    } catch (error) {
+      lease.release({ retryable: false, summary: error instanceof Error ? error.message : "Code change failed." });
+      if (taskId !== null) {
+        this.database.updateTaskStatus(taskId, "blocked");
+        this.database.addEvent({
+          source: input.origin.channel,
+          type: "chat.code_change_failed",
+          text: `Direct provider code change failed for Task #${taskId}.`,
+          userId: input.origin.userId,
+          username: input.origin.username,
+          taskId,
+          metadata: { providerId: input.providerId, model: input.model, error: error instanceof Error ? error.message : "unknown" }
+        });
+      }
+      throw error;
+    }
+  }
+
+  private originForCommand(origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null }) {
+    return { channel: origin.channel, userId: origin.userId, username: origin.username } as const;
   }
 
   private resolveChatProject(projectKey: string): ProjectRecord {
@@ -618,7 +790,8 @@ export class OperationalChatService {
     taskIntent: TaskCreationIntent | null = null,
     userMessage?: string,
     accessMode: ChatAccessMode = "standard",
-    locale: ChatLocale = "en"
+    locale: ChatLocale = "en",
+    selection: { providerId: AgentProviderId | null; model: string | null } = { providerId: null, model: null }
   ): GovernedChatAction[] {
     const actions: GovernedChatAction[] = [];
 
@@ -634,6 +807,41 @@ export class OperationalChatService {
           description: chatText(locale, `Create a new task in @${targetProjectKey} with the requested objective.`, `Cria uma nova task em @${targetProjectKey} com o objetivo informado.`),
           targetId: targetProjectKey,
           payload: { text: taskIntent.text, projectKey: targetProjectKey }
+        });
+      }
+    }
+
+    if (userMessage && !taskIntent && isCodeChangeRequest(userMessage)) {
+      const targetProjectKey = evidence.project.key === GLOBAL_CHAT_PROJECT_KEY
+        ? this.database.getDefaultProject()?.key
+        : evidence.project.key;
+      const codingProviderReady = evidence.providers.some((provider) => (
+        provider.capabilities.includes("coding")
+        && provider.health.state === "ready"
+        && provider.control.mode === "enabled"
+      ));
+      if (targetProjectKey && codingProviderReady) {
+        const payload = {
+          text: userMessage.trim(),
+          projectKey: targetProjectKey,
+          providerId: selection.providerId,
+          model: selection.model
+        };
+        actions.push({
+          id: "code_change_worktree",
+          type: "code_change_worktree",
+          label: chatText(locale, "Implement in provider worktree", "Implementar no worktree do provider"),
+          description: chatText(locale, "Creates a reversible worktree and lets the selected provider edit it directly; no merge is automatic.", "Cria um worktree reversível e deixa o provider selecionado editar nele; nenhum merge é automático."),
+          targetId: targetProjectKey,
+          payload
+        });
+        actions.push({
+          id: "code_change_task",
+          type: "code_change_task",
+          label: chatText(locale, "Create governed task/goal", "Criar task/goal governada"),
+          description: chatText(locale, "Sends the request through Maestro's task, validation and review path.", "Envia o pedido pelo fluxo de task, validação e revisão do Maestro."),
+          targetId: targetProjectKey,
+          payload
         });
       }
     }
@@ -1108,6 +1316,17 @@ function isOperationalChatMessage(input: string): boolean {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
   return /\b(task|goal|provider|claude|codex|antigravity|gemini|copilot|feature\s*plan|worktree|quota|cota|log|erro|falha|bloquead|parad|trav|iniciar|comec|comecar|retomar|continuar|reiniciar|cancelar|habilitar|ativar|pausar|status|andamento|revisao|revisao|pull\s*request|\bpr\b)\b/.test(normalized);
+}
+
+function isCodeChangeRequest(input: string): boolean {
+  const normalized = input
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  const changeVerb = /\b(?:fix|repair|implement|modify|change|add|remove|refactor|edit|write|create|build|corrig|corrija|consert|implemente|implementa|altere|alterar|mude|modifique|adicione|remova|refatore|edite|crie|construa|faca|fazer)\b/.test(normalized);
+  const codeTarget = /\b(?:code|codigo|arquivo|file|bug|feature|funcionalidade|endpoint|componente|component|interface|script|projeto|project|api|ui|frontend|backend)\b/.test(normalized)
+    || /\.(?:ts|tsx|js|jsx|py|rs|go|java|c|cpp|css|html|json)\b/.test(normalized);
+  return changeVerb && codeTarget;
 }
 
 /**
