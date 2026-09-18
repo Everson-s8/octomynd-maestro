@@ -125,6 +125,16 @@ describe("OpenAICompatibleProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("returns timeout without calling the endpoint when the deadline already expired (F03)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), deadlineAt: Date.now() - 1 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("probes the endpoint before reporting it ready (F03)", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal("fetch", fetchMock);

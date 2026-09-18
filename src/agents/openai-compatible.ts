@@ -9,6 +9,13 @@ import type {
   CustomCliProviderConfig
 } from "./types.js";
 
+const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
+  "conversation",
+  "research",
+  "reviewing",
+  "improvement_reviewing"
+]);
+
 /**
  * OpenAI-compatible chat-completions provider.
  *
@@ -44,12 +51,6 @@ export class OpenAICompatibleProvider implements AgentProvider {
     // implement code or run tests, so drop those capabilities and keep only
     // the text-only ones the bridge can actually satisfy. A chat endpoint that
     // replies with prose is not a coding agent.
-    const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
-      "conversation",
-      "research",
-      "reviewing",
-      "improvement_reviewing"
-    ]);
     this.capabilities = new Set(
       config.capabilities.filter((capability) => TEXT_ONLY_CAPABILITIES.has(capability))
     );
@@ -131,6 +132,23 @@ export class OpenAICompatibleProvider implements AgentProvider {
         artifactsProduced: [],
         output: "",
         error: null,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: request.model ?? this.model ?? undefined
+      };
+    }
+    if (request.deadlineAt !== undefined && request.deadlineAt <= Date.now()) {
+      const errorText = `${this.label}: request deadline already expired.`;
+      return {
+        outcome: "failed",
+        summary: errorText,
+        structuredPayload: null,
+        failureCategory: "timeout",
+        retryable: isRetryableFailureCategory("timeout"),
+        retryAfterMs: retryAfterMsForFailure("timeout"),
+        artifactsProduced: [],
+        output: "",
+        error: errorText,
         durationMs: 0,
         tokenUsage: undefined,
         model: request.model ?? this.model ?? undefined

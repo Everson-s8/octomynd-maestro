@@ -114,6 +114,11 @@ describe("Antigravity provider", () => {
     })).toBe(true);
     expect(isSoftPermissionDenial({
       exitCode: 0,
+      stdout: "I could not execute the requested command because permission was denied.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
       stdout: "Completed successfully. The response explains the permission model.",
       stderr: ""
     })).toBe(false);
