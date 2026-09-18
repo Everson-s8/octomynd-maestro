@@ -211,6 +211,15 @@ async function routeRequest(
 ) {
   const url = new URL(request.url ?? "/", "http://localhost");
 
+  // Browser mutations must come from this local dashboard. The CLI is a
+  // non-browser client and intentionally has neither Origin nor Fetch Metadata
+  // headers, so that request shape remains supported without user setup.
+  if (isMutatingMethod(request.method) && !isAllowedDashboardMutation(request)) {
+    request.resume();
+    sendJson(response, 403, { error: "origin_not_allowed" });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/health") {
     sendJson(response, 200, {
       ok: true,
@@ -1995,6 +2004,67 @@ function sendCommandError(response: ServerResponse, error: unknown, errorCode: s
     error: errorCode,
     details: [error instanceof Error ? error.message : "Unknown error"]
   });
+}
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const SAME_SITE_FETCH_VALUES = new Set(["same-origin", "same-site"]);
+
+function isMutatingMethod(method: string | undefined): boolean {
+  return method !== undefined && MUTATING_METHODS.has(method.toUpperCase());
+}
+
+function isAllowedDashboardMutation(request: IncomingMessage): boolean {
+  const origin = headerValue(request.headers.origin);
+  const fetchSite = headerValue(request.headers["sec-fetch-site"])?.toLowerCase();
+
+  // A browser-like request that declares its site must be same-origin/site.
+  // This also rejects a cross-site request that attempts to omit Origin while
+  // retaining Fetch Metadata.
+  if (fetchSite && !SAME_SITE_FETCH_VALUES.has(fetchSite)) return false;
+
+  // The CLI has no browser headers. Keep it working, while treating any
+  // request that looks browser-generated but lacks Origin as untrusted.
+  if (!origin) return !fetchSite;
+
+  return isSameLocalDashboardOrigin(origin, request.headers.host);
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0]?.trim() || undefined;
+  return value?.trim() || undefined;
+}
+
+function isSameLocalDashboardOrigin(origin: string, hostHeader: string | string[] | undefined): boolean {
+  if (origin === "null") return false;
+  const requestHost = headerValue(hostHeader);
+  if (!requestHost) return false;
+
+  try {
+    const originUrl = new URL(origin);
+    const targetUrl = new URL(`http://${requestHost}`);
+    if (originUrl.protocol !== "http:" || originUrl.username || originUrl.password) return false;
+
+    const originHost = normalizeHostname(originUrl.hostname);
+    const targetHost = normalizeHostname(targetUrl.hostname);
+    const originPort = originUrl.port || "80";
+    const targetPort = targetUrl.port || "80";
+    if (originPort !== targetPort) return false;
+
+    return originHost === targetHost
+      || (isLoopbackHost(originHost) && isLoopbackHost(targetHost));
+  } catch {
+    return false;
+  }
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "::1";
 }
 
 function sendJson(response: ServerResponse, status: number, payload: unknown) {

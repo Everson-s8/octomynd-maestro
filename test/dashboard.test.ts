@@ -65,6 +65,49 @@ afterEach(() => {
 });
 
 describe("dashboard", () => {
+  it("rejects cross-origin mutations while preserving dashboard and CLI requests", async () => {
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/tasks`;
+    const body = JSON.stringify({ projectKey: "boo", text: "origin policy regression" });
+
+    try {
+      const crossOriginResponse = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example",
+          "Sec-Fetch-Site": "cross-site"
+        },
+        body
+      });
+      expect(crossOriginResponse.status).toBe(403);
+
+      const dashboardResponse = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: `http://127.0.0.1:${port}`,
+          "Sec-Fetch-Site": "same-origin"
+        },
+        body
+      });
+      expect(dashboardResponse.status).toBe(201);
+
+      const cliResponse = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body
+      });
+      expect(cliResponse.status).toBe(201);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
   it("distinguishes the dashboard-only process from the full Maestro runtime", async () => {
     const dashboardOnly = createDashboardServer({ config, database, staticRoot: tempDir });
     await new Promise<void>((resolve) => dashboardOnly.listen(0, "127.0.0.1", resolve));
