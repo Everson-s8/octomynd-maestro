@@ -115,13 +115,13 @@ export class OpenAICompatibleProvider implements AgentProvider {
         health = endpointReachable
           ? { state: "ready", detail: `${usedChatFallback ? `${this.label}: chat endpoint reachable; models route not exposed` : `${this.label}: endpoint authenticated`}${capabilityNote}`, checkedAt: new Date().toISOString() }
           : response.status === 401 || response.status === 403
-            ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}`, checkedAt: new Date().toISOString() }
+            ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}${capabilityNote}`, checkedAt: new Date().toISOString() }
             : response.status === 429
-              ? { state: "quota", detail: `${this.label}: endpoint rate limited the health probe.`, checkedAt: new Date().toISOString() }
-              : { state: "offline", detail: `${this.label}: health probe returned HTTP ${response.status}.`, checkedAt: new Date().toISOString() };
+              ? { state: "quota", detail: `${this.label}: endpoint rate limited the health probe.${capabilityNote}`, checkedAt: new Date().toISOString() }
+              : { state: "offline", detail: `${this.label}: health probe returned HTTP ${response.status}.${capabilityNote}`, checkedAt: new Date().toISOString() };
       } catch (cause) {
         const detail = cause instanceof Error ? cause.message : String(cause);
-        health = { state: "offline", detail: `${this.label}: health probe failed (${detail.slice(0, 140)}).`, checkedAt: new Date().toISOString() };
+        health = { state: "offline", detail: `${this.label}: health probe failed (${detail.slice(0, 140)}).${capabilityNote}`, checkedAt: new Date().toISOString() };
       }
     }
     this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
@@ -144,6 +144,23 @@ export class OpenAICompatibleProvider implements AgentProvider {
         artifactsProduced: [],
         output: "",
         error: null,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: request.model ?? this.model ?? undefined
+      };
+    }
+    if (!this.capabilities.has(request.capability)) {
+      const errorText = `${this.label}: capability \"${request.capability}\" is not supported by this text-only adapter.`;
+      return {
+        outcome: "failed",
+        summary: errorText,
+        structuredPayload: null,
+        failureCategory: "unsupported_capability",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: "",
+        error: errorText,
         durationMs: 0,
         tokenUsage: undefined,
         model: request.model ?? this.model ?? undefined

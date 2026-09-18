@@ -28,7 +28,7 @@ describe("OpenAICompatibleProvider", () => {
       runId: 1,
       stepNumber: 1,
       phase,
-      capability: "coding" as const,
+      capability: "research" as const,
       task: { id: 1, text: "t", projectKey: "p" } as any,
       project: { path: "/p" } as any,
       previousSteps: [],
@@ -99,6 +99,19 @@ describe("OpenAICompatibleProvider", () => {
     expect(provider.capabilities.has("testing")).toBe(false);
     expect(provider.capabilities.has("planning")).toBe(false);
     expect(provider.capabilities.has("conversation")).toBe(true);
+  });
+
+  it("rejects unsupported capabilities before making an HTTP call (F02)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "coding" });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCategory: "unsupported_capability",
+      retryable: false
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports dropped capabilities while provider setup is incomplete (F02)", async () => {
@@ -198,7 +211,10 @@ describe("OpenAICompatibleProvider", () => {
       text: async () => "invalid key"
     }));
     const provider = new OpenAICompatibleProvider(baseConfig);
-    await expect(provider.health()).resolves.toMatchObject({ state: "auth_required" });
+    await expect(provider.health()).resolves.toMatchObject({
+      state: "auth_required",
+      detail: expect.stringContaining("Ignored unsupported capabilities: planning, coding, testing")
+    });
   });
 
   it("supports gateways that expose chat completions but not /models (F03)", async () => {

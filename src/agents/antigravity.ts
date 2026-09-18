@@ -440,14 +440,24 @@ export function isSoftPermissionDenial(input: {
   if (!stdoutCouldNotActMatch || stdoutCouldNotActMatch.index === undefined) return false;
   const permissionFailurePattern = /permission(?:\s+was)?\s+denied|permission\s+check\s+failed|user\s+denied\s+permission|auto[- ]denied|headless\s+mode\s+cannot\s+prompt|tool\s+required[^\n]{0,100}\bpermission\b/i;
   const textBeforeDenial = input.stdout.slice(0, stdoutCouldNotActMatch.index);
-  const textAfterDenial = input.stdout.slice(stdoutCouldNotActMatch.index + stdoutCouldNotActMatch[0].length);
+  const actionEnd = stdoutCouldNotActMatch.index + stdoutCouldNotActMatch[0].length;
+  const textAfterDenial = input.stdout.slice(actionEnd);
+  const lineStart = Math.max(0, input.stdout.lastIndexOf("\n", stdoutCouldNotActMatch.index - 1) + 1);
+  const sentenceStart = Math.max(lineStart, input.stdout.lastIndexOf(".", stdoutCouldNotActMatch.index - 1) + 1);
+  const sentenceEndCandidates = [".", "!", "?", "\n"]
+    .map((delimiter) => input.stdout.indexOf(delimiter, actionEnd))
+    .filter((index) => index >= 0);
+  const sentenceEnd = sentenceEndCandidates.length > 0 ? Math.min(...sentenceEndCandidates) : input.stdout.length;
+  const actionSentence = input.stdout.slice(sentenceStart, sentenceEnd);
+  const directPermissionFollowup = /^(?:\s*(?:because|as|due\s+to|when|while|and)?\s*[,;:.-]?\s*)permission(?:\s+was)?\s+denied/i.test(textAfterDenial);
   const completedBeforeDenial = /\b(?:completed\s+successfully|successfully\s+completed|finished\s+the\s+(?:task|request|work)|(?:the\s+)?(?:task|request|work|implementation|changes)\s+(?:is|are)\s+(?:complete|completed|done|finished)|all\s+tests\s+pass(?:ed)?)\b/i.test(textBeforeDenial);
   const recoveredAfterDenial = /\b(?:so|but|then|and)\b[\s\S]{0,180}\b(?:completed|successfully|done|implemented|finished|applied|created|passed)\b/i.test(textAfterDenial);
+  const stdoutPermissionNearAction = permissionFailurePattern.test(actionSentence) || directPermissionFollowup;
   // Keep this narrower than classifyFailure's general-purpose diagnostic
   // classifier. A successful response may mention a generic 403/access-denied
   // example while the CLI's actual headless denial has these explicit markers.
   return !completedBeforeDenial && !recoveredAfterDenial
-    && (permissionFailurePattern.test(input.stderr) || permissionFailurePattern.test(input.stdout));
+    && (permissionFailurePattern.test(input.stderr) || stdoutPermissionNearAction);
 }
 
 export function buildAntigravityArgs(

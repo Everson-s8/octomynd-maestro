@@ -138,6 +138,11 @@ describe("Antigravity provider", () => {
       stderr: ""
     })).toBe(false);
     expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the full test suite in this sandbox, so I reviewed the diff manually. The new code handles permission denied errors when writing temp files.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
       exitCode: 1,
       stdout: "I could not execute the requested command.",
       stderr: "permission denied"

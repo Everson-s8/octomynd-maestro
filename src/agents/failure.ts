@@ -6,6 +6,7 @@ export type FailureCategory =
   | "capacity"
   | "output_limit"
   | "permission_denied"
+  | "unsupported_capability"
   | "environment_error"
   | "invalid_output"
   | "user_cancelled"
@@ -38,6 +39,7 @@ const CATEGORY_LABELS: Record<FailureCategory, string> = {
   capacity: "no provider with available capacity",
   output_limit: "output limit exceeded",
   permission_denied: "permission denied",
+  unsupported_capability: "unsupported capability",
   environment_error: "environment error",
   invalid_output: "invalid output",
   user_cancelled: "cancelled by the user",
