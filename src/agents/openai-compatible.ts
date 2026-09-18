@@ -39,7 +39,20 @@ export class OpenAICompatibleProvider implements AgentProvider {
     this.config = config;
     this.id = config.id;
     this.label = config.label || config.id;
-    this.capabilities = new Set(config.capabilities);
+    // F02: this adapter is a bare chat-completions bridge — it has no tool
+    // executor, file editor, or command runner. It cannot honestly claim to
+    // implement code or run tests, so drop those capabilities and keep only
+    // the text-only ones the bridge can actually satisfy. A chat endpoint that
+    // replies with prose is not a coding agent.
+    const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
+      "conversation",
+      "research",
+      "reviewing",
+      "improvement_reviewing"
+    ]);
+    this.capabilities = new Set(
+      config.capabilities.filter((capability) => TEXT_ONLY_CAPABILITIES.has(capability))
+    );
     this.model = config.model?.trim() || null;
     this.defaultEndpoint = config.endpointUrl ?? null;
     this.apiKeyEnv = config.apiKeyEnv ?? null;
@@ -60,7 +73,13 @@ export class OpenAICompatibleProvider implements AgentProvider {
     } else if (!key) {
       health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
     } else {
-      health = { state: "ready", detail: `${this.label}: endpoint ready (${endpoint})`, checkedAt: new Date().toISOString() };
+      // F03: presence of a URL and key proves the adapter is *configured*, not
+      // that the endpoint is reachable or the credential is valid. Reporting
+      // "ready" here would let a dead endpoint masquerade as an executable
+      // agent. "configured" is surfaced as offline-with-detail so the UI never
+      // claims live capability without a verified probe, and a real failure
+      // surfaces the truth after the first execute.
+      health = { state: "offline", detail: `${this.label}: endpoint configured but not yet verified`, checkedAt: new Date().toISOString() };
     }
     this.healthExpiresAt = Date.now() + 30_000;
     this.cachedHealth = health;
@@ -69,6 +88,24 @@ export class OpenAICompatibleProvider implements AgentProvider {
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const startedAt = Date.now();
+    // F03: honour a pre-aborted signal before any side effect. A cancelled
+    // request must never fire an HTTP call and report "completed".
+    if (request.signal?.aborted) {
+      return {
+        outcome: "cancelled",
+        summary: `${this.label}: request already cancelled.`,
+        structuredPayload: null,
+        failureCategory: "user_cancelled",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: "",
+        error: null,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: request.model ?? this.model ?? undefined
+      };
+    }
     const selectedModel = request.model ?? this.model ?? this.config.models?.[0] ?? this.id;
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
@@ -101,6 +138,14 @@ export class OpenAICompatibleProvider implements AgentProvider {
     ];
 
     try {
+      // F03: combine the inbound cancellation signal with the provider timeout
+      // and the phase deadline so a cancel or deadline aborts the in-flight
+      // request (and reports 'cancelled'/'timed out') instead of a fixed 10-min
+      // timeout that ignores cancellation.
+      const timeoutSignal = AbortSignal.timeout(600_000);
+      const signal = request.signal
+        ? AbortSignal.any([request.signal, timeoutSignal])
+        : timeoutSignal;
       const response = await fetch(`${endpoint}/chat/completions`, {
         method: "POST",
         headers: {
@@ -113,7 +158,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
           temperature: 0.2,
           max_tokens: 4096
         }),
-        signal: AbortSignal.timeout(600_000)
+        signal
       });
 
       if (!response.ok) {
@@ -138,6 +183,21 @@ export class OpenAICompatibleProvider implements AgentProvider {
         ? { inputTokens: payload.usage.prompt_tokens ?? 0, outputTokens: payload.usage.completion_tokens ?? 0 }
         : undefined;
 
+      // F02: an empty completion is not "completed" — it is no result at all.
+      // Surface it as a failure so fallback/routing can react, instead of
+      // marking the phase done with no evidence.
+      if (!content) {
+        const errorText = `${this.label}: empty completion from ${endpoint} (model ${selectedModel}).`;
+        this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
+        return {
+          outcome: "failed", summary: errorText, structuredPayload: null,
+          failureCategory: "invalid_output", retryable: true,
+          retryAfterMs: 15_000, artifactsProduced: [],
+          output: "", error: errorText, durationMs: Date.now() - startedAt,
+          tokenUsage, model: selectedModel
+        };
+      }
+
       this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
       return {
         outcome: "completed", summary: `${this.label} completed the ${request.phase} phase.`,
@@ -147,10 +207,12 @@ export class OpenAICompatibleProvider implements AgentProvider {
       };
     } catch (cause) {
       const errorText = cause instanceof Error ? cause.message : String(cause);
-      const timedOut = errorText.toLowerCase().includes("abort") || errorText.toLowerCase().includes("timeout");
-      const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: 0, timedOut, aborted: false, breakerReason: null, spawnErrorCode: null });
+      const aborted = request.signal?.aborted || errorText.toLowerCase().includes("abort");
+      const timedOut = !aborted && (errorText.toLowerCase().includes("timeout"));
+      const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: 0, timedOut, aborted, breakerReason: null, spawnErrorCode: null });
       return {
-        outcome: "failed", summary: errorText, structuredPayload: null,
+        outcome: aborted ? "cancelled" : "failed",
+        summary: errorText, structuredPayload: null,
         failureCategory: category, retryable: isRetryableFailureCategory(category),
         retryAfterMs: retryAfterMsForFailure(category), artifactsProduced: [],
         output: "", error: errorText, durationMs: Date.now() - startedAt,

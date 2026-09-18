@@ -248,6 +248,38 @@ export class AntigravityProvider implements AgentProvider {
       .filter(Boolean)
       .join("\n")
       .trim();
+    // F04: a soft denial (exit 0, non-empty stdout saying it could not act,
+    // stderr carrying a permission denial) must NOT be reported as success.
+    // Antigravity's headless contract explicitly allows denial with exit 0, so
+    // a green exit code is not by itself proof that the phase completed.
+    const softDenial = classifyFailure(diagnostics, {
+      provider: this.id,
+      phase: request.phase,
+      exitCode: processResult.exitCode,
+      timedOut: processResult.timedOut,
+      aborted: processResult.aborted,
+      breakerReason: processResult.breakerReason,
+      spawnErrorCode: processResult.spawnErrorCode
+    });
+    if (processResult.exitCode === 0 && softDenial === "permission_denied") {
+      const summary = buildFailureSummary(this.label, request.phase, "permission_denied");
+      this.cacheHealth({ state: "offline", detail: summary, checkedAt: new Date().toISOString() }, 30_000);
+      return {
+        outcome: "blocked",
+        summary,
+        structuredPayload: null,
+        failureCategory: "permission_denied",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: diagnostics,
+        error: diagnostics,
+        durationMs: processResult.durationMs,
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: selectedModel ?? "antigravity"
+      };
+    }
     if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
       const category = classifyFailure(diagnostics, {
         provider: this.id,

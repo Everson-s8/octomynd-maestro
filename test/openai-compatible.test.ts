@@ -94,4 +94,44 @@ describe("OpenAICompatibleProvider", () => {
     const [, init] = (fetch as any).mock.calls[0];
     expect(JSON.parse(init.body).model).toBe("m2");
   });
+
+  it("does not advertise coding/testing capabilities it cannot actually execute (F02)", () => {
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    // The bridge is chat-completions only; it must not claim implement/run-tests.
+    expect(provider.capabilities.has("coding")).toBe(false);
+    expect(provider.capabilities.has("testing")).toBe(false);
+    expect(provider.capabilities.has("planning")).toBe(false);
+    expect(provider.capabilities.has("conversation")).toBe(true);
+  });
+
+  it("returns failed (not completed) on an empty completion (F02)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "" } }] })
+    }));
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation" });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("invalid_output");
+  });
+
+  it("returns cancelled without calling the endpoint when the signal is already aborted (F03)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), signal: controller.signal });
+    expect(result.outcome).toBe("cancelled");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the endpoint as configured-but-unverified, not ready, before any probe (F03)", async () => {
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const health = await provider.health();
+    // URL + key are present but never probed; must not claim live "ready".
+    expect(health.state).toBe("offline");
+    expect(health.detail).toContain("not yet verified");
+  });
 });
