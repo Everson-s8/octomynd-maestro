@@ -159,6 +159,11 @@ describe("Antigravity provider", () => {
     })).toBe(true);
     expect(isSoftPermissionDenial({
       exitCode: 0,
+      stdout: "I could not run the tests because permission was denied. So I documented the limitation and the writeup is done.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
       stdout: "The formatter could not run because the binary is missing. Everything else works fine.",
       stderr: "permission denied writing to /var/lock (ignored, non-fatal)"
     })).toBe(false);
@@ -199,6 +204,15 @@ describe("Antigravity provider", () => {
       failureCategory: "permission_denied",
       retryable: false
     });
+
+    const review = await provider.reviewImprovements?.({
+      workspacePath: tempDir,
+      prompt: "Review the workspace.",
+      schema: {},
+      timeoutMs: 5_000,
+      maxOutputChars: 2_000
+    });
+    expect(review).toMatchObject({ status: "failed", retryable: false });
   });
 
   it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", { timeout: 20_000 }, async () => {

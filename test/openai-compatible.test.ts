@@ -163,6 +163,17 @@ describe("OpenAICompatibleProvider", () => {
     ]);
   });
 
+  it("invalidates cached health when providers are refreshed (F03)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await provider.health();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    provider.refresh();
+    await provider.health();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns failed (not completed) on an empty completion (F02)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,

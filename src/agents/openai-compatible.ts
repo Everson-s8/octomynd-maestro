@@ -67,6 +67,15 @@ export class OpenAICompatibleProvider implements AgentProvider {
     return this.model ? [this.model] : [this.id];
   }
 
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+  }
+
+  invalidateCaches(): void {
+    this.refresh();
+  }
+
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     if (this.healthProbePromise) return this.healthProbePromise;
