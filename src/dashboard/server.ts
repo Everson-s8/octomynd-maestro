@@ -1589,6 +1589,15 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/chat/providers") {
+    try {
+      sendJson(response, 200, { providers: await chatService.listConversationProviders() });
+    } catch (error) {
+      sendJson(response, 500, { error: "chat_providers_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/chat/threads") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
@@ -1603,6 +1612,23 @@ async function routeRequest(
   }
 
   const deleteChatThreadMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)$/);
+  const selectChatProviderMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)\/provider$/);
+  if (request.method === "PUT" && selectChatProviderMatch) {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
+    const providerId = typeof body.providerId === "string" && body.providerId.trim()
+      ? body.providerId.trim() as AgentProviderId
+      : null;
+    const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    try {
+      const thread = await chatService.selectThreadProvider(projectKey, Number(selectChatProviderMatch[1]), providerId, model);
+      sendJson(response, 200, { thread });
+    } catch (error) {
+      sendJson(response, 409, { error: "chat_provider_selection_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
   if (request.method === "DELETE" && deleteChatThreadMatch) {
     const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
     const threadId = Number(deleteChatThreadMatch[1]);
@@ -1641,6 +1667,8 @@ async function routeRequest(
     const threadId = body.threadId === undefined || body.threadId === null ? undefined : Number(body.threadId);
     const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
     const locale = body.locale === "pt-BR" ? "pt-BR" : "en";
+    const providerId = typeof body.providerId === "string" && body.providerId.trim() ? body.providerId.trim() as AgentProviderId : body.providerId === null ? null : undefined;
+    const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : body.model === null ? null : undefined;
 
     if (!message) {
       sendJson(response, 400, { error: "message_is_required" });
@@ -1654,7 +1682,9 @@ async function routeRequest(
         surface: "dashboard",
         message,
         accessMode,
-        locale
+        locale,
+        providerId,
+        model
       });
       sendJson(response, 200, chatResponse);
     } catch (error) {

@@ -546,6 +546,10 @@ describe("Unified Operational Chat (Task #52)", () => {
       expect(askData.projectKey).toBe("maestro");
       expect(askData.threadId).toEqual(expect.any(Number));
 
+      const chatProvidersRes = await fetch(`${baseUrl}/api/chat/providers`);
+      expect(chatProvidersRes.status).toBe(200);
+      expect((await chatProvidersRes.json()).providers).toEqual([]);
+
       const globalAskRes = await fetch(`${baseUrl}/api/chat/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -639,15 +643,19 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}): AgentProvider {
+}, options: { models?: string[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
   return {
     id,
     label: id,
     capabilities: new Set(["conversation"]),
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
-    execute: async () => ({
-      ...result,
-      durationMs: 1
-    })
+    models: async () => options.models ?? [],
+    execute: async (request) => {
+      options.onExecute?.(request);
+      return {
+        ...result,
+        durationMs: 1
+      };
+    }
   };
 }

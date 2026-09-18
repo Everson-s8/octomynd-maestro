@@ -3,6 +3,7 @@ import {
   DashboardProject,
   executeChatAction,
   fetchChatMessages,
+  fetchChatProviders,
   fetchChatThreads,
   GovernedChatAction,
   OperationalChatMessage,
@@ -11,6 +12,7 @@ import {
   GLOBAL_CHAT_PROJECT_KEY,
   createChatThread,
   deleteChatThread,
+  selectChatProvider,
   sendChatMessage
 } from "../api";
 import { formatRelative } from "../helpers";
@@ -39,9 +41,16 @@ export function OperationalChatConsole({
   const [actionExecuting, setActionExecuting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accessMode, setAccessMode] = useState<ChatAccessMode>("standard");
+  const [chatProviders, setChatProviders] = useState<import("../api").ChatProviderOption[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    void fetchChatProviders().then(setChatProviders).catch(() => setChatProviders([]));
+  }, []);
 
   useEffect(() => {
     setSelectedProjectKey((current) => {
@@ -62,6 +71,8 @@ export function OperationalChatConsole({
       setSelectedThreadId((current) => nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0].id);
       const selected = nextThreads.find((thread) => thread.id === selectedThreadId) ?? nextThreads[0];
       setAccessMode(selected.accessMode);
+      setSelectedProviderId(selected.providerId);
+      setSelectedModel(selected.model);
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
     }
@@ -109,7 +120,11 @@ export function OperationalChatConsole({
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
 
   useEffect(() => {
-    if (selectedThread) setAccessMode(selectedThread.accessMode);
+    if (selectedThread) {
+      setAccessMode(selectedThread.accessMode);
+      setSelectedProviderId(selectedThread.providerId);
+      setSelectedModel(selectedThread.model);
+    }
   }, [selectedThread]);
 
   const projectLabel = selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
@@ -182,7 +197,7 @@ export function OperationalChatConsole({
     setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale);
+      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale, selectedProviderId, selectedModel);
       await Promise.all([
         loadHistory(selectedProjectKey, selectedThreadId),
         loadThreads(selectedProjectKey)
@@ -192,6 +207,40 @@ export function OperationalChatConsole({
       setError(err instanceof Error ? err.message : translate("Unable to send the message."));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleProviderSelection = async (providerId: string) => {
+    if (!selectedThreadId || threadBusy) return;
+    const nextProviderId = providerId || null;
+    const provider = chatProviders.find((item) => item.id === nextProviderId);
+    const nextModel = nextProviderId ? provider?.currentModel ?? provider?.models?.[0] ?? null : null;
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, nextProviderId, nextModel);
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+      setSelectedProviderId(thread.providerId);
+      setSelectedModel(thread.model);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to select the chat provider."));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const handleModelSelection = async (model: string) => {
+    if (!selectedThreadId || !selectedProviderId || threadBusy) return;
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, model || null);
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+      setSelectedModel(thread.model);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to select the chat model."));
+    } finally {
+      setThreadBusy(false);
     }
   };
 
@@ -251,6 +300,28 @@ export function OperationalChatConsole({
             <option value="full">Full Access</option>
           </select>
         </label>
+        <label className="chat-access-picker" htmlFor="chat-provider-select">
+          <span>{translate("Provider")}</span>
+          <select id="chat-provider-select" value={selectedProviderId ?? ""} onChange={(e) => void handleProviderSelection(e.target.value)} disabled={!selectedThreadId || threadBusy}>
+            <option value="">{translate("Automatic routing")}</option>
+            {chatProviders.filter((provider) => provider.capabilities.includes("conversation")).map((provider) => (
+              <option key={provider.id} value={provider.id} disabled={provider.health.state !== "ready" || provider.control.mode !== "enabled"}>
+                {provider.label} · {provider.health.state === "ready" && provider.control.mode === "enabled" ? translate("ready") : provider.health.state}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedProviderId ? (
+          <label className="chat-access-picker" htmlFor="chat-model-select">
+            <span>{translate("Model")}</span>
+            <select id="chat-model-select" value={selectedModel ?? ""} onChange={(e) => void handleModelSelection(e.target.value)} disabled={threadBusy}>
+              <option value="">{translate("Provider default")}</option>
+              {(chatProviders.find((provider) => provider.id === selectedProviderId)?.models ?? []).map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       <div className="chat-workspace">
@@ -331,7 +402,7 @@ export function OperationalChatConsole({
                   <div key={msg.id} className={`chat-message ${isUser ? "is-user" : isSystem ? "is-system" : "is-maestro"}`}>
                     <div className="chat-avatar"><Icon name={isUser ? "hand" : isSystem ? "shield" : "ghost"} /></div>
                     <div className="chat-message-content">
-                      <span className="chat-message-label">{isUser ? translate("You") : isSystem ? translate("System") : "Maestro"}</span>
+                      <span className="chat-message-label">{isUser ? translate("You") : isSystem ? translate("System") : msg.providerId && msg.providerId !== "deterministic_engine" ? `${msg.providerId}${msg.model ? ` · ${msg.model}` : ""}` : "Maestro"}</span>
                       <div className="chat-bubble">{msg.messageText}</div>
                       {actions.length > 0 && !isUser ? (
                         <div className="chat-actions">
