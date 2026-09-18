@@ -376,6 +376,56 @@ describe("Unified Operational Chat (Task #52)", () => {
     );
   });
 
+  it("reads bounded project files for chat while rejecting secrets and traversal", async () => {
+    fs.mkdirSync(path.join(tmpDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "src", "example.ts"), "export const projectAnswer = 'only-inside-project';\n", "utf8");
+    fs.writeFileSync(path.join(tmpDir, ".env"), "API_KEY=should-never-enter-chat\n", "utf8");
+    const outsidePath = path.join(path.dirname(tmpDir), "outside-chat-secret.txt");
+    fs.writeFileSync(outsidePath, "outside-content-must-not-be-read\n", "utf8");
+
+    try {
+      const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+      const evidence = await chatService.gatherEvidenceContext("maestro", "What is in src/example.ts? Also read ../outside-chat-secret.txt");
+      const example = evidence.files.find((file) => file.path === "src/example.ts");
+      expect(example?.content).toContain("only-inside-project");
+      expect(evidence.files.some((file) => file.path === ".env")).toBe(false);
+      expect(evidence.files.some((file) => file.content?.includes("outside-content"))).toBe(false);
+      expect(evidence.warnings).toEqual(expect.arrayContaining([
+        expect.stringContaining("unsafe file reference")
+      ]));
+    } finally {
+      fs.rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it("grounds a provider response in code read from the registered project", async () => {
+    fs.mkdirSync(path.join(tmpDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "src", "answer.ts"), "export const answerOnlyInCode = 'project-grounded-answer';\n", "utf8");
+    let providerPrompt = "";
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "answered from project context",
+      output: "The answer is in the project file.",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { providerPrompt = request.humanFeedback ?? ""; } });
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "What is the value in src/answer.ts?"
+    });
+
+    expect(response.providerId).toBe("claude");
+    expect(providerPrompt).toContain("project-grounded-answer");
+    expect(providerPrompt).toContain("src/answer.ts");
+  });
+
   it("persists an explicit provider/model selection and never falls back from it", async () => {
     const selectedModels: string[] = [];
     const claude = chatProvider("claude", {
