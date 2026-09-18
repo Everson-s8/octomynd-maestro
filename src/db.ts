@@ -275,6 +275,10 @@ export type GoalRunRecord = {
   waitReason?: GoalWaitReason | null;
   nextRetryAt?: string | null;
   lastProvider?: string | null;
+  /** Explicit validation state for the current implementation generation. */
+  validationPassed?: boolean | null;
+  /** First step id excluded from the current resumable phase budget window. */
+  phaseBudgetStartStepId?: number | null;
   commitSha: string | null;
   pullRequestUrl: string | null;
   createdAt: string;
@@ -836,9 +840,9 @@ export function createDatabase(databasePath: string) {
   const createGoalRunStatement = db.prepare(`
     INSERT INTO goal_runs (
       task_id, status, current_phase, step_count, max_steps, last_error,
-      wait_reason, next_retry_at, last_provider, failure_category, created_at, updated_at, finished_at
+      wait_reason, next_retry_at, last_provider, failure_category, validation_passed, phase_budget_start_step_id, created_at, updated_at, finished_at
     )
-    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, NULL, @now, @now, NULL)
+    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, NULL, NULL, NULL, @now, @now, NULL)
   `);
   const updateGoalRunStatement = db.prepare(`
     UPDATE goal_runs
@@ -851,6 +855,8 @@ export function createDatabase(databasePath: string) {
         next_retry_at = @nextRetryAt,
         last_provider = @lastProvider,
         failure_category = @failureCategory,
+        validation_passed = @validationPassed,
+        phase_budget_start_step_id = @phaseBudgetStartStepId,
         updated_at = @now,
         finished_at = @finishedAt
     WHERE id = @id
@@ -859,6 +865,12 @@ export function createDatabase(databasePath: string) {
     UPDATE goal_runs
     SET commit_sha = @commitSha,
         pull_request_url = @pullRequestUrl,
+        updated_at = @now
+    WHERE id = @id
+  `);
+  const updateGoalValidationStatement = db.prepare(`
+    UPDATE goal_runs
+    SET validation_passed = @validationPassed,
         updated_at = @now
     WHERE id = @id
   `);
@@ -1356,6 +1368,20 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    findGoalStepCompletedEvent(runId: number, stepId: number): EventRecord | null {
+      const row = db
+        .prepare(`
+          SELECT * FROM events
+          WHERE type = 'goal.step_completed'
+            AND CAST(json_extract(metadata_json, '$.runId') AS INTEGER) = ?
+            AND CAST(json_extract(metadata_json, '$.stepId') AS INTEGER) = ?
+          ORDER BY id DESC
+          LIMIT 1
+        `)
+        .get(runId, stepId) as EventRow | undefined;
+      return row ? mapEvent(row) : null;
+    },
+
     listEventsForTask(taskId: number, limit = 500): EventRecord[] {
       const rows = db
         .prepare(`
@@ -1545,6 +1571,15 @@ export function createDatabase(databasePath: string) {
       return mapGoalRun(row);
     },
 
+    setGoalRunValidation(id: number, validationPassed: boolean | null): GoalRunRecord {
+      updateGoalValidationStatement.run({
+        id,
+        validationPassed: validationPassed === null ? null : validationPassed ? 1 : 0,
+        now: new Date().toISOString()
+      });
+      return this.getGoalRun(id);
+    },
+
     getLatestBlockedGoalRun(taskId: number): GoalRunRecord | null {
       const row = db
         .prepare("SELECT * FROM goal_runs WHERE task_id = ? AND status = 'blocked' ORDER BY id DESC LIMIT 1")
@@ -1732,10 +1767,15 @@ export function createDatabase(databasePath: string) {
       waitReason?: GoalWaitReason | null;
       nextRetryAt?: string | null;
       lastProvider?: string | null;
+      validationPassed?: boolean | null;
+      phaseBudgetStartStepId?: number | null;
     }): GoalRunRecord {
       const existing = this.getGoalRun(input.id);
       const now = new Date().toISOString();
       const waiting = input.status === "waiting_provider";
+      const validationPassed = input.validationPassed === undefined
+        ? existing.validationPassed ?? null
+        : input.validationPassed;
       updateGoalRunStatement.run({
         ...input,
         maxSteps: input.maxSteps ?? existing.maxSteps,
@@ -1745,6 +1785,10 @@ export function createDatabase(databasePath: string) {
         nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
         lastProvider: input.lastProvider ?? existing.lastProvider,
         now,
+        validationPassed: validationPassed === null ? null : validationPassed ? 1 : 0,
+        phaseBudgetStartStepId: input.phaseBudgetStartStepId === undefined
+          ? existing.phaseBudgetStartStepId ?? null
+          : input.phaseBudgetStartStepId,
         finishedAt: ["running", "waiting_provider"].includes(input.status) ? null : now
       });
       return this.getGoalRun(input.id);
@@ -3221,7 +3265,6 @@ function migrate(db: Database.Database) {
       ON events(CAST(json_extract(metadata_json, '$.taskId') AS INTEGER));
     CREATE INDEX IF NOT EXISTS idx_events_metadata_deleted_task_id
       ON events(CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER));
-
     /* F3: durable idempotency for work-intake submissions. The previous scheme
        scanned the last 200 events for task.created metadata — once the window
        rolled over the same demand created duplicate tasks. A dedicated column
@@ -3278,6 +3321,8 @@ function migrate(db: Database.Database) {
       last_error TEXT,
       commit_sha TEXT,
       pull_request_url TEXT,
+      validation_passed INTEGER,
+      phase_budget_start_step_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       finished_at TEXT,
@@ -3595,6 +3640,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "goal_runs", "next_retry_at", "TEXT");
   addColumnIfMissing(db, "goal_runs", "last_provider", "TEXT");
   addColumnIfMissing(db, "goal_runs", "failure_category", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "validation_passed", "INTEGER");
+  addColumnIfMissing(db, "goal_runs", "phase_budget_start_step_id", "INTEGER");
   addColumnIfMissing(db, "feature_plans", "revision", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "feature_plans", "priority", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "feature_plans", "is_paused", "INTEGER NOT NULL DEFAULT 0");
@@ -3628,6 +3675,11 @@ function migrate(db: Database.Database) {
       ON features(feature_plan_id) WHERE feature_plan_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_proposals_fingerprint
       ON improvement_proposals(fingerprint) WHERE fingerprint IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_goal_step_completed
+      ON events(
+        CAST(json_extract(metadata_json, '$.runId') AS INTEGER),
+        CAST(json_extract(metadata_json, '$.stepId') AS INTEGER)
+      ) WHERE type = 'goal.step_completed';
   `);
 }
 
@@ -3722,6 +3774,8 @@ type GoalRunRow = {
   wait_reason: GoalWaitReason | null;
   next_retry_at: string | null;
   last_provider: string | null;
+  validation_passed: number | null;
+  phase_budget_start_step_id: number | null;
   commit_sha: string | null;
   pull_request_url: string | null;
   created_at: string;
@@ -4386,6 +4440,8 @@ function mapGoalRun(row: GoalRunRow): GoalRunRecord {
     waitReason: row.wait_reason,
     nextRetryAt: row.next_retry_at,
     lastProvider: row.last_provider,
+    validationPassed: row.validation_passed === null ? null : Boolean(row.validation_passed),
+    phaseBudgetStartStepId: row.phase_budget_start_step_id,
     commitSha: row.commit_sha,
     pullRequestUrl: row.pull_request_url,
     createdAt: row.created_at,

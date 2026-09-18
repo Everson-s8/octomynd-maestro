@@ -109,11 +109,27 @@ export async function runAgentProcess(request: AgentProcessRequest): Promise<Age
       if (stopRequested) return;
       stopRequested = true;
       if (process.platform === "win32" && child.pid) {
+        // Terminate the root process immediately as well as asking taskkill to
+        // tear down its descendants. `taskkill` is asynchronous; waiting for
+        // it to report an error before calling child.kill() can leave the
+        // direct process alive long enough to hold a workspace/temp path open
+        // after the runner has already timed out.
         const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
           windowsHide: true,
           stdio: "ignore"
         });
-        killer.once("error", () => child.kill());
+        try {
+          if (!child.killed) child.kill();
+        } catch {
+          // The process may have exited between the PID check and kill.
+        }
+        killer.once("error", () => {
+          try {
+            if (!child.killed) child.kill();
+          } catch {
+            // Best-effort cleanup; the force-finish timer still bounds this.
+          }
+        });
       } else if (!child.killed) {
         child.kill("SIGTERM");
       }
