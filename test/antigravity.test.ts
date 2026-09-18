@@ -146,7 +146,17 @@ describe("Antigravity provider", () => {
       exitCode: 0,
       stdout: "I could not execute the legacy migration script directly because the sandbox reports permission denied for that path, so I documented the limitation in the README.",
       stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the full integration suite in this environment.",
+      stderr: "Starting agent in headless mode."
     })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the deployment script because permission was denied by the sandbox policy. So I stopped and reported the blocker to the team.",
+      stderr: ""
+    })).toBe(true);
     expect(isSoftPermissionDenial({
       exitCode: 0,
       stdout: "The formatter could not run because the binary is missing. Everything else works fine.",
