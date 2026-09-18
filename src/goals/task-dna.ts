@@ -139,6 +139,8 @@ export function computeTaskDNA(input: WorkIntakeDecision): TaskDNA {
 export function computeTaskDNAFromText(taskText: string): TaskDNA {
   const text = taskText.toLowerCase();
   const length = taskText.length;
+  const wordCount = taskText.trim() ? taskText.trim().split(/\s+/).length : 0;
+  const lineCount = taskText.split(/\r?\n/).length;
 
   // Heuristic signals
   const mentionsFeature = /\b(feature|implement|add|create|build|new)\b/i.test(text);
@@ -159,7 +161,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
       requireReview: false,
       requireTests: false,
       allowIteration: false,
-      rationale: "Trivial: short task text with fix keywords.",
+      rationale: "Offline estimate: short task text with a bounded fix shape.",
     };
   }
 
@@ -172,7 +174,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
       requireReview: true,
       requireTests: true,
       allowIteration: true,
-      rationale: `Large: length=${length}, actions=${actionCount}, feature=${mentionsFeature}, multiple=${mentionsMultiple}.`,
+      rationale: `Offline estimate: large structural signal (length=${length}, actions=${actionCount}, feature=${mentionsFeature}, multiple=${mentionsMultiple}).`,
     };
   }
 
@@ -185,7 +187,7 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
       requireReview: false,
       requireTests: true,
       allowIteration: false,
-      rationale: "Small: feature task with moderate description.",
+      rationale: "Offline estimate: compact feature-shaped request.",
     };
   }
 
@@ -198,11 +200,64 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
       requireReview: true,
       requireTests: true,
       allowIteration: true,
-      rationale: "Medium: architecture or multi-part task.",
+      rationale: "Offline estimate: architecture or multi-part shape.",
     };
   }
 
-  // Default: medium (safe fallback)
+  // Language-independent structural fallback. This is deliberately cheaper
+  // than the old medium default: uncertainty must not spend the customer's
+  // expensive budget. Model sizing is the normal path; this is only offline
+  // safety net behavior.
+  if (lineCount === 1 && wordCount <= 6 && length < 80) {
+    return {
+      complexity: "trivial",
+      phases: ["implementing"],
+      phaseBudgets: { implementing: 2 },
+      requireReview: false,
+      requireTests: false,
+      allowIteration: false,
+      rationale: "Offline estimate: one short bounded request."
+    };
+  }
+
+  if (lineCount <= 2 && wordCount <= 14 && length < 220 && !mentionsMultiple) {
+    return {
+      complexity: "small",
+      phases: ["implementing", "testing"],
+      phaseBudgets: { implementing: 3, testing: 2 },
+      requireReview: false,
+      requireTests: true,
+      allowIteration: false,
+      rationale: "Offline estimate: compact request with no structural evidence of multiple workstreams."
+    };
+  }
+
+  // Default: small (cheap uncertainty fallback)
+  return {
+    complexity: "small",
+    phases: ["implementing", "testing"],
+    phaseBudgets: { implementing: 3, testing: 2 },
+    requireReview: false,
+    requireTests: true,
+    allowIteration: false,
+    rationale: "Offline estimate: uncertain scope uses the cheaper small budget; model sizing should replace this when available.",
+  };
+}
+
+/**
+ * Compatibility fallback for coordinators created without the production
+ * semantic sizing callback (for example older integrations and test hosts).
+ * The runtime entrypoint always supplies sizeTaskWithModel, but preserving the
+ * previous medium default here avoids changing an existing caller's phase
+ * contract merely because it has not adopted the new callback yet.
+ */
+export function computeLegacyTaskDNAFromText(taskText: string): TaskDNA {
+  const dna = computeTaskDNAFromText(taskText);
+  if (!dna.rationale.startsWith("Offline estimate: one short")
+    && !dna.rationale.startsWith("Offline estimate: compact request")
+    && !dna.rationale.startsWith("Offline estimate: uncertain scope")) {
+    return dna;
+  }
   return {
     complexity: "medium",
     phases: ["planning", "implementing", "testing", "reviewing"],
@@ -210,6 +265,6 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
     requireReview: true,
     requireTests: true,
     allowIteration: true,
-    rationale: "Medium: default fallback.",
+    rationale: "Compatibility estimate: legacy caller did not provide semantic sizing."
   };
 }

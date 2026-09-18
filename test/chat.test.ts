@@ -427,6 +427,51 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(providerPrompt).toContain("src/answer.ts");
   });
 
+  it("lets the provider answer in an unlisted user language while keeping UI labels separate", async () => {
+    let providerPrompt = "";
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "answered in the user's language",
+      output: "こんにちは！プロジェクトについてお手伝いします。",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { providerPrompt = request.humanFeedback ?? ""; } });
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      uiLocale: "pt-BR",
+      message: "プロジェクトの状態を教えてください。"
+    });
+
+    expect(response.explanation).toContain("こんにちは");
+    expect(providerPrompt).toContain("Reply in the same language used by the user");
+    expect(providerPrompt).not.toContain("natural Brazilian Portuguese");
+    expect(providerPrompt).toContain("プロジェクトの状態を教えてください");
+  });
+
+  it("keeps governed UI labels in the selected interface language", async () => {
+    const task = database.createTask("Uma task bloqueada para testar idioma da interface", "test", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      uiLocale: "pt-BR",
+      accessMode: "full",
+      message: "Por que a task está bloqueada?"
+    });
+
+    expect(response.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "cancel_task", label: `Cancelar task #${task.id}` })
+    ]));
+  });
+
   it("persists only explicit project memory across new conversations", async () => {
     const prompts: string[] = [];
     const provider = chatProvider("claude", {

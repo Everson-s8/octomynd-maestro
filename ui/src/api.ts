@@ -1437,11 +1437,11 @@ export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, li
   return payload.messages;
 }
 
-export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", locale: ChatLocale = "en", providerId?: string | null, model?: string | null): Promise<OperationalChatResponse> {
+export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en", providerId?: string | null, model?: string | null): Promise<OperationalChatResponse> {
   const response = await fetch("/api/chat/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, threadId, message, accessMode, locale, providerId, model, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, message, accessMode, uiLocale, providerId, model, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
   if (!response.ok || !payload.explanation) {
@@ -1450,11 +1450,11 @@ export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, mess
   return payload;
 }
 
-export async function executeChatAction(projectKey = GLOBAL_CHAT_PROJECT_KEY, action: GovernedChatAction, threadId?: number, accessMode: ChatAccessMode = "standard", locale: ChatLocale = "en"): Promise<OperationalChatActionResult> {
+export async function executeChatAction(projectKey = GLOBAL_CHAT_PROJECT_KEY, action: GovernedChatAction, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en"): Promise<OperationalChatActionResult> {
   const response = await fetch("/api/chat/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, threadId, action, accessMode, locale, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, action, accessMode, uiLocale, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatActionResult & { error?: string; details?: string };
   if (!response.ok || payload.success === undefined) {

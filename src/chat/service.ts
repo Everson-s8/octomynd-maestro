@@ -27,6 +27,7 @@ import { ProjectRepositoryService, RepositorySyncError } from "../projects/repos
 import { inspectProjectContext } from "./project-context.js";
 import { executeChatCommand, formatChatCommandEvidence, planChatCommand } from "./project-command.js";
 import { runGit } from "../git.js";
+import type { TaskSizingResult } from "../goals/task-sizing.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
 // normal conversational reply look like a provider failure and immediately
@@ -68,6 +69,12 @@ export type OperationalChatServiceOptions = {
   worktreesRoot?: string;
   actionExecutor?: ChatActionExecutor;
   repositoryService?: ProjectRepositoryService;
+  taskSizer?: (input: {
+    task: import("../db.js").TaskRecord;
+    project: ProjectRecord;
+    providerId: AgentProviderId | null;
+    model: string | null;
+  }) => Promise<TaskSizingResult>;
 };
 
 export class OperationalChatService {
@@ -77,6 +84,7 @@ export class OperationalChatService {
   private readonly worktreesRoot: string;
   private readonly actionExecutor?: ChatActionExecutor;
   private readonly repositoryService: ProjectRepositoryService;
+  private readonly taskSizer?: OperationalChatServiceOptions["taskSizer"];
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
@@ -85,6 +93,7 @@ export class OperationalChatService {
     this.worktreesRoot = options.worktreesRoot ?? process.cwd();
     this.actionExecutor = options.actionExecutor;
     this.repositoryService = options.repositoryService ?? new ProjectRepositoryService(options.database);
+    this.taskSizer = options.taskSizer;
   }
 
   async ask(request: OperationalChatRequest): Promise<OperationalChatResponse> {
@@ -92,7 +101,7 @@ export class OperationalChatService {
     const project = this.resolveChatProject(projectKey);
     const thread = this.resolveThread(projectKey, request.threadId);
     const accessMode = normalizeAccessMode(request.accessMode ?? thread.accessMode);
-    const locale = normalizeChatLocale(request.locale);
+    const locale = normalizeChatLocale(request.uiLocale ?? request.locale);
     if (thread.accessMode !== accessMode) this.database.updateOperationalChatThreadAccessMode(thread.id, accessMode);
     const selectedProviderId = request.providerId === undefined
       ? thread.providerId
@@ -189,7 +198,7 @@ export class OperationalChatService {
     this.resolveChatProject(projectKey);
     const thread = this.resolveThread(projectKey, request.threadId);
     const accessMode = normalizeAccessMode(request.accessMode ?? thread.accessMode);
-    const locale = normalizeChatLocale(request.locale);
+    const locale = normalizeChatLocale(request.uiLocale ?? request.locale);
     if (thread.accessMode !== accessMode) this.database.updateOperationalChatThreadAccessMode(thread.id, accessMode);
 
     if (accessMode === "read_only") {
@@ -244,8 +253,12 @@ export class OperationalChatService {
             : projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : projectKey;
           if (!targetProjectKey) throw new Error(chatText(locale, "No project is registered to receive the task.", "Nenhum projeto está cadastrado para receber a task."));
           const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
+          const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
-          resultSummary = chatText(locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`);
+          resultSummary = [
+            chatText(locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`),
+            sizingNotice
+          ].filter(Boolean).join(" ");
           break;
         }
 
@@ -258,12 +271,13 @@ export class OperationalChatService {
             throw new Error(chatText(locale, "A project and a code-change request are required.", "Um projeto e um pedido de alteração são necessários."));
           }
           const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
+          const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
-          resultSummary = chatText(
+          resultSummary = [chatText(
             locale,
             `Task #${task.id} created for @${targetProjectKey}; the governed queue will prepare and validate it.`,
             `Task #${task.id} criada para @${targetProjectKey}; a fila governada vai preparar e validar a alteração.`
-          );
+          ), sizingNotice].filter(Boolean).join(" ");
           break;
         }
 
@@ -561,6 +575,34 @@ export class OperationalChatService {
     return { channel: origin.channel, userId: origin.userId, username: origin.username } as const;
   }
 
+  private async persistTaskSizing(task: import("../db.js").TaskRecord, payload?: Record<string, unknown>): Promise<string> {
+    if (!this.taskSizer || !task.projectKey) return "";
+    const project = this.database.getProjectByKey(task.projectKey);
+    const result = await this.taskSizer({
+      task,
+      project,
+      providerId: typeof payload?.providerId === "string" ? payload.providerId as AgentProviderId : null,
+      model: typeof payload?.model === "string" ? payload.model : null
+    });
+    this.database.saveTaskDNA({
+      taskId: task.id,
+      dna: result.dna,
+      source: result.source,
+      providerId: result.providerId,
+      model: result.model,
+      warning: result.warning
+    });
+    if (!result.warning) return "";
+    this.database.addEvent({
+      source: "chat",
+      type: "task.sizing_estimated",
+      text: result.warning,
+      taskId: task.id,
+      metadata: { source: result.source, providerId: result.providerId, model: result.model }
+    });
+    return result.warning;
+  }
+
   private resolveChatProject(projectKey: string): ProjectRecord {
     if (projectKey === GLOBAL_CHAT_PROJECT_KEY) return { ...GLOBAL_CHAT_PROJECT, path: this.worktreesRoot };
     const project = this.database.findProjectByKey(projectKey);
@@ -821,7 +863,12 @@ export class OperationalChatService {
           label: chatText(locale, "Create task", "Criar task"),
           description: chatText(locale, `Create a new task in @${targetProjectKey} with the requested objective.`, `Cria uma nova task em @${targetProjectKey} com o objetivo informado.`),
           targetId: targetProjectKey,
-          payload: { text: taskIntent.text, projectKey: targetProjectKey }
+          payload: {
+            text: taskIntent.text,
+            projectKey: targetProjectKey,
+            providerId: selection.providerId,
+            model: selection.model
+          }
         });
       }
     }
@@ -1025,7 +1072,7 @@ export class OperationalChatService {
                 "Talk like a normal LLM: greet the user, answer questions, explain ideas, and keep project context.",
                 `Current access mode: ${accessMode}. Available actions were filtered by Maestro's core.`,
                 "A casual message such as 'hi' should receive a casual, helpful reply — never a task report.",
-                `Reply in ${locale === "pt-BR" ? "natural Brazilian Portuguese" : "natural English"}, directly and humanely. Keep simple answers to roughly eight lines;`,
+                "Reply in the same language used by the user in USER QUESTION. The UI language is only for interface labels and governed system messages; never use it to override the user's conversation language. Do not translate unless the user asks. Keep simple answers to roughly eight lines;",
                 "do not force sections, lists, status, or actions when they were not requested.",
                 "When the user explicitly asks Maestro to perform an action, explain in one sentence what will happen and wait for the confirmation button; never execute it alone.",
                 "NEVER invent runtime state that is not present in the supplied evidence.",
