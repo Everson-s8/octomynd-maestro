@@ -104,6 +104,17 @@ export type ChatEvidenceWorkGraphFact = {
   failedNodes: number;
 };
 
+export type ChatEvidenceMemoryFact = {
+  id: number;
+  text: string;
+  kind: "decision" | "preference" | "constraint";
+  sourceThreadId: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OperationalChatMemoryRecord = ChatEvidenceMemoryFact;
+
 export type ChatEvidenceContext = {
   project: ProjectRecord;
   tasks: ChatEvidenceTaskFact[];
@@ -116,6 +127,7 @@ export type ChatEvidenceContext = {
   files: ChatProjectFileFact[];
   git: ChatProjectGitContext;
   commands: ChatCommandEvidence[];
+  memories: ChatEvidenceMemoryFact[];
   warnings: string[];
   repositoryState?: RepositoryState | null;
   summaryText: string;

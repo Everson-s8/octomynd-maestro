@@ -427,6 +427,53 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(providerPrompt).toContain("src/answer.ts");
   });
 
+  it("persists only explicit project memory across new conversations", async () => {
+    const prompts: string[] = [];
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "answered with project memory",
+      output: "Entendi o contexto salvo do projeto.",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { prompts.push(request.humanFeedback ?? ""); } });
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir
+    });
+
+    const firstThread = chatService.createThread("maestro", "Decisões");
+    const first = await chatService.ask({
+      projectKey: "maestro",
+      threadId: firstThread.id,
+      surface: "dashboard",
+      message: "Decidimos que o padrão do dashboard é inglês."
+    });
+    expect(first.evidence.memories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: "o padrão do dashboard é inglês", kind: "decision", sourceThreadId: firstThread.id })
+    ]));
+
+    const secondThread = chatService.createThread("maestro", "Nova conversa");
+    const second = await chatService.ask({
+      projectKey: "maestro",
+      threadId: secondThread.id,
+      surface: "dashboard",
+      message: "Qual decisão sobre o idioma do dashboard você lembra?"
+    });
+    expect(second.evidence.memories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: "o padrão do dashboard é inglês" })
+    ]));
+    expect(prompts.at(-1)).toContain("o padrão do dashboard é inglês");
+
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "read_only",
+      message: "Guarde na memória que a senha é secreta."
+    });
+    expect(database.listOperationalChatMemories("maestro")).toHaveLength(1);
+  });
+
   it("persists an explicit provider/model selection and never falls back from it", async () => {
     const selectedModels: string[] = [];
     const claude = chatProvider("claude", {
