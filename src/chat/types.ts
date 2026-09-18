@@ -3,6 +3,7 @@ import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { AgentProviderId } from "../agents/types.js";
 import type { RepositoryState } from "../projects/repository-service.js";
 import type { ChatProjectFileFact, ChatProjectGitContext } from "./project-context.js";
+import type { ChatCommandEvidence } from "./project-command.js";
 
 export type OperationalChatSurface = "dashboard" | "telegram";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
@@ -114,6 +115,7 @@ export type ChatEvidenceContext = {
   workGraphs: ChatEvidenceWorkGraphFact[];
   files: ChatProjectFileFact[];
   git: ChatProjectGitContext;
+  commands: ChatCommandEvidence[];
   warnings: string[];
   repositoryState?: RepositoryState | null;
   summaryText: string;
