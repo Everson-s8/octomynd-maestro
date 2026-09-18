@@ -6,6 +6,7 @@ export type FailureCategory =
   | "capacity"
   | "output_limit"
   | "permission_denied"
+  | "unsupported_capability"
   | "environment_error"
   | "invalid_output"
   | "user_cancelled"
@@ -38,6 +39,7 @@ const CATEGORY_LABELS: Record<FailureCategory, string> = {
   capacity: "no provider with available capacity",
   output_limit: "output limit exceeded",
   permission_denied: "permission denied",
+  unsupported_capability: "unsupported capability",
   environment_error: "environment error",
   invalid_output: "invalid output",
   user_cancelled: "cancelled by the user",
@@ -53,7 +55,7 @@ const OUTPUT_LIMIT_PATTERN = /output limit exceeded|max chars exceeded|output le
 const INVALID_OUTPUT_PATTERN = /saida invalida|invalid json|unexpected token|invalid output|failed to parse output|result schema/i;
 const QUOTA_PATTERN = /usage limit|session limit|rate limit|quota|credits exhausted|no credits|\b429\b|too many requests|resets?\s+\d/i;
 const AUTH_PATTERN = /\b401\b|unauthorized|authentication|not logged in|please run \/login|sign in|invalid credentials|login required/i;
-const PERMISSION_PATTERN = /\b403\b|permission denied|access denied|permission check failed|user denied permission|auto[- ]denied|cannot prompt for|required the ["']command["'] permission|headless mode cannot prompt|soft[- ]denied|permiss[aã]o negada|verifica[cç][aã]o de permiss[aã]o|\beacces\b|\beperm\b/i;
+export const PERMISSION_PATTERN = /\b403\b|permission(?:\s+was)?\s+denied|access denied|permission check failed|user denied permission|auto[- ]denied|cannot prompt for|required the ["']command["'] permission|headless mode cannot prompt|soft[- ]denied|permiss[aã]o negada|verifica[cç][aã]o de permiss[aã]o|\beacces\b|\beperm\b/i;
 const ENVIRONMENT_PATTERN = /cannot find module|command not found|\benoent\b|module_not_found|node_module/i;
 const OFFLINE_PATTERN = /connection refused|network is unreachable|\boffline\b|dns lookup failed|getaddrinfo\b|econnrefused|etimedout|socket hang up/i;
 const CAPACITY_PATTERN = /resource_exhausted|no provider available|all providers busy|overloaded|capacity|high demand|server is busy/i;
