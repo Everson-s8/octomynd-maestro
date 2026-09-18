@@ -152,6 +152,7 @@ export class GoalCoordinator {
     if (this.active.has(run.taskId)) return run;
 
     const reopened = this.database.withTransaction(() => {
+      const lastStepId = latestGoalStepId(this.database, run.id);
       const updated = this.database.updateGoalRun({
         id: run.id,
         status: "waiting_provider",
@@ -159,7 +160,10 @@ export class GoalCoordinator {
         stepCount: run.stepCount,
         maxSteps: run.maxSteps,
         lastError: null,
-        nextRetryAt: null
+        nextRetryAt: null,
+        // A human-initiated continuation gets a fresh budget window for the
+        // phase that was blocked, while preserving all historical steps.
+        phaseBudgetStartStepId: lastStepId
       });
       this.database.updateTaskStatus(run.taskId, run.currentPhase);
       this.database.addEvent({
@@ -216,6 +220,7 @@ export class GoalCoordinator {
     }
     const newMaxSteps = elevatedMaxStepsAtLeast(run.maxSteps);
     const reopened = this.database.withTransaction(() => {
+      const lastStepId = latestGoalStepId(this.database, run.id);
       if (newMaxSteps > run.maxSteps) {
         this.database.addEvent({
           source: "human",
@@ -238,7 +243,8 @@ export class GoalCoordinator {
         stepCount: run.stepCount,
         maxSteps: newMaxSteps,
         lastError: null,
-        nextRetryAt: null
+        nextRetryAt: null,
+        phaseBudgetStartStepId: lastStepId
       });
       this.database.updateTaskStatus(run.taskId, "planning");
       this.database.addEvent({
@@ -260,7 +266,17 @@ export class GoalCoordinator {
       throw new Error(`Task #${run.taskId} already has a goal running in this process.`);
     }
     const reopened = this.database.withTransaction(() => {
-      const run = this.database.reopenGoalRun(runId);
+      const reopenedRun = this.database.reopenGoalRun(runId);
+      const lastStepId = latestGoalStepId(this.database, reopenedRun.id);
+      const run = this.database.updateGoalRun({
+        id: reopenedRun.id,
+        status: "running",
+        currentPhase: reopenedRun.currentPhase,
+        stepCount: reopenedRun.stepCount,
+        maxSteps: reopenedRun.maxSteps,
+        validationPassed: false,
+        phaseBudgetStartStepId: lastStepId
+      });
       this.database.updateTaskStatus(run.taskId, "changes_requested");
       this.database.addEvent({
         source: "human",
@@ -604,6 +620,11 @@ export class GoalCoordinator {
     }, delayMs);
     this.retryTimers.set(run.id, timer);
   }
+}
+
+function latestGoalStepId(database: MaestroDatabase, runId: number): number | null {
+  const steps = database.listGoalSteps(runId);
+  return steps[steps.length - 1]?.id ?? null;
 }
 
 function elapsedDurationMs(createdAt: string): number {

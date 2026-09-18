@@ -90,12 +90,17 @@ export async function runTaskGoal(
     : undefined;
   const effectiveMaxSteps = dnaMaxSteps ?? options.maxSteps ?? 20;
 
-  const run = options.existingRun ?? database.createGoalRun(task.id, effectiveMaxSteps);
+  // Re-read resumed runs so durable state written after the scheduler handed
+  // us the run (notably validation evidence) is never shadowed by a stale
+  // in-memory record.
+  const run = options.existingRun
+    ? database.getGoalRun(options.existingRun.id)
+    : database.createGoalRun(task.id, effectiveMaxSteps);
   // ── DNA / Existing: preserve existing run maxSteps, keeping elevated maxSteps ─
   if (options.existingRun) {
     run.maxSteps = dnaMaxSteps
-      ? Math.max(options.existingRun.maxSteps, dnaMaxSteps)
-      : options.existingRun.maxSteps;
+      ? Math.max(run.maxSteps, dnaMaxSteps)
+      : run.maxSteps;
   }
   const isResume = run.status === "waiting_provider" || run.stepCount > 0;
   let currentRun = run;
@@ -105,6 +110,30 @@ export async function runTaskGoal(
     : (dna?.phases[0] as GoalPhase) ?? run.currentPhase;
   let stepCount = run.stepCount;
   let excluded = initialExcludedProviders(database, run, phase);
+  // ── F01 guard: track whether the last completed validation pass actually
+  // passed. A failed (or never-run) validation must never be masked by phase
+  // budget exhaustion into a "deliver anyway" transition. When requireTests is
+  // true and the test phase ran without a green result, delivery is refused and
+  // the run blocks (resumable) instead of shipping unverified code.
+  // Rebuild the evidence on resume instead of trusting in-memory state. A
+  // validation only remains valid until a later implementing step changes the
+  // workspace.
+  // The explicit column is authoritative for new runs, including `false`
+  // after a reviewer requests changes. Fall back only for legacy runs that
+  // predate the durable validation state.
+  let lastValidationPassed = run.validationPassed !== null && run.validationPassed !== undefined
+    ? run.validationPassed
+    : options.existingRun
+      ? validationPassedForCurrentImplementation(database, run.id)
+      : null;
+  const setValidationState = (passed: boolean | null) => {
+    lastValidationPassed = passed;
+    database.setGoalRunValidation(run.id, passed);
+  };
+  // A resumed/retried run may start a fresh budget window for its current
+  // phase. Historical steps remain visible and auditable, but must not consume
+  // the continuation's entire phase budget before one new attempt can run.
+  const phaseBudgetStartStepId = run.phaseBudgetStartStepId ?? null;
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
@@ -163,6 +192,31 @@ export async function runTaskGoal(
     // scheduler tick, retry, or resume must not create a second PR).
     if (currentRun.commitSha || currentRun.pullRequestUrl || currentRun.status === "completed") {
       return currentRun;
+    }
+
+    // F01: every delivery route, including reviewer approval and the
+    // no-review shortcut, must prove that the current implementation passed
+    // validation. Keeping this check here prevents a future shortcut from
+    // bypassing the budget-exhaustion guard below.
+    if (dna?.requireTests && lastValidationPassed !== true) {
+      const steps = database.listGoalSteps(run.id);
+      const latestImplementationStepId = [...steps]
+        .reverse()
+        .find((step) => step.phase === "implementing")?.id ?? 0;
+      const validationBoundary = Math.max(phaseBudgetStartStepId ?? 0, latestImplementationStepId);
+      const hasValidationAttempt = steps.some((step) => (
+        step.phase === "testing" && step.id > validationBoundary
+      ));
+      return finishRun(
+        database,
+        currentRun,
+        "blocked",
+        phase,
+        stepCount,
+        "Tests are required, but the current implementation has no passing validation.",
+        task.id,
+        hasValidationAttempt ? "budget_exhausted" : undefined
+      );
     }
 
     const worktreePath = task.worktreePath;
@@ -280,12 +334,16 @@ export async function runTaskGoal(
       // ── Phase budget check: DNA-aware ────────────────────
       // DNA phase budgets take precedence over circuit breaker defaults
       const dnaBudgetLimit = dnaPhaseBudgets[phase as GoalPhase];
-      const phaseStepCount = database.listGoalSteps(run.id).filter((s) => s.phase === phase).length;
+      const phaseStepCount = database.listGoalSteps(run.id).filter((s) => (
+        s.phase === phase
+          && (phaseBudgetStartStepId === null || s.id > phaseBudgetStartStepId)
+      )).length;
       if (dnaBudgetLimit !== undefined && phaseStepCount >= dnaBudgetLimit) {
         // Check if this is the last phase — if so, deliver
         const phaseIndex = dnaPhases.indexOf(phase as GoalPhase);
         if (phaseIndex === dnaPhases.length - 1) {
-          // Last phase budget exhausted — deliver via the single completion path.
+          // Delivery performs the F01 validation check centrally, so this
+          // budget path cannot diverge from reviewer and shortcut paths.
           return await deliverGoal();
         }
         // Not last phase — move to next DNA phase
@@ -400,6 +458,7 @@ export async function runTaskGoal(
               }
             }
           });
+          setValidationState(validation.status === "passed");
         });
         if (validation.status === "passed") {
           phase = "reviewing";
@@ -763,6 +822,18 @@ export async function runTaskGoal(
             }
           }
         });
+        if (
+          phase === "testing"
+          && !options.validationRunner
+          && ["completed", "failed", "blocked"].includes(result.outcome)
+        ) {
+          setValidationState(
+            result.outcome === "completed" && result.structuredPayload?.testsPassed === true
+          );
+        }
+        if (phase === "reviewing" && result.outcome === "changes_requested") {
+          setValidationState(false);
+        }
       });
       if (tracksWorkspaceProgress) {
         const previousCheckpoint = database.getLatestGoalCheckpoint(run.id);
@@ -1020,6 +1091,8 @@ export async function runTaskGoal(
             task.id
           );
         }
+        // Any new implementation invalidates the previous validation result.
+        // The next testing phase must produce fresh evidence for the new code.
         phase = "implementing";
         excluded = new Set();
         continue;
@@ -1033,29 +1106,6 @@ export async function runTaskGoal(
         if (reviewDecision === "approved") {
           // Reviewer approved — complete through the single delivery path.
           return await deliverGoal();
-        }
-        // DNA: if this is the last required phase and no review needed, deliver
-        if (dna && !dna.requireReview && phase === (dna.phases[dna.phases.length - 1])) {
-          // For trivial tasks with no changes, complete without PR
-          const wf = captureWorkspaceProgress(task.worktreePath);
-          const prevCp = database.getLatestGoalCheckpoint(run.id);
-          const hasFileChanges = wf !== null && prevCp !== null && wf !== prevCp.workspaceFingerprint;
-          if (dna.complexity === "trivial" && !hasFileChanges) {
-            database.updateTaskStatus(task.id, "done");
-            return database.withTransaction(() => {
-              const updated = database.updateGoalRun({
-                id: run.id, status: "completed", currentPhase: phase, stepCount
-              });
-              database.addEvent({
-                source: "maestro", type: "goal.completed",
-                text: `Goal #${run.id} completed (trivial, no changes needed).`,
-                taskId: task.id, metadata: { runId: run.id, stepCount, trivial: true }
-              });
-              return updated;
-            });
-          }
-          // Has changes or not trivial — continue to delivery (don't break here,
-          // the !nextPhase check below handles delivery)
         }
         // DNA: if tests passed and no review needed, deliver
         if (dna && !dna.requireReview && phase === "testing" && result.structuredPayload?.testsPassed) {
@@ -1382,6 +1432,39 @@ function pauseRun(
 
 function sanitizeForRunSummary(text: string): string {
   return truncateForDisplay(redactSensitiveText(text), LAST_ERROR_MAX_LENGTH);
+}
+
+/**
+ * Reconstruct validation evidence for a resumed run. Validation is tied to the
+ * implementation generation: an implementing step created after the latest
+ * validation invalidates that validation, while a reviewing-only resume may
+ * safely retain it.
+ */
+function validationPassedForCurrentImplementation(
+  database: MaestroDatabase,
+  runId: number
+): boolean | null {
+  const steps = database.listGoalSteps(runId);
+  const latestValidation = [...steps]
+    .reverse()
+    .find((step) => step.phase === "testing");
+  if (!latestValidation) return null;
+
+  const implementationAfterValidation = steps.some((step) => (
+    step.phase === "implementing" && step.id > latestValidation.id
+  ));
+  if (implementationAfterValidation) return false;
+  if (latestValidation.status !== "completed") return false;
+  if (latestValidation.provider === "maestro-validation") return true;
+
+  // New executions persist provider-backed evidence directly on goal_runs. A
+  // step-specific lookup keeps legacy/in-flight runs recoverable without
+  // scanning a capped task event window.
+  const event = database.findGoalStepCompletedEvent(runId, latestValidation.id);
+  const payload = event?.metadata.structuredPayload;
+  return typeof payload === "object"
+    && payload !== null
+    && (payload as Record<string, unknown>).testsPassed === true;
 }
 
 function nextPhaseAfter(phase: GoalPhase, dnaPhases?: GoalPhase[]): GoalPhase | null {
