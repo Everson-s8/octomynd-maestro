@@ -128,6 +128,11 @@ describe("Antigravity provider", () => {
       stderr: "a retried sub-tool reported access denied before succeeding"
     })).toBe(false);
     expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the script directly because permission was denied, so I used sudo and completed the task successfully.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
       exitCode: 1,
       stdout: "I could not execute the requested command.",
       stderr: "permission denied"

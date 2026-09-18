@@ -9,6 +9,7 @@ import type {
   CustomCliProviderConfig
 } from "./types.js";
 
+const HEALTH_PROBE_CACHE_TTL_MS = 120_000;
 const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
   "conversation",
   "research",
@@ -39,6 +40,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
   private readonly config: CustomCliProviderConfig;
   private readonly defaultEndpoint: string | null;
   private readonly apiKeyEnv: string | null;
+  private readonly ignoredCapabilities: AgentCapability[];
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
 
@@ -51,6 +53,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
     // implement code or run tests, so drop those capabilities and keep only
     // the text-only ones the bridge can actually satisfy. A chat endpoint that
     // replies with prose is not a coding agent.
+    this.ignoredCapabilities = config.capabilities.filter((capability) => !TEXT_ONLY_CAPABILITIES.has(capability));
     this.capabilities = new Set(
       config.capabilities.filter((capability) => TEXT_ONLY_CAPABILITIES.has(capability))
     );
@@ -68,11 +71,20 @@ export class OpenAICompatibleProvider implements AgentProvider {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
+    const capabilityNote = this.ignoredCapabilities.length > 0
+      ? ` Ignored unsupported capabilities: ${this.ignoredCapabilities.join(", ")}.`
+      : "";
     let health: AgentHealth;
     if (!endpoint) {
       health = { state: "offline", detail: `${this.label}: endpoint not configured`, checkedAt: new Date().toISOString() };
     } else if (!key) {
       health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
+    } else if (this.capabilities.size === 0) {
+      health = {
+        state: "offline",
+        detail: `${this.label}: no supported text capabilities are configured.${capabilityNote}`,
+        checkedAt: new Date().toISOString()
+      };
     } else {
       // F03: configuration is not evidence that the endpoint works. Probe the
       // read-only models route before allowing the registry to route work to
@@ -101,7 +113,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
         const detail = body.trim().slice(0, 180);
         const endpointReachable = response.ok || (usedChatFallback && (response.status === 400 || response.status === 405));
         health = endpointReachable
-          ? { state: "ready", detail: usedChatFallback ? `${this.label}: chat endpoint reachable; models route not exposed` : `${this.label}: endpoint authenticated`, checkedAt: new Date().toISOString() }
+          ? { state: "ready", detail: `${usedChatFallback ? `${this.label}: chat endpoint reachable; models route not exposed` : `${this.label}: endpoint authenticated`}${capabilityNote}`, checkedAt: new Date().toISOString() }
           : response.status === 401 || response.status === 403
             ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}`, checkedAt: new Date().toISOString() }
             : response.status === 429
@@ -112,7 +124,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
         health = { state: "offline", detail: `${this.label}: health probe failed (${detail.slice(0, 140)}).`, checkedAt: new Date().toISOString() };
       }
     }
-    this.healthExpiresAt = Date.now() + 30_000;
+    this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
     this.cachedHealth = health;
     return health;
   }
@@ -137,23 +149,6 @@ export class OpenAICompatibleProvider implements AgentProvider {
         model: request.model ?? this.model ?? undefined
       };
     }
-    if (request.deadlineAt !== undefined && request.deadlineAt <= Date.now()) {
-      const errorText = `${this.label}: request deadline already expired.`;
-      return {
-        outcome: "failed",
-        summary: errorText,
-        structuredPayload: null,
-        failureCategory: "timeout",
-        retryable: isRetryableFailureCategory("timeout"),
-        retryAfterMs: retryAfterMsForFailure("timeout"),
-        artifactsProduced: [],
-        output: "",
-        error: errorText,
-        durationMs: 0,
-        tokenUsage: undefined,
-        model: request.model ?? this.model ?? undefined
-      };
-    }
     const selectedModel = request.model ?? this.model ?? this.config.models?.[0] ?? this.id;
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
@@ -170,6 +165,23 @@ export class OpenAICompatibleProvider implements AgentProvider {
         retryAfterMs: retryAfterMsForFailure(category), artifactsProduced: [],
         output: "", error: errorText, durationMs: Date.now() - startedAt,
         tokenUsage: undefined, model: selectedModel
+      };
+    }
+    if (request.deadlineAt !== undefined && request.deadlineAt <= Date.now()) {
+      const errorText = `${this.label}: request deadline already expired.`;
+      return {
+        outcome: "failed",
+        summary: errorText,
+        structuredPayload: null,
+        failureCategory: "timeout",
+        retryable: isRetryableFailureCategory("timeout"),
+        retryAfterMs: retryAfterMsForFailure("timeout"),
+        artifactsProduced: [],
+        output: "",
+        error: errorText,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: selectedModel
       };
     }
 
