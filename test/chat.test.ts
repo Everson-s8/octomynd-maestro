@@ -376,6 +376,80 @@ describe("Unified Operational Chat (Task #52)", () => {
     );
   });
 
+  it("persists an explicit provider/model selection and never falls back from it", async () => {
+    const selectedModels: string[] = [];
+    const claude = chatProvider("claude", {
+      outcome: "completed",
+      summary: "Claude answered",
+      output: "Resposta do Claude selecionado.",
+      error: null,
+      retryable: false
+    }, { models: ["claude-sonnet-4"], onExecute: (request) => selectedModels.push(request.model ?? "") });
+    const codex = chatProvider("codex", {
+      outcome: "completed",
+      summary: "Codex answered",
+      output: "Resposta do Codex.",
+      error: null,
+      retryable: false
+    }, { models: ["gpt-5-codex"] });
+    const registry = new AgentRegistry([codex, claude]);
+    const chatService = new OperationalChatService({ database, agentRegistry: registry, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Seleção de provider");
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      message: "Explique o estado do projeto.",
+      providerId: "claude",
+      model: "claude-sonnet-4"
+    });
+
+    expect(response.providerId).toBe("claude");
+    expect(response.model).toBe("claude-sonnet-4");
+    expect(selectedModels).toEqual(["claude-sonnet-4"]);
+    expect(database.getOperationalChatThread(thread.id)).toEqual(expect.objectContaining({
+      providerId: "claude",
+      model: "claude-sonnet-4"
+    }));
+    expect((await chatService.getHistory("maestro", 20, thread.id)).at(-1)).toEqual(expect.objectContaining({
+      providerId: "claude",
+      model: "claude-sonnet-4"
+    }));
+
+    const failing = chatProvider("antigravity", {
+      outcome: "failed",
+      summary: "permission denied",
+      output: "",
+      error: "permission denied",
+      retryable: false
+    }, { models: ["gemini-3.7-flash-high"] });
+    const fallback = chatProvider("codex", {
+      outcome: "completed",
+      summary: "Codex answered",
+      output: "Fallback must not be used.",
+      error: null,
+      retryable: false
+    }, { models: ["gpt-5-codex"] });
+    const strictService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([failing, fallback]),
+      worktreesRoot: tmpDir
+    });
+    const strictThread = strictService.createThread("maestro", "Sem fallback");
+    const strictResponse = await strictService.ask({
+      projectKey: "maestro",
+      threadId: strictThread.id,
+      surface: "dashboard",
+      message: "Responda usando exatamente o provider escolhido.",
+      providerId: "antigravity",
+      model: "gemini-3.7-flash-high"
+    });
+    expect(strictResponse.providerId).toBe("antigravity");
+    expect(strictResponse.explanation).toContain("No fallback was used");
+    expect((await strictService.getHistory("maestro", 20, strictThread.id)).at(-1)?.providerId).toBe("antigravity");
+  });
+
   it("serves operational chat endpoints through dashboard server", async () => {
     const mockConfig: MaestroConfig = {
       projectName: "maestro",
@@ -421,6 +495,10 @@ describe("Unified Operational Chat (Task #52)", () => {
       expect(askData.explanation).toBeDefined();
       expect(askData.projectKey).toBe("maestro");
       expect(askData.threadId).toEqual(expect.any(Number));
+
+      const chatProvidersRes = await fetch(`${baseUrl}/api/chat/providers`);
+      expect(chatProvidersRes.status).toBe(200);
+      expect((await chatProvidersRes.json()).providers).toEqual([]);
 
       const globalAskRes = await fetch(`${baseUrl}/api/chat/ask`, {
         method: "POST",
@@ -515,15 +593,19 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}): AgentProvider {
+}, options: { models?: string[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
   return {
     id,
     label: id,
     capabilities: new Set(["conversation"]),
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
-    execute: async () => ({
-      ...result,
-      durationMs: 1
-    })
+    models: async () => options.models ?? [],
+    execute: async (request) => {
+      options.onExecute?.(request);
+      return {
+        ...result,
+        durationMs: 1
+      };
+    }
   };
 }

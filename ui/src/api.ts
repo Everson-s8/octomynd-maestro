@@ -1327,6 +1327,8 @@ export type OperationalChatThread = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  providerId: string | null;
+  model: string | null;
 };
 
 export type ChatAccessMode = "read_only" | "standard" | "full";
@@ -1342,7 +1344,20 @@ export type OperationalChatMessage = {
   messageText: string;
   evidenceJson?: string | null;
   actionTaken?: string | null;
+  providerId?: string | null;
+  model?: string | null;
   createdAt: string;
+};
+
+export type ChatProviderOption = {
+  id: string;
+  label: string;
+  capabilities: string[];
+  health: { state: string; detail: string; checkedAt: string };
+  state: string;
+  models?: string[];
+  currentModel?: string | null;
+  control: { mode: string; fallbackEnabled: boolean; model?: string | null };
 };
 
 export type OperationalChatResponse = {
@@ -1354,6 +1369,7 @@ export type OperationalChatResponse = {
   evidence: any;
   actions: GovernedChatAction[];
   providerId?: string;
+  model?: string | null;
   createdAt: string;
 };
 
@@ -1369,6 +1385,29 @@ export async function fetchChatThreads(projectKey = GLOBAL_CHAT_PROJECT_KEY): Pr
   const payload = await response.json() as { threads?: OperationalChatThread[]; error?: string };
   if (!response.ok || !payload.threads) throw new Error(payload.error || "Unable to load conversations.");
   return payload.threads;
+}
+
+export async function fetchChatProviders(): Promise<ChatProviderOption[]> {
+  const response = await fetch("/api/chat/providers", { cache: "no-store" });
+  const payload = await response.json() as { providers?: ChatProviderOption[]; error?: string; details?: string };
+  if (!response.ok || !payload.providers) throw new Error(payload.details || payload.error || "Unable to load chat providers.");
+  return payload.providers;
+}
+
+export async function selectChatProvider(
+  projectKey: string,
+  threadId: number,
+  providerId: string | null,
+  model: string | null
+): Promise<OperationalChatThread> {
+  const response = await fetch(`/api/chat/threads/${threadId}/provider`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, providerId, model })
+  });
+  const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
+  if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Unable to select the chat provider.");
+  return payload.thread;
 }
 
 export async function createChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, title = "Nova conversa", accessMode: ChatAccessMode = "standard"): Promise<OperationalChatThread> {
@@ -1398,11 +1437,11 @@ export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, li
   return payload.messages;
 }
 
-export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", locale: ChatLocale = "en"): Promise<OperationalChatResponse> {
+export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", locale: ChatLocale = "en", providerId?: string | null, model?: string | null): Promise<OperationalChatResponse> {
   const response = await fetch("/api/chat/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, threadId, message, accessMode, locale, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, message, accessMode, locale, providerId, model, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
   if (!response.ok || !payload.explanation) {

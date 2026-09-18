@@ -18,6 +18,8 @@ type OperationalChatMessageRow = {
   message_text: string;
   evidence_json: string | null;
   action_taken: string | null;
+  provider_id: string | null;
+  model: string | null;
   created_at: string;
 };
 
@@ -29,6 +31,8 @@ type OperationalChatThreadRow = {
   created_at: string;
   updated_at: string;
   message_count: number;
+  provider_id: string | null;
+  model: string | null;
 };
 
 export function migrateOperationalChatPersistence(db: Database.Database): void {
@@ -38,6 +42,8 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
       project_key TEXT NOT NULL,
       title TEXT NOT NULL,
       access_mode TEXT NOT NULL DEFAULT 'standard',
+      provider_id TEXT,
+      model TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -52,6 +58,8 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
       message_text TEXT NOT NULL,
       evidence_json TEXT,
       action_taken TEXT,
+      provider_id TEXT,
+      model TEXT,
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_operational_chat_messages_project
@@ -64,10 +72,22 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
   if (!threadColumns.some((column) => column.name === "access_mode")) {
     db.exec("ALTER TABLE operational_chat_threads ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'standard'");
   }
+  if (!threadColumns.some((column) => column.name === "provider_id")) {
+    db.exec("ALTER TABLE operational_chat_threads ADD COLUMN provider_id TEXT");
+  }
+  if (!threadColumns.some((column) => column.name === "model")) {
+    db.exec("ALTER TABLE operational_chat_threads ADD COLUMN model TEXT");
+  }
 
   const columns = db.prepare("PRAGMA table_info(operational_chat_messages)").all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === "thread_id")) {
     db.exec("ALTER TABLE operational_chat_messages ADD COLUMN thread_id INTEGER");
+  }
+  if (!columns.some((column) => column.name === "provider_id")) {
+    db.exec("ALTER TABLE operational_chat_messages ADD COLUMN provider_id TEXT");
+  }
+  if (!columns.some((column) => column.name === "model")) {
+    db.exec("ALTER TABLE operational_chat_messages ADD COLUMN model TEXT");
   }
 
   const legacyProjects = db.prepare(`
@@ -109,8 +129,8 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
 
 export function createOperationalChatPersistence(db: Database.Database) {
   const insertThreadStatement = db.prepare(`
-    INSERT INTO operational_chat_threads (project_key, title, access_mode, created_at, updated_at)
-    VALUES (@projectKey, @title, @accessMode, @createdAt, @updatedAt)
+    INSERT INTO operational_chat_threads (project_key, title, access_mode, provider_id, model, created_at, updated_at)
+    VALUES (@projectKey, @title, @accessMode, @providerId, @model, @createdAt, @updatedAt)
   `);
 
   const getThreadStatement = db.prepare(`
@@ -146,6 +166,11 @@ export function createOperationalChatPersistence(db: Database.Database) {
     SET access_mode = @accessMode, updated_at = @updatedAt
     WHERE id = @id
   `);
+  const updateThreadSelectionStatement = db.prepare(`
+    UPDATE operational_chat_threads
+    SET provider_id = @providerId, model = @model, updated_at = @updatedAt
+    WHERE id = @id
+  `);
 
   const deleteThreadMessagesStatement = db.prepare(`
     DELETE FROM operational_chat_messages WHERE thread_id = ?
@@ -156,9 +181,9 @@ export function createOperationalChatPersistence(db: Database.Database) {
 
   const insertMessageStatement = db.prepare(`
     INSERT INTO operational_chat_messages (
-      thread_id, project_key, surface, sender_role, message_text, evidence_json, action_taken, created_at
+      thread_id, project_key, surface, sender_role, message_text, evidence_json, action_taken, provider_id, model, created_at
     ) VALUES (
-      @threadId, @projectKey, @surface, @senderRole, @messageText, @evidenceJson, @actionTaken, @createdAt
+      @threadId, @projectKey, @surface, @senderRole, @messageText, @evidenceJson, @actionTaken, @providerId, @model, @createdAt
     )
   `);
 
@@ -196,6 +221,8 @@ export function createOperationalChatPersistence(db: Database.Database) {
         projectKey,
         title,
         accessMode: normalizeAccessMode(input.accessMode),
+        providerId: input.providerId ?? null,
+        model: normalizeModel(input.model),
         createdAt: now,
         updatedAt: now
       });
@@ -229,6 +256,18 @@ export function createOperationalChatPersistence(db: Database.Database) {
       return mapRowToThread(getThreadStatement.get(threadId) as OperationalChatThreadRow);
     },
 
+    updateOperationalChatThreadSelection(threadId: number, providerId: string | null, model: string | null): OperationalChatThreadRecord {
+      const thread = getThreadStatement.get(threadId) as OperationalChatThreadRow | undefined;
+      if (!thread) throw new Error("Chat thread not found.");
+      updateThreadSelectionStatement.run({
+        id: threadId,
+        providerId: providerId?.trim() || null,
+        model: normalizeModel(model),
+        updatedAt: new Date().toISOString()
+      });
+      return mapRowToThread(getThreadStatement.get(threadId) as OperationalChatThreadRow);
+    },
+
     getOrCreateOperationalChatThread(projectKey: string, title = "Conversa do projeto"): OperationalChatThreadRecord {
       const existing = (listThreadsStatement.all(projectKey.trim().toLowerCase()) as OperationalChatThreadRow[])[0];
       if (existing) return mapRowToThread(existing);
@@ -254,6 +293,8 @@ export function createOperationalChatPersistence(db: Database.Database) {
         messageText: input.messageText,
         evidenceJson: input.evidenceJson ?? null,
         actionTaken: input.actionTaken ?? null,
+        providerId: input.providerId ?? null,
+        model: normalizeModel(input.model),
         createdAt
       });
 
@@ -305,6 +346,8 @@ function mapRowToMessage(row: OperationalChatMessageRow): OperationalChatMessage
     messageText: row.message_text,
     evidenceJson: row.evidence_json,
     actionTaken: row.action_taken,
+    providerId: (row.provider_id as OperationalChatMessageRecord["providerId"]) ?? null,
+    model: row.model ?? null,
     createdAt: row.created_at
   };
 }
@@ -317,7 +360,9 @@ function mapRowToThread(row: OperationalChatThreadRow): OperationalChatThreadRec
     accessMode: normalizeAccessMode(row.access_mode),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    messageCount: Number(row.message_count ?? 0)
+    messageCount: Number(row.message_count ?? 0),
+    providerId: (row.provider_id as OperationalChatThreadRecord["providerId"]) ?? null,
+    model: row.model ?? null
   };
 }
 
@@ -328,4 +373,9 @@ function normalizeAccessMode(value?: string | null): ChatAccessMode {
 function normalizeThreadTitle(value?: string | null): string {
   const title = String(value ?? "").replace(/\s+/g, " ").trim();
   return title.slice(0, 80) || "Nova conversa";
+}
+
+function normalizeModel(value?: string | null): string | null {
+  const model = String(value ?? "").trim();
+  return model ? model.slice(0, 200) : null;
 }
