@@ -76,9 +76,9 @@ export class OpenAICompatibleProvider implements AgentProvider {
       : "";
     let health: AgentHealth;
     if (!endpoint) {
-      health = { state: "offline", detail: `${this.label}: endpoint not configured`, checkedAt: new Date().toISOString() };
+      health = { state: "offline", detail: `${this.label}: endpoint not configured.${capabilityNote}`, checkedAt: new Date().toISOString() };
     } else if (!key) {
-      health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
+      health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured.${capabilityNote}`, checkedAt: new Date().toISOString() };
     } else if (this.capabilities.size === 0) {
       health = {
         state: "offline",
@@ -290,7 +290,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
 
   private cacheHealth(state: "ready" | "auth_required" | "offline" | "quota", detail: string) {
     this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
-    this.healthExpiresAt = Date.now() + 30_000;
+    this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
   }
 }
 

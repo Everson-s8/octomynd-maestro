@@ -439,12 +439,14 @@ export function isSoftPermissionDenial(input: {
   const stdoutCouldNotActMatch = input.stdout.match(/(?:could(?:\s+not|n't)|unable\s+to|not\s+able\s+to|failed\s+to|cannot|can't)\s+(?:run|execute|complete|perform|write|invoke|apply|use|carry\s+out)\b|(?:blocked|denied)\s+(?:from|by)\s+(?:running|executing|writing|using)\b/i);
   if (!stdoutCouldNotActMatch || stdoutCouldNotActMatch.index === undefined) return false;
   const permissionFailurePattern = /permission(?:\s+was)?\s+denied|permission\s+check\s+failed|user\s+denied\s+permission|auto[- ]denied|headless\s+mode\s+cannot\s+prompt|tool\s+required[^\n]{0,100}\bpermission\b/i;
+  const textBeforeDenial = input.stdout.slice(0, stdoutCouldNotActMatch.index);
   const textAfterDenial = input.stdout.slice(stdoutCouldNotActMatch.index + stdoutCouldNotActMatch[0].length);
+  const completedBeforeDenial = /\b(?:completed\s+successfully|successfully\s+completed|finished\s+the\s+(?:task|request|work)|(?:the\s+)?(?:task|request|work|implementation|changes)\s+(?:is|are)\s+(?:complete|completed|done|finished)|all\s+tests\s+pass(?:ed)?)\b/i.test(textBeforeDenial);
   const recoveredAfterDenial = /\b(?:so|but|then|and)\b[\s\S]{0,180}\b(?:completed|successfully|done|implemented|finished|applied|created|passed)\b/i.test(textAfterDenial);
   // Keep this narrower than classifyFailure's general-purpose diagnostic
   // classifier. A successful response may mention a generic 403/access-denied
   // example while the CLI's actual headless denial has these explicit markers.
-  return !recoveredAfterDenial
+  return !completedBeforeDenial && !recoveredAfterDenial
     && (permissionFailurePattern.test(input.stderr) || permissionFailurePattern.test(input.stdout));
 }
 

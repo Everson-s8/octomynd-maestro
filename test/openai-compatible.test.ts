@@ -101,6 +101,35 @@ describe("OpenAICompatibleProvider", () => {
     expect(provider.capabilities.has("conversation")).toBe(true);
   });
 
+  it("reports dropped capabilities while provider setup is incomplete (F02)", async () => {
+    const provider = new OpenAICompatibleProvider({
+      ...baseConfig,
+      endpointUrl: undefined,
+      apiKeyEnv: "MISSING_API_KEY"
+    });
+    const health = await provider.health();
+    expect(health.detail).toContain("Ignored unsupported capabilities: planning, coding, testing");
+  });
+
+  it("keeps the post-execution health cache at the probe TTL (F03)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: "OK" } }] })
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new OpenAICompatibleProvider(baseConfig);
+      await provider.execute({ ...request(), capability: "conversation" });
+      vi.advanceTimersByTime(31_000);
+      await provider.health();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns failed (not completed) on an empty completion (F02)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,

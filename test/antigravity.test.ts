@@ -133,10 +133,47 @@ describe("Antigravity provider", () => {
       stderr: ""
     })).toBe(false);
     expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "Completed successfully; all tests passed. I could not write the changelog because permission was denied.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
       exitCode: 1,
       stdout: "I could not execute the requested command.",
       stderr: "permission denied"
     })).toBe(false);
+  });
+
+  it("classifies an exit-zero soft permission denial through execute() (F04)", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-denial-"));
+    tempPaths.push(tempDir);
+    const scriptPath = path.join(tempDir, process.platform === "win32" ? "agy.exe" : "agy");
+    if (process.platform === "win32") {
+      const source = [
+        "using System;",
+        "class P { static void Main() {",
+        "Console.WriteLine(\"I could not execute the requested command because permission was denied.\");",
+        "Console.Error.WriteLine(\"jetski: permission denied in headless mode\");",
+        "} }"
+      ].join(" ");
+      const sourceBase64 = Buffer.from(source, "utf8").toString("base64");
+      const { execSync } = await import("node:child_process");
+      execSync(`powershell -Command \"Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${sourceBase64}'))) -OutputAssembly '${scriptPath.replace(/'/g, "''")}' -OutputType ConsoleApplication\"`, { stdio: "ignore" });
+    } else {
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho 'I could not execute the requested command because permission was denied.'\necho 'jetski: permission denied in headless mode' >&2\n", { mode: 0o755 });
+    }
+
+    const provider = new AntigravityProvider({ executablePath: scriptPath, healthProbe: false });
+    const req = request("implementing", "coding");
+    req.task.worktreePath = tempDir;
+    req.project.path = tempDir;
+    const result = await provider.execute(req);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCategory: "permission_denied",
+      retryable: false
+    });
   });
 
   it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", { timeout: 20_000 }, async () => {
