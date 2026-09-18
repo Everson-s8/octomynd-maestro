@@ -6,6 +6,7 @@ import {
   ANTIGRAVITY_AUTH_PROBE_ARGS,
   AntigravityProvider,
   buildAntigravityArgs,
+  isSoftPermissionDenial,
   resolveAntigravityExecutable
 } from "../src/agents/antigravity.js";
 import type { AgentExecutionRequest } from "../src/agents/types.js";
@@ -56,12 +57,11 @@ describe("Antigravity provider", () => {
 
   it("omits --effort when the model id already encodes the effort in its suffix", () => {
     const coding = request("implementing", "coding");
-    // gemini-3.7-flash-high already pins the effort; --effort would conflict.
+    // gemini-3.7-flash-high already pins the reasoning effort.
     const withSuffix = buildAntigravityArgs(coding, "gemini-3.7-flash-high", "high");
     expect(withSuffix).toContain("--model");
     expect(withSuffix).toContain("gemini-3.7-flash-high");
     expect(withSuffix).not.toContain("--effort");
-    // vanilla model keeps the explicit --effort.
     const vanilla = buildAntigravityArgs(coding, "gemini-1.5-pro", "medium");
     expect(vanilla).toContain("--effort");
     expect(vanilla).toContain("medium");
@@ -101,6 +101,120 @@ describe("Antigravity provider", () => {
     });
   });
 
+  it("detects a headless soft permission denial without false positives (F04)", () => {
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not execute the requested command.",
+      stderr: "jetski: permission denied in headless mode"
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I couldn't execute the requested command.",
+      stderr: "jetski: permission denied in headless mode"
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not execute the requested command because permission was denied.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "Completed successfully. The response explains the permission model.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not confirm the upstream API, so I completed the implementation.",
+      stderr: "a retried sub-tool reported access denied before succeeding"
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the script directly because permission was denied, so I used sudo and completed the task successfully.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "Completed successfully; all tests passed. I could not write the changelog because permission was denied.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the full test suite in this sandbox, so I reviewed the diff manually. The new code handles permission denied errors when writing temp files.",
+      stderr: ""
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not execute the legacy migration script directly because the sandbox reports permission denied for that path, so I documented the limitation in the README.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the full integration suite in this environment.",
+      stderr: "Starting agent in headless mode."
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the deployment script because permission was denied by the sandbox policy. So I stopped and reported the blocker to the team.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "I could not run the tests because permission was denied. So I documented the limitation and the writeup is done.",
+      stderr: ""
+    })).toBe(true);
+    expect(isSoftPermissionDenial({
+      exitCode: 0,
+      stdout: "The formatter could not run because the binary is missing. Everything else works fine.",
+      stderr: "permission denied writing to /var/lock (ignored, non-fatal)"
+    })).toBe(false);
+    expect(isSoftPermissionDenial({
+      exitCode: 1,
+      stdout: "I could not execute the requested command.",
+      stderr: "permission denied"
+    })).toBe(false);
+  });
+
+  it("classifies an exit-zero soft permission denial through execute() (F04)", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-denial-"));
+    tempPaths.push(tempDir);
+    const scriptPath = path.join(tempDir, process.platform === "win32" ? "agy.exe" : "agy");
+    if (process.platform === "win32") {
+      const source = [
+        "using System;",
+        "class P { static void Main() {",
+        "Console.WriteLine(\"I could not execute the requested command because permission was denied.\");",
+        "Console.Error.WriteLine(\"jetski: permission denied in headless mode\");",
+        "} }"
+      ].join(" ");
+      const sourceBase64 = Buffer.from(source, "utf8").toString("base64");
+      const { execSync } = await import("node:child_process");
+      execSync(`powershell -Command \"Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${sourceBase64}'))) -OutputAssembly '${scriptPath.replace(/'/g, "''")}' -OutputType ConsoleApplication\"`, { stdio: "ignore" });
+    } else {
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho 'I could not execute the requested command because permission was denied.'\necho 'jetski: permission denied in headless mode' >&2\n", { mode: 0o755 });
+    }
+
+    const provider = new AntigravityProvider({ executablePath: scriptPath, healthProbe: false });
+    const req = request("implementing", "coding");
+    req.task.worktreePath = tempDir;
+    req.project.path = tempDir;
+    const result = await provider.execute(req);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCategory: "permission_denied",
+      retryable: false
+    });
+
+    const review = await provider.reviewImprovements?.({
+      workspacePath: tempDir,
+      prompt: "Review the workspace.",
+      schema: {},
+      timeoutMs: 5_000,
+      maxOutputChars: 2_000
+    });
+    expect(review).toMatchObject({ status: "failed", retryable: false });
+  });
+
   it("kills a hanging/silent CLI process after the configured inactivity window and classifies failure as retryable timeout", { timeout: 20_000 }, async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-agy-hang-"));
     tempPaths.push(tempDir);
@@ -117,9 +231,7 @@ describe("Antigravity provider", () => {
     const provider = new AntigravityProvider({
       executablePath: scriptPath,
       healthProbe: false,
-      executionLimits: {
-        inactivityTimeoutMs: 150
-      }
+      executionLimits: { inactivityTimeoutMs: 150 }
     });
 
     const req = request("implementing", "coding");

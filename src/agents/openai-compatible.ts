@@ -9,6 +9,13 @@ import type {
   CustomCliProviderConfig
 } from "./types.js";
 
+const HEALTH_PROBE_CACHE_TTL_MS = 120_000;
+const TEXT_ONLY_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<AgentCapability>([
+  "conversation",
+  "research",
+  "reviewing"
+]);
+
 /**
  * OpenAI-compatible chat-completions provider.
  *
@@ -32,14 +39,24 @@ export class OpenAICompatibleProvider implements AgentProvider {
   private readonly config: CustomCliProviderConfig;
   private readonly defaultEndpoint: string | null;
   private readonly apiKeyEnv: string | null;
+  private readonly ignoredCapabilities: AgentCapability[];
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
+  private healthProbePromise: Promise<AgentHealth> | null = null;
 
   constructor(config: CustomCliProviderConfig) {
     this.config = config;
     this.id = config.id;
     this.label = config.label || config.id;
-    this.capabilities = new Set(config.capabilities);
+    // F02: this adapter is a bare chat-completions bridge — it has no tool
+    // executor, file editor, or command runner. It cannot honestly claim to
+    // implement code or run tests, so drop those capabilities and keep only
+    // the text-only ones the bridge can actually satisfy. A chat endpoint that
+    // replies with prose is not a coding agent.
+    this.ignoredCapabilities = config.capabilities.filter((capability) => !TEXT_ONLY_CAPABILITIES.has(capability));
+    this.capabilities = new Set(
+      config.capabilities.filter((capability) => TEXT_ONLY_CAPABILITIES.has(capability))
+    );
     this.model = config.model?.trim() || null;
     this.defaultEndpoint = config.endpointUrl ?? null;
     this.apiKeyEnv = config.apiKeyEnv ?? null;
@@ -50,25 +67,125 @@ export class OpenAICompatibleProvider implements AgentProvider {
     return this.model ? [this.model] : [this.id];
   }
 
+  refresh(): void {
+    this.cachedHealth = null;
+    this.healthExpiresAt = 0;
+  }
+
+  invalidateCaches(): void {
+    this.refresh();
+  }
+
   async health(): Promise<AgentHealth> {
     if (this.cachedHealth && Date.now() < this.healthExpiresAt) return this.cachedHealth;
+    if (this.healthProbePromise) return this.healthProbePromise;
+    const probePromise = this.probeHealth();
+    this.healthProbePromise = probePromise;
+    try {
+      return await probePromise;
+    } finally {
+      if (this.healthProbePromise === probePromise) this.healthProbePromise = null;
+    }
+  }
+
+  private async probeHealth(): Promise<AgentHealth> {
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
+    const capabilityNote = this.ignoredCapabilities.length > 0
+      ? ` Ignored unsupported capabilities: ${this.ignoredCapabilities.join(", ")}.`
+      : "";
     let health: AgentHealth;
     if (!endpoint) {
-      health = { state: "offline", detail: `${this.label}: endpoint not configured`, checkedAt: new Date().toISOString() };
+      health = { state: "offline", detail: `${this.label}: endpoint not configured.${capabilityNote}`, checkedAt: new Date().toISOString() };
     } else if (!key) {
-      health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured`, checkedAt: new Date().toISOString() };
+      health = { state: "auth_required", detail: `${this.label}: API key (${this.apiKeyEnv ?? "?"}) not configured.${capabilityNote}`, checkedAt: new Date().toISOString() };
+    } else if (this.capabilities.size === 0) {
+      health = {
+        state: "offline",
+        detail: `${this.label}: no supported text capabilities are configured.${capabilityNote}`,
+        checkedAt: new Date().toISOString()
+      };
     } else {
-      health = { state: "ready", detail: `${this.label}: endpoint ready (${endpoint})`, checkedAt: new Date().toISOString() };
+      // F03: configuration is not evidence that the endpoint works. Probe the
+      // read-only models route before allowing the registry to route work to
+      // this provider. This keeps a dead endpoint out of the ready pool while
+      // avoiding a token-consuming chat completion just to check health.
+      try {
+        let response = await fetch(`${endpoint}/models`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${key}` },
+          signal: AbortSignal.timeout(10_000)
+        });
+        let usedChatFallback = false;
+        if (response.status === 404 || response.status === 405) {
+          // Minimal OpenAI-compatible gateways often implement only
+          // /chat/completions and intentionally omit /models. Probe that
+          // route without a body so health remains read-only and does not
+          // consume completion tokens.
+          usedChatFallback = true;
+          response = await fetch(`${endpoint}/chat/completions`, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(10_000)
+          });
+        }
+        const body = response.ok ? "" : await response.text().catch(() => "");
+        const detail = body.trim().slice(0, 180);
+        const endpointReachable = response.ok || (usedChatFallback && (response.status === 400 || response.status === 405));
+        health = endpointReachable
+          ? { state: "ready", detail: `${usedChatFallback ? `${this.label}: chat endpoint reachable; models route not exposed` : `${this.label}: endpoint authenticated`}${capabilityNote}`, checkedAt: new Date().toISOString() }
+          : response.status === 401 || response.status === 403
+            ? { state: "auth_required", detail: `${this.label}: endpoint rejected the API key${detail ? ` (${detail})` : "."}${capabilityNote}`, checkedAt: new Date().toISOString() }
+            : response.status === 429
+              ? { state: "quota", detail: `${this.label}: endpoint rate limited the health probe.${capabilityNote}`, checkedAt: new Date().toISOString() }
+              : { state: "offline", detail: `${this.label}: health probe returned HTTP ${response.status}.${capabilityNote}`, checkedAt: new Date().toISOString() };
+      } catch (cause) {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        health = { state: "offline", detail: `${this.label}: health probe failed (${detail.slice(0, 140)}).${capabilityNote}`, checkedAt: new Date().toISOString() };
+      }
     }
-    this.healthExpiresAt = Date.now() + 30_000;
+    this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
     this.cachedHealth = health;
     return health;
   }
 
   async execute(request: AgentExecutionRequest): Promise<AgentExecutionResult> {
     const startedAt = Date.now();
+    // F03: honour a pre-aborted signal before any side effect. A cancelled
+    // request must never fire an HTTP call and report "completed".
+    if (request.signal?.aborted) {
+      return {
+        outcome: "cancelled",
+        summary: `${this.label}: request already cancelled.`,
+        structuredPayload: null,
+        failureCategory: "user_cancelled",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: "",
+        error: null,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: request.model ?? this.model ?? undefined
+      };
+    }
+    if (!this.capabilities.has(request.capability)) {
+      const errorText = `${this.label}: capability \"${request.capability}\" is not supported by this text-only adapter.`;
+      return {
+        outcome: "failed",
+        summary: errorText,
+        structuredPayload: null,
+        failureCategory: "unsupported_capability",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: "",
+        error: errorText,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: request.model ?? this.model ?? undefined
+      };
+    }
     const selectedModel = request.model ?? this.model ?? this.config.models?.[0] ?? this.id;
     const endpoint = this.defaultEndpoint?.replace(/\/+$/, "");
     const key = this.apiKeyEnv ? process.env[this.apiKeyEnv]?.trim() ?? "" : "";
@@ -87,6 +204,23 @@ export class OpenAICompatibleProvider implements AgentProvider {
         tokenUsage: undefined, model: selectedModel
       };
     }
+    if (request.deadlineAt !== undefined && request.deadlineAt <= Date.now()) {
+      const errorText = `${this.label}: request deadline already expired.`;
+      return {
+        outcome: "failed",
+        summary: errorText,
+        structuredPayload: null,
+        failureCategory: "timeout",
+        retryable: isRetryableFailureCategory("timeout"),
+        retryAfterMs: retryAfterMsForFailure("timeout"),
+        artifactsProduced: [],
+        output: "",
+        error: errorText,
+        durationMs: 0,
+        tokenUsage: undefined,
+        model: selectedModel
+      };
+    }
 
     const conversation = request.capability === "conversation";
     const prompt = conversation ? buildConversationPrompt(request) : buildAgentGoalPrompt(request);
@@ -100,7 +234,19 @@ export class OpenAICompatibleProvider implements AgentProvider {
       { role: "user", content: prompt }
     ];
 
+    // F03: combine the inbound cancellation signal with the provider timeout
+    // and the phase deadline so a cancel or deadline aborts the in-flight
+    // request (and reports 'cancelled'/'timed out') instead of a fixed 10-min
+    // timeout that ignores cancellation.
+    const timeoutMs = request.deadlineAt === undefined
+      ? 600_000
+      : Math.min(600_000, Math.max(0, request.deadlineAt - Date.now()));
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+
     try {
+      const signal = request.signal
+        ? AbortSignal.any([request.signal, timeoutSignal])
+        : timeoutSignal;
       const response = await fetch(`${endpoint}/chat/completions`, {
         method: "POST",
         headers: {
@@ -113,7 +259,7 @@ export class OpenAICompatibleProvider implements AgentProvider {
           temperature: 0.2,
           max_tokens: 4096
         }),
-        signal: AbortSignal.timeout(600_000)
+        signal
       });
 
       if (!response.ok) {
@@ -138,6 +284,21 @@ export class OpenAICompatibleProvider implements AgentProvider {
         ? { inputTokens: payload.usage.prompt_tokens ?? 0, outputTokens: payload.usage.completion_tokens ?? 0 }
         : undefined;
 
+      // F02: an empty completion is not "completed" — it is no result at all.
+      // Surface it as a failure so fallback/routing can react, instead of
+      // marking the phase done with no evidence.
+      if (!content) {
+        const errorText = `${this.label}: empty completion from ${endpoint} (model ${selectedModel}).`;
+        this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
+        return {
+          outcome: "failed", summary: errorText, structuredPayload: null,
+          failureCategory: "invalid_output", retryable: false,
+          retryAfterMs: undefined, artifactsProduced: [],
+          output: "", error: errorText, durationMs: Date.now() - startedAt,
+          tokenUsage, model: selectedModel
+        };
+      }
+
       this.cacheHealth("ready", `${this.label}: endpoint authenticated`);
       return {
         outcome: "completed", summary: `${this.label} completed the ${request.phase} phase.`,
@@ -147,10 +308,15 @@ export class OpenAICompatibleProvider implements AgentProvider {
       };
     } catch (cause) {
       const errorText = cause instanceof Error ? cause.message : String(cause);
-      const timedOut = errorText.toLowerCase().includes("abort") || errorText.toLowerCase().includes("timeout");
-      const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: 0, timedOut, aborted: false, breakerReason: null, spawnErrorCode: null });
+      // A timeout signal also rejects fetch with an AbortError in some Node
+      // versions. Use the originating signals, not the exception wording, so
+      // an internal deadline is not misreported as a user cancellation.
+      const aborted = request.signal?.aborted === true;
+      const timedOut = !aborted && timeoutSignal.aborted;
+      const category = classifyFailure(errorText, { provider: this.id, phase: request.phase, exitCode: 0, timedOut, aborted, breakerReason: null, spawnErrorCode: null });
       return {
-        outcome: "failed", summary: errorText, structuredPayload: null,
+        outcome: aborted ? "cancelled" : "failed",
+        summary: errorText, structuredPayload: null,
         failureCategory: category, retryable: isRetryableFailureCategory(category),
         retryAfterMs: retryAfterMsForFailure(category), artifactsProduced: [],
         output: "", error: errorText, durationMs: Date.now() - startedAt,
@@ -160,8 +326,11 @@ export class OpenAICompatibleProvider implements AgentProvider {
   }
 
   private cacheHealth(state: "ready" | "auth_required" | "offline" | "quota", detail: string) {
-    this.cachedHealth = { state, detail, checkedAt: new Date().toISOString() };
-    this.healthExpiresAt = Date.now() + 30_000;
+    const capabilityNote = this.ignoredCapabilities.length > 0
+      ? ` Ignored unsupported capabilities: ${this.ignoredCapabilities.join(", ")}.`
+      : "";
+    this.cachedHealth = { state, detail: `${detail}${capabilityNote}`, checkedAt: new Date().toISOString() };
+    this.healthExpiresAt = Date.now() + HEALTH_PROBE_CACHE_TTL_MS;
   }
 }
 

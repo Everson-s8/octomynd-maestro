@@ -28,7 +28,7 @@ describe("OpenAICompatibleProvider", () => {
       runId: 1,
       stepNumber: 1,
       phase,
-      capability: "coding" as const,
+      capability: "research" as const,
       task: { id: 1, text: "t", projectKey: "p" } as any,
       project: { path: "/p" } as any,
       previousSteps: [],
@@ -53,13 +53,11 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.outcome).toBe("completed");
     expect(result.output).toBe("DONE");
     expect(result.tokenUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
-    // check the request
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.test.local/v1/chat/completions");
     expect(init.headers.Authorization).toBe("Bearer sk-test");
     const body = JSON.parse(init.body);
     expect(body.model).toBe("m1");
-    // the goal prompt carries the task text into the user message
     expect(body.messages[1].content.length).toBeGreaterThan(50);
   });
 
@@ -93,5 +91,200 @@ describe("OpenAICompatibleProvider", () => {
     await provider.execute({ ...request(), model: "m2" });
     const [, init] = (fetch as any).mock.calls[0];
     expect(JSON.parse(init.body).model).toBe("m2");
+  });
+
+  it("does not advertise coding/testing capabilities it cannot actually execute (F02)", () => {
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    expect(provider.capabilities.has("coding")).toBe(false);
+    expect(provider.capabilities.has("testing")).toBe(false);
+    expect(provider.capabilities.has("planning")).toBe(false);
+    expect(provider.capabilities.has("improvement_reviewing")).toBe(false);
+    expect(provider.capabilities.has("conversation")).toBe(true);
+  });
+
+  it("rejects unsupported capabilities before making an HTTP call (F02)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "coding" });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCategory: "unsupported_capability",
+      retryable: false
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports dropped capabilities while provider setup is incomplete (F02)", async () => {
+    const provider = new OpenAICompatibleProvider({
+      ...baseConfig,
+      endpointUrl: undefined,
+      apiKeyEnv: "MISSING_API_KEY"
+    });
+    const health = await provider.health();
+    expect(health.detail).toContain("Ignored unsupported capabilities: planning, coding, testing");
+  });
+
+  it("keeps the post-execution health cache at the probe TTL (F03)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: "OK" } }] })
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new OpenAICompatibleProvider(baseConfig);
+      await provider.execute({ ...request(), capability: "conversation" });
+      vi.advanceTimersByTime(31_000);
+      const health = await provider.health();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(health.detail).toContain("Ignored unsupported capabilities: planning, coding, testing");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("deduplicates concurrent health probes (F03)", async () => {
+    let resolveFetch!: (value: { ok: boolean; status: number }) => void;
+    const pendingResponse = new Promise<{ ok: boolean; status: number }>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pendingResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const first = provider.health();
+    const second = provider.health();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    resolveFetch({ ok: true, status: 200 });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" })
+    ]);
+  });
+
+  it("invalidates cached health when providers are refreshed (F03)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await provider.health();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    provider.refresh();
+    await provider.health();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns failed (not completed) on an empty completion (F02)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "" } }] })
+    }));
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation" });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("invalid_output");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("returns cancelled without calling the endpoint when the signal is already aborted (F03)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), signal: controller.signal });
+    expect(result.outcome).toBe("cancelled");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns timeout without calling the endpoint when the deadline already expired (F03)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), deadlineAt: Date.now() - 1 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports missing credentials before an expired deadline (F03)", async () => {
+    delete process.env.TEST_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), deadlineAt: Date.now() - 1 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("auth_required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("probes the endpoint before reporting it ready (F03)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const health = await provider.health();
+    expect(health.state).toBe("ready");
+    expect(health.detail).toContain("authenticated");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.test.local/v1/models",
+      expect.objectContaining({
+        method: "GET",
+        headers: { Authorization: "Bearer sk-test" }
+      })
+    );
+  });
+
+  it("classifies a rejected health probe as authentication required (F03)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "invalid key"
+    }));
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await expect(provider.health()).resolves.toMatchObject({
+      state: "auth_required",
+      detail: expect.stringContaining("Ignored unsupported capabilities: planning, coding, testing")
+    });
+  });
+
+  it("supports gateways that expose chat completions but not /models (F03)", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => "not found" })
+      .mockResolvedValueOnce({ ok: false, status: 405, text: async () => "method not allowed" });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    await expect(provider.health()).resolves.toMatchObject({
+      state: "ready",
+      detail: expect.stringContaining("chat endpoint reachable")
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.test.local/v1/chat/completions",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("uses the phase deadline when composing the request abort signal (F03)", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("deadline", "TimeoutError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation", deadlineAt: Date.now() + 5 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not turn an internal timeout into user cancellation (F03)", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OpenAICompatibleProvider(baseConfig);
+    const result = await provider.execute({ ...request(), capability: "conversation", deadlineAt: Date.now() + 5 });
+    expect(result.outcome).toBe("failed");
+    expect(result.failureCategory).toBe("timeout");
   });
 });

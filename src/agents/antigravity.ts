@@ -6,6 +6,7 @@ import {
   buildFailureSummary,
   classifyFailure,
   isRetryableFailureCategory,
+  PERMISSION_PATTERN,
   retryAfterMsForFailure,
   type FailureCategory
 } from "./failure.js";
@@ -248,6 +249,36 @@ export class AntigravityProvider implements AgentProvider {
       .filter(Boolean)
       .join("\n")
       .trim();
+    // F04: a soft denial (exit 0, non-empty stdout saying it could not act,
+    // stderr carrying a permission denial) must NOT be reported as success.
+    // Antigravity's headless contract explicitly allows denial with exit 0, so
+    // a green exit code is not by itself proof that the phase completed.
+    const softDenial = isSoftPermissionDenial({
+      exitCode: processResult.exitCode,
+      stdout: processResult.stdout,
+      stderr: processResult.stderr
+    });
+    if (softDenial) {
+      const summary = buildFailureSummary(this.label, request.phase, "permission_denied");
+      return {
+        // This is a provider-level failure, not a terminal goal block. Keep
+        // the permission category for diagnostics, but let the runner try its
+        // configured fallback provider instead of killing the whole task.
+        outcome: "failed",
+        summary,
+        structuredPayload: null,
+        failureCategory: "permission_denied",
+        retryable: false,
+        retryAfterMs: undefined,
+        artifactsProduced: [],
+        output: diagnostics,
+        error: diagnostics,
+        durationMs: processResult.durationMs,
+        processRuntime: processRuntime(processResult),
+        tokenUsage: processResult.tokenUsage,
+        model: selectedModel ?? "antigravity"
+      };
+    }
     if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
       const category = classifyFailure(diagnostics, {
         provider: this.id,
@@ -364,6 +395,17 @@ export class AntigravityProvider implements AgentProvider {
       return { status: "cancelled", output: "", error: null, durationMs: processResult.durationMs, retryable: false };
     }
     const diagnostics = [processResult.stderr, processResult.stdout].filter(Boolean).join("\n").trim();
+    if (isSoftPermissionDenial({
+      exitCode: processResult.exitCode,
+      stdout: processResult.stdout,
+      stderr: processResult.stderr
+    })) {
+      return improvementFailure(
+        diagnostics || buildFailureSummary(this.label, "reviewing", "permission_denied"),
+        false,
+        processResult.durationMs
+      );
+    }
     if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
       const category = classifyFailure(diagnostics, {
         provider: this.id,
@@ -394,6 +436,40 @@ export class AntigravityProvider implements AgentProvider {
     this.cachedHealth = health;
     this.healthExpiresAt = Date.now() + ttlMs;
   }
+}
+
+/**
+ * Detect Antigravity's headless soft-denial contract without treating normal
+ * successful prose that mentions permissions as a failed execution.
+ */
+export function isSoftPermissionDenial(input: {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}): boolean {
+  if (input.exitCode !== 0 || !input.stdout.trim()) return false;
+  const stdoutCouldNotActMatch = input.stdout.match(/(?:could(?:\s+not|n't)|unable\s+to|not\s+able\s+to|failed\s+to|cannot|can't)\s+(?:run|execute|complete|perform|write|invoke|apply|use|carry\s+out)\b|(?:blocked|denied)\s+(?:from|by)\s+(?:running|executing|writing|using)\b/i);
+  if (!stdoutCouldNotActMatch || stdoutCouldNotActMatch.index === undefined) return false;
+  const textBeforeDenial = input.stdout.slice(0, stdoutCouldNotActMatch.index);
+  const actionEnd = stdoutCouldNotActMatch.index + stdoutCouldNotActMatch[0].length;
+  const textAfterDenial = input.stdout.slice(actionEnd);
+  const lineStart = Math.max(0, input.stdout.lastIndexOf("\n", stdoutCouldNotActMatch.index - 1) + 1);
+  const sentenceStart = Math.max(lineStart, input.stdout.lastIndexOf(".", stdoutCouldNotActMatch.index - 1) + 1);
+  const sentenceEndCandidates = [".", "!", "?", "\n"]
+    .map((delimiter) => input.stdout.indexOf(delimiter, actionEnd))
+    .filter((index) => index >= 0);
+  const sentenceEnd = sentenceEndCandidates.length > 0 ? Math.min(...sentenceEndCandidates) : input.stdout.length;
+  const actionSentence = input.stdout.slice(sentenceStart, sentenceEnd);
+  const directPermissionFollowup = /^(?:\s*(?:because|as|due\s+to|when|while|and)?\s*[,;:.-]?\s*)permission(?:\s+was)?\s+denied/i.test(textAfterDenial);
+  const completedBeforeDenial = /\b(?:completed\s+successfully|successfully\s+completed|finished\s+the\s+(?:task|request|work)|(?:the\s+)?(?:task|request|work|implementation|changes)\s+(?:is|are)\s+(?:complete|completed|done|finished)|all\s+tests\s+pass(?:ed)?)\b/i.test(textBeforeDenial);
+  const recoveredAfterDenial = /\b(?:so|but|then|and)\b[\s\S]{0,180}\b(?:completed|successfully|implemented|finished|applied|created|passed|delivered)\b/i.test(textAfterDenial);
+  const stdoutPermissionNearAction = PERMISSION_PATTERN.test(actionSentence) || directPermissionFollowup;
+  const strongStderrPermission = /permission\s+check\s+failed|user\s+denied\s+permission|auto[- ]denied|permission(?:\s+was)?\s+denied[^\n]{0,80}\bheadless\b|headless\s+mode\s+(?:cannot\s+prompt|requires?[^\n]{0,80}\bpermission\b)|tool\s+required[^\n]{0,100}\bpermission\b/i.test(input.stderr);
+  // Keep this narrower than classifyFailure's general-purpose diagnostic
+  // classifier. A successful response may mention a generic 403/access-denied
+  // example while the CLI's actual headless denial has these explicit markers.
+  return !completedBeforeDenial && !recoveredAfterDenial
+    && (strongStderrPermission || stdoutPermissionNearAction);
 }
 
 export function buildAntigravityArgs(
