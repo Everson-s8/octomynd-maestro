@@ -31,7 +31,7 @@ function pushStep(run: GoalRunRecord, phase: "planning" | "implementing" | "test
   database.finishGoalStep({ id: step.id, status, summary, error, durationMs: 500 });
 }
 
-describe.sequential("GoalWatchdog", () => {
+describe("GoalWatchdog", () => {
   it("does not stop a goal with fewer than two finished steps", () => {
     const r = makeRun();
     const v = new GoalWatchdog(database).verdict(r);
