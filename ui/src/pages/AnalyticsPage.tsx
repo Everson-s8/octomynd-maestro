@@ -5,7 +5,7 @@ import { WorkGraphBoard } from "../components/WorkGraphBoard";
 import { SectionHeader } from "../components/SectionHeader";
 import { Icon } from "../components/Icon";
 import { useEffect, useState } from "react";
-import { translate } from "../i18n";
+import { formatNumber, translate } from "../i18n";
 
 export interface AnalyticsPageProps {
   data: DashboardData;
@@ -93,10 +93,10 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
             </div>
             <div>
               <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>
-                Work Graphs Executados
+                {translate("Executed Work Graphs")}
               </span>
               <strong style={{ fontSize: "20px", color: "#ffffff", fontWeight: 700 }}>
-                {data.workGraphs.length} <small style={{ fontSize: "13px", color: "#808595" }}>graphs</small>
+                {formatNumber(data.workGraphs.length)} <small style={{ fontSize: "13px", color: "#808595" }}>{translate("graphs")}</small>
               </strong>
             </div>
           </div>
@@ -123,7 +123,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                       {p.provider}
                     </span>
                     <span style={{ color: "#94a3b8" }}>
-                      {total.toLocaleString()} tokens ({inputPct}% in / {100 - inputPct}% out)
+                      {formatNumber(total)} {translate("tokens")} ({inputPct}% {translate("input")} / {100 - inputPct}% {translate("output")})
                     </span>
                   </div>
                   <div style={{ height: "12px", background: "rgba(255,255,255,0.06)", borderRadius: "6px", overflow: "hidden", display: "flex" }}>
@@ -135,7 +135,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                         height: "100%",
                         transition: "width 0.3s ease"
                       }}
-                      title={`Input: ${p.inputTokens.toLocaleString()}`}
+                      title={`${translate("Input")}: ${formatNumber(p.inputTokens)}`}
                     />
                     <div
                       style={{
@@ -145,7 +145,7 @@ export function AnalyticsPage({ data, onRefresh }: AnalyticsPageProps) {
                         height: "100%",
                         transition: "width 0.3s ease"
                       }}
-                      title={`Output: ${p.outputTokens.toLocaleString()}`}
+                      title={`${translate("Output")}: ${formatNumber(p.outputTokens)}`}
                     />
                   </div>
                 </div>

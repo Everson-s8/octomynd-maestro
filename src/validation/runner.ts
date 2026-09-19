@@ -217,7 +217,7 @@ function nestedProjectCommandSpecs(workspacePath: string, request: ValidationReq
         ? [typescriptBin, "--noEmit", "-p", backendTsconfig]
         : [],
       timeoutMs: 120_000,
-      skipReason: backendTsconfig ? undefined : "nenhum tsconfig de backend encontrado"
+      skipReason: backendTsconfig ? undefined : "no backend tsconfig found"
     },
     {
       id: "typecheck_ui",
@@ -226,14 +226,14 @@ function nestedProjectCommandSpecs(workspacePath: string, request: ValidationReq
         ? [typescriptBin, "--noEmit", "-p", uiTsconfig]
         : [],
       timeoutMs: 120_000,
-      skipReason: uiTsconfig ? undefined : "nenhum tsconfig de frontend encontrado"
+      skipReason: uiTsconfig ? undefined : "no frontend tsconfig found"
     },
     {
       id: testId,
       command: process.execPath,
       args: [vitestEntry, "run", ...tests],
       timeoutMs: tests.length > 0 ? 120_000 : 300_000,
-      skipReason: hasTests ? undefined : "nenhum arquivo de teste encontrado"
+      skipReason: hasTests ? undefined : "no test files found"
     },
     {
       id: "build_ui",

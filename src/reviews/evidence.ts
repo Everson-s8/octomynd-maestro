@@ -136,7 +136,7 @@ function inspectChangedFiles(worktreePath: string | null, baseBranch: string): C
   return {
     status: "unavailable",
     code: "changed_files_unavailable",
-    message: "Nao foi possivel inspecionar o diff local para segredos."
+    message: "Unable to inspect the local diff for secrets."
   };
 }
 

@@ -62,7 +62,7 @@ function titleFromClause(value: string): string {
   }
 
   title = capitalize(title.replace(/\s+/g, " ").trim());
-  return truncate(title || "Atualizar projeto", 82);
+  return truncate(title || "Update project", 82);
 }
 
 function compact(value: string): string {

@@ -1,24 +1,30 @@
 import { DashboardData } from "../api";
 import { Icon } from "../components/Icon";
 import { ImprovementLab } from "../components/ImprovementLab";
-import { OperationalChatConsole } from "../components/OperationalChatConsole";
 import { SectionHeader } from "../components/SectionHeader";
 import { TelegramConnectCard } from "../components/TelegramConnectCard";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { SkillControlPanel } from "../components/SkillControlPanel";
-import { translate } from "../i18n";
+import { getLocaleLabel, translate, useI18n } from "../i18n";
 
 export interface SettingsPageProps {
   data: DashboardData;
   onRefresh: () => Promise<unknown>;
+  onRestartOnboarding?: () => void;
 }
 
-export function SettingsPage({ data, onRefresh }: SettingsPageProps) {
+export function SettingsPage({ data, onRefresh, onRestartOnboarding }: SettingsPageProps) {
+  const { locale } = useI18n();
   return (
     <div className="settings-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <div className="panel" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow={translate("Language preference")} title={translate("Language")} meta={translate("English")} />
+        <SectionHeader eyebrow={translate("Language preference")} title={translate("Language")} meta={translate(getLocaleLabel(locale))} />
         <LanguageSelector />
+      </div>
+      <div className="panel" style={{ padding: "20px" }}>
+        <SectionHeader eyebrow={translate("Help") } title={translate("First-run onboarding")} meta={translate("Available again anytime")} />
+        <p style={{ color: "var(--text-2)", maxWidth: 680 }}>{translate("Reopen the guided setup to review language, provider, project, and first-task steps.")}</p>
+        <button type="button" className="btn-ghost" onClick={onRestartOnboarding}>{translate("Restart onboarding")}</button>
       </div>
       <TelegramConnectCard agents={data.agents} onChanged={onRefresh} />
       <SkillControlPanel data={data} onRefresh={onRefresh} />
@@ -55,8 +61,6 @@ export function SettingsPage({ data, onRefresh }: SettingsPageProps) {
           </div>
         </div>
       </div>
-
-      <OperationalChatConsole projects={data.projects} onChanged={onRefresh} />
 
       <ImprovementLab improvements={data.improvements} onChanged={onRefresh} />
     </div>

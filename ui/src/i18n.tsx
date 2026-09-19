@@ -1,8 +1,36 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-export type Locale = "en" | "pt-BR";
+export const SUPPORTED_LOCALES = [
+  { id: "en", label: "English" },
+  { id: "pt-BR", label: "Brazilian Portuguese" }
+] as const;
+
+export type Locale = (typeof SUPPORTED_LOCALES)[number]["id"];
 
 const STORAGE_KEY = "maestro:locale";
+
+export function isLocale(value: string | null | undefined): value is Locale {
+  return SUPPORTED_LOCALES.some((locale) => locale.id === value);
+}
+
+export function getLocaleLabel(locale: Locale): string {
+  return SUPPORTED_LOCALES.find((item) => item.id === locale)?.label ?? "English";
+}
+
+export function applyLocaleMetadata(locale: Locale): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = locale;
+  // The current locales are left-to-right. Keeping direction centralized means
+  // adding an RTL locale later will not require changes across UI components.
+  document.documentElement.dir = "ltr";
+}
+
+export function getRecommendedLocale(): Locale {
+  if (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("pt")) {
+    return "pt-BR";
+  }
+  return "en";
+}
 
 const portuguese: Record<string, string> = {
   "Overview": "Visão geral",
@@ -157,15 +185,17 @@ const portuguese: Record<string, string> = {
   "Full access": "Acesso completo",
   "Worktrees isolate script execution and prevent mutations without confirmation.": "As worktrees isolam a execução de scripts e previnem mutações sem confirmação.",
   "Language": "Idioma",
-  "English": "English",
+  "English": "Inglês",
   "Brazilian Portuguese": "Português (Brasil)",
+  "Use English throughout the dashboard.": "Use inglês em todo o dashboard.",
+  "Use Brazilian Portuguese throughout the dashboard.": "Use português do Brasil em todo o dashboard.",
   "Choose the language used by the Maestro dashboard. The default is English.": "Escolha o idioma usado pelo dashboard do Maestro. O padrão é inglês.",
   "Save": "Salvar",
   "Unified orchestrator": "Orquestrador unificado",
   "Context": "Contexto",
   "Maestro (general)": "Maestro (geral)",
   "Read-only": "Somente leitura",
-  "Standard": "Standard",
+  "Standard": "Padrão",
   "Conversations": "Conversas",
   "New chat": "Novo chat",
   "Create a new chat": "Criar novo chat",
@@ -193,7 +223,39 @@ const portuguese: Record<string, string> = {
   "Ask Maestro…": "Pergunte ao Maestro…",
   "Message Maestro": "Mensagem para o Maestro",
   "Send message": "Enviar mensagem",
-  "Language preference": "Preferência de idioma"
+  "Language preference": "Preferência de idioma",
+  "Judgment rules": "Regras de julgamento",
+  "Skills": "Skills",
+  "Use skills during task execution": "Usar skills durante a execução das tasks",
+  "Skills guide judgment and evidence. They never bypass approval, write scopes, or explicit invocation rules.": "As skills orientam julgamento e evidências. Elas nunca ignoram aprovação, escopos de escrita ou regras de invocação explícita.",
+  "Enable skills": "Ativar skills",
+  "Disable skills": "Desativar skills",
+  "Skills enabled": "Skills ativas",
+  "Updating": "Atualizando",
+  "No registered skills": "Nenhuma skill registrada",
+  "Built-in skills will appear here after the application loads its catalog.": "As skills nativas aparecerão aqui depois que o aplicativo carregar o catálogo.",
+  "Not active": "Não ativa",
+  "Evaluation": "Avaliação",
+  "Lifecycle": "Ciclo de vida",
+  "Curator": "Curador",
+  "Automatic archival enabled": "Arquivamento automático ativo",
+  "Dry run — no automatic archival": "Simulação — sem arquivamento automático",
+  "The curator gate is visible here. Review its report before applying any archival action.": "O gate do curador aparece aqui. Revise o relatório antes de aplicar qualquer arquivamento.",
+  "Refresh report": "Atualizar relatório",
+  "Refresh proposals": "Atualizar propostas",
+  "Reconcile proposals": "Reconciliar propostas",
+  "Refresh candidates": "Atualizar candidatos",
+  "Process incidents": "Processar incidentes",
+  "Apply curator": "Aplicar curador",
+  "skills in report": "skills no relatório",
+  "candidates": "candidatos",
+  "Curator report refreshed.": "Relatório do curador atualizado.",
+  "Proposals refreshed.": "Propostas atualizadas.",
+  "Skill proposals reconciled.": "Propostas de skill reconciliadas.",
+  "Curator candidates refreshed.": "Candidatos do curador atualizados.",
+  "Curator incidents processed.": "Incidentes do curador processados.",
+  "Curator action applied.": "Ação do curador aplicada.",
+  "Unable to update skills.": "Não foi possível atualizar as skills."
 };
 
 // Keep the UI source English-first. This supplemental dictionary contains the
@@ -619,12 +681,68 @@ const portugueseSupplement: Record<string, string> = {
   "No GitHub PR exists for this run. Install/authenticate GitHub CLI and run delivery again.": "Não existe PR no GitHub para esta execução. Instale/autentique o GitHub CLI e execute a entrega novamente.",
   "Copy logs": "Copiar logs",
   "Phase": "Fase",
-  "Waiting to start": "Aguardando disparo"
+  "Waiting to start": "Aguardando disparo",
+  "Português (Brasil)": "Português (Brasil)",
+  "Analytics & Usage": "Analytics e uso",
+  "AI Routing": "Roteamento de IA",
+  "Executed Work Graphs": "Work Graphs executados",
+  "graphs": "graphs",
+  "tokens": "tokens",
+  "input": "entrada",
+  "output": "saída",
+  "Input": "Entrada",
+  "Output": "Saída",
+  "Maestro": "Maestro",
+  "Standard": "Padrão",
+  "Full Access": "Acesso total",
+  "Multi-agent": "Multiagente",
+  "Work Graphs": "Work Graphs",
+  "1 active": "1 ativo",
+  "{count} active": "{count} ativos",
+  "Parallel: {count} readers": "Paralelo: {count} readers",
+  "1 provider ready to use": "1 provider pronto para uso",
+  "{count} providers ready to use": "{count} providers prontos para uso",
+  "First run": "Primeiro acesso",
+  "Skip for now": "Pular por enquanto",
+  "Onboarding progress": "Progresso da configuração inicial",
+  "Welcome to Maestro": "Bem-vindo ao Maestro",
+  "Choose the language for the Maestro interface. This does not limit the language you can use in Chat or tasks.": "Escolha o idioma da interface do Maestro. Isso não limita o idioma que você pode usar no Chat ou nas tasks.",
+  "Your browser appears to use Portuguese.": "Seu navegador parece estar em português.",
+  "A clear path from idea to working software": "Do pedido ao software funcionando",
+  "Maestro connects the AI service you already use to your project. It helps you understand the work, execute it in an isolated workspace, and keeps you in control of the final decision.": "O Maestro conecta o serviço de IA que você já usa ao seu projeto. Ele ajuda a entender o trabalho, executa em um espaço isolado e mantém você no controle da decisão final.",
+  "Continue": "Continuar",
+  "I know what I need": "Já sei o que preciso",
+  "Connect an AI provider": "Conecte um provider de IA",
+  "Choose a provider you already use. Maestro will show whether it is installed, authenticated, and ready before you start work.": "Escolha um provider que você já usa. O Maestro mostra se ele está instalado, autenticado e pronto antes de iniciar o trabalho.",
+  "{count} provider(s) ready to use": "{count} provider(s) pronto(s) para uso",
+  "No provider is ready yet": "Nenhum provider está pronto ainda",
+  "Open provider setup": "Abrir configuração de providers",
+  "I’ll configure this later": "Vou configurar isso depois",
+  "Choose where you want to work": "Escolha onde você quer trabalhar",
+  "A project is the repository Maestro will work on. You can import one from GitHub, connect a local repository, or use Chat about Maestro without a project.": "Um projeto é o repositório em que o Maestro vai trabalhar. Você pode importar um do GitHub, conectar um repositório local ou usar o Chat sobre o Maestro sem projeto.",
+  "Add a project": "Adicionar um projeto",
+  "Open Chat without a project": "Abrir Chat sem projeto",
+  "I’ll do this later": "Vou fazer isso depois",
+  "You are ready for your first useful interaction": "Você está pronto para sua primeira interação útil",
+  "Tell Maestro what you want to do in natural language. You can start a task or ask Chat a question first.": "Diga ao Maestro o que você quer fazer em linguagem natural. Você pode iniciar uma task ou fazer uma pergunta no Chat.",
+  "Create your first task": "Criar sua primeira task",
+  "Open Chat": "Abrir Chat",
+  "Finish setup": "Concluir configuração",
+  "Help": "Ajuda",
+  "First-run onboarding": "Configuração do primeiro acesso",
+  "Available again anytime": "Disponível novamente quando quiser",
+  "Reopen the guided setup to review language, provider, project, and first-task steps.": "Reabra a configuração guiada para revisar idioma, provider, projeto e primeira task.",
+  "Restart onboarding": "Reiniciar configuração inicial"
 };
 
 export function getLocale(): Locale {
   if (typeof window === "undefined") return "en";
-  return window.localStorage.getItem(STORAGE_KEY) === "pt-BR" ? "pt-BR" : "en";
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return isLocale(stored) ? stored : "en";
+  } catch {
+    return "en";
+  }
 }
 
 export function translate(key: string, values: Record<string, string | number> = {}): string {
@@ -633,6 +751,19 @@ export function translate(key: string, values: Record<string, string | number> =
     (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
     template
   );
+}
+
+export function translateCount(
+  count: number,
+  singularKey: string,
+  pluralKey: string,
+  values: Record<string, string | number> = {}
+): string {
+  return translate(count === 1 ? singularKey : pluralKey, { ...values, count });
+}
+
+export function formatNumber(value: number, locale: Locale = getLocale()): string {
+  return new Intl.NumberFormat(locale).format(value);
 }
 
 type LanguageContextValue = {
@@ -645,11 +776,21 @@ const LanguageContext = createContext<LanguageContextValue | null>(null);
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => getLocale());
-  const setLocale = (next: Locale) => {
-    window.localStorage.setItem(STORAGE_KEY, next);
+  const setLocale = useCallback((next: Locale) => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Private browsing or a locked-down desktop profile may reject storage;
+      // the active session still changes correctly.
+    }
     setLocaleState(next);
-  };
-  const value = useMemo(() => ({ locale, setLocale, t: translate }), [locale]);
+  }, []);
+
+  useEffect(() => {
+    applyLocaleMetadata(locale);
+  }, [locale]);
+
+  const value = useMemo(() => ({ locale, setLocale, t: translate }), [locale, setLocale]);
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
 }
 

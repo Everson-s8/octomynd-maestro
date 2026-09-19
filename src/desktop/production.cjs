@@ -79,6 +79,10 @@ function buildBackendSpawnConfig(input) {
     MAESTRO_REQUIRE_TELEGRAM: "false",
     // Point the static file server at the packaged UI regardless of cwd.
     MAESTRO_UI_DIST: input.uiDist,
+    // Built-in skills ship with the application. Keep their catalog separate
+    // from the per-user data directory so a packaged install can discover
+    // them even when it starts with an empty user profile.
+    MAESTRO_SKILLS_PATH: path.join(input.runtimeRoot || path.dirname(path.dirname(input.backendEntry)), "skills"),
     // Make the runtime mode explicit. MAESTRO_RUNTIME_ROOT is also used for
     // locating the bundled toolchain, so it must not be used as a proxy for
     // deciding whether the target project is running inside the packaged app.

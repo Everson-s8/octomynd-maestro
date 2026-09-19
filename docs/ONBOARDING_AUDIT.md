@@ -1,6 +1,24 @@
 # Onboarding Audit: Public Experience for Non-Technical Users
 
-Status: audit only. No product code was changed as part of this task.
+Status: historical baseline plus current implementation notes. The first-run guide, dashboard
+project entry point, and interface language preference described below are now implemented; the
+remaining findings are follow-up work and should not be read as a description of the current UI.
+
+## Current implementation (2026-09)
+
+- The dashboard has a resumable first-run guide in `ui/src/components/FirstRunOnboarding.tsx`.
+- The guide covers interface language, product orientation, provider readiness, project/chat
+  choice, and first task/chat action. It can be skipped and restarted from Settings.
+- Project registration is available from the dashboard through the existing `ProjectModal` path;
+  the guide does not bypass the existing validation or grant filesystem access.
+- English is the default interface locale. Portuguese (Brazil) is available in the locale registry,
+  Settings, and the guide. Locale metadata is applied to the HTML document before and after render.
+- The interface locale is independent from chat/task content and provider response language.
+- Automated coverage is in `test/i18n.test.ts` and `test/onboarding.test.ts`; the engineering
+  details and known translation follow-ups are in [`I18N_ONBOARDING.md`](I18N_ONBOARDING.md).
+
+The sections below preserve the original audit evidence and scope. Where they say that a feature
+does not exist, that statement refers to the pre-onboarding baseline, not the current branch.
 
 ## Scope and method
 
@@ -18,7 +36,7 @@ Findings are based on `README.md`, `.env.example`, `scripts/maestro-runtime.ps1`
 `src/agents/claude.ts`, `src/commands/application-commands.ts`, `src/telegram/bot.ts`,
 `ui/src/App.tsx`, `ui/src/api.ts`, and `docs/MAESTRO_CONSTITUTION.md`.
 
-## Executive summary
+## Historical executive summary
 
 Maestro's automation core (routing, environment doctor, Work Graph, PR delivery,
 audit trail) is mature and well governed. The public-facing *entry path*, however,

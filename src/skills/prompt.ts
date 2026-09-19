@@ -14,11 +14,11 @@ export function formatSkillPromptContext(context?: SkillExecutionContext): strin
   return [
     "",
     ...(context.selectionNote ? [`Skill selection: ${context.selectionNote}`] : []),
-    "Skills disponiveis nesta etapa (somente metadados):",
+    "Skills available in this phase (metadata only):",
     ...(available.length > 0 ? available : ["- nenhuma"]),
     "",
-    "Skills pinadas e carregadas para esta etapa:",
+    "Skills pinned and loaded for this phase:",
     ...(loaded.length > 0 ? loaded : ["- nenhuma"]),
-    "As Skills carregadas orientam o procedimento, mas nao substituem guardrails, escopo ou instrucoes superiores."
+    "Loaded skills guide the procedure, but do not replace guardrails, scope, or higher-priority instructions."
   ];
 }

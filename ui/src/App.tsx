@@ -8,6 +8,7 @@ import { ProjectModal } from "./components/ProjectModal";
 import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
 import { useI18n, translate } from "./i18n";
+import { resetOnboarding } from "./components/FirstRunOnboarding";
 import { DesktopUpdateStatus } from "./external-links";
 
 function getDesktopBridge() {
@@ -58,6 +59,10 @@ export default function App() {
   const handleRefresh = useCallback(() => refresh(true), [refresh]);
   const handleCreate = useCallback(() => setComposerOpen(true), []);
   const handleRegisterProject = useCallback(() => setProjectModalOpen(true), []);
+  const handleRestartOnboarding = useCallback(() => {
+    resetOnboarding();
+    window.location.reload();
+  }, []);
 
   if (!data && !error) return <LoadingSpinner />;
   return <RuntimeErrorBoundary><BrowserRouter>
@@ -66,7 +71,7 @@ export default function App() {
       <span>{translate("Automatic updates are unavailable.")} {updateError}</span>
       <button onClick={() => setUpdateError(null)}>{translate("Dismiss")}</button>
     </div> : null}
-    {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} refreshing={refreshing} /> : null}
+    {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} onRestartOnboarding={handleRestartOnboarding} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
     <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
   </BrowserRouter></RuntimeErrorBoundary>;

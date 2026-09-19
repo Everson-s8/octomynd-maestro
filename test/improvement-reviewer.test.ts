@@ -33,7 +33,7 @@ describe("restricted improvement reviewer", () => {
     const prompt = buildImprovementReviewPrompt(EVIDENCE_PACK, schema);
 
     expect(prompt).toContain("restricted background improvement reviewer");
-    expect(prompt).toContain("Execucao estritamente read-only");
+    expect(prompt).toContain("Execution is strictly read-only");
     expect(prompt).not.toContain("goal persistente");
     expect(schema).toMatchObject({
       properties: { candidates: { maxItems: 3 } }

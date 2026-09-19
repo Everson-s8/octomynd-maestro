@@ -128,7 +128,7 @@ export function OperationalChatConsole({
   }, [selectedThread]);
 
   const projectLabel = selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
-    ? "Maestro (geral)"
+    ? translate("Maestro (general)")
     : `@${selectedProjectKey}`;
 
   const handleNewChat = async () => {
@@ -283,7 +283,7 @@ export function OperationalChatConsole({
       <div className="chat-page-top">
         <div>
           <div className="chat-eyebrow">{translate("Unified orchestrator")}</div>
-          <h1 id="chat-title">Chat</h1>
+          <h1 id="chat-title">{translate("Chat")}</h1>
         </div>
         <label className="chat-project-picker" htmlFor="chat-project-select">
           <span>{translate("Context")}</span>
@@ -298,8 +298,8 @@ export function OperationalChatConsole({
           <span>{translate("Access")}</span>
           <select id="chat-access-select" value={accessMode} onChange={(e) => setAccessMode(e.target.value as ChatAccessMode)}>
             <option value="read_only">{translate("Read-only")}</option>
-            <option value="standard">Standard</option>
-            <option value="full">Full Access</option>
+            <option value="standard">{translate("Standard")}</option>
+            <option value="full">{translate("Full Access")}</option>
           </select>
         </label>
         <label className="chat-access-picker" htmlFor="chat-provider-select">
@@ -365,7 +365,7 @@ export function OperationalChatConsole({
           <header className="chat-main-header">
             <div>
               <strong>{selectedThread?.title ?? translate("No conversation")}</strong>
-              <span>{projectLabel} · Maestro</span>
+              <span>{projectLabel} · {translate("Maestro")}</span>
             </div>
             <span className="chat-context-badge">
               {accessMode === "read_only" ? translate("read-only") : accessMode === "full" ? translate("governed full access") : translate("standard access")}
@@ -404,7 +404,7 @@ export function OperationalChatConsole({
                   <div key={msg.id} className={`chat-message ${isUser ? "is-user" : isSystem ? "is-system" : "is-maestro"}`}>
                     <div className="chat-avatar"><Icon name={isUser ? "hand" : isSystem ? "shield" : "ghost"} /></div>
                     <div className="chat-message-content">
-                      <span className="chat-message-label">{isUser ? translate("You") : isSystem ? translate("System") : msg.providerId && msg.providerId !== "deterministic_engine" ? `${msg.providerId}${msg.model ? ` · ${msg.model}` : ""}` : "Maestro"}</span>
+                      <span className="chat-message-label">{isUser ? translate("You") : isSystem ? translate("System") : msg.providerId && msg.providerId !== "deterministic_engine" ? `${msg.providerId}${msg.model ? ` · ${msg.model}` : ""}` : translate("Maestro")}</span>
                       <div className="chat-bubble">{msg.messageText}</div>
                       {actions.length > 0 && !isUser ? (
                         <div className="chat-actions">
