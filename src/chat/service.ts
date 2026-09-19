@@ -701,7 +701,8 @@ export class OperationalChatService {
           ].join("\n"),
           skillContext,
           signal: controller.signal,
-          model: input.model ?? lease.model ?? null
+          model: input.model ?? lease.model ?? null,
+          effort: lease.effort
         });
       } finally {
         clearTimeout(timeout);
@@ -1549,7 +1550,7 @@ export class OperationalChatService {
                 skillContext,
                 signal: timeoutController.signal,
                 model: selectedModel ?? lease.model ?? null,
-                effort: selectedEffort ?? evidence.providers.find((item) => item.id === providerId)?.control.effort ?? null
+                effort: selectedEffort ?? lease.effort ?? evidence.providers.find((item) => item.id === providerId)?.control.effort ?? null
               });
               if (result.outcome === "completed" && result.output.trim().length > 0) {
                 lease.release();

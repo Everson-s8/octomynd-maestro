@@ -20,6 +20,7 @@ export type RoutedAgent = {
   provider: AgentProvider;
   health: AgentHealth;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
 };
 
 export type AgentLease = RoutedAgent & {
@@ -155,7 +156,8 @@ export class AgentRegistry {
       const health = await provider.health();
       if (health.state === "ready") {
         const model = this.resolveModelForExecution(providerId, capability);
-        return { provider, health, model };
+        const effort = this.resolveEffortForExecution(providerId, capability);
+        return { provider, health, model, effort };
       }
     }
     return null;
@@ -178,10 +180,12 @@ export class AgentRegistry {
       this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
       let released = false;
       const model = this.resolveModelForExecution(providerId, capability);
+      const effort = this.resolveEffortForExecution(providerId, capability);
       return {
         provider,
         health,
         model,
+        effort,
         release: (feedback) => {
           if (released) return;
           released = true;
@@ -219,10 +223,12 @@ export class AgentRegistry {
     this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
     let released = false;
     const model = this.resolveModelForExecution(providerId, capability);
+    const effort = this.resolveEffortForExecution(providerId, capability);
     return {
       provider,
       health,
       model,
+      effort,
       release: (feedback) => {
         if (released) return;
         released = true;
@@ -399,6 +405,17 @@ export class AgentRegistry {
     }
     const provider = this.providers.get(providerId);
     return provider?.model ?? null;
+  }
+
+  private resolveEffortForExecution(providerId: AgentProviderId, capability?: AgentCapability): AgentReasoningEffort | null {
+    const policy = this.policySnapshot();
+    if (capability) {
+      const capabilityRouting = policy.capabilities.find((c) => c.capability === capability);
+      if (capabilityRouting?.preferredEffort && capabilityRouting.order[0] === providerId) {
+        return capabilityRouting.preferredEffort;
+      }
+    }
+    return policy.controls.find((c) => c.providerId === providerId)?.effort ?? null;
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {

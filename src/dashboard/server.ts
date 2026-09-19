@@ -824,6 +824,11 @@ async function routeRequest(
       : body.preferredModel === null
         ? null
         : undefined;
+    const preferredEffort = body.preferredEffort === null
+      ? null
+      : typeof body.preferredEffort === "string"
+        ? normalizeReasoningEffort(body.preferredEffort)
+        : undefined;
     if (!capability || order.length === 0) {
       sendJson(response, 400, { error: "valid_capability_order_and_requiredProviderId_are_required" });
       return;
@@ -832,7 +837,8 @@ async function routeRequest(
       capability,
       order,
       requiredProviderId,
-      preferredModel
+      preferredModel,
+      preferredEffort
     });
     options.database.addEvent({
       source: "dashboard",

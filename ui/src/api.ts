@@ -438,6 +438,7 @@ export type CapabilityRoutingPolicy = {
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
   preferredModel?: string | null;
+  preferredEffort?: ReasoningEffort | null;
   updatedAt: string | null;
 };
 export type ProviderPolicySnapshot = {
@@ -564,7 +565,7 @@ export async function testProviderConnection(input: {
 
 export async function updateCapabilityRouting(
   capability: AgentCapability,
-  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId"> & { preferredModel?: string | null }
+  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId"> & { preferredModel?: string | null; preferredEffort?: ReasoningEffort | null }
 ): Promise<CapabilityRoutingPolicy> {
   const response = await fetch(`/api/provider-policy/capabilities/${capability}`, {
     method: "PUT",

@@ -16,6 +16,7 @@ export type CapabilityRoutingPolicy = {
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
   preferredModel?: string | null;
+  preferredEffort?: AgentReasoningEffort | null;
   updatedAt: string | null;
 };
 
@@ -31,6 +32,7 @@ export type ProviderControlUpdate = Pick<ProviderControl, "providerId" | "mode" 
 };
 export type CapabilityRoutingUpdate = Pick<CapabilityRoutingPolicy, "capability" | "order" | "requiredProviderId"> & {
   preferredModel?: string | null;
+  preferredEffort?: AgentReasoningEffort | null;
 };
 
 export interface ProviderPolicyStore {
@@ -82,6 +84,7 @@ export function defaultProviderPolicySnapshot(): ProviderPolicySnapshot {
       order,
       requiredProviderId: null,
       preferredModel: null,
+      preferredEffort: null,
       updatedAt: null
     }))
   };

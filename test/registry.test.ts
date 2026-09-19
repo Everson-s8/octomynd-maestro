@@ -142,20 +142,22 @@ describe("agent registry leases", () => {
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
 
-  it("resolves model preference hierarchically: capability > provider control > provider default", async () => {
+  it("resolves model and effort preferences hierarchically per capability", async () => {
     const policy = policyStore();
     const codex = provider("codex", ["coding"], "codex-default", ["gpt-4o", "o3-mini"]);
     const registry = new AgentRegistry([codex], undefined, Date.now, policy);
 
-    // 1. Provider default model
+    // 1. Provider default model and no explicit effort
     let lease = await registry.acquire("coding");
     expect(lease?.model).toBe("codex-default");
+    expect(lease?.effort).toBeNull();
     lease?.release();
 
     // 2. Provider control override
-    policy.updateProviderControl({ providerId: "codex", mode: "enabled", fallbackEnabled: true, model: "gpt-4o" });
+    policy.updateProviderControl({ providerId: "codex", mode: "enabled", fallbackEnabled: true, model: "gpt-4o", effort: "high" });
     lease = await registry.acquire("coding");
     expect(lease?.model).toBe("gpt-4o");
+    expect(lease?.effort).toBe("high");
     lease?.release();
 
     // 3. Capability preferred model override
@@ -163,10 +165,12 @@ describe("agent registry leases", () => {
       capability: "coding",
       order: ["codex"],
       requiredProviderId: null,
-      preferredModel: "o3-mini"
+      preferredModel: "o3-mini",
+      preferredEffort: "low"
     });
     lease = await registry.acquire("coding");
     expect(lease?.model).toBe("o3-mini");
+    expect(lease?.effort).toBe("low");
     lease?.release();
 
     // Check snapshot contains models and currentModel

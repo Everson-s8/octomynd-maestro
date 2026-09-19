@@ -5,6 +5,7 @@ import {
   DashboardData,
   fetchProviderPolicy,
   ProviderPolicySnapshot,
+  ReasoningEffort,
   updateCapabilityRouting,
 } from "../api";
 import { capabilityLabel } from "../helpers";
@@ -49,17 +50,20 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
     capability: AgentCapability,
     primary: AgentProviderId,
     requiredProviderId: AgentProviderId | null,
-    preferredModel?: string | null
+    preferredModel?: string | null,
+    preferredEffort?: ReasoningEffort | null
   ) => {
     const current = (policy?.capabilities ?? []).find((item) => item.capability === capability);
     if (!current) return;
     setBusy(`capability:${capability}`);
     try {
       const targetPreferredModel = preferredModel !== undefined ? preferredModel : current.preferredModel;
+      const targetPreferredEffort = preferredEffort !== undefined ? preferredEffort : current.preferredEffort;
       await updateCapabilityRouting(capability, {
         order: [primary, ...current.order.filter((item) => item !== primary)],
         requiredProviderId,
-        preferredModel: targetPreferredModel
+        preferredModel: targetPreferredModel,
+        preferredEffort: targetPreferredEffort
       });
       await loadPolicy();
       onPolicyChanged?.();
@@ -96,6 +100,14 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
             const selectedModel = routing.preferredModel && modelOptions.includes(routing.preferredModel)
               ? routing.preferredModel
               : "";
+            const availableEfforts = primaryProvider?.reasoningEfforts ?? [];
+            const effortOptions = [...new Set([
+              ...availableEfforts,
+              ...(routing.preferredEffort ? [routing.preferredEffort] : [])
+            ])];
+            const selectedEffort = routing.preferredEffort && effortOptions.includes(routing.preferredEffort)
+              ? routing.preferredEffort
+              : "";
             return (
               <div className="routing-row" key={routing.capability}>
                 <div className="rname">{capabilityLabel(routing.capability)}</div>
@@ -108,7 +120,8 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                         routing.capability,
                         event.target.value as AgentProviderId,
                         routing.requiredProviderId,
-                        event.target.value === primaryProviderId ? routing.preferredModel : null
+                        event.target.value === primaryProviderId ? routing.preferredModel : null,
+                        event.target.value === primaryProviderId ? routing.preferredEffort : null
                       )
                     }
                   >
@@ -137,6 +150,25 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                     {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
                   </select>
                 </div>
+                <div><div className="field-lbl">{translate("Effort")}</div>
+                  <select
+                    className="sel"
+                    value={selectedEffort}
+                    disabled={busy !== null || effortOptions.length === 0}
+                    onChange={(event) =>
+                      void changeRouting(
+                        routing.capability,
+                        primaryProviderId as AgentProviderId,
+                        routing.requiredProviderId,
+                        selectedModel || null,
+                        (event.target.value || null) as ReasoningEffort | null
+                      )
+                    }
+                  >
+                    <option value="">{translate("Provider default")}</option>
+                    {effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabel(effort)}</option>)}
+                  </select>
+                </div>
                 <div><div className="field-lbl">{translate("Rule")}</div><select className="sel"
                     value={routing.requiredProviderId ?? "auto"}
                     disabled={busy !== null}
@@ -145,7 +177,8 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                         routing.capability,
                         primaryProviderId as AgentProviderId,
                         event.target.value === "auto" ? null : (event.target.value as AgentProviderId),
-                        selectedModel || null
+                        selectedModel || null,
+                        (selectedEffort || null) as ReasoningEffort | null
                       )
                     }
                   >
@@ -162,4 +195,16 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
           })}
     </section>
   );
+}
+
+function effortLabel(effort: ReasoningEffort): string {
+  return translate({
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    extra_high: "Extra high",
+    max: "Max",
+    ultra: "Ultra"
+  }[effort]);
 }

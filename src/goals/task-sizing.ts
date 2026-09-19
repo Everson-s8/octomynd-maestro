@@ -95,6 +95,7 @@ export async function sizeTaskWithModel(
       previousSteps: [],
       artifactsRoot: project.path,
       model,
+      effort: lease.effort,
       humanFeedback: buildSizingPrompt(task.text)
     });
     if (result.outcome !== "completed") {
