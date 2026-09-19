@@ -26,8 +26,10 @@ phase, outcome, summary, output, error, duration, and timestamps.
 Before a new task starts, Maestro makes one small structured planning call through the same
 provider/model routing policy used by the rest of the runtime. The provider returns bounded intake
 facts (estimated files, workstreams, dependencies, review gates, and acceptance criteria); the
-existing `TaskDNA` policy converts those facts into phase budgets. Task text is redacted before it
-is sent to the sizing provider, and the result is persisted so a resume does not pay for sizing
+existing `TaskDNA` policy converts those facts into phase budgets. The extracted acceptance
+criteria are persisted and reused in the initial worker prompt and in the draft PR body, so the
+provider and human reviewer see the same definition of done. Task text is redacted before it is
+sent to the sizing provider, and the result is persisted so a resume does not pay for sizing
 again. If the provider is unavailable, over quota, or returns invalid output, Maestro records the
 reason and uses an explicit offline estimate instead of silently spending the old medium budget.
 

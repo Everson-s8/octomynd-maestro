@@ -3,6 +3,7 @@ import path from "node:path";
 import { GoalRunRecord, ProjectRecord, TaskRecord } from "../db.js";
 import { GitCommandResult, runGit } from "../git.js";
 import { formatSecretScanFinding, scanWorktreePathsForSecrets } from "../security/secrets.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 export type GoalDeliveryResult = {
   commitSha: string;
@@ -13,13 +14,15 @@ export type GoalDeliveryResult = {
 export type GoalDeliveryHandler = (
   task: TaskRecord,
   project: ProjectRecord,
-  run: GoalRunRecord
+  run: GoalRunRecord,
+  acceptanceCriteria?: string[]
 ) => Promise<GoalDeliveryResult>;
 
 export type GoalPublisher = (
   task: TaskRecord,
   project: ProjectRecord,
-  commitSha: string
+  commitSha: string,
+  acceptanceCriteria?: string[]
 ) => Promise<string>;
 
 export const deliverGoalToDraftPullRequest = createGoalDeliveryHandler();
@@ -27,7 +30,7 @@ export const deliverGoalToDraftPullRequest = createGoalDeliveryHandler();
 export function createGoalDeliveryHandler(
   publisher: GoalPublisher = publishGoalBranch
 ): GoalDeliveryHandler {
-  return async (task, project, run) => {
+  return async (task, project, run, acceptanceCriteria = []) => {
     if (!task.worktreePath || !task.branchName) {
       throw new Error(`Task #${task.id} has no prepared worktree or branch.`);
     }
@@ -66,7 +69,7 @@ export function createGoalDeliveryHandler(
       "read delivery commit"
     ).stdout.trim();
 
-    const pullRequestUrl = await publisher(task, project, commitSha);
+    const pullRequestUrl = await publisher(task, project, commitSha, acceptanceCriteria);
     return { commitSha, pullRequestUrl, branchName: task.branchName };
   };
 }
@@ -114,7 +117,7 @@ function listChangedFiles(worktreePath: string): string[] {
   return [...new Set([...splitNull(tracked), ...splitNull(untracked)])];
 }
 
-async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Promise<string> {
+async function publishGoalBranch(task: TaskRecord, project: ProjectRecord, _commitSha: string, acceptanceCriteria: string[] = []): Promise<string> {
   const remote = runGitSafe(["remote", "get-url", "origin"], task.worktreePath!);
   if (!remote.ok) {
     // A local-only project has no meaningful GitHub PR target. Preserve the
@@ -140,18 +143,7 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
   if (existingUrl) return existingUrl;
 
   const title = buildPullRequestTitle(task, project);
-  const body = [
-    "## Resumo",
-    `Implementa: ${task.title || pullRequestSummary(task.text)}.`,
-    "",
-    "## Objetivo original",
-    singleLine(task.text),
-    "",
-    "## Controle",
-    `- Task do Maestro: #${task.id}`,
-    `- Branch: \`${task.branchName}\``,
-    "- PR is created as a draft; review and merge remain human decisions."
-  ].join("\n");
+  const body = buildPullRequestBody(task, acceptanceCriteria);
   const created = runGh([
     "pr", "create", "--draft", "--base", task.baseBranch || project.defaultBranch, "--head", task.branchName!,
     "--title", title, "--body", body
@@ -165,6 +157,26 @@ async function publishGoalBranch(task: TaskRecord, project: ProjectRecord): Prom
   const url = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\/github\.com\//.test(line));
   if (!url) throw new Error("GitHub CLI did not return a pull request URL.");
   return url;
+}
+
+export function buildPullRequestBody(task: TaskRecord, acceptanceCriteria: string[] = []): string {
+  const safeCriteria = acceptanceCriteria
+    .map((criterion) => redactSensitiveText(criterion).replace(/\s+/g, " ").trim().slice(0, 500))
+    .filter(Boolean)
+    .slice(0, 12);
+  return [
+    "## Resumo",
+    `Implementa: ${redactSensitiveText(task.title || pullRequestSummary(task.text))}.`,
+    "",
+    "## Objetivo original",
+    redactSensitiveText(singleLine(task.text)),
+    ...(safeCriteria.length > 0 ? ["", "## Critérios de aceitação", ...safeCriteria.map((criterion) => `- ${criterion}`)] : []),
+    "",
+    "## Controle",
+    `- Task do Maestro: #${task.id}`,
+    `- Branch: \`${task.branchName}\``,
+    "- PR is created as a draft; review and merge remain human decisions."
+  ].join("\n");
 }
 
 function runGitSafe(args: string[], cwd: string): GitCommandResult {

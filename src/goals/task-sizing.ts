@@ -14,6 +14,7 @@ export type TaskSizingOptions = {
 
 export type TaskSizingResult = {
   dna: TaskDNA;
+  acceptanceCriteria: string[];
   source: "model" | "offline_estimate";
   providerId: AgentProviderId | null;
   model: string | null;
@@ -45,6 +46,7 @@ export async function sizeTaskWithModel(
   if (options.offline) {
     return {
       dna: offlineDNA,
+      acceptanceCriteria: [],
       source: "offline_estimate",
       providerId: null,
       model: null,
@@ -60,6 +62,7 @@ export async function sizeTaskWithModel(
   } catch (error) {
     return {
       dna: offlineDNA,
+      acceptanceCriteria: [],
       source: "offline_estimate",
       providerId: options.providerId ?? null,
       model: options.model ?? null,
@@ -69,6 +72,7 @@ export async function sizeTaskWithModel(
   if (!lease) {
     return {
       dna: offlineDNA,
+      acceptanceCriteria: [],
       source: "offline_estimate",
       providerId: options.providerId ?? null,
       model: options.model ?? null,
@@ -113,8 +117,13 @@ export async function sizeTaskWithModel(
       },
       explicitOverride: structured.classification ?? "direct_task"
     });
+    const dna = computeTaskDNA(decision);
+    if (structured.acceptanceCriteria.length > 0) {
+      dna.acceptanceCriteria = structured.acceptanceCriteria;
+    }
     return {
-      dna: computeTaskDNA(decision),
+      dna,
+      acceptanceCriteria: structured.acceptanceCriteria,
       source: "model",
       providerId,
       model,
@@ -123,6 +132,7 @@ export async function sizeTaskWithModel(
   } catch (error) {
     return {
       dna: offlineDNA,
+      acceptanceCriteria: [],
       source: "offline_estimate",
       providerId,
       model,

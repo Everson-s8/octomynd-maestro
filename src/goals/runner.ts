@@ -266,7 +266,7 @@ export async function runTaskGoal(
         });
       });
       try {
-        const delivery = await options.delivery(database.getTask(task.id), project, currentRun);
+        const delivery = await options.delivery(database.getTask(task.id), project, currentRun, dna?.acceptanceCriteria);
         deliveredRun = database.withTransaction(() => {
           const updated = database.updateGoalDelivery({
             id: run.id,
@@ -708,7 +708,8 @@ export async function runTaskGoal(
             .find((candidate) => candidate.taskId === task.id)?.contract,
           deadlineAt: goalDeadlineAt,
           signal: options.signal,
-          model: routed.model
+          model: routed.model,
+          acceptanceCriteria: dna?.acceptanceCriteria
         });
       } catch (error) {
         result = {

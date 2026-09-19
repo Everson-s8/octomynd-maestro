@@ -72,6 +72,8 @@ export type AgentExecutionRequest = {
   deadlineAt?: number;
   signal?: AbortSignal;
   model?: string | null;
+  /** Semantic acceptance criteria extracted during task sizing, when available. */
+  acceptanceCriteria?: string[];
 };
 
 export type NormalizedResult = {
