@@ -17,10 +17,14 @@
  *     folder, so updates never clobber them and no secret ships in the build.
  */
 
+const http = require("node:http");
 const path = require("node:path");
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4787;
+const DEFAULT_HEALTH_SERVICE = "octomynd-maestro";
+const DEFAULT_HEALTH_RUNTIME_MODE = "full";
+const MAX_HEALTH_BODY_BYTES = 64 * 1024;
 
 /**
  * Resolve the on-disk locations of the packaged backend entry and built UI.
@@ -134,6 +138,108 @@ function resolveReleaseChannel(env) {
   return raw === "dev" || raw === "development" ? "dev" : "prod";
 }
 
+/**
+ * Verify that an HTTP server is the Maestro instance this caller expects.
+ *
+ * A 200 status alone is not an identity check: any unrelated local process
+ * can return it. The dashboard already exposes a small health contract, so
+ * consume that contract with a bounded body and a total timeout. The optional
+ * runtimeMode allows the packaged desktop entry point to distinguish its
+ * full orchestrator from a dashboard-only development server.
+ *
+ * @param {string} host
+ * @param {number|string} port
+ * @param {number} timeoutMs
+ * @param {{ service?: string, runtimeMode?: string }} [expected]
+ * @returns {Promise<{
+ *   status: "healthy"|"unavailable"|"timeout"|"invalid_response"|"wrong_identity",
+ *   service?: string,
+ *   runtimeMode?: string,
+ *   reason?: string
+ * }>}
+ */
+function checkHealth(host, port, timeoutMs, expected = {}) {
+  const expectedService = String(expected.service || DEFAULT_HEALTH_SERVICE).trim();
+  const expectedRuntimeMode = expected.runtimeMode ? String(expected.runtimeMode).trim() : undefined;
+  const safeTimeout = Math.max(1, Number(timeoutMs) || 1);
+
+  return new Promise((resolve) => {
+    let request;
+    let settled = false;
+    const timer = setTimeout(() => {
+      finish({ status: "timeout", reason: "request_timeout" });
+      request?.destroy();
+    }, safeTimeout);
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    try {
+      request = http.get(`http://${host}:${port}/api/health`, { timeout: safeTimeout }, (response) => {
+        let body = "";
+        let bodyBytes = 0;
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          bodyBytes += Buffer.byteLength(chunk, "utf8");
+          if (bodyBytes > MAX_HEALTH_BODY_BYTES) {
+            finish({ status: "invalid_response", reason: "body_too_large" });
+            response.destroy();
+            return;
+          }
+          body += chunk;
+        });
+        response.on("end", () => {
+          if (response.statusCode !== 200) {
+            finish({ status: "invalid_response", reason: `unexpected_status_${response.statusCode ?? "unknown"}` });
+            return;
+          }
+
+          let payload;
+          try {
+            payload = JSON.parse(body);
+          } catch {
+            finish({ status: "invalid_response", reason: "invalid_json" });
+            return;
+          }
+
+          if (!payload || typeof payload !== "object" || payload.ok !== true) {
+            finish({ status: "invalid_response", reason: "invalid_health_payload" });
+            return;
+          }
+
+          const service = typeof payload.service === "string" ? payload.service : undefined;
+          const runtimeMode = typeof payload.runtimeMode === "string" ? payload.runtimeMode : undefined;
+          if (service !== expectedService || (expectedRuntimeMode && runtimeMode !== expectedRuntimeMode)) {
+            finish({ status: "wrong_identity", service, runtimeMode });
+            return;
+          }
+
+          finish({ status: "healthy", service, runtimeMode });
+        });
+        response.on("error", () => finish({ status: "invalid_response", reason: "response_read_error" }));
+      });
+      request.on("error", () => finish({ status: "unavailable", reason: "connection_error" }));
+      request.on("timeout", () => {
+        finish({ status: "timeout", reason: "request_timeout" });
+        request.destroy();
+      });
+    } catch {
+      finish({ status: "unavailable", reason: "request_error" });
+    }
+  });
+}
+
+function formatHealthConflictMessage(host, port, result) {
+  const reason = result?.status === "wrong_identity"
+    ? "The process answering this port is not the Maestro backend expected by this app."
+    : "The process answering this port did not return a valid Maestro health response.";
+  return `${reason}\n\nClose the other program using http://${host}:${port}, or set MAESTRO_DASHBOARD_PORT to another free port and reopen Maestro.`;
+}
+
 function normalizePort(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
@@ -148,5 +254,9 @@ module.exports = {
   resolveEnvSeedPlan,
   resolveLoadUrl,
   resolveReleaseChannel,
-  normalizePort
+  normalizePort,
+  DEFAULT_HEALTH_SERVICE,
+  DEFAULT_HEALTH_RUNTIME_MODE,
+  checkHealth,
+  formatHealthConflictMessage
 };

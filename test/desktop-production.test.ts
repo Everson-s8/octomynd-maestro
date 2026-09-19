@@ -1,17 +1,43 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import { createRequire } from "node:module";
 import { loadConfig, validateRuntimeConfig } from "../src/config.js";
 import { parse } from "yaml";
 
 const require = createRequire(import.meta.url);
-const production = require("../src/desktop/production.cjs") as typeof import("../src/desktop/production.cjs");
+const production = require("../src/desktop/production.cjs") as typeof import("../src/desktop/production.cjs") & {
+  DEFAULT_HEALTH_SERVICE: string;
+  DEFAULT_HEALTH_RUNTIME_MODE: string;
+  checkHealth: (
+    host: string,
+    port: number,
+    timeoutMs: number,
+    expected?: { service?: string; runtimeMode?: string }
+  ) => Promise<{ status: string }>;
+  formatHealthConflictMessage: (host: string, port: number, result: { status: string }) => string;
+};
 const updater = require("../src/desktop/auto-updater.cjs") as {
   initAutoUpdate: (options: Record<string, unknown>) => unknown;
 };
 
 describe("desktop production runtime logic", () => {
+  async function startHealthServer(handler: http.RequestListener): Promise<{ server: http.Server; port: number }> {
+    const server = http.createServer(handler);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("health test server did not expose a TCP port");
+    return { server, port: address.port };
+  }
+
+  async function closeServer(server: http.Server): Promise<void> {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+
   it("packages the updater entry without broad desktop source globs", () => {
     const builderConfig = parse(fs.readFileSync(path.resolve(process.cwd(), "electron-builder.yml"), "utf8")) as {
       files: string[];
@@ -157,6 +183,102 @@ describe("desktop production runtime logic", () => {
   it("resolves the dashboard load URL", () => {
     expect(production.resolveLoadUrl("127.0.0.1", 4787)).toBe("http://127.0.0.1:4787/");
     expect(production.resolveLoadUrl("", "bad")).toBe("http://127.0.0.1:4787/");
+  });
+
+  it("rejects a 200 response from an impostor process", async () => {
+    const { server, port } = await startHealthServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, service: "outro-programa-qualquer", runtimeMode: "full" }));
+    });
+
+    try {
+      const result = await production.checkHealth("127.0.0.1", port, 250, {
+        service: production.DEFAULT_HEALTH_SERVICE,
+        runtimeMode: production.DEFAULT_HEALTH_RUNTIME_MODE
+      });
+      expect(result.status).toBe("wrong_identity");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("accepts the legitimate Maestro health contract", async () => {
+    const { server, port } = await startHealthServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, service: "octomynd-maestro", runtimeMode: "full" }));
+    });
+
+    try {
+      const result = await production.checkHealth("127.0.0.1", port, 250, {
+        service: production.DEFAULT_HEALTH_SERVICE,
+        runtimeMode: production.DEFAULT_HEALTH_RUNTIME_MODE
+      });
+      expect(result.status).toBe("healthy");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects a Maestro process running in the wrong runtime mode", async () => {
+    const { server, port } = await startHealthServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, service: "octomynd-maestro", runtimeMode: "dashboard" }));
+    });
+
+    try {
+      const result = await production.checkHealth("127.0.0.1", port, 250, {
+        service: production.DEFAULT_HEALTH_SERVICE,
+        runtimeMode: production.DEFAULT_HEALTH_RUNTIME_MODE
+      });
+      expect(result.status).toBe("wrong_identity");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects non-JSON health responses without hanging", async () => {
+    const { server, port } = await startHealthServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("not Maestro");
+    });
+
+    try {
+      const result = await production.checkHealth("127.0.0.1", port, 250, {
+        service: production.DEFAULT_HEALTH_SERVICE,
+        runtimeMode: production.DEFAULT_HEALTH_RUNTIME_MODE
+      });
+      expect(result.status).toBe("invalid_response");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("bounds a slow health response by the request timeout", async () => {
+    const { server, port } = await startHealthServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, service: "octomynd-maestro", runtimeMode: "full" }));
+      }, 150);
+    });
+
+    try {
+      const startedAt = Date.now();
+      const result = await production.checkHealth("127.0.0.1", port, 25, {
+        service: production.DEFAULT_HEALTH_SERVICE,
+        runtimeMode: production.DEFAULT_HEALTH_RUNTIME_MODE
+      });
+      expect(result.status).toBe("timeout");
+      expect(Date.now() - startedAt).toBeLessThan(125);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("explains how to recover from an occupied port", () => {
+    const message = production.formatHealthConflictMessage("127.0.0.1", 4787, { status: "wrong_identity" });
+    expect(message).toContain("http://127.0.0.1:4787");
+    expect(message).toContain("Close the other program");
+    expect(message).toContain("MAESTRO_DASHBOARD_PORT");
   });
 
   it("classifies release channels for HG dev vs main production", () => {
