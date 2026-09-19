@@ -826,6 +826,32 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(strictResponse.providerId).toBe("antigravity");
     expect(strictResponse.explanation).toContain("No fallback was used");
     expect((await strictService.getHistory("maestro", 20, strictThread.id)).at(-1)?.providerId).toBe("antigravity");
+
+    const incompatibleCodex = chatProvider("codex", {
+      outcome: "failed",
+      summary: "Codex failed",
+      output: "",
+      error: `2026 ERROR codex_models_manager::cache: failed to load models cache: unknown variant \`max\`, expected one of \`none\`, \`minimal\`, \`low\`, \`medium\`, \`high\`, \`xhigh\`; body: {\"models\":[${"x".repeat(10_000)}]}`,
+      retryable: false
+    }, { models: ["gpt-5.6-luna"] });
+    const conciseFailureService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([incompatibleCodex]),
+      worktreesRoot: tmpDir
+    });
+    const conciseThread = conciseFailureService.createThread("maestro", "Erro de compatibilidade");
+    const conciseFailure = await conciseFailureService.ask({
+      projectKey: "maestro",
+      threadId: conciseThread.id,
+      surface: "dashboard",
+      message: "Teste o Codex",
+      providerId: "codex",
+      model: "gpt-5.6-luna",
+      uiLocale: "pt-BR"
+    });
+    expect(conciseFailure.explanation).toContain("atualize o Codex CLI");
+    expect(conciseFailure.explanation).not.toContain('"models"');
+    expect(conciseFailure.explanation.length).toBeLessThan(500);
   });
 
   it("offers governed or direct worktree code paths and verifies the direct change", async () => {

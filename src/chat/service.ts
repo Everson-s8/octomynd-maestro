@@ -22,7 +22,7 @@ import { MaestroDatabase, ProjectRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
-import { redactSensitiveText } from "../security/redaction.js";
+import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import { inspectProjectContext } from "./project-context.js";
 import { executeChatCommand, formatChatCommandEvidence, isLongRunningCommand, planChatCommand, planDependencyInstallCommand, planProjectStartCommand, type ChatCommandPlan } from "./project-command.js";
@@ -1598,9 +1598,10 @@ export class OperationalChatService {
     locale: ChatLocale,
     reason: string
   ): { explanation: string; providerId: AgentProviderId; model: string | null } {
+    const safeReason = summarizeProviderFailure(providerId, reason, locale);
     const message = locale === "pt-BR"
-      ? `Não consegui responder usando ${providerId}${model ? ` (${model})` : ""}. Motivo: ${reason} Nenhum fallback foi usado.`
-      : `I could not answer using ${providerId}${model ? ` (${model})` : ""}. Reason: ${reason} No fallback was used.`;
+      ? `Não consegui responder usando ${providerId}${model ? ` (${model})` : ""}. Motivo: ${safeReason} Nenhum fallback foi usado.`
+      : `I could not answer using ${providerId}${model ? ` (${model})` : ""}. Reason: ${safeReason} No fallback was used.`;
     return { explanation: message, providerId, model };
   }
 
@@ -1948,4 +1949,17 @@ export function parseTaskCreationIntent(input: string): TaskCreationIntent | nul
 function truncateChatText(value: string, max = 180): string {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length <= max ? compact : `${compact.slice(0, max - 1).trim()}…`;
+}
+
+function summarizeProviderFailure(providerId: AgentProviderId, reason: string, locale: ChatLocale): string {
+  const normalized = reason.replace(/\s+/g, " ").trim();
+  if (providerId === "codex" && /failed to load models cache|failed to refresh available models|unknown variant [`']?max|requires a newer version of codex/i.test(normalized)) {
+    return locale === "pt-BR"
+      ? "a versão instalada do Codex CLI é incompatível com o catálogo atual de modelos; atualize o Codex CLI e tente novamente."
+      : "the installed Codex CLI is incompatible with the current model catalog; update the Codex CLI and try again.";
+  }
+
+  const bodyIndex = normalized.search(/\bbody:\s*\{/i);
+  const concise = bodyIndex >= 0 ? normalized.slice(0, bodyIndex).trim() : normalized;
+  return truncateForDisplay(redactSensitiveText(concise || "The provider returned an error."), 360);
 }
