@@ -115,7 +115,7 @@ async function codexFetcher(): Promise<QuotaResult> {
       status: buckets.length ? "ok" : "unavailable",
       updatedAt: new Date().toISOString(),
       buckets,
-      error: buckets.length ? null : "sem dados de quota no wham"
+      error: buckets.length ? null : "no quota data available from wham"
     };
   } catch (error) {
     return buildError("codex", error);
@@ -424,7 +424,7 @@ async function claudeFetcher(): Promise<QuotaResult> {
       status: buckets.some((b) => b.usedPercent != null) ? "ok" : "unavailable",
       updatedAt: new Date().toISOString(),
       buckets,
-      error: buckets.some((b) => b.usedPercent != null) ? null : "sem dados de uso OAuth"
+      error: buckets.some((b) => b.usedPercent != null) ? null : "no OAuth usage data available"
     };
   } catch (error) {
     return buildError("claude", error);
@@ -444,7 +444,7 @@ const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 
 async function openRouterFetcher(): Promise<QuotaResult> {
   const key = process.env.OPENROUTER_API_KEY ?? process.env.OPENROUTER_KEY ?? null;
-  if (!key) return buildEmptyUnavailable("openrouter", "sem OPENROUTER_API_KEY");
+  if (!key) return buildEmptyUnavailable("openrouter", "OPENROUTER_API_KEY is not set");
   try {
     const res = await fetch(OPENROUTER_KEY_URL, {
       headers: { Authorization: `Bearer ${key}` }
@@ -454,7 +454,7 @@ async function openRouterFetcher(): Promise<QuotaResult> {
       data?: { limit?: number | null; usage?: number; is_free_tier?: boolean; usage_limit?: number | null };
     };
     const usg = data.data;
-    if (!usg || typeof usg.usage !== "number") return buildEmptyUnavailable("openrouter", "sem uso de quota");
+    if (!usg || typeof usg.usage !== "number") return buildEmptyUnavailable("openrouter", "no quota usage available");
     const limit = typeof usg.limit === "number" && usg.limit > 0 ? usg.limit : null;
     const bucket = usedLimitToBucket({
       provider: "openrouter",
@@ -478,7 +478,7 @@ const OPENAI_USAGE_URL = "https://api.openai.com/v1/organization/usage/completio
 
 async function openAIFetcher(): Promise<QuotaResult> {
   const key = process.env.OPENAI_API_KEY ?? null;
-  if (!key) return buildEmptyUnavailable("openai", "sem OPENAI_API_KEY");
+  if (!key) return buildEmptyUnavailable("openai", "OPENAI_API_KEY is not set");
   try {
     const res = await fetch(`${OPENAI_USAGE_URL}?start_time=${Math.floor(Date.now() / 1000) - 30 * 86400}`, {
       headers: { Authorization: `Bearer ${key}` }
@@ -487,7 +487,7 @@ async function openAIFetcher(): Promise<QuotaResult> {
     // Best-effort: OpenAI usage endpoint requires admin; if it fails, report based on data.
     const data = (await res.json()) as { data?: { total_usage?: number }[] };
     const used = data?.data?.[0]?.total_usage ?? null;
-    if (used == null) return buildEmptyUnavailable("openai", "sem dados de uso (requer org admin)");
+    if (used == null) return buildEmptyUnavailable("openai", "no usage data available (organization admin required)");
     const bucket = usedLimitToBucket({
       provider: "openai",
       modelId: null,
@@ -533,7 +533,7 @@ const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
 
 async function openCodeGoFetcher(): Promise<QuotaResult> {
   const key = process.env.OPENCODE_GO_API_KEY ?? null;
-  if (!key) return buildEmptyUnavailable("opencode-go", "sem OPENCODE_GO_API_KEY");
+  if (!key) return buildEmptyUnavailable("opencode-go", "OPENCODE_GO_API_KEY is not set");
   try {
     const res = await fetch(`${OPENCODE_GO_BASE}/usage`, {
       headers: { Authorization: `Bearer ${key}` }
@@ -547,7 +547,7 @@ async function openCodeGoFetcher(): Promise<QuotaResult> {
       };
     };
     const u = data.usage;
-    if (!u) return buildEmptyUnavailable("opencode-go", "sem dados de uso");
+    if (!u) return buildEmptyUnavailable("opencode-go", "no usage data available");
     const windows: Array<{ key: string; w: { percent?: number; resetsAt?: string } }> = [
       { key: "rolling", w: u.rolling ?? {} },
       { key: "weekly", w: u.weekly ?? {} },

@@ -72,7 +72,7 @@ describe("DeterministicValidationRunner", () => {
     expect(calls.find((call) => call.args.includes("frontend/tsconfig.json"))).toBeDefined();
     expect(calls.find((call) => call.args.includes("frontend/vite.config.ts"))).toBeDefined();
     expect(report.checks.find((check) => check.id === "tests_full")?.summary)
-      .toContain("nenhum arquivo de teste");
+      .toContain("no test files found");
   });
 
   it("returns compact actionable failures while retaining raw output", async () => {
