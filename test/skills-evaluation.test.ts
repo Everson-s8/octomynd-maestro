@@ -158,10 +158,25 @@ function skillMarkdown(name: string, body: string): string {
   return [
     "---",
     `name: ${name}`,
-    "description: Review one consolidated feature with deterministic evidence.",
+    "description: Review features with deterministic evidence.",
     "---",
     "",
+    "## Introduction",
+    "This skill defines a bounded review judgment rule.",
+    "## When to Use",
+    "Use it for a consolidated feature review.",
+    "## Prerequisites",
+    "Read the feature evidence before deciding.",
+    "## How to Run",
+    "Follow the review procedure.",
+    "## Quick Reference",
+    "Evidence must be deterministic.",
+    "## Procedure",
     body,
+    "## Pitfalls",
+    "Do not approve missing evidence.",
+    "## Verification",
+    "Check the required phrases and evals.",
     ""
   ].join("\n");
 }

@@ -13,6 +13,7 @@ export function formatSkillPromptContext(context?: SkillExecutionContext): strin
   ]);
   return [
     "",
+    ...(context.selectionNote ? [`Skill selection: ${context.selectionNote}`] : []),
     "Skills disponiveis nesta etapa (somente metadados):",
     ...(available.length > 0 ? available : ["- nenhuma"]),
     "",

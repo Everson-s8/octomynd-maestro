@@ -16,7 +16,7 @@ describe("SkillCatalog", () => {
   it("discovers metadata and hashes the complete package without exposing instructions", () => {
     const root = tempRoot();
     const skillPath = writeSkill(root, "diagnose-goal-failure", {
-      description: "Diagnose a failed Goal from artifacts. Use after a Goal fails or stalls.",
+      description: "Diagnose failed Goals with evidence.",
       body: "SECRET PROCEDURE BODY",
       policy: [
         "schemaVersion: 1",
@@ -43,8 +43,8 @@ describe("SkillCatalog", () => {
       qualifiedName: "repository:diagnose-goal-failure",
       name: "diagnose-goal-failure",
       scope: "repository",
-      fileCount: 3,
-      resourcePaths: ["references/failure-taxonomy.md"]
+      fileCount: 4,
+      resourcePaths: ["evals/cases.yaml", "references/failure-taxonomy.md"]
     });
     expect(snapshot.skills[0]?.versionId).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(snapshot.skills[0]?.policy).toMatchObject({
@@ -59,14 +59,14 @@ describe("SkillCatalog", () => {
   it("changes the immutable version when any resource changes", () => {
     const root = tempRoot();
     const skillPath = writeSkill(root, "implement-task-safely", {
-      description: "Implement one bounded Task safely. Use for approved coding Tasks.",
+      description: "Implement bounded Tasks safely.",
       body: "First version"
     });
     const first = new SkillCatalog([{ scope: "repository", path: root }]).discover().skills[0];
 
     fs.writeFileSync(path.join(skillPath, "SKILL.md"), skillMarkdown(
       "implement-task-safely",
-      "Implement one bounded Task safely. Use for approved coding Tasks.",
+      "Implement bounded Tasks safely.",
       "Second version"
     ));
     const second = new SkillCatalog([{ scope: "repository", path: root }]).discover().skills[0];
@@ -84,7 +84,7 @@ describe("SkillCatalog", () => {
       "Body"
     ));
     writeSkill(root, "unsafe-policy", {
-      description: "Unsafe policy example. Use only in a negative test.",
+      description: "Unsafe policy example.",
       body: "Body",
       policy: "writeScopes: ['../outside']"
     });
@@ -97,22 +97,36 @@ describe("SkillCatalog", () => {
     expect(snapshot.issues.map((issue) => issue.message).join(" ")).toContain("safe relative paths");
   });
 
+  it("rejects a shallow Skill that has no judgment sections or eval cases", () => {
+    const root = tempRoot();
+    const skillPath = path.join(root, "shallow-skill");
+    fs.mkdirSync(skillPath, { recursive: true });
+    fs.writeFileSync(path.join(skillPath, "SKILL.md"), [
+      "---", "name: shallow-skill", "description: Shallow skill.", "---", "", "Do the thing.", ""
+    ].join("\n"));
+
+    const snapshot = new SkillCatalog([{ scope: "repository", path: root }]).discover();
+
+    expect(snapshot.skills).toEqual([]);
+    expect(snapshot.issues[0]?.message).toContain("## Introduction");
+  });
+
   it("rejects oversized packages and secret-shaped resources", () => {
     const root = tempRoot();
     const oversized = writeSkill(root, "oversized-skill", {
-      description: "Oversized Skill. Use only in a negative test.",
+      description: "Oversized Skill.",
       body: "Body"
     });
-    fs.writeFileSync(path.join(oversized, "large.txt"), "x".repeat(200));
+    fs.writeFileSync(path.join(oversized, "large.txt"), "x".repeat(600));
     const secret = writeSkill(root, "secret-skill", {
-      description: "Secret Skill. Use only in a negative test.",
+      description: "Secret Skill.",
       body: "Body"
     });
     fs.writeFileSync(path.join(secret, ".env"), "OPENAI_API_KEY=not-real");
 
     const snapshot = new SkillCatalog(
       [{ scope: "repository", path: root }],
-      { maxFileBytes: 100 }
+      { maxFileBytes: 500 }
     ).discover();
 
     expect(snapshot.skills).toEqual([]);
@@ -125,7 +139,7 @@ describe("SkillCatalog", () => {
     const root = tempRoot();
     const outside = tempRoot();
     const skillPath = writeSkill(root, "linked-skill", {
-      description: "Linked Skill. Use only in a negative test.",
+      description: "Linked Skill.",
       body: "Body"
     });
     const referencePath = path.join(skillPath, "references");
@@ -152,10 +166,36 @@ function writeSkill(
   const skillPath = path.join(root, name);
   fs.mkdirSync(skillPath, { recursive: true });
   fs.writeFileSync(path.join(skillPath, "SKILL.md"), skillMarkdown(name, input.description, input.body));
+  fs.mkdirSync(path.join(skillPath, "evals"), { recursive: true });
+  fs.writeFileSync(path.join(skillPath, "evals", "cases.yaml"), [
+    "schemaVersion: 1",
+    "cases:",
+    "  - id: trigger",
+    "    type: trigger",
+    "    prompt: use this skill",
+    "    phase: reviewing",
+    "    capability: reviewing",
+    "    expectMatch: true",
+    "  - id: content",
+    "    type: content",
+    "    requiredPhrases: ['Body']",
+    "    forbiddenPhrases: []"
+  ].join("\n"));
   if (input.policy) fs.writeFileSync(path.join(skillPath, "maestro.yaml"), input.policy);
   return skillPath;
 }
 
 function skillMarkdown(name: string, description: string, body: string): string {
-  return ["---", `name: ${name}`, `description: ${description}`, "---", "", body, ""].join("\n");
+  return [
+    "---", `name: ${name}`, `description: ${description}`, "---", "",
+    "## Introduction", "This skill defines a bounded judgment rule.",
+    "## When to Use", "Use it when the matching evidence is present.",
+    "## Prerequisites", "Read the task and its available evidence first.",
+    "## How to Run", "Follow the procedure below.",
+    "## Quick Reference", "Keep the scope bounded.",
+    "## Procedure", body,
+    "## Pitfalls", "Do not infer missing evidence.",
+    "## Verification", "Check the result against the acceptance criteria.",
+    ""
+  ].join("\n");
 }

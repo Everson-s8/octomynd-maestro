@@ -21,6 +21,7 @@ export function bootstrapSkills(input: {
   catalogPath: string;
   versionsPath: string;
   projectKey: string;
+  isEnabled?: () => boolean;
 }): SkillBootstrapResult {
   const snapshot = new SkillCatalog([{
     scope: "repository",
@@ -66,7 +67,7 @@ export function bootstrapSkills(input: {
   }
 
   return {
-    runtime: new SkillRuntime(input.database, store),
+    runtime: new SkillRuntime(input.database, store, {}, input.isEnabled),
     registered,
     active
   };

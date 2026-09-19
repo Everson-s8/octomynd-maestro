@@ -6,6 +6,7 @@ import type { AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { AgentRegistry } from "../agents/registry.js";
 import type { GoalPhase, GoalWaitReason, MaestroDatabase } from "../db.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import type { SkillRuntime } from "../skills/runtime.js";
 import { writeWorkerResultArtifacts } from "./artifacts.js";
 import { scheduleWorkerBatch } from "./scheduler.js";
 import type { WorkGraphDetails, WorkerNodeRecord } from "./types.js";
@@ -14,6 +15,7 @@ import { validateWorkGraph } from "./validator.js";
 export type WorkGraphRunnerOptions = {
   artifactsRoot: string;
   signal?: AbortSignal;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
   onProgress?: (graph: WorkGraphDetails, node: WorkerNodeRecord, provider: AgentProviderId) => void;
 };
 
@@ -89,6 +91,23 @@ export async function runWorkGraph(
         const dependencyIds = new Set(
           graph.nodes.filter((candidate) => node.dependsOn.includes(candidate.key)).map((candidate) => candidate.id)
         );
+        const skillContext = options.skillRuntime?.prepareContext({
+          runId: run.id,
+          phase: phaseForNode(node),
+          capability: node.capability,
+          taskText: `${task.text}\n${node.objective}`,
+          projectKey: project.key,
+          pinnedSkillVersions: node.skillVersions
+        });
+        if (skillContext?.selectionNote?.startsWith("Rejected ")) {
+          database.addEvent({
+            source: "maestro",
+            type: "work_graph.skill_pin_rejected",
+            text: skillContext.selectionNote,
+            taskId: task.id,
+            metadata: { graphId: graph.id, nodeId: node.id, pinnedSkillVersions: node.skillVersions }
+          });
+        }
         result = await lease.provider.execute({
           runId: run.id,
           stepNumber: attempt.id,
@@ -110,6 +129,7 @@ export async function runWorkGraph(
               .filter((artifact) => dependencyIds.has(artifact.nodeId) || node.inputArtifacts.includes(artifact.key))
               .map((artifact) => ({ key: artifact.key, summary: artifact.summary }))
           },
+          skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
           deadlineAt: Date.now() + node.deadlineMs,
           signal: options.signal,

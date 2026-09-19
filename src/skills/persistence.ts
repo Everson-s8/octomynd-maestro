@@ -228,7 +228,22 @@ export type SkillCuratorCandidateInput = {
   reproducibleTestCase: Record<string, unknown>;
 };
 
+export type SkillRuntimeSettings = {
+  enabled: boolean;
+  updatedAt: string | null;
+};
+
 export function createSkillPersistence(db: Database.Database) {
+  const ensureRuntimeSettings = db.prepare(`
+    INSERT INTO skill_runtime_settings (id, enabled, updated_at)
+    VALUES (1, @enabled, @now)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const setRuntimeEnabled = db.prepare(`
+    INSERT INTO skill_runtime_settings (id, enabled, updated_at)
+    VALUES (1, @enabled, @now)
+    ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+  `);
   const upsertSkill = db.prepare(`
     INSERT INTO skills (
       qualified_name, name, description, scope, project_key, owner, risk,
@@ -377,6 +392,20 @@ export function createSkillPersistence(db: Database.Database) {
   }
 
   return {
+    getSkillRuntimeSettings(defaultEnabled = false): SkillRuntimeSettings {
+      const now = new Date().toISOString();
+      ensureRuntimeSettings.run({ enabled: defaultEnabled ? 1 : 0, now });
+      const row = db.prepare("SELECT enabled, updated_at FROM skill_runtime_settings WHERE id = 1")
+        .get() as { enabled: number; updated_at: string | null };
+      return { enabled: row.enabled === 1, updatedAt: row.updated_at };
+    },
+
+    setSkillRuntimeEnabled(enabled: boolean): SkillRuntimeSettings {
+      const now = new Date().toISOString();
+      setRuntimeEnabled.run({ enabled: enabled ? 1 : 0, now });
+      return { enabled, updatedAt: now };
+    },
+
     registerSkillVersion(input: SkillVersionRegistrationInput): SkillVersionRecord {
       const normalized = normalizeRegistration(input);
       const now = new Date().toISOString();
@@ -927,6 +956,11 @@ export function migrateSkillPersistence(db: Database.Database): void {
       updated_at TEXT NOT NULL,
       FOREIGN KEY (skill_id) REFERENCES skills(id),
       FOREIGN KEY (skill_version_id) REFERENCES skill_versions(id)
+    );
+    CREATE TABLE IF NOT EXISTS skill_runtime_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, id);
     CREATE INDEX IF NOT EXISTS idx_goal_skill_pins_run_id ON goal_skill_pins(run_id, id);
