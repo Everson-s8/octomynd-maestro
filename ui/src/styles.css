@@ -344,7 +344,7 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
 .routing-table { display: grid; overflow: hidden; background: rgba(12,11,16,.035); border: 1px solid rgba(12,11,16,.08); border-radius: 18px; }
 .routing-heading { display: grid; gap: 4px; padding: 16px 18px; color: white; background: var(--ink); }
 .routing-heading strong { font-size: .86rem; }.routing-heading small { color: rgba(255,255,255,.56); font-size: .64rem; }
-.routing-row { display: grid; grid-template-columns: minmax(120px,.7fr) minmax(130px,1fr) minmax(170px,1.25fr); gap: 12px; align-items: end; padding: 12px 16px; border-top: 1px solid rgba(12,11,16,.07); }
+  .routing-row { display: grid; grid-template-columns: minmax(120px,.7fr) minmax(130px,1fr) minmax(150px,1fr) minmax(170px,1.25fr); gap: 12px; align-items: end; padding: 12px 16px; border-top: 1px solid rgba(12,11,16,.07); }
 .routing-row > strong { align-self: center; font-size: .73rem; }
 
 .project-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }

@@ -85,6 +85,17 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
             const firstStr = String(routing.order[0]);
             const primaryProviderId: string =
               eligible.includes(firstStr) ? firstStr : eligible[0] ?? "";
+            const primaryProvider = providers.find((provider) => provider.id === primaryProviderId);
+            const availableModels = primaryProvider?.models?.length
+              ? primaryProvider.models
+              : policy?.models?.[primaryProviderId] ?? [];
+            const modelOptions = [...new Set([
+              ...availableModels,
+              ...(routing.preferredModel ? [routing.preferredModel] : [])
+            ])];
+            const selectedModel = routing.preferredModel && modelOptions.includes(routing.preferredModel)
+              ? routing.preferredModel
+              : "";
             return (
               <div className="routing-row" key={routing.capability}>
                 <div className="rname">{capabilityLabel(routing.capability)}</div>
@@ -97,7 +108,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                         routing.capability,
                         event.target.value as AgentProviderId,
                         routing.requiredProviderId,
-                        routing.preferredModel
+                        event.target.value === primaryProviderId ? routing.preferredModel : null
                       )
                     }
                   >
@@ -108,15 +119,33 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                     ))}
                   </select>
                 </div>
+                <div><div className="field-lbl">{translate("Model")}</div>
+                  <select
+                    className="sel"
+                    value={selectedModel}
+                    disabled={busy !== null || modelOptions.length === 0}
+                    onChange={(event) =>
+                      void changeRouting(
+                        routing.capability,
+                        primaryProviderId as AgentProviderId,
+                        routing.requiredProviderId,
+                        event.target.value || null
+                      )
+                    }
+                  >
+                    <option value="">{translate("Provider default")}</option>
+                    {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
+                  </select>
+                </div>
                 <div><div className="field-lbl">{translate("Rule")}</div><select className="sel"
                     value={routing.requiredProviderId ?? "auto"}
                     disabled={busy !== null}
                     onChange={(event) =>
                       void changeRouting(
                         routing.capability,
-                        routing.order[0],
+                        primaryProviderId as AgentProviderId,
                         event.target.value === "auto" ? null : (event.target.value as AgentProviderId),
-                        routing.preferredModel
+                        selectedModel || null
                       )
                     }
                   >
