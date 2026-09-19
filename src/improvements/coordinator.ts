@@ -1,6 +1,8 @@
 import { AgentRegistry } from "../agents/registry.js";
 import type { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import type { SkillRuntime } from "../skills/runtime.js";
+import { formatSkillPromptContext } from "../skills/prompt.js";
 import {
   buildImprovementReviewPrompt,
   buildImprovementReviewSchema,
@@ -24,12 +26,16 @@ export type RestrictedImprovementReviewOptions = {
   timeoutMs?: number;
   maxOutputChars?: number;
   maxCandidates?: number;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
+  skillProjectKey?: string;
 };
 
 export class RestrictedImprovementReviewCoordinator implements RestrictedImprovementReviewer {
   private readonly timeoutMs: number;
   private readonly maxOutputChars: number;
   private readonly maxCandidates: number;
+  private readonly skillRuntime?: RestrictedImprovementReviewOptions["skillRuntime"];
+  private readonly skillProjectKey: string;
 
   constructor(
     private readonly agents: AgentRegistry,
@@ -50,6 +56,8 @@ export class RestrictedImprovementReviewCoordinator implements RestrictedImprove
       IMPROVEMENT_REVIEW_DEFAULT_MAX_CANDIDATES,
       IMPROVEMENT_REVIEW_MAX_CANDIDATES
     );
+    this.skillRuntime = options.skillRuntime;
+    this.skillProjectKey = options.skillProjectKey?.trim().toLowerCase() || "maestro";
   }
 
   async review(
@@ -57,7 +65,17 @@ export class RestrictedImprovementReviewCoordinator implements RestrictedImprove
     options: { workspacePath: string; signal?: AbortSignal }
   ): Promise<ImprovementReviewResult> {
     const schema = buildImprovementReviewSchema(this.maxCandidates);
-    const prompt = buildImprovementReviewPrompt(evidencePack, schema);
+    const skillContext = this.skillRuntime?.prepareContext({
+      runId: null,
+      phase: "improvement_reviewing",
+      capability: "improvement_reviewing",
+      taskText: evidencePack.subject,
+      projectKey: this.skillProjectKey
+    });
+    const prompt = [
+      buildImprovementReviewPrompt(evidencePack, schema),
+      ...formatSkillPromptContext(skillContext)
+    ].join("\n");
     const excluded = new Set<AgentProviderId>();
     const attempts: ImprovementReviewAttempt[] = [];
 

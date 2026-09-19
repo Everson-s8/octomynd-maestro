@@ -4,20 +4,20 @@ import { spawnSync } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 import type { AgentCapability } from "../agents/types.js";
 import type {
-  GoalPhase,
   MaestroDatabase,
   SkillEvaluationCheck,
   SkillEvaluationRecord,
   SkillVersionRecord
 } from "../db.js";
 import { scoreSkillRelevance } from "./runtime.js";
+import type { SkillInvocationPhase } from "./runtime.js";
 import { SkillVersionStore } from "./store.js";
 
 type TriggerEvalCase = {
   id: string;
   type: "trigger";
   prompt: string;
-  phase: GoalPhase;
+  phase: SkillInvocationPhase;
   capability: AgentCapability;
   expectMatch: boolean;
 };
@@ -167,7 +167,11 @@ function parseEvalCase(value: unknown, ids: Set<string>): SkillEvalCase {
   if (ids.has(id)) throw new Error(`Duplicate Skill eval id: ${id}.`);
   ids.add(id);
   if (value.type === "trigger") {
-    const phase = enumValue(value.phase, ["planning", "implementing", "testing", "reviewing"] as const, "phase");
+    const phase = enumValue(
+      value.phase,
+      ["planning", "implementing", "testing", "reviewing", "conversation", "improvement_reviewing"] as const,
+      "phase"
+    );
     const capability = enumValue(
       value.capability,
       ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"] as const,

@@ -174,7 +174,9 @@ const telegramManager = new TelegramSubsystemManager(config, database, {
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator,
   triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
-  repositoryService
+  repositoryService,
+  skillRuntime: skillBootstrap?.runtime,
+  skillProjectKey: config.skills.projectKey
 });
 const bot = createTelegramBot(config, database, {
   cancelTask: (taskId: number) => goalCoordinator.cancel(taskId),
@@ -184,7 +186,9 @@ const bot = createTelegramBot(config, database, {
   workGraphRuntime: workGraphCoordinator,
   featureCoordinator,
   triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
-  repositoryService
+  repositoryService,
+  skillRuntime: skillBootstrap?.runtime,
+  skillProjectKey: config.skills.projectKey
 });
 const featurePlanLifecycleNotifier = createTelegramFeaturePlanLifecycleNotifier(
   config,
@@ -272,7 +276,10 @@ const featureAssemblyCoordinator = new FeatureAssemblyCoordinator(
 );
 const improvementReviewWorker = new ImprovementReviewWorker(
   database,
-  new RestrictedImprovementReviewCoordinator(agentRegistry),
+  new RestrictedImprovementReviewCoordinator(agentRegistry, {
+    skillRuntime: skillBootstrap?.runtime,
+    skillProjectKey: config.skills.projectKey
+  }),
   improvementCandidateNotifier
 );
 backlogAutopilot = new BacklogAutopilot(database, goalCoordinator, {
@@ -300,6 +307,8 @@ const dashboardServer = config.dashboard.enabled
     agentRegistry,
     workGraphRuntime: workGraphCoordinator,
     skillLifecycle: skillLifecycleRuntime,
+    skillRuntime: skillBootstrap?.runtime,
+    skillProjectKey: config.skills.projectKey,
     telegramManager,
     repositoryService,
     taskSizer: ({ task, project, providerId, model }) => sizeTaskWithModel(agentRegistry, task, project, {

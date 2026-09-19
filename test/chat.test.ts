@@ -67,6 +67,54 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(history[2].senderRole).toBe("user");
   });
 
+  it("injects the selected conversation Skill into the provider prompt", async () => {
+    let seen: Parameters<AgentProvider["execute"]>[0] | undefined;
+    const provider = chatProvider("codex", {
+      outcome: "completed",
+      summary: "answered",
+      output: "Oi! Como posso ajudar?",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { seen = request; } });
+    const skillContext = {
+      available: [],
+      loaded: [{
+        qualifiedName: "repository:conversation",
+        versionId: "sha256:conversation",
+        triggerReason: "Implicit metadata match for conversation.",
+        instructions: "CONVERSATION SKILL INSTRUCTIONS"
+      }],
+      selectionMode: "deterministic_metadata" as const,
+      selectionNote: "Selected by conversation capability."
+    };
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir,
+      skillRuntime: {
+        prepareContext: (request) => {
+          expect(request).toMatchObject({
+            runId: null,
+            phase: "conversation",
+            capability: "conversation",
+            projectKey: "maestro"
+          });
+          return skillContext;
+        }
+      },
+      skillProjectKey: "maestro"
+    });
+
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Oi"
+    });
+
+    expect(seen?.skillContext).toEqual(skillContext);
+    expect(seen?.humanFeedback).toContain("CONVERSATION SKILL INSTRUCTIONS");
+  });
+
   it("keeps chat history isolated per conversation and supports deletion", async () => {
     const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
     const first = chatService.createThread("maestro", "Primeira conversa");

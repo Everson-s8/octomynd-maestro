@@ -58,6 +58,7 @@ import {
   validateTelegramUserId
 } from "../telegram/connect.js";
 import type { TelegramSubsystemManager } from "../telegram/bot.js";
+import type { SkillRuntime } from "../skills/runtime.js";
 
 const providerAuthBroker = new ProviderAuthBroker();
 const DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS = 1_500;
@@ -130,8 +131,10 @@ export type DashboardServerOptions = {
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
   chatService?: OperationalChatService;
   taskSizer?: OperationalChatServiceOptions["taskSizer"];
+  skillProjectKey?: string;
   repositoryService?: ProjectRepositoryService;
   telegramManager?: Pick<TelegramSubsystemManager, "restart" | "getBotInfo">;
 };
@@ -158,6 +161,8 @@ export function createDashboardServer(options: DashboardServerOptions) {
     worktreesRoot: options.config.worktreesPath,
     repositoryService: options.repositoryService,
     taskSizer: options.taskSizer,
+    skillRuntime: options.skillRuntime,
+    skillProjectKey: options.skillProjectKey,
     actionExecutor: options.goalCoordinator
       ? {
           taskCreated: async (taskId) => {

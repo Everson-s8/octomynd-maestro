@@ -56,6 +56,45 @@ describe("SkillRuntime", () => {
     }
   });
 
+  it("selects surface skills by capability without requiring a GoalPhase", () => {
+    const root = path.join(tempDir, "skills");
+    writeSkill(root, "conversation", {
+      description: "Guide project conversations without forcing actions.",
+      body: "CONVERSATION PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "conversation"
+    });
+    writeSkill(root, "improvement-reviewing", {
+      description: "Judge improvement proposals from bounded evidence.",
+      body: "IMPROVEMENT PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "improvement_reviewing"
+    });
+    const store = registerAndActivateAll(root);
+    const runtime = new SkillRuntime(database, store);
+
+    const conversation = runtime.prepareContext({
+      runId: null,
+      phase: "conversation",
+      capability: "conversation",
+      taskText: "Oi, por que esta Task está bloqueada?",
+      projectKey: "maestro"
+    });
+    expect(conversation.loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:conversation"]);
+
+    const improvement = runtime.prepareContext({
+      runId: null,
+      phase: "improvement_reviewing",
+      capability: "improvement_reviewing",
+      taskText: "Judge this evidence pack",
+      projectKey: "maestro"
+    });
+    expect(improvement.loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:improvement-reviewing"]);
+    expect(database.listGoalSkillPins(createRun("unrelated").id)).toEqual([]);
+  });
+
   it("does not inject skills when the operator disables the runtime", () => {
     const root = path.join(tempDir, "skills");
     writeSkill(root, "review-feature", {
@@ -265,7 +304,7 @@ function writeSkill(
     body: string;
     risk: "low" | "medium" | "high";
     implicit: boolean;
-    capability?: "planning" | "coding" | "reviewing";
+    capability?: "planning" | "coding" | "reviewing" | "conversation" | "improvement_reviewing";
   }
 ): void {
   const skillPath = path.join(root, name);

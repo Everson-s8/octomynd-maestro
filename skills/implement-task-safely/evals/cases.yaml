@@ -18,5 +18,10 @@ cases:
       - requires explicit selection
       - Never commit, push, merge, deploy or change secrets
       - Fail closed
+      - lastValidationPassed
+      - diff_check
+      - blocked
+      - Red Flags — STOP
+      - Common Rationalizations
     forbiddenPhrases:
       - modify main directly

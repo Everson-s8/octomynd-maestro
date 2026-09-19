@@ -14,6 +14,7 @@ import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult }
 import { OperationalChatService } from "../chat/service.js";
 import { ProjectRepositoryService } from "../projects/repository-service.js";
 import { formatCurrencyUsd } from "../agents/economics.js";
+import type { SkillRuntime } from "../skills/runtime.js";
 
 export type TelegramBotOptions = {
   cancelTask?: (taskId: number) => TaskRecord;
@@ -25,6 +26,8 @@ export type TelegramBotOptions = {
   featureCoordinator?: FeatureCoordinator;
   chatService?: OperationalChatService;
   repositoryService?: ProjectRepositoryService;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
+  skillProjectKey?: string;
   triggerSelfUpdate?: () => Promise<RuntimeUpdateRecord>;
 };
 
@@ -136,7 +139,9 @@ export function createTelegramBot(
   const chatService = options.chatService ?? new OperationalChatService({
     database,
     commands,
-    repositoryService: options.repositoryService
+    repositoryService: options.repositoryService,
+    skillRuntime: options.skillRuntime,
+    skillProjectKey: options.skillProjectKey
   });
 
   bot.use(async (ctx, next) => {
