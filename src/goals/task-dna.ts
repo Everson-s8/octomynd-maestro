@@ -34,6 +34,8 @@ export type TaskDNA = {
   allowIteration: boolean;
   /** Human-readable reason for this DNA configuration. */
   rationale: string;
+  /** Criteria extracted during semantic sizing; absent when no useful criteria exist. */
+  acceptanceCriteria?: string[];
 };
 
 /**
@@ -141,6 +143,22 @@ export function computeTaskDNAFromText(taskText: string): TaskDNA {
   const length = taskText.length;
   const wordCount = taskText.trim() ? taskText.trim().split(/\s+/).length : 0;
   const lineCount = taskText.split(/\r?\n/).length;
+
+  // Structural evidence comes before vocabulary. This keeps the offline path
+  // from treating translated large requests as cheap merely because their
+  // English action keywords are absent.
+  const hasMultipleStructuralClauses = /[,;:]/.test(taskText);
+  if (lineCount > 3 || (wordCount >= 10 && length >= 60 && (wordCount <= 11 || hasMultipleStructuralClauses))) {
+    return {
+      complexity: "large",
+      phases: ["planning", "implementing", "testing", "reviewing"],
+      phaseBudgets: { planning: 3, implementing: 8, testing: 5, reviewing: 6 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: true,
+      rationale: `Offline estimate: large structural signal (length=${length}, words=${wordCount}, lines=${lineCount}).`,
+    };
+  }
 
   // Heuristic signals
   const mentionsFeature = /\b(feature|implement|add|create|build|new)\b/i.test(text);

@@ -3,6 +3,7 @@ import { AgentRegistry } from "../src/agents/registry.js";
 import type { AgentProvider, AgentExecutionRequest } from "../src/agents/types.js";
 import { computeTaskDNAFromText } from "../src/goals/task-dna.js";
 import { sizeTaskWithModel } from "../src/goals/task-sizing.js";
+import { buildAgentGoalPrompt } from "../src/agents/goal-prompt.js";
 import type { ProjectRecord, TaskRecord } from "../src/db.js";
 
 const project: ProjectRecord = {
@@ -81,7 +82,23 @@ describe("language-independent task sizing", () => {
     expect(result.providerId).toBe("claude");
     expect(result.model).toBe("claude-sonnet");
     expect(result.dna.complexity).toBe("trivial");
+    expect(result.acceptanceCriteria).toEqual(["change one visual value"]);
+    expect(result.dna.acceptanceCriteria).toEqual(["change one visual value"]);
     expect(prompt).toContain("regardless of language");
+
+    const goalPrompt = buildAgentGoalPrompt({
+      runId: 1,
+      stepNumber: 1,
+      phase: "implementing",
+      capability: "coding",
+      task,
+      project,
+      previousSteps: [],
+      artifactsRoot: project.path,
+      acceptanceCriteria: result.acceptanceCriteria
+    });
+    expect(goalPrompt).toContain("Acceptance criteria from task sizing:");
+    expect(goalPrompt).toContain("change one visual value");
   });
 
   it("sizes a large request written in a language outside the UI locales", async () => {
@@ -101,5 +118,41 @@ describe("language-independent task sizing", () => {
     expect(calls).toBe(0);
     expect(result.source).toBe("offline_estimate");
     expect(result.warning).toContain("offline heuristic");
+  });
+
+  it("gives Portuguese and English large requests the same offline budget", () => {
+    const pairs = [
+      ["refactor the entire authentication architecture and migrate the whole database", "refatora toda a arquitetura de autenticação e migra o banco inteiro"],
+      ["implement a complete payment system with stripe, webhooks, retries, refunds, and reconciliation", "implementar sistema completo de pagamentos com stripe, webhooks, retries, reembolsos e conciliação"]
+    ];
+    for (const [english, portuguese] of pairs) {
+      const englishDNA = computeTaskDNAFromText(english);
+      const portugueseDNA = computeTaskDNAFromText(portuguese);
+      const englishBudget = Object.values(englishDNA.phaseBudgets).reduce((sum, value) => sum + value, 0);
+      const portugueseBudget = Object.values(portugueseDNA.phaseBudgets).reduce((sum, value) => sum + value, 0);
+      expect(portugueseDNA.complexity).toBe(englishDNA.complexity);
+      expect(portugueseBudget).toBe(englishBudget);
+    }
+  });
+
+  it("does not invent criteria when the provider returns none", async () => {
+    const registry = new AgentRegistry([provider(
+      '{"classification":"direct_task","estimatedFileTouchCount":1,"estimatedWorkstreamCount":1,"dependsOnCount":0,"requiresMultipleReviewGates":false,"acceptanceCriteria":[],"confidence":0.4}'
+    )]);
+    const result = await sizeTaskWithModel(registry, task, project);
+    const prompt = buildAgentGoalPrompt({
+      runId: 1,
+      stepNumber: 1,
+      phase: "implementing",
+      capability: "coding",
+      task,
+      project,
+      previousSteps: [],
+      artifactsRoot: project.path,
+      acceptanceCriteria: result.acceptanceCriteria
+    });
+    expect(result.acceptanceCriteria).toEqual([]);
+    expect(result.dna.acceptanceCriteria).toBeUndefined();
+    expect(prompt).not.toContain("Acceptance criteria from task sizing:");
   });
 });

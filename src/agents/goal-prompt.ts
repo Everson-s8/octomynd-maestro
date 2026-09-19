@@ -2,6 +2,7 @@ import { formatLegacyPreviousSteps, formatTokenEfficientPreviousSteps } from "..
 import { formatSkillPromptContext } from "../skills/prompt.js";
 import { buildReviewPhaseInstruction } from "./review-prompt.js";
 import type { AgentExecutionRequest } from "./types.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 /**
  * Provider-specific output contract. The phase prompt itself is shared by every
@@ -50,6 +51,7 @@ export function buildAgentGoalPrompt(
     `Phase: ${request.phase}`,
     phaseInstruction,
     ...formatFeatureTaskContract(request.featureTaskContract),
+    ...(!request.featureTaskContract ? formatAcceptanceCriteria(request.acceptanceCriteria) : []),
     ...formatWorkerContext(request.workerContext),
     "",
     "Summarized step history:",
@@ -60,6 +62,16 @@ export function buildAgentGoalPrompt(
     "",
     outputFormat.output
   ].join("\n");
+}
+
+function formatAcceptanceCriteria(criteria: AgentExecutionRequest["acceptanceCriteria"]): string[] {
+  const safeCriteria = (criteria ?? [])
+    .map((criterion) => redactSensitiveText(criterion).replace(/\s+/g, " ").trim().slice(0, 500))
+    .filter(Boolean)
+    .slice(0, 12);
+  return safeCriteria.length > 0
+    ? ["", "Acceptance criteria from task sizing:", ...safeCriteria.map((criterion) => `- ${criterion}`)]
+    : [];
 }
 
 /** Chat is a separate surface from a persistent goal; it must not inherit

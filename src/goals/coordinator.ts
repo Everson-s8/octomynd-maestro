@@ -493,6 +493,7 @@ export class GoalCoordinator {
       ? await this.taskSizing(taskId)
       : {
         dna: computeTaskDNAFromText(this.database.getTask(taskId).text),
+        acceptanceCriteria: [],
         source: "offline_estimate" as const,
         providerId: null,
         model: null,

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GoalRunRecord, ProjectRecord, TaskRecord } from "../src/db.js";
-import { buildPullRequestTitle, createGoalDeliveryHandler, pullRequestSummary, scanGoalChangesForSecrets, validateStagedDiffWhitespace } from "../src/goals/delivery.js";
+import { buildPullRequestBody, buildPullRequestTitle, createGoalDeliveryHandler, pullRequestSummary, scanGoalChangesForSecrets, validateStagedDiffWhitespace } from "../src/goals/delivery.js";
 import { formatSecretScanFinding, scanWorktreePathsForSecrets } from "../src/security/secrets.js";
 
 let tempDir: string;
@@ -22,6 +22,23 @@ describe("goal delivery guard", () => {
     const text = "Crie essa task: A ideia inicial é fazer um projeto de controle de finanças, organizar gastos do apartamento e acompanhar investimentos. Faça.";
     expect(pullRequestSummary(text)).toBe("fazer um projeto de controle de finanças");
     expect(buildPullRequestTitle(taskRecord(), projectRecord())).toBe("feat(example): deliver feature");
+  });
+
+  it("includes extracted acceptance criteria in the PR body and redacts secrets", () => {
+    const body = buildPullRequestBody(taskRecord(), [
+      "Valid users can sign in",
+      `Never print ${"sk-" + "a".repeat(30)}`
+    ]);
+
+    expect(body).toContain("## Critérios de aceitação");
+    expect(body).toContain("- Valid users can sign in");
+    expect(body).toContain("[REDACTED_SECRET]");
+  });
+
+  it("keeps the legacy PR body when no criteria are available", () => {
+    const body = buildPullRequestBody(taskRecord());
+    expect(body).not.toContain("Critérios de aceitação");
+    expect(body).toContain("## Objetivo original");
   });
 
   it("allows ordinary source files", () => {
