@@ -58,6 +58,7 @@
   /* ============ MAIN ============ */
   main{min-width:0;overflow-y:auto;overflow-x:hidden}
   .inner{width:100%;max-width:1180px;min-width:0;margin:0 auto;padding:30px 36px 60px}
+  .inner:has(.providers-page){max-width:1480px}
   .view{display:none;animation:fadeIn .3s ease both}
   .view.active{display:block}
   @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
@@ -283,7 +284,7 @@
   .proj-foot{font-family:'IBM Plex Mono';font-size:11px;color:var(--faint)}
 
   /* ============ PROVIDERS — extensível por grupo ============ */
-  .prov-grid{display:grid;grid-template-columns:minmax(300px,1fr) minmax(0,1.35fr);gap:20px;min-width:0}
+  .prov-grid{display:grid;grid-template-columns:minmax(330px,.84fr) minmax(0,1.6fr);gap:22px;min-width:0;align-items:start}
   .prov-group-lbl{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:22px 0 12px}
   .prov-group-lbl:first-child{margin-top:0}
   .prov-card{background:var(--sepia);border:1px solid var(--line);border-radius:var(--r-lg);padding:17px;margin-bottom:11px}
@@ -316,13 +317,16 @@
   .conn-badge.fail{background:#271414;border:1px solid #8a3a2f;color:#f0a097}
   .conn-badge span{font-family:'IBM Plex Mono';font-size:11px;opacity:.85}
 
-    .routing-row{display:grid;grid-template-columns:minmax(92px,.62fr) repeat(4,minmax(0,1fr));gap:8px;align-items:center;padding:16px 0;border-top:1px solid var(--line-soft)}
+    .routing-row{display:grid;grid-template-columns:minmax(124px,.82fr) repeat(4,minmax(0,1fr));gap:10px;align-items:center;padding:15px 0;border-top:1px solid var(--line-soft);transition:background .18s ease}
   .routing-row>div{min-width:0}
-  .routing-row .sel{width:100%;min-width:0}
-  .provider-routing{margin-bottom:0}
+  .routing-row .sel{width:100%;min-width:0;height:38px;padding:0 28px 0 11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1}
+  .provider-routing{margin-bottom:0;padding:24px 26px 18px}
+  .provider-routing .panel-head{margin-bottom:5px}
+  .provider-routing .panel-head>span{padding:5px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font:10px 'IBM Plex Mono';letter-spacing:.4px;text-transform:uppercase}
   .routing-row:first-child{border-top:none}
-  .routing-row .rname{font-family:'Fraunces';font-size:14px;color:var(--ivory);font-weight:600}
-  .field-lbl{font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+  .routing-row:hover{background:linear-gradient(90deg,rgba(196,98,45,.055),transparent 78%)}
+  .routing-row .rname{display:flex;align-items:center;min-height:42px;padding:8px 10px;border-left:2px solid var(--rust-dim);border-radius:0 var(--r-sm) var(--r-sm) 0;background:rgba(196,98,45,.055);font-family:'Fraunces';font-size:14px;line-height:1.15;color:var(--ivory);font-weight:600}
+  .field-lbl{font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin:0 0 6px 2px}
 
   /* ============ ANALYTICS ============ */
   .chartbox{background:var(--sepia);border:1px solid var(--line);border-radius:var(--r-xl);padding:24px;margin-bottom:20px}
@@ -410,7 +414,7 @@
   .sugg{font-family:'IBM Plex Mono';font-size:11px;color:var(--muted);border:1px solid var(--line);padding:7px 12px;border-radius:100px;cursor:pointer}
   .sugg:hover{border-color:var(--rust-dim);color:var(--coral)}
 
-  @media(max-width:1080px){.metrics{grid-template-columns:1fr 1fr}.cols{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.nerve{min-height:300px}.prov-grid,.proj-grid,.toggle-panel{grid-template-columns:1fr}.chat-wrap{grid-template-columns:1fr;height:auto}}
+  @media(max-width:1080px){.metrics{grid-template-columns:1fr 1fr}.cols{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.prov-grid,.proj-grid,.toggle-panel{grid-template-columns:1fr}.chat-wrap{grid-template-columns:1fr;height:auto}}
   @media(max-width:760px){.app{grid-template-columns:1fr}aside{display:none}}
   @media(prefers-reduced-motion:reduce){*{animation:none!important}}
 

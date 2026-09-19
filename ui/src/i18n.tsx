@@ -139,6 +139,7 @@ const portuguese: Record<string, string> = {
   "Automatic routing": "Roteamento automático",
   "Model": "Modelo",
   "Effort": "Esforço",
+  "Default": "Padrão",
   "Provider default": "Padrão do provider",
   "Your first message will create the conversation.": "Sua primeira mensagem criará a conversa.",
   "Type below to start; you do not need to create a chat first.": "Digite abaixo para começar; você não precisa criar um chat antes.",

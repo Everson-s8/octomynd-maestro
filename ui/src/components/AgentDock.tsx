@@ -146,7 +146,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                       )
                     }
                   >
-                    <option value="">{translate("Provider default")}</option>
+                    <option value="" title={translate("Provider default")}>{translate("Default")}</option>
                     {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
                   </select>
                 </div>
@@ -165,7 +165,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
                       )
                     }
                   >
-                    <option value="">{translate("Provider default")}</option>
+                    <option value="" title={translate("Provider default")}>{translate("Default")}</option>
                     {effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabel(effort)}</option>)}
                   </select>
                 </div>
