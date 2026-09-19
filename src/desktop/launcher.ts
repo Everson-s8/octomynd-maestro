@@ -1,6 +1,17 @@
 import path from "node:path";
 import fs from "node:fs";
-import http from "node:http";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const productionHealth = require("./production.cjs") as {
+  DEFAULT_HEALTH_SERVICE: string;
+  checkHealth: (
+    host: string,
+    port: number,
+    timeoutMs: number,
+    expected?: { service?: string; runtimeMode?: string }
+  ) => Promise<{ status: string }>;
+};
 
 export interface DesktopPaths {
   rootPath: string;
@@ -102,14 +113,8 @@ export function checkViteConfigBase(viteConfigPath: string): { valid: boolean; b
 }
 
 export async function checkApiHealth(host = "127.0.0.1", port = 4787, timeoutMs = 2000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.get(`http://${host}:${port}/api/health`, { timeout: timeoutMs }, (res) => {
-      resolve(res.statusCode === 200);
-    });
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
+  const result = await productionHealth.checkHealth(host, port, timeoutMs, {
+    service: process.env.MAESTRO_PROJECT_NAME?.trim() || productionHealth.DEFAULT_HEALTH_SERVICE
   });
+  return result.status === "healthy";
 }

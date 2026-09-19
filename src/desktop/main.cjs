@@ -15,7 +15,6 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
 
 const {
@@ -24,12 +23,20 @@ const {
   buildBackendSpawnConfig,
   resolveEnvSeedPlan,
   resolveLoadUrl,
-  resolveReleaseChannel
+  resolveReleaseChannel,
+  DEFAULT_HEALTH_SERVICE,
+  DEFAULT_HEALTH_RUNTIME_MODE,
+  checkHealth,
+  formatHealthConflictMessage
 } = require("./production.cjs");
 
 const HOST = process.env.MAESTRO_DASHBOARD_HOST || "127.0.0.1";
 const PORT = process.env.MAESTRO_DASHBOARD_PORT || "4787";
 const HEALTH_TIMEOUT_MS = 60_000;
+const EXPECTED_HEALTH = {
+  service: process.env.MAESTRO_PROJECT_NAME?.trim() || DEFAULT_HEALTH_SERVICE,
+  runtimeMode: DEFAULT_HEALTH_RUNTIME_MODE
+};
 
 let backendProcess = null;
 
@@ -71,27 +78,26 @@ function configureExternalLinkHandling(window, localOrigin) {
 
 ipcMain.handle("maestro:open-external", (_event, value) => openExternalUrl(value));
 
-function checkHealth(host, port, timeoutMs) {
-  return new Promise((resolve) => {
-    const req = http.get(`http://${host}:${port}/api/health`, { timeout: timeoutMs }, (res) => {
-      resolve(res.statusCode === 200);
-      res.resume();
-    });
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
-
-async function waitForHealth(host, port) {
+async function waitForHealth(host, port, expected) {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  let lastResult = { status: "timeout", reason: "startup_deadline" };
   while (Date.now() < deadline) {
-    if (await checkHealth(host, port, 1_000)) return true;
+    lastResult = await checkHealth(host, port, 1_000, expected);
+    if (lastResult.status === "healthy") return lastResult;
+    // A reachable HTTP server that is not our backend cannot become our
+    // backend while this process waits. Report it immediately instead of
+    // spending the full startup deadline on an occupied port.
+    if (lastResult.status !== "unavailable" && lastResult.status !== "timeout") return lastResult;
     await new Promise((r) => setTimeout(r, 500));
   }
-  return false;
+  return lastResult;
+}
+
+function showPortConflict(result) {
+  dialog.showErrorBox(
+    "Maestro could not use this port",
+    formatHealthConflictMessage(HOST, PORT, result)
+  );
 }
 
 function seedEnvFile(dataDir, appRoot) {
@@ -194,14 +200,25 @@ async function bootstrap() {
 
   seedEnvFile(dataDir, paths.appRoot);
 
-  if (!(await checkHealth(HOST, PORT, 1_000))) {
+  const existingHealth = await checkHealth(HOST, PORT, 1_000, EXPECTED_HEALTH);
+  if (existingHealth.status !== "healthy" && existingHealth.status !== "unavailable" && existingHealth.status !== "timeout") {
+    showPortConflict(existingHealth);
+    app.quit();
+    return;
+  }
+
+  if (existingHealth.status !== "healthy") {
     startBackend(paths, dataDir);
-    const healthy = await waitForHealth(HOST, PORT);
-    if (!healthy) {
-      dialog.showErrorBox(
-        "Maestro",
-        "The Maestro service did not respond in time. Check the logs and reopen the application."
-      );
+    const healthy = await waitForHealth(HOST, PORT, EXPECTED_HEALTH);
+    if (healthy.status !== "healthy") {
+      if (healthy.status === "wrong_identity" || healthy.status === "invalid_response") {
+        showPortConflict(healthy);
+      } else {
+        dialog.showErrorBox(
+          "Maestro",
+          "The Maestro service did not respond in time. Check the logs and reopen the application."
+        );
+      }
       stopBackend();
       app.quit();
       return;
