@@ -84,8 +84,16 @@ export function planChatCommand(message: string, accessMode: ChatAccessMode = "s
 
   const explicit = requested.match(/^(?:\/run|\/exec|run|execute|executar|execute|rode|rodar|executa)\s+(?:o\s+comando\s+)?(.+)$/i);
   const direct = requested.match(new RegExp(`^(${DIRECT_EXECUTABLES})(?:\\s+|$)(.*)$`, "i"));
+  const embedded = requested.match(new RegExp(`\\b(${DIRECT_EXECUTABLES})\\b(?:\\s+.*)?$`, "i"));
   const natural = requested.match(/^(?:rode|rodar|executa|execute|run)\s+(?:os?\s+)?(testes?|tests?|typecheck|build|lint)(?:\s+do\s+projeto)?\s*[.!]?$/i);
-  const commandText = natural ? naturalCommand(natural[1]) : explicit?.[1]?.trim() ?? direct?.[0]?.trim() ?? null;
+  const embeddedPrefix = embedded && requested.slice(0, embedded.index).trim();
+  const isEmbeddedExplicitRequest = Boolean(
+    embedded && embeddedPrefix && /\b(?:quero|preciso|pode|pod[eê]|execute|executar|executa|run|start|iniciar|inicie|inicia|rodar|rode|roda|dar|d[eê]|faca|fa[cç]a|mande|mandar)\b/i.test(embeddedPrefix)
+  );
+  const embeddedCommand = isEmbeddedExplicitRequest
+    ? requested.slice(embedded?.index ?? 0).replace(/\s+(?:para mim|por favor|please)\s*[.!?]?$/i, "").trim()
+    : null;
+  const commandText = natural ? naturalCommand(natural[1]) : explicit?.[1]?.trim() ?? direct?.[0]?.trim() ?? embeddedCommand;
   if (!commandText) return null;
 
   if (/[\r\n;|&<>`$()]/.test(commandText)) {

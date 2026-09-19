@@ -28,6 +28,11 @@ describe("chat command execution", () => {
     expect(planChatCommand("npm run typecheck")).toEqual(expect.objectContaining({
       args: ["run", "typecheck"]
     }));
+    expect(planChatCommand("eu quero que você dê npm run dev para mim", "full")).toEqual(expect.objectContaining({
+      executable: expect.stringMatching(/npm(?:\.cmd)?$/),
+      args: ["run", "dev"]
+    }));
+    expect(planChatCommand("o que é npm run dev", "full")).toBeNull();
     expect(planChatCommand("npm install")).toEqual(expect.objectContaining({
       blockedReason: expect.stringContaining("Dependency installation")
     }));

@@ -240,7 +240,10 @@ export function OperationalChatConsole({
       setMessages((prev) => [...prev, tempUserMsg]);
 
       const chatResponse = await sendChatMessage(selectedProjectKey, userText, activeThreadId, accessMode, locale, selectedProviderId, selectedModel);
-      if (accessMode === "full" && /\b(?:start|run|inici|rod[ae]|coloque).*\b(?:project|server|projeto|servidor)\b/i.test(userText)) {
+      const startedProjectCommand = accessMode === "full" && (chatResponse.evidence?.commands ?? []).some((command: { command?: string; status?: string }) => (
+        command.status === "completed" && /\bnpm(?:\.cmd)?\s+run\s+(?:dev|start|serve|preview)\b/i.test(command.command ?? "")
+      ));
+      if (startedProjectCommand) {
         const runningProcess = (chatResponse.evidence?.processes ?? []).find((process: { status?: string; url?: string | null }) => process.status === "running" && process.url);
         if (runningProcess?.url) openExternalUrl(runningProcess.url, true);
       }

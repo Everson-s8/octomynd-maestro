@@ -336,6 +336,50 @@ describe("Unified Operational Chat (Task #52)", () => {
     }
   });
 
+  it("executes an explicit natural-language dev-server request in Full Access", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({
+      name: "chat-natural-command-test",
+      version: "1.0.0",
+      scripts: { dev: "node -e \"console.log('Local: http://127.0.0.1:4556/'); setInterval(() => {}, 1000)\"" }
+    }), "utf8");
+    const processManager = new ProjectProcessManager();
+    let providerPrompt = "";
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "reported evidence",
+      output: "O servidor foi iniciado conforme a evidência.",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { providerPrompt = request.humanFeedback ?? ""; } });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([provider]),
+      processManager
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "eu quero que você dê npm run dev para mim",
+        accessMode: "full"
+      });
+
+      expect(response.evidence.commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "npm run dev", status: "completed" })
+      ]));
+      expect(response.evidence.processes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: "running", url: "http://127.0.0.1:4556/" })
+      ]));
+      expect(providerPrompt).toContain("Full Access rule");
+      expect(providerPrompt).not.toContain("wait for the confirmation button");
+    } finally {
+      chatService.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  });
+
   it("exposes resume from checkpoint for a blocked goal instead of only restarting the task", async () => {
     const task = database.createTask("Continue the financial app implementation", "test", "maestro");
     database.updateTaskStatus(task.id, "blocked");
