@@ -28,6 +28,8 @@ import { inspectProjectContext } from "./project-context.js";
 import { executeChatCommand, formatChatCommandEvidence, planChatCommand } from "./project-command.js";
 import { runGit } from "../git.js";
 import type { TaskSizingResult } from "../goals/task-sizing.js";
+import type { SkillRuntime } from "../skills/runtime.js";
+import { formatSkillPromptContext } from "../skills/prompt.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
 // normal conversational reply look like a provider failure and immediately
@@ -69,6 +71,8 @@ export type OperationalChatServiceOptions = {
   worktreesRoot?: string;
   actionExecutor?: ChatActionExecutor;
   repositoryService?: ProjectRepositoryService;
+  skillRuntime?: Pick<SkillRuntime, "prepareContext">;
+  skillProjectKey?: string;
   taskSizer?: (input: {
     task: import("../db.js").TaskRecord;
     project: ProjectRecord;
@@ -85,6 +89,8 @@ export class OperationalChatService {
   private readonly actionExecutor?: ChatActionExecutor;
   private readonly repositoryService: ProjectRepositoryService;
   private readonly taskSizer?: OperationalChatServiceOptions["taskSizer"];
+  private readonly skillRuntime?: OperationalChatServiceOptions["skillRuntime"];
+  private readonly skillProjectKey?: string;
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
@@ -94,6 +100,8 @@ export class OperationalChatService {
     this.actionExecutor = options.actionExecutor;
     this.repositoryService = options.repositoryService ?? new ProjectRepositoryService(options.database);
     this.taskSizer = options.taskSizer;
+    this.skillRuntime = options.skillRuntime;
+    this.skillProjectKey = options.skillProjectKey?.trim().toLowerCase() || undefined;
   }
 
   async ask(request: OperationalChatRequest): Promise<OperationalChatResponse> {
@@ -496,6 +504,13 @@ export class OperationalChatService {
       taskId = task.id;
       const prepared = this.commands.prepareTask(this.originForCommand(input.origin), task.id, this.worktreesRoot);
       const project = this.database.getProjectByKey(input.projectKey);
+      const skillContext = this.skillRuntime?.prepareContext({
+        runId: null,
+        phase: "implementing",
+        capability: "coding",
+        taskText: input.text,
+        projectKey: this.skillProjectKey ?? input.projectKey
+      });
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), CHAT_CODE_CHANGE_TIMEOUT_MS);
       let result;
@@ -514,6 +529,7 @@ export class OperationalChatService {
             "Keep all changes inside the worktree and do not merge or push.",
             `User request: ${input.text}`
           ].join("\n"),
+          skillContext,
           signal: controller.signal,
           model: input.model ?? lease.model ?? null
         });
@@ -1112,6 +1128,13 @@ export class OperationalChatService {
               const historyText = history
                 .map((h) => `${h.senderRole.toUpperCase()}: ${h.messageText}`)
                 .join("\n");
+              const skillContext = this.skillRuntime?.prepareContext({
+                runId: null,
+                phase: "conversation",
+                capability: "conversation",
+                taskText: userMessage,
+                projectKey: this.skillProjectKey ?? evidence.project.key
+              });
 
               const result = await lease.provider.execute({
                 runId: 0,
@@ -1135,7 +1158,8 @@ export class OperationalChatService {
                 project: evidence.project,
                 previousSteps: [],
                 artifactsRoot: this.worktreesRoot,
-                humanFeedback: `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\n\nUSER QUESTION:\n${userMessage}`,
+                humanFeedback: `${systemPrompt}\n${formatSkillPromptContext(skillContext).join("\n")}\n\nCONVERSATION HISTORY:\n${historyText}\n\nUSER QUESTION:\n${userMessage}`,
+                skillContext,
                 signal: timeoutController.signal,
                 model: selectedModel ?? lease.model ?? null
               });

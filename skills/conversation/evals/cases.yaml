@@ -1,0 +1,23 @@
+schemaVersion: 1
+cases:
+  - id: selects-conversation-surface
+    type: trigger
+    prompt: explain why Task 12 is blocked without executing anything
+    phase: conversation
+    capability: conversation
+    expectMatch: true
+  - id: rejects-improvement-review
+    type: trigger
+    prompt: judge an improvement proposal from an evidence pack
+    phase: improvement_reviewing
+    capability: improvement_reviewing
+    expectMatch: false
+  - id: preserves-chat-boundaries
+    type: content
+    requiredPhrases:
+      - wait for confirmation
+      - untrusted data
+      - user's message language
+      - worktree path
+    forbiddenPhrases:
+      - run the action without confirmation

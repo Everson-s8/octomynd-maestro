@@ -93,6 +93,46 @@ describe("restricted improvement reviewer", () => {
     expect(registry.activeCount("codex")).toBe(0);
   });
 
+  it("injects improvement-reviewing Skill judgment without granting mutation authority", async () => {
+    let seenPrompt = "";
+    const reviewer = new RestrictedImprovementReviewCoordinator(
+      new AgentRegistry([provider("codex", async (request) => {
+        seenPrompt = request.prompt;
+        return completed(JSON.stringify({ candidates: [] }));
+      })]),
+      {
+        skillProjectKey: "maestro",
+        skillRuntime: {
+          prepareContext: (request) => {
+            expect(request).toMatchObject({
+              runId: null,
+              phase: "improvement_reviewing",
+              capability: "improvement_reviewing",
+              projectKey: "maestro"
+            });
+            return {
+              available: [],
+              loaded: [{
+                qualifiedName: "repository:improvement-reviewing",
+                versionId: "sha256:improvement",
+                triggerReason: "Implicit metadata match for improvement_reviewing.",
+                instructions: "IMPROVEMENT REVIEW SKILL INSTRUCTIONS"
+              }],
+              selectionMode: "deterministic_metadata" as const,
+              selectionNote: "Selected by improvement_reviewing capability."
+            };
+          }
+        }
+      }
+    );
+
+    const result = await reviewer.review(EVIDENCE_PACK, { workspacePath: "C:/repo" });
+
+    expect(result.status).toBe("completed");
+    expect(seenPrompt).toContain("IMPROVEMENT REVIEW SKILL INSTRUCTIONS");
+    expect(seenPrompt).toContain("read-only");
+  });
+
   it("tries at most two providers and fails closed when both outputs are invalid", async () => {
     const calls: AgentProviderId[] = [];
     const registry = new AgentRegistry([

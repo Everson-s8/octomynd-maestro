@@ -1,0 +1,23 @@
+schemaVersion: 1
+cases:
+  - id: selects-improvement-review
+    type: trigger
+    prompt: judge a bounded improvement proposal from evidence
+    phase: improvement_reviewing
+    capability: improvement_reviewing
+    expectMatch: true
+  - id: rejects-normal-conversation
+    type: trigger
+    prompt: answer a user's question about a project
+    phase: conversation
+    capability: conversation
+    expectMatch: false
+  - id: preserves-read-only-evidence-contract
+    type: content
+    requiredPhrases:
+      - evidenceRefs
+      - exact JSON
+      - read-only
+      - activation
+    forbiddenPhrases:
+      - activate automatically

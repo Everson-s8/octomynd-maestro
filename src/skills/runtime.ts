@@ -3,9 +3,11 @@ import type { GoalPhase, MaestroDatabase, SkillRecord, SkillVersionRecord } from
 import type { SkillExecutionContext, SkillOperatingSystem } from "./types.js";
 import { SkillVersionStore } from "./store.js";
 
+export type SkillInvocationPhase = GoalPhase | "conversation" | "improvement_reviewing";
+
 export type SkillRuntimeRequest = {
-  runId: number;
-  phase: GoalPhase;
+  runId: number | null;
+  phase: SkillInvocationPhase;
   capability: AgentCapability;
   taskText: string;
   projectKey: string;
@@ -64,13 +66,23 @@ export class SkillRuntime {
       risk: version.policy.risk
     }));
 
-    const alreadyPinned = this.database.listGoalSkillPins(request.runId)
+    const alreadyPinned = request.runId === null
+      ? []
+      : this.database.listGoalSkillPins(request.runId)
       .map((pin) => {
         const version = this.database.getSkillVersion(pin.skillVersionRecordId);
         return { pin, version, skill: this.database.getSkillByQualifiedName(version.qualifiedName) };
       })
       .filter(({ skill, version }) => version.status === "active" && isApplicable(skill, version, request));
-    const selected = [...alreadyPinned];
+    const selected: Array<{
+      skill: SkillRecord;
+      version: SkillVersionRecord;
+      pin: { triggerReason: string };
+    }> = alreadyPinned.map(({ pin, skill, version }) => ({
+      skill,
+      version,
+      pin: { triggerReason: pin.triggerReason }
+    }));
     const selectedVersionIds = new Set(selected.map(({ version }) => version.id));
     const rejectedPins: string[] = [];
     for (const pinnedVersionId of request.pinnedSkillVersions ?? []) {
@@ -175,6 +187,9 @@ export class SkillRuntime {
     triggerReason: string,
     invocationMode: "explicit" | "implicit"
   ) {
+    if (request.runId === null) {
+      return { triggerReason };
+    }
     return this.database.pinGoalSkill({
       runId: request.runId,
       skillVersionRecordId: version.id,
@@ -237,7 +252,10 @@ export function scoreSkillRelevance(
     reviewing: "reviewing"
   };
   if (supportedCapabilities && !supportedCapabilities.includes(request.capability)) return 0;
-  return request.capability === phaseCapability[request.phase] && Boolean(request.taskText.trim()) ? 10 : 0;
+  const expectedCapability = request.phase in phaseCapability
+    ? phaseCapability[request.phase as GoalPhase]
+    : request.phase;
+  return request.capability === expectedCapability && Boolean(request.taskText.trim()) ? 10 : 0;
 }
 
 function skillName(version: SkillVersionRecord): string {

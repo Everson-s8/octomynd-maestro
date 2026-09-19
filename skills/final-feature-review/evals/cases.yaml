@@ -18,5 +18,9 @@ cases:
       - Review only the consolidated Feature PR
       - Do not edit files
       - fail closed
+      - "failureCategory: permission_denied"
+      - typecheck_backend
+      - not prove
+      - Common Rationalizations
     forbiddenPhrases:
       - merge automatically

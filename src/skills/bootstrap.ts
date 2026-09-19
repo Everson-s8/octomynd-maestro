@@ -7,7 +7,9 @@ import { SkillVersionStore } from "./store.js";
 const BUILTIN_SKILLS = new Set([
   "repository:diagnose-goal-failure",
   "repository:implement-task-safely",
-  "repository:final-feature-review"
+  "repository:final-feature-review",
+  "repository:conversation",
+  "repository:improvement-reviewing"
 ]);
 
 export type SkillBootstrapResult = {

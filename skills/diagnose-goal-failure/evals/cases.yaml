@@ -18,5 +18,9 @@ cases:
       - Do not edit files
       - fail closed
       - distinguish facts from hypotheses
+      - 2,400 relevant characters
+      - excluded
+      - semantic checkpoint
+      - Common Rationalizations
     forbiddenPhrases:
       - reveal credentials

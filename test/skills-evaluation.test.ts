@@ -89,12 +89,28 @@ describe("SkillEvaluationHarness", () => {
     });
 
     expect(result.active.map((skill) => skill.qualifiedName).sort()).toEqual([
+      "repository:conversation",
       "repository:diagnose-goal-failure",
       "repository:final-feature-review",
-      "repository:implement-task-safely"
+      "repository:implement-task-safely",
+      "repository:improvement-reviewing"
     ]);
-    expect(database.listSkillEvaluations()).toHaveLength(3);
+    expect(database.listSkillEvaluations()).toHaveLength(5);
     expect(database.listSkillEvaluations().every((evaluation) => evaluation.status === "passed")).toBe(true);
+    expect(result.runtime.prepareContext({
+      runId: null,
+      phase: "conversation",
+      capability: "conversation",
+      taskText: "Oi, explique a Task bloqueada.",
+      projectKey: "maestro"
+    }).loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:conversation"]);
+    expect(result.runtime.prepareContext({
+      runId: null,
+      phase: "improvement_reviewing",
+      capability: "improvement_reviewing",
+      taskText: "Judge this bounded evidence pack.",
+      projectKey: "maestro"
+    }).loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:improvement-reviewing"]);
   });
 });
 
