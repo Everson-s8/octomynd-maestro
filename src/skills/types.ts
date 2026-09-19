@@ -65,6 +65,8 @@ export type LoadedSkillContext = {
 export type SkillExecutionContext = {
   available: SkillDiscoveryEntry[];
   loaded: LoadedSkillContext[];
+  selectionMode?: "disabled" | "deterministic_metadata";
+  selectionNote?: string;
 };
 
 export type SkillCatalogIssueCode =

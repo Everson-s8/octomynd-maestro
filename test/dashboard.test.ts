@@ -528,11 +528,41 @@ describe("dashboard", () => {
     fs.writeFileSync(path.join(skillSource, "SKILL.md"), [
       "---",
       "name: review-feature",
-      "description: Review consolidated Feature evidence.",
+      "description: Review feature evidence.",
       "---",
       "",
+      "## Introduction",
+      "This skill defines a bounded judgment rule.",
+      "## When to Use",
+      "Use it for feature evidence.",
+      "## Prerequisites",
+      "Read the available evidence first.",
+      "## How to Run",
+      "Follow the review procedure.",
+      "## Quick Reference",
+      "Keep the scope bounded.",
+      "## Procedure",
       "PRIVATE SKILL INSTRUCTIONS",
+      "## Pitfalls",
+      "Do not expose secrets.",
+      "## Verification",
+      "Verify the evidence.",
       ""
+    ].join("\n"));
+    fs.mkdirSync(path.join(skillSource, "evals"), { recursive: true });
+    fs.writeFileSync(path.join(skillSource, "evals", "cases.yaml"), [
+      "schemaVersion: 1",
+      "cases:",
+      "  - id: trigger",
+      "    type: trigger",
+      "    prompt: review feature evidence",
+      "    phase: reviewing",
+      "    capability: reviewing",
+      "    expectMatch: true",
+      "  - id: content",
+      "    type: content",
+      "    requiredPhrases: ['PRIVATE SKILL INSTRUCTIONS']",
+      "    forbiddenPhrases: []"
     ].join("\n"));
     const skillMetadata = new SkillCatalog([{
       scope: "repository",

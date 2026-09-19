@@ -88,7 +88,8 @@ export type {
   SkillIncidentType,
   SkillCuratorCandidateRecord,
   SkillCuratorCandidateInput,
-  SkillCuratorCandidateStatus
+  SkillCuratorCandidateStatus,
+  SkillRuntimeSettings
 } from "./skills/persistence.js";
 export type { SkillOwner, SkillRisk, SkillScope } from "./skills/types.js";
 

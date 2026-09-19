@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { captureEnvironmentFingerprint, ensureExecutionContract } from "./execution/contract.js";
 import { createAgentRegistry } from "./agents/runtime.js";
@@ -77,12 +78,14 @@ const agentRegistry = createAgentRegistry(config, database);
 agentRegistry.startHealthProbing();
 const environmentDoctor = new EnvironmentDoctor(config, database, agentRegistry);
 const validationRunner = new DeterministicValidationRunner();
-const skillBootstrap = config.skills.enabled
+const skillRuntimeEnabled = () => database.getSkillRuntimeSettings(config.skills.enabled).enabled;
+const skillBootstrap = fs.existsSync(config.skills.catalogPath)
   ? bootstrapSkills({
       database,
       catalogPath: config.skills.catalogPath,
       versionsPath: config.skills.versionsPath,
-      projectKey: config.skills.projectKey
+      projectKey: config.skills.projectKey,
+      isEnabled: skillRuntimeEnabled
     })
   : null;
 if (skillBootstrap) {
@@ -93,7 +96,7 @@ if (skillBootstrap) {
     metadata: { active: skillBootstrap.active }
   });
 }
-const skillLifecycleRuntime: SkillLifecycleRuntime | undefined = config.skills.enabled
+const skillLifecycleRuntime: SkillLifecycleRuntime | undefined = skillBootstrap
   ? (() => {
     const store = new SkillVersionStore(database, config.skills.versionsPath);
     return {
@@ -124,7 +127,8 @@ const workGraphCoordinator = new WorkGraphCoordinator(
       // The owning Goal is not waiting for this graph (e.g. it drove the graph inline and
       // will observe the terminal result directly), already active, or already terminal.
     }
-  }
+  },
+  skillBootstrap?.runtime
 );
 const featureNotifier = createTelegramFeatureNotifier(
   config,

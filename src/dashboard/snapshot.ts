@@ -158,6 +158,11 @@ export function buildDashboardSnapshot(
       decisionNote: proposal.decisionNote ? redactSensitiveText(proposal.decisionNote) : null
     })),
     skillCuratorReport: new SkillCurator(database, { staleDays: config.skills.curator.staleDays }).dryRun(),
+    skillSettings: {
+      ...database.getSkillRuntimeSettings(config.skills.enabled),
+      curatorAutomaticArchivalEnabled: config.skills.curator.autoArchiveEnabled,
+      curatorMode: config.skills.curator.autoArchiveEnabled ? "automatic" as const : "dry_run" as const
+    },
     projects: projects.map((project) => {
       const projectTasks = tasks.filter((task) => task.projectKey === project.key);
       const currentWork = goals.flatMap((goal) => {

@@ -73,6 +73,30 @@ describe("Skill lifecycle dashboard API", () => {
     }
   });
 
+  it("lets an operator toggle runtime injection and exposes the curator gate", async () => {
+    config.skills.enabled = false;
+    const server = createDashboardServer({ config, database, staticRoot: tempDir });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const initial = await fetch(`http://127.0.0.1:${port}/api/skills/settings`);
+      expect(initial.status).toBe(200);
+      expect((await initial.json()).settings).toMatchObject({ enabled: false, curatorMode: "dry_run" });
+
+      const enabled = await fetch(`http://127.0.0.1:${port}/api/skills/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true })
+      });
+      expect(enabled.status).toBe(200);
+      expect((await enabled.json()).settings).toMatchObject({ enabled: true, curatorMode: "dry_run" });
+      expect(database.getSkillRuntimeSettings(false).enabled).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
   it("evaluates, approves, activates and rolls back a Skill version through the governed runtime", async () => {
     const sourceRoot = path.join(tempDir, "skills");
     writeAgentOwnedSkillWithEvals(sourceRoot, "governed-checklist", "Checklist body");
@@ -126,10 +150,17 @@ function writeAgentOwnedSkillWithEvals(root: string, name: string, body: string)
   fs.writeFileSync(path.join(skillPath, "SKILL.md"), [
     "---",
     `name: ${name}`,
-    `description: ${name} procedure. Use only after explicit selection.`,
+    "description: Apply a bounded judgment rule.",
     "---",
     "",
-    body,
+    "## Introduction", "This skill defines a bounded judgment rule.",
+    "## When to Use", "Use it only when the task matches.",
+    "## Prerequisites", "Read the available evidence first.",
+    "## How to Run", "Follow the procedure below.",
+    "## Quick Reference", "Keep the scope bounded.",
+    "## Procedure", body,
+    "## Pitfalls", "Do not infer missing evidence.",
+    "## Verification", "Check the result against acceptance criteria.",
     ""
   ].join("\n"));
   fs.writeFileSync(path.join(skillPath, "maestro.yaml"), [

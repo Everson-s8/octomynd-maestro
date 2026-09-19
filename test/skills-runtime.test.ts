@@ -23,16 +23,113 @@ afterEach(() => {
 });
 
 describe("SkillRuntime", () => {
+  it("selects the same skill for translated requests without inspecting user-language words", () => {
+    const root = path.join(tempDir, "skills");
+    writeSkill(root, "review-feature", {
+      description: "Review features before merge.",
+      body: "REVIEW PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "reviewing"
+    });
+    writeSkill(root, "implement-task", {
+      description: "Implement bounded tasks.",
+      body: "IMPLEMENT PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "coding"
+    });
+    const store = registerAndActivateAll(root);
+    const runtime = new SkillRuntime(database, store);
+    const run = createRun("review");
+
+    for (const taskText of ["Revise a revisão final", "Review the final change", "最終変更をレビューする"]) {
+      const context = runtime.prepareContext({
+        runId: run.id,
+        phase: "reviewing",
+        capability: "reviewing",
+        taskText,
+        projectKey: "maestro"
+      });
+      expect(context.loaded.map((skill) => skill.qualifiedName)).toContain("repository:review-feature");
+      expect(context.loaded.map((skill) => skill.qualifiedName)).not.toContain("repository:implement-task");
+    }
+  });
+
+  it("does not inject skills when the operator disables the runtime", () => {
+    const root = path.join(tempDir, "skills");
+    writeSkill(root, "review-feature", {
+      description: "Review features before merge.",
+      body: "REVIEW PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "reviewing"
+    });
+    const store = registerAndActivateAll(root);
+    const runtime = new SkillRuntime(database, store, {}, () => false);
+    const context = runtime.prepareContext({
+      runId: createRun("review").id,
+      phase: "reviewing",
+      capability: "reviewing",
+      taskText: "Review the final change",
+      projectKey: "maestro"
+    });
+    expect(context.loaded).toEqual([]);
+    expect(context.available).toEqual([]);
+    expect(context.selectionMode).toBe("disabled");
+  });
+
+  it("refuses a Work Graph pin to an inactive version without stopping execution", () => {
+    const root = path.join(tempDir, "skills");
+    writeSkill(root, "review-feature", {
+      description: "Review features before merge.",
+      body: "REVIEW PROCEDURE V1",
+      risk: "low",
+      implicit: true,
+      capability: "reviewing"
+    });
+    const store = registerAndActivateAll(root);
+    const oldVersionId = database.getSkillByQualifiedName("repository:review-feature").activeVersionId!;
+
+    writeSkill(root, "review-feature", {
+      description: "Review features before merge.",
+      body: "REVIEW PROCEDURE V2",
+      risk: "low",
+      implicit: true,
+      capability: "reviewing"
+    });
+    const next = store.register(new SkillCatalog([{ scope: "repository", path: root, projectKey: "maestro" }]).discover().skills[0]!);
+    recordPassingEvaluation(next.id);
+    database.updateSkillVersionStatus(next.id, "evaluated");
+    database.updateSkillVersionStatus(next.id, "approved");
+    database.activateSkillVersion(next.id);
+
+    const runtime = new SkillRuntime(database, store);
+    const context = runtime.prepareContext({
+      runId: createRun("review").id,
+      phase: "reviewing",
+      capability: "reviewing",
+      taskText: "Review the final change",
+      projectKey: "maestro",
+      pinnedSkillVersions: [oldVersionId]
+    });
+
+    expect(context.loaded.map((skill) => skill.versionId)).not.toContain(oldVersionId);
+    expect(context.selectionNote).toContain("Rejected 1");
+    expect(context.loaded[0]?.versionId).toBe(next.versionId);
+    expect(database.getSkillByQualifiedName("repository:review-feature").activeVersionId).toBe(next.versionId);
+  });
+
   it("loads only bounded low-risk implicit Skills and audits the pinned version", () => {
     const root = path.join(tempDir, "skills");
     writeSkill(root, "review-feature", {
-      description: "Review a consolidated feature and its tests before merge.",
+      description: "Review features before merge.",
       body: "LOW RISK REVIEW PROCEDURE",
       risk: "low",
       implicit: true
     });
     writeSkill(root, "dangerous-review", {
-      description: "Review a consolidated feature with broad mutation permissions.",
+      description: "Review features with broad permissions.",
       body: "HIGH RISK PROCEDURE",
       risk: "high",
       implicit: true
@@ -168,7 +265,7 @@ function writeSkill(
     body: string;
     risk: "low" | "medium" | "high";
     implicit: boolean;
-    capability?: "planning" | "reviewing";
+    capability?: "planning" | "coding" | "reviewing";
   }
 ): void {
   const skillPath = path.join(root, name);
@@ -179,8 +276,30 @@ function writeSkill(
     `description: ${input.description}`,
     "---",
     "",
-    input.body,
+    "## Introduction", "This skill defines a bounded judgment rule.",
+    "## When to Use", "Use it for the matching task phase.",
+    "## Prerequisites", "Read the available task evidence.",
+    "## How to Run", "Follow the procedure and stop on missing evidence.",
+    "## Quick Reference", "Keep the scope bounded.",
+    "## Procedure", input.body,
+    "## Pitfalls", "Do not infer unsupported facts.",
+    "## Verification", "Check the result against acceptance criteria.",
     ""
+  ].join("\n"));
+  fs.mkdirSync(path.join(skillPath, "evals"), { recursive: true });
+  fs.writeFileSync(path.join(skillPath, "evals", "cases.yaml"), [
+    "schemaVersion: 1",
+    "cases:",
+    "  - id: trigger",
+    "    type: trigger",
+    "    prompt: review the feature",
+    "    phase: reviewing",
+    "    capability: reviewing",
+    "    expectMatch: true",
+    "  - id: content",
+    "    type: content",
+    "    requiredPhrases: ['PROCEDURE']",
+    "    forbiddenPhrases: []"
   ].join("\n"));
   fs.writeFileSync(path.join(skillPath, "maestro.yaml"), [
     "schemaVersion: 1",

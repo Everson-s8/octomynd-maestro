@@ -3,6 +3,7 @@ import type { AgentRegistry } from "../agents/registry.js";
 import type { MaestroDatabase } from "../db.js";
 import { Scheduler, SystemScheduler } from "../goals/scheduler.js";
 import { redactSensitiveText } from "../security/redaction.js";
+import type { SkillRuntime } from "../skills/runtime.js";
 import { runWorkGraph, WORK_GRAPH_RUNTIME_SHUTDOWN } from "./runner.js";
 import type { WorkGraphDetails, WorkerAttemptRecord } from "./types.js";
 
@@ -37,7 +38,8 @@ export class WorkGraphCoordinator {
     private readonly retryDelayMs = 15 * 60_000,
     private readonly scheduler: Scheduler = new SystemScheduler(),
     private readonly restartRetryDelayMs = RESTART_RETRY_DELAY_MS,
-    private readonly onGraphSettled?: (graph: WorkGraphDetails) => void
+    private readonly onGraphSettled?: (graph: WorkGraphDetails) => void,
+    private readonly skillRuntime?: Pick<SkillRuntime, "prepareContext">
   ) {}
 
   start(graphId: number): WorkGraphDetails {
@@ -187,7 +189,8 @@ export class WorkGraphCoordinator {
     this.linkExternalAbort(controller, options.externalSignal);
     const promise = runWorkGraph(this.database, this.registry, graph.id, {
       artifactsRoot: this.artifactsRoot,
-      signal: controller.signal
+      signal: controller.signal,
+      skillRuntime: this.skillRuntime
     });
     const active = { runId: graph.runId, controller, promise };
     this.activeByGraphId.set(graph.id, active);

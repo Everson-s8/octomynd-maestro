@@ -41,6 +41,37 @@ afterEach(() => {
 });
 
 describe("Work Graph runner", () => {
+  it("passes the node's exact Skill version pins to the provider context", async () => {
+    const requests: string[][] = [];
+    const provider = new FakeProvider("codex", ["research"], async () => completed("researched"));
+    const graph = createPreparedGraph({
+      objective: "Research one bounded change.",
+      nodes: [{
+        key: "research",
+        role: "researcher",
+        objective: "Inspect the relevant modules.",
+        capability: "research",
+        outputContract: "Research report.",
+        skillVersions: ["sha256:pin-for-this-node"],
+        mode: "read_only",
+        budget: { maxAttempts: 1, deadlineMs: 30_000, outputChars: 2_000 }
+      }]
+    });
+
+    const finished = await runWorkGraph(database, new AgentRegistry([provider]), graph.id, {
+      artifactsRoot,
+      skillRuntime: {
+        prepareContext(request) {
+          requests.push(request.pinnedSkillVersions ?? []);
+          return { available: [], loaded: [], selectionMode: "deterministic_metadata", selectionNote: "test" };
+        }
+      }
+    });
+
+    expect(finished.status).toBe("completed");
+    expect(requests).toEqual([["sha256:pin-for-this-node"]]);
+  });
+
   it("runs independent readers concurrently and passes their artifacts to the writer", async () => {
     let activeReaders = 0;
     let maxActiveReaders = 0;

@@ -290,6 +290,42 @@ export type EnvironmentDoctorReport = {
   }>;
 };
 
+export type DashboardSkill = {
+  qualifiedName: string;
+  description: string;
+  scope: string;
+  projectKey: string | null;
+  owner: string;
+  risk: string;
+  activeVersionId: string | null;
+  evaluation: {
+    status: string;
+    qualityScore: number;
+    estimatedTokens: number;
+    failures: number;
+  } | null;
+};
+
+export type SkillRuntimeSettings = {
+  enabled: boolean;
+  updatedAt: string | null;
+  curatorAutomaticArchivalEnabled: boolean;
+  curatorMode: "automatic" | "dry_run";
+};
+
+export type SkillCuratorReport = {
+  generatedAt: string;
+  entries: Array<{
+    qualifiedName: string;
+    action: string;
+    autoApplicable: boolean;
+    reason: string;
+    usageCount: number;
+    lastUsedAt: string | null;
+  }>;
+  candidates: Array<{ id: number; title: string; status: string; risk: string }>;
+};
+
 export type DashboardRuntimeUpdate = {
   id: number;
   featureId: number | null;
@@ -358,6 +394,11 @@ export type DashboardData = {
   workGraphs: DashboardWorkGraph[];
   environments: EnvironmentDoctorReport[];
   reviewQueue: ReviewQueueItem[];
+  skills: DashboardSkill[];
+  skillUsage: Array<Record<string, unknown>>;
+  skillProposals: Array<Record<string, unknown>>;
+  skillCuratorReport: SkillCuratorReport;
+  skillSettings: SkillRuntimeSettings;
   runtimeUpdate?: DashboardRuntimeUpdate | null;
   agents: Array<{
     id: "codex" | "claude" | "antigravity" | "telegram";
@@ -928,8 +969,65 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardDat
     workGraphs: Array.isArray(payload.workGraphs) ? payload.workGraphs : [],
     environments: Array.isArray(payload.environments) ? payload.environments : [],
     reviewQueue: Array.isArray(payload.reviewQueue) ? payload.reviewQueue : [],
+    skills: Array.isArray(payload.skills) ? payload.skills : [],
+    skillUsage: Array.isArray(payload.skillUsage) ? payload.skillUsage : [],
+    skillProposals: Array.isArray(payload.skillProposals) ? payload.skillProposals : [],
+    skillCuratorReport: payload.skillCuratorReport ?? { generatedAt: new Date().toISOString(), entries: [], candidates: [] },
+    skillSettings: payload.skillSettings ?? {
+      enabled: false,
+      updatedAt: null,
+      curatorAutomaticArchivalEnabled: false,
+      curatorMode: "dry_run"
+    },
     agents: Array.isArray(payload.agents) ? payload.agents : []
   } as DashboardData;
+}
+
+async function skillRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  const payload = await response.json() as T & { error?: string; details?: string };
+  if (!response.ok) throw new Error(payload.details || payload.error || "Skill operation failed.");
+  return payload;
+}
+
+export async function updateSkillRuntimeEnabled(enabled: boolean): Promise<SkillRuntimeSettings> {
+  const payload = await skillRequest<{ settings: SkillRuntimeSettings }>("/api/skills/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  return payload.settings;
+}
+
+export async function fetchSkillProposals(status?: "requested" | "linked" | "rejected"): Promise<unknown[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  const payload = await skillRequest<{ proposals: unknown[] }>(`/api/skills/proposals${query}`);
+  return payload.proposals;
+}
+
+export async function reconcileSkillProposals(): Promise<unknown[]> {
+  const payload = await skillRequest<{ linked: unknown[] }>("/api/skills/proposals/reconcile", { method: "POST" });
+  return payload.linked;
+}
+
+export async function fetchSkillCuratorReport(): Promise<SkillCuratorReport> {
+  const payload = await skillRequest<{ report: SkillCuratorReport }>("/api/skills/curator/report");
+  return payload.report;
+}
+
+export async function applySkillCurator(): Promise<SkillCuratorReport> {
+  const payload = await skillRequest<{ report: SkillCuratorReport }>("/api/skills/curator/apply", { method: "POST" });
+  return payload.report;
+}
+
+export async function fetchSkillCuratorCandidates(): Promise<unknown[]> {
+  const payload = await skillRequest<{ candidates: unknown[] }>("/api/skills/curator/candidates");
+  return payload.candidates;
+}
+
+export async function processSkillCuratorCandidates(): Promise<unknown[]> {
+  const payload = await skillRequest<{ candidates: unknown[] }>("/api/skills/curator/candidates/process", { method: "POST" });
+  return payload.candidates;
 }
 
 export type PreviewWorkIntakeInput = {

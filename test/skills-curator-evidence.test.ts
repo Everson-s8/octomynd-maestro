@@ -246,7 +246,17 @@ function setupSkillWithActiveVersion(
 
   fs.writeFileSync(
     path.join(skillPath, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${name} test skill.\n---\n\nProcedure body.\n`
+    [
+      "---", `name: ${name}`, "description: Apply a bounded judgment rule.", "---", "",
+      "## Introduction", "This skill defines a bounded judgment rule.",
+      "## When to Use", "Use it only when the task matches.",
+      "## Prerequisites", "Read the available evidence first.",
+      "## How to Run", "Follow the procedure below.",
+      "## Quick Reference", "Keep the scope bounded.",
+      "## Procedure", "Procedure body.",
+      "## Pitfalls", "Do not infer missing evidence.",
+      "## Verification", "Check the result against acceptance criteria.", ""
+    ].join("\n")
   );
   fs.writeFileSync(
     path.join(skillPath, "maestro.yaml"),

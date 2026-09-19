@@ -157,6 +157,7 @@ function writeSkill(root: string, name: string, body: string): string {
   const skillPath = path.join(root, name);
   fs.mkdirSync(skillPath, { recursive: true });
   fs.writeFileSync(path.join(skillPath, "SKILL.md"), skillMarkdown(name, body));
+  writeEvalCases(skillPath);
   fs.writeFileSync(path.join(skillPath, "maestro.yaml"), [
     "schemaVersion: 1",
     "owner: system",
@@ -177,12 +178,37 @@ function skillMarkdown(name: string, body: string): string {
   return [
     "---",
     `name: ${name}`,
-    `description: ${name} procedure. Use only after explicit selection.`,
+    "description: Apply a bounded judgment rule.",
     "---",
     "",
-    body,
+    "## Introduction", "This skill defines a bounded judgment rule.",
+    "## When to Use", "Use it only when the task matches.",
+    "## Prerequisites", "Read the available evidence first.",
+    "## How to Run", "Follow the procedure below.",
+    "## Quick Reference", "Keep the scope bounded.",
+    "## Procedure", body,
+    "## Pitfalls", "Do not infer missing evidence.",
+    "## Verification", "Check the result against acceptance criteria.",
     ""
   ].join("\n");
+}
+
+function writeEvalCases(skillPath: string): void {
+  fs.mkdirSync(path.join(skillPath, "evals"), { recursive: true });
+  fs.writeFileSync(path.join(skillPath, "evals", "cases.yaml"), [
+    "schemaVersion: 1",
+    "cases:",
+    "  - id: trigger",
+    "    type: trigger",
+    "    prompt: use the bounded judgment rule",
+    "    phase: implementing",
+    "    capability: coding",
+    "    expectMatch: true",
+    "  - id: content",
+    "    type: content",
+    "    requiredPhrases: ['Procedure body']",
+    "    forbiddenPhrases: []"
+  ].join("\n"));
 }
 
 function recordPassingEvaluation(skillVersionRecordId: number): void {

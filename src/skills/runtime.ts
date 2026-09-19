@@ -10,6 +10,7 @@ export type SkillRuntimeRequest = {
   taskText: string;
   projectKey: string;
   explicitSkills?: string[];
+  pinnedSkillVersions?: string[];
 };
 
 export type SkillRuntimeOptions = {
@@ -18,10 +19,10 @@ export type SkillRuntimeOptions = {
   maxInstructionChars: number;
 };
 
-const DEFAULT_OPTIONS: SkillRuntimeOptions = {
-  maxAvailable: 12,
+export const DEFAULT_SKILL_RUNTIME_OPTIONS: SkillRuntimeOptions = {
+  maxAvailable: 24,
   maxLoaded: 2,
-  maxInstructionChars: 16_000
+  maxInstructionChars: 24_000
 };
 
 export class SkillRuntime {
@@ -30,22 +31,31 @@ export class SkillRuntime {
   constructor(
     private readonly database: MaestroDatabase,
     private readonly store: SkillVersionStore,
-    options: Partial<SkillRuntimeOptions> = {}
+    options: Partial<SkillRuntimeOptions> = {},
+    private readonly isEnabled: () => boolean = () => true
   ) {
-    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.options = { ...DEFAULT_SKILL_RUNTIME_OPTIONS, ...options };
     if (this.options.maxAvailable < 1 || this.options.maxLoaded < 1 || this.options.maxInstructionChars < 1_000) {
       throw new Error("Skill runtime limits must be positive and keep at least 1000 instruction characters.");
     }
   }
 
   prepareContext(request: SkillRuntimeRequest): SkillExecutionContext {
+    if (!this.isEnabled()) {
+      return {
+        available: [],
+        loaded: [],
+        selectionMode: "disabled",
+        selectionNote: "Skills are disabled by the operator."
+      };
+    }
     const active = this.database.listSkills()
       .filter((skill) => skill.activeVersionId)
       .map((skill) => ({
         skill,
         version: this.database.getSkillVersionByCoordinates(skill.qualifiedName, skill.activeVersionId!)
       }))
-      .filter(({ skill, version }) => isApplicable(skill, version, request));
+      .filter(({ skill, version }) => version.status === "active" && isApplicable(skill, version, request));
     const available = active.slice(0, this.options.maxAvailable).map(({ skill, version }) => ({
       qualifiedName: version.qualifiedName,
       description: version.description.slice(0, 240),
@@ -59,9 +69,31 @@ export class SkillRuntime {
         const version = this.database.getSkillVersion(pin.skillVersionRecordId);
         return { pin, version, skill: this.database.getSkillByQualifiedName(version.qualifiedName) };
       })
-      .filter(({ skill, version }) => isApplicable(skill, version, request));
+      .filter(({ skill, version }) => version.status === "active" && isApplicable(skill, version, request));
     const selected = [...alreadyPinned];
     const selectedVersionIds = new Set(selected.map(({ version }) => version.id));
+    const rejectedPins: string[] = [];
+    for (const pinnedVersionId of request.pinnedSkillVersions ?? []) {
+      const candidate = findActiveVersion(this.database, pinnedVersionId.trim());
+      if (!candidate) {
+        rejectedPins.push(pinnedVersionId);
+        continue;
+      }
+      if (!isApplicable(candidate.skill, candidate.version, request) || selectedVersionIds.has(candidate.version.id)) {
+        rejectedPins.push(pinnedVersionId);
+        continue;
+      }
+      if (selected.length >= this.options.maxLoaded) {
+        rejectedPins.push(pinnedVersionId);
+        continue;
+      }
+      this.assertInstructionsBudget(candidate.version);
+      selected.push({
+        ...candidate,
+        pin: this.pin(request, candidate.version, `Pinned by Work Graph node for ${request.phase}.`, "explicit")
+      });
+      selectedVersionIds.add(candidate.version.id);
+    }
     const explicit = new Set((request.explicitSkills ?? []).map((name) => name.trim()).filter(Boolean));
 
     for (const name of explicit) {
@@ -86,7 +118,12 @@ export class SkillRuntime {
         .filter(({ version }) => version.policy.allowImplicitInvocation && version.policy.risk === "low")
         .map((candidate) => ({
           ...candidate,
-          score: scoreSkillRelevance(skillName(candidate.version), candidate.version.description, request)
+          score: scoreSkillRelevance(
+            skillName(candidate.version),
+            candidate.version.description,
+            request,
+            candidate.version.policy.capabilities
+          )
         }))
         .filter((candidate) => candidate.score > 0)
         .sort((left, right) => right.score - left.score || left.version.qualifiedName.localeCompare(right.version.qualifiedName))
@@ -106,19 +143,30 @@ export class SkillRuntime {
       }
     }
 
-    const loaded = selected.slice(0, this.options.maxLoaded).map(({ pin, version }) => {
+    let loadedChars = 0;
+    let budgetSkipped = 0;
+    const loaded = selected.slice(0, this.options.maxLoaded).flatMap(({ pin, version }) => {
       const instructions = this.store.readSkillMarkdown(version);
-      if (instructions.length > this.options.maxInstructionChars) {
-        throw new Error(`Skill instructions exceed the runtime context budget: ${version.qualifiedName}.`);
+      if (loadedChars + instructions.length > this.options.maxInstructionChars) {
+        budgetSkipped += 1;
+        return [];
       }
-      return {
+      loadedChars += instructions.length;
+      return [{
         qualifiedName: version.qualifiedName,
         versionId: version.versionId,
         triggerReason: pin.triggerReason,
         instructions
-      };
+      }];
     });
-    return { available, loaded };
+    const notes = [
+      rejectedPins.length > 0 ? `Rejected ${rejectedPins.length} non-active or inapplicable Work Graph Skill pin(s).` : null,
+      budgetSkipped > 0 ? `Skipped ${budgetSkipped} Skill(s) because the instruction budget was full.` : null
+    ].filter((item): item is string => Boolean(item));
+    const note = notes.length > 0
+      ? notes.join(" ")
+      : "Selection uses language-independent phase and capability metadata; no model call was added.";
+    return { available, loaded, selectionMode: "deterministic_metadata", selectionNote: note };
   }
 
   private pin(
@@ -143,6 +191,22 @@ export class SkillRuntime {
   }
 }
 
+function findActiveVersion(
+  database: MaestroDatabase,
+  requestedVersionId: string
+): { skill: SkillRecord; version: SkillVersionRecord } | null {
+  const normalized = requestedVersionId.trim();
+  if (!normalized) return null;
+  for (const skill of database.listSkills()) {
+    if (!skill.activeVersionId) continue;
+    const version = database.getSkillVersionByCoordinates(skill.qualifiedName, skill.activeVersionId);
+    if (version.status === "active" && (version.versionId === normalized || `${version.qualifiedName}@${version.versionId}` === normalized)) {
+      return { skill, version };
+    }
+  }
+  return null;
+}
+
 function isApplicable(
   skill: SkillRecord,
   version: SkillVersionRecord,
@@ -159,21 +223,23 @@ function isApplicable(
 export function scoreSkillRelevance(
   name: string,
   description: string,
-  request: Pick<SkillRuntimeRequest, "taskText" | "phase" | "capability">
+  request: Pick<SkillRuntimeRequest, "taskText" | "phase" | "capability">,
+  supportedCapabilities?: readonly AgentCapability[]
 ): number {
-  const requestTokens = tokens(`${request.taskText} ${request.phase} ${request.capability}`);
-  const skillTokens = tokens(`${name} ${description}`);
-  let score = 0;
-  for (const token of skillTokens) if (requestTokens.has(token)) score += token.length >= 7 ? 3 : 1;
-  return score;
+  void name;
+  void description;
+  // Selection is intentionally based on protocol metadata, not words. The
+  // phase/capability enums survive translation and non-Latin user input.
+  const phaseCapability: Record<GoalPhase, AgentCapability> = {
+    planning: "planning",
+    implementing: "coding",
+    testing: "testing",
+    reviewing: "reviewing"
+  };
+  if (supportedCapabilities && !supportedCapabilities.includes(request.capability)) return 0;
+  return request.capability === phaseCapability[request.phase] && Boolean(request.taskText.trim()) ? 10 : 0;
 }
 
 function skillName(version: SkillVersionRecord): string {
   return version.qualifiedName.slice(version.qualifiedName.indexOf(":") + 1);
-}
-
-function tokens(value: string): Set<string> {
-  return new Set(value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length >= 3));
 }

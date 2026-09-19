@@ -252,7 +252,10 @@ deterministic cases in `evals/cases.yaml`. Discovery loads only metadata; instru
 prompt only after selection and are bounded by budget. Each Goal pins the exact hash of the version
 used, the trigger reason, and the invocation mode.
 
-It is off by default. To enable the three initial Skills:
+Skills start disabled unless the operator's persisted setting or the initial environment default
+enables them. After startup, use Settings → Skills in the Dashboard to enable or disable runtime
+injection and inspect the active versions; no environment edit is required. The environment
+variable remains useful for first boot and unattended deployments:
 
 ```text
 MAESTRO_SKILLS_ENABLED=true
@@ -260,6 +263,16 @@ MAESTRO_SKILLS_PATH=skills
 MAESTRO_SKILL_VERSIONS_PATH=.maestro/skill-versions
 MAESTRO_SKILLS_PROJECT_KEY=maestro
 ```
+
+The curator is a separate gate. Its report and proposal actions are visible in the same Settings
+panel, while automatic archival stays off by default. Enabling Skills does not enable archival or
+grant any new write scope.
+
+Every Skill must have a machine-validated authoring shape: a plain one-sentence description of at
+most 60 characters, the ordered sections `Introduction`, `When to Use`, `Prerequisites`, `How to
+Run`, `Quick Reference`, `Procedure`, `Pitfalls`, and `Verification`, plus `evals/cases.yaml` with
+trigger and content cases. Keep the main instructions within 24,000 characters; move reusable
+detail to `references/` or `scripts/` when the procedure grows.
 
 - `diagnose-goal-failure`: can be selected implicitly, but is read-only, off-network, and
   write-free.

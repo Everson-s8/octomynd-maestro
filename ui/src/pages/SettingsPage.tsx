@@ -5,6 +5,7 @@ import { OperationalChatConsole } from "../components/OperationalChatConsole";
 import { SectionHeader } from "../components/SectionHeader";
 import { TelegramConnectCard } from "../components/TelegramConnectCard";
 import { LanguageSelector } from "../components/LanguageSelector";
+import { SkillControlPanel } from "../components/SkillControlPanel";
 import { translate } from "../i18n";
 
 export interface SettingsPageProps {
@@ -20,6 +21,7 @@ export function SettingsPage({ data, onRefresh }: SettingsPageProps) {
         <LanguageSelector />
       </div>
       <TelegramConnectCard agents={data.agents} onChanged={onRefresh} />
+      <SkillControlPanel data={data} onRefresh={onRefresh} />
 
       <div className="panel settings-autopilot-card" style={{ padding: "20px" }}>
         <SectionHeader eyebrow={translate("Autonomy")} title={translate("Autopilot settings")} meta={`${translate("state")}: ${data.autopilot.state}`} />

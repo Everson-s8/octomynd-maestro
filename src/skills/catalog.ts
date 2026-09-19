@@ -46,6 +46,22 @@ const CAPABILITIES: AgentCapability[] = [
   "conversation"
 ];
 
+export const SKILL_AUTHORING_STANDARD = Object.freeze({
+  descriptionMaxChars: 60,
+  recommendedInstructionChars: 12_000,
+  hardInstructionChars: 24_000,
+  requiredSections: [
+    "Introduction",
+    "When to Use",
+    "Prerequisites",
+    "How to Run",
+    "Quick Reference",
+    "Procedure",
+    "Pitfalls",
+    "Verification"
+  ] as const
+});
+
 type PackageFile = {
   absolutePath: string;
   relativePath: string;
@@ -146,6 +162,7 @@ export function inspectSkillPackage(
   }
 
   const frontmatter = parseSkillFrontmatter(fs.readFileSync(skillFile.absolutePath, "utf8"));
+  validateSkillAuthoring(files, effectiveLimits);
   const policy = policyFile
     ? parseSkillPolicy(fs.readFileSync(policyFile.absolutePath, "utf8"), root.scope)
     : defaultSkillPolicy(root.scope);
@@ -210,10 +227,52 @@ function parseSkillFrontmatter(content: string): { name: string; description: st
   if (!name || name.length > 64 || !SKILL_NAME.test(name)) {
     throw new Error("Skill name must use lowercase letters, numbers and hyphens, with at most 64 characters.");
   }
-  if (!description || description.length > 1_024 || /<[^>]+>/.test(description)) {
-    throw new Error("Skill description must be plain text with at most 1024 characters.");
+  if (
+    !description
+    || description.length > SKILL_AUTHORING_STANDARD.descriptionMaxChars
+    || /<[^>]+>/.test(description)
+    || !/^[^.!?]+\.$/.test(description)
+    || /\b(amazing|ultimate|revolutionary|best|powerful)\b/i.test(description)
+  ) {
+    throw new Error("Skill description must be one plain, non-marketing sentence of at most 60 characters ending with a period.");
   }
   return { name, description };
+}
+
+function validateSkillAuthoring(
+  files: PackageFile[],
+  limits: SkillCatalogLimits
+): void {
+  const skillFile = files.find((file) => file.relativePath === "SKILL.md");
+  if (!skillFile) throw new Error("SKILL.md is required.");
+  const markdown = fs.readFileSync(skillFile.absolutePath, "utf8").replaceAll("\r\n", "\n");
+  if (markdown.length > SKILL_AUTHORING_STANDARD.hardInstructionChars) {
+    throw new Error("SKILL.md exceeds the authoring limit; move reusable detail to references/ or scripts/.");
+  }
+  const headings = [...markdown.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1].trim());
+  let previousIndex = -1;
+  for (const section of SKILL_AUTHORING_STANDARD.requiredSections) {
+    const index = headings.indexOf(section);
+    if (index < 0 || index <= previousIndex) {
+      throw new Error(`SKILL.md must contain ordered section ## ${section}.`);
+    }
+    previousIndex = index;
+  }
+
+  const evalFile = files.find((file) => file.relativePath === "evals/cases.yaml");
+  if (!evalFile) throw new Error("evals/cases.yaml is required.");
+  const parsed = parseYaml(fs.readFileSync(evalFile.absolutePath, "utf8"));
+  if (!isRecord(parsed) || parsed.schemaVersion !== 1 || !Array.isArray(parsed.cases)) {
+    throw new Error("evals/cases.yaml must declare schemaVersion 1 and a cases array.");
+  }
+  const hasTrigger = parsed.cases.some((item) => isRecord(item) && item.type === "trigger");
+  const hasContent = parsed.cases.some((item) => isRecord(item) && item.type === "content");
+  if (!hasTrigger || !hasContent) {
+    throw new Error("evals/cases.yaml must include trigger and content cases.");
+  }
+  if (skillFile.size > limits.maxSkillMarkdownBytes) {
+    throw new Error("SKILL.md exceeds the configured catalog size limit.");
+  }
 }
 
 function parseSkillPolicy(content: string, scope: SkillCatalogRoot["scope"]): SkillPolicy {

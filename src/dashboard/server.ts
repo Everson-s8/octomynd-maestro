@@ -1027,6 +1027,44 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/skills/settings") {
+    sendJson(response, 200, {
+      settings: {
+        ...options.database.getSkillRuntimeSettings(options.config.skills.enabled),
+        curatorAutomaticArchivalEnabled: options.config.skills.curator.autoArchiveEnabled,
+        curatorMode: options.config.skills.curator.autoArchiveEnabled ? "automatic" : "dry_run"
+      }
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/skills/settings") {
+    try {
+      const body = await readJsonBody(request);
+      if (typeof body.enabled !== "boolean") {
+        sendJson(response, 400, { error: "skills_enabled_must_be_boolean" });
+        return;
+      }
+      const settings = options.database.setSkillRuntimeEnabled(body.enabled);
+      options.database.addEvent({
+        source: "dashboard",
+        type: "skills.runtime_toggled",
+        text: body.enabled ? "Skills enabled from the dashboard." : "Skills disabled from the dashboard.",
+        metadata: { enabled: body.enabled }
+      });
+      sendJson(response, 200, {
+        settings: {
+          ...settings,
+          curatorAutomaticArchivalEnabled: options.config.skills.curator.autoArchiveEnabled,
+          curatorMode: options.config.skills.curator.autoArchiveEnabled ? "automatic" : "dry_run"
+        }
+      });
+    } catch (error) {
+      sendCommandError(response, error, "skill_settings_update_failed");
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/skills/proposals/reconcile") {
     try {
       sendJson(response, 200, { linked: commands.reconcileSkillProposalDrafts({ channel: "dashboard" }) });
