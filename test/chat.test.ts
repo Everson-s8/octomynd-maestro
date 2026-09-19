@@ -491,6 +491,24 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
   });
 
+  it("creates an explicitly requested task directly in Full Access", async () => {
+    const request = "A partir disso analise o projeto e crie uma task para o Maestro rodar: simplificar o fluxo de despesas e dividir o saldo entre os moradores.";
+    expect(parseTaskCreationIntent(request)?.text).toBe(request);
+    expect(parseTaskCreationIntent("não crie uma task agora, apenas explique a ideia")).toBeNull();
+
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: request,
+      accessMode: "full"
+    });
+
+    expect(database.listTasks(20)).toHaveLength(1);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para) @maestro/);
+    expect(response.actions.some((action) => action.type === "create_task")).toBe(false);
+  });
+
   it("falls back to the next conversation provider after a headless provider failure", async () => {
     const antigravity = chatProvider("antigravity", {
       outcome: "failed",

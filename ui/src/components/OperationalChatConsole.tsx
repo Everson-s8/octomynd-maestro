@@ -48,7 +48,7 @@ export function OperationalChatConsole({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -507,12 +507,22 @@ export function OperationalChatConsole({
           </div>
 
           <form className="chat-input" onSubmit={handleSend}>
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
+              rows={1}
               placeholder={isResponding ? translate("Maestro is responding") : translate("Ask Maestro…")}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                setInputText(e.target.value);
+                e.currentTarget.style.height = "auto";
+                e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 180)}px`;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
               disabled={isResponding || historyLoading}
               aria-label={translate("Message Maestro")}
             />

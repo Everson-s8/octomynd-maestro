@@ -207,6 +207,27 @@ export class OperationalChatService {
     }
 
     let automaticStartSummary = "";
+    let automaticTaskSummary = "";
+    if (accessMode === "full" && taskIntent) {
+      const createTaskAction = actions.find((action) => action.type === "create_task");
+      const targetProjectKey = typeof createTaskAction?.payload?.projectKey === "string"
+        ? createTaskAction.payload.projectKey
+        : projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : projectKey;
+      if (createTaskAction && targetProjectKey) {
+        const task = this.commands.createTask(
+          { channel: request.surface, userId: request.userId ?? null, username: request.username ?? null },
+          { text: taskIntent.text, projectKey: targetProjectKey }
+        );
+        const sizingNotice = await this.persistTaskSizing(task, createTaskAction.payload);
+        await this.actionExecutor?.taskCreated?.(task.id);
+        automaticTaskSummary = [
+          chatText(locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`),
+          sizingNotice
+        ].filter(Boolean).join(" ");
+        evidence.summaryText = `${evidence.summaryText}\nTask creation: ${automaticTaskSummary}`;
+        actions = actions.filter((action) => action.type !== "create_task");
+      }
+    }
     if (accessMode === "full" && !commandPlan && isProjectStartRequest(request.message)) {
       const startAction = actions.find((action) => action.type === "start_project");
       if (startAction) {
@@ -235,20 +256,23 @@ export class OperationalChatService {
       .listOperationalChatMessages(projectKey, 12, thread.id)
       .filter((message) => message.id !== savedUserMessage.id)
       .slice(-10);
-    const routingResult = await this.synthesizeExplanation(
-      request.message,
-      evidence,
-      actions,
-      conversationHistory,
-      accessMode,
-      locale,
-      selectedProviderId,
-      selectedModel
-    );
+    const routingResult = automaticTaskSummary
+      ? { explanation: "", providerId: "deterministic_engine" as const, model: null }
+      : await this.synthesizeExplanation(
+        request.message,
+        evidence,
+        actions,
+        conversationHistory,
+        accessMode,
+        locale,
+        selectedProviderId,
+        selectedModel
+      );
 
     const commandReport = evidence.commands.at(-1);
     const explanation = redactSensitiveText([
       routingResult.explanation,
+      automaticTaskSummary,
       automaticStartSummary,
       commandReport ? formatChatCommandEvidence(commandReport, locale) : ""
     ].filter(Boolean).join("\n\n"));
@@ -1869,6 +1893,17 @@ export function parseTaskCreationIntent(input: string): TaskCreationIntent | nul
     if (framingSeparator >= 0) taskText = taskText.slice(framingSeparator + 1).trim();
     taskText = taskText.replace(/^[,\-:]\s*/, "").replace(/^para\s+/i, "").trim();
     return taskText.length >= 4 ? { text: taskText } : null;
+  }
+
+  // Users often give the rationale first and put the mutation at the end:
+  // "analise isso e crie uma task para o Maestro rodar". Preserve the full
+  // request as the task objective so the worker receives the requirements,
+  // not only the short phrase after "task".
+  const embedded = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
+  const negated = /^(?:não|nao)\s+(?:(?:quero|preciso)\s+)?(?:que\s+)?(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\b/i.test(text)
+    || /^(?:não|nao)\b[^.!?]{0,80}\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
+  if (embedded && !negated && !/\?\s*$/.test(text) && !/^(?:como|how|o que|what)\b/i.test(text)) {
+    return text.length >= 4 ? { text } : null;
   }
 
   // A short form such as "Quero criar um projeto de finanças" is also an
