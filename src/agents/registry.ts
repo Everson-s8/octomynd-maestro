@@ -3,7 +3,8 @@ import {
   AgentExecutionResult,
   AgentHealth,
   AgentProvider,
-  AgentProviderId
+  AgentProviderId,
+  AgentReasoningEffort
 } from "./types.js";
 import type { FailureCategory } from "./failure.js";
 import { BackgroundHealthProber } from "./health-prober.js";
@@ -46,10 +47,12 @@ export type AgentProviderSnapshot = {
   detail: string;
   models?: string[];
   currentModel?: string | null;
+  reasoningEfforts?: AgentReasoningEffort[];
   control: {
     mode: "enabled" | "paused" | "disabled";
     fallbackEnabled: boolean;
     model?: string | null;
+    effort?: AgentReasoningEffort | null;
   };
 };
 
@@ -298,6 +301,9 @@ export class AgentRegistry {
             : "ready";
       const availableModels = provider.models ? await provider.models() : [];
       const configuredModel = controls.get(provider.id)?.model ?? provider.model ?? null;
+      const models = configuredModel && !availableModels.includes(configuredModel)
+        ? [...availableModels, configuredModel]
+        : availableModels;
       return {
         id: provider.id,
         label: provider.label,
@@ -307,12 +313,14 @@ export class AgentRegistry {
         activeCount,
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
         detail: cooldown?.detail ?? health.detail,
-        models: availableModels,
+        models,
         currentModel: configuredModel,
+        reasoningEfforts: [...(provider.reasoningEfforts ?? [])],
         control: {
           mode: controls.get(provider.id)?.mode ?? "enabled",
           fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true,
-          model: configuredModel
+          model: configuredModel,
+          effort: controls.get(provider.id)?.effort ?? null
         }
       };
     }));
@@ -346,7 +354,10 @@ export class AgentRegistry {
       if (models.length === 0) {
         models = provider.models ? await provider.models() : [];
       }
-      result[provider.id] = models;
+      const configuredModel = this.policySnapshot().controls.find((control) => control.providerId === provider.id)?.model ?? provider.model ?? null;
+      result[provider.id] = configuredModel && !models.includes(configuredModel)
+        ? [...models, configuredModel]
+        : models;
     }
     return result;
   }

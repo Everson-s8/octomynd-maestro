@@ -5,7 +5,7 @@ import { redactSensitiveText, sanitizePublicMetadata, truncateForDisplay } from 
 import { BacklogAutopilotSnapshot } from "../backlog/autopilot.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
-import type { AgentProviderId } from "../agents/types.js";
+import type { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { SkillCurator } from "../skills/curator.js";
 
@@ -19,6 +19,9 @@ export type AgentPresence = {
   taskId?: number;
   projectKey?: string;
   phase?: string;
+  reasoningEfforts?: AgentReasoningEffort[];
+  models?: string[];
+  currentModel?: string | null;
 };
 
 export function providerAgentPresence(
@@ -45,7 +48,10 @@ export function providerAgentPresence(
               : "attention",
         detail: provider.state === "cooldown" && provider.cooldownUntil
           ? `${provider.detail} Cooldown ate ${provider.cooldownUntil}.`
-          : provider.detail
+          : provider.detail,
+        reasoningEfforts: provider.reasoningEfforts ?? [],
+        models: provider.models ?? [],
+        currentModel: provider.currentModel ?? null
       };
     }),
     telegramPresence(config)

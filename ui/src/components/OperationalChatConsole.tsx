@@ -10,6 +10,7 @@ import {
   OperationalChatThread,
   ChatAccessMode,
   GLOBAL_CHAT_PROJECT_KEY,
+  ReasoningEffort,
   createChatThread,
   deleteChatThread,
   fetchChatActivity,
@@ -47,6 +48,7 @@ export function OperationalChatConsole({
   const [chatProviders, setChatProviders] = useState<import("../api").ChatProviderOption[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort | null>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
@@ -74,6 +76,7 @@ export function OperationalChatConsole({
         setAccessMode(selected.accessMode);
         setSelectedProviderId(selected.providerId);
         setSelectedModel(selected.model);
+        setSelectedEffort(selected.effort);
       } else {
         setSelectedThreadId(null);
         setChatActivity({ active: false, startedAt: null });
@@ -154,6 +157,7 @@ export function OperationalChatConsole({
       setAccessMode(selectedThread.accessMode);
       setSelectedProviderId(selectedThread.providerId);
       setSelectedModel(selectedThread.model);
+      setSelectedEffort(selectedThread.effort);
     }
   }, [selectedThread]);
 
@@ -239,7 +243,7 @@ export function OperationalChatConsole({
       };
       setMessages((prev) => [...prev, tempUserMsg]);
 
-      const chatResponse = await sendChatMessage(selectedProjectKey, userText, activeThreadId, accessMode, locale, selectedProviderId, selectedModel);
+      const chatResponse = await sendChatMessage(selectedProjectKey, userText, activeThreadId, accessMode, locale, selectedProviderId, selectedModel, selectedEffort);
       const startedProjectCommand = accessMode === "full" && (chatResponse.evidence?.commands ?? []).some((command: { command?: string; status?: string }) => (
         command.status === "completed" && /\bnpm(?:\.cmd)?\s+run\s+(?:dev|start|serve|preview)\b/i.test(command.command ?? "")
       ));
@@ -265,13 +269,15 @@ export function OperationalChatConsole({
     const nextProviderId = providerId || null;
     const provider = chatProviders.find((item) => item.id === nextProviderId);
     const nextModel = nextProviderId ? provider?.currentModel ?? provider?.models?.[0] ?? null : null;
+    const nextEffort = nextProviderId ? provider?.control.effort ?? null : null;
     setThreadBusy(true);
     setError(null);
     try {
-      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, nextProviderId, nextModel);
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, nextProviderId, nextModel, nextEffort);
       setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
       setSelectedProviderId(thread.providerId);
       setSelectedModel(thread.model);
+      setSelectedEffort(thread.effort);
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to select the chat provider."));
     } finally {
@@ -294,11 +300,28 @@ export function OperationalChatConsole({
     setThreadBusy(true);
     setError(null);
     try {
-      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, model || null);
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, model || null, selectedEffort);
       setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
       setSelectedModel(thread.model);
+      setSelectedEffort(thread.effort);
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to select the chat model."));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const handleEffortSelection = async (effort: string) => {
+    if (!selectedThreadId || !selectedProviderId || threadBusy) return;
+    const nextEffort = (effort || null) as ReasoningEffort | null;
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, selectedModel, nextEffort);
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+      setSelectedEffort(thread.effort);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to select the reasoning effort."));
     } finally {
       setThreadBusy(false);
     }
@@ -383,10 +406,21 @@ export function OperationalChatConsole({
             <select id="chat-model-select" value={selectedModel ?? ""} onChange={(e) => void handleModelSelection(e.target.value)} disabled={threadBusy}>
               <option value="">{translate("Provider default")}</option>
               {(chatProviders.find((provider) => provider.id === selectedProviderId)?.models ?? []).map((model) => (
-                <option key={model} value={model}>{model} · {translate(modelProcessingLabel(model))}</option>
+                <option key={model} value={model}>{model}</option>
               ))}
             </select>
-            {selectedModel ? <small className="chat-model-profile">{translate("Reasoning profile")}: {translate(modelProcessingLabel(selectedModel))}</small> : null}
+            {selectedModel ? <small className="chat-model-profile">{translate("Model family")}: {translate(modelProcessingLabel(selectedModel))}</small> : null}
+          </label>
+        ) : null}
+        {selectedProviderId && (chatProviders.find((provider) => provider.id === selectedProviderId)?.reasoningEfforts?.length ?? 0) > 0 ? (
+          <label className="chat-access-picker" htmlFor="chat-effort-select">
+            <span>{translate("Effort")}</span>
+            <select id="chat-effort-select" value={selectedEffort ?? ""} onChange={(e) => void handleEffortSelection(e.target.value)} disabled={threadBusy}>
+              <option value="">{translate("Provider default")}</option>
+              {(chatProviders.find((provider) => provider.id === selectedProviderId)?.reasoningEfforts ?? []).map((effort) => (
+                <option key={effort} value={effort}>{effortLabel(effort)}</option>
+              ))}
+            </select>
           </label>
         ) : null}
       </div>
@@ -550,4 +584,17 @@ function modelProcessingLabel(model: string): "Fast" | "Balanced" | "Deep" {
   if (/(?:opus|astra|pro|thinking|reasoning|high)(?:[-_]|$)/.test(normalized)) return "Deep";
   if (/(?:nano|mini|haiku|flash|luna)(?:[-_]|$)/.test(normalized)) return "Fast";
   return "Balanced";
+}
+
+function effortLabel(effort: ReasoningEffort): string {
+  const labels: Record<ReasoningEffort, string> = {
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    extra_high: "Extra high",
+    max: "Max",
+    ultra: "Ultra"
+  };
+  return labels[effort];
 }

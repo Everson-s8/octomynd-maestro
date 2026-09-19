@@ -26,7 +26,7 @@ import { FeatureGitHubGateway } from "../features/github.js";
 import { EnvironmentDoctor } from "../environment/doctor.js";
 import { AgentRegistry } from "../agents/registry.js";
 import type { WorkGraphRuntimeCommands, WorkIntakeCommandInput } from "../commands/application-commands.js";
-import type { AgentCapability, AgentProviderId } from "../agents/types.js";
+import type { AgentCapability, AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import { prepareCliSpawn, resolveCustomCliExecutable } from "../agents/custom-cli.js";
 import { CustomCliProvider } from "../agents/custom-cli.js";
@@ -451,6 +451,7 @@ async function routeRequest(
         activeCount: provider.activeCount,
         currentModel: provider.currentModel ?? null,
         models: provider.models ?? [],
+        reasoningEfforts: provider.reasoningEfforts ?? [],
         quota: quotaFor(provider.id)
       }))
     });
@@ -683,12 +684,14 @@ async function routeRequest(
       const providerId = typeof item?.providerId === "string" ? item.providerId.trim() : "";
       const mode = readEnum(item?.mode, ["enabled", "paused", "disabled"] as const);
       const model = typeof item?.model === "string" ? item.model.trim() || null : item?.model === null ? null : undefined;
+      const effort = normalizeReasoningEffort(item?.effort);
       return providerId && mode && typeof item?.fallbackEnabled === "boolean"
         ? [{
             providerId: providerId as AgentProviderId,
             mode: mode as ProviderMode,
             fallbackEnabled: item.fallbackEnabled as boolean,
-            model
+            model,
+            ...(effort !== undefined ? { effort } : {})
           }]
         : [];
     });
@@ -780,11 +783,13 @@ async function routeRequest(
       return;
     }
     const model = typeof body.model === "string" ? body.model.trim() || null : body.model === null ? null : undefined;
+    const effort = normalizeReasoningEffort(body.effort);
     const control = options.agentRegistry.updateProviderControl({
       providerId: providerControlMatch[1] as AgentProviderId,
       mode: mode as ProviderMode,
       fallbackEnabled: body.fallbackEnabled,
-      model
+      model,
+      ...(effort !== undefined ? { effort } : {})
     });
     options.database.addEvent({
       source: "dashboard",
@@ -1668,8 +1673,9 @@ async function routeRequest(
       ? body.providerId.trim() as AgentProviderId
       : null;
     const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    const effort = normalizeReasoningEffort(body.effort);
     try {
-      const thread = await chatService.selectThreadProvider(projectKey, Number(selectChatProviderMatch[1]), providerId, model);
+      const thread = await chatService.selectThreadProvider(projectKey, Number(selectChatProviderMatch[1]), providerId, model, effort ?? null);
       sendJson(response, 200, { thread });
     } catch (error) {
       sendJson(response, 409, { error: "chat_provider_selection_failed", details: error instanceof Error ? error.message : "unknown" });
@@ -1732,6 +1738,7 @@ async function routeRequest(
     const uiLocale = (body.uiLocale ?? body.locale) === "pt-BR" ? "pt-BR" : "en";
     const providerId = typeof body.providerId === "string" && body.providerId.trim() ? body.providerId.trim() as AgentProviderId : body.providerId === null ? null : undefined;
     const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : body.model === null ? null : undefined;
+    const effort = normalizeReasoningEffort(body.effort);
 
     if (!message) {
       sendJson(response, 400, { error: "message_is_required" });
@@ -1747,7 +1754,8 @@ async function routeRequest(
         accessMode,
         uiLocale,
         providerId,
-        model
+        model,
+        ...(effort !== undefined ? { effort } : {})
       });
       sendJson(response, 200, chatResponse);
     } catch (error) {
@@ -2015,6 +2023,11 @@ function readString(value: unknown): string {
 
 function readEnum<const Option extends string>(value: unknown, options: readonly Option[]): Option | null {
   return typeof value === "string" && options.includes(value as Option) ? value as Option : null;
+}
+
+function normalizeReasoningEffort(value: unknown): AgentReasoningEffort | null | undefined {
+  if (value === null) return null;
+  return readEnum(value, ["minimal", "low", "medium", "high", "extra_high", "max", "ultra"] as const) ?? undefined;
 }
 
 function readStringArray(value: unknown): string[] {

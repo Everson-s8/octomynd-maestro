@@ -749,13 +749,17 @@ describe("Unified Operational Chat (Task #52)", () => {
 
   it("persists an explicit provider/model selection and never falls back from it", async () => {
     const selectedModels: string[] = [];
+    const selectedEfforts: string[] = [];
     const claude = chatProvider("claude", {
       outcome: "completed",
       summary: "Claude answered",
       output: "Resposta do Claude selecionado.",
       error: null,
       retryable: false
-    }, { models: ["claude-sonnet-4"], onExecute: (request) => selectedModels.push(request.model ?? "") });
+    }, { models: ["claude-sonnet-4"], reasoningEfforts: ["low", "high"], onExecute: (request) => {
+      selectedModels.push(request.model ?? "");
+      selectedEfforts.push(request.effort ?? "");
+    } });
     const codex = chatProvider("codex", {
       outcome: "completed",
       summary: "Codex answered",
@@ -773,15 +777,18 @@ describe("Unified Operational Chat (Task #52)", () => {
       surface: "dashboard",
       message: "Explique o estado do projeto.",
       providerId: "claude",
-      model: "claude-sonnet-4"
+      model: "claude-sonnet-4",
+      effort: "high"
     });
 
     expect(response.providerId).toBe("claude");
     expect(response.model).toBe("claude-sonnet-4");
     expect(selectedModels).toEqual(["claude-sonnet-4"]);
+    expect(selectedEfforts).toEqual(["high"]);
     expect(database.getOperationalChatThread(thread.id)).toEqual(expect.objectContaining({
       providerId: "claude",
-      model: "claude-sonnet-4"
+      model: "claude-sonnet-4",
+      effort: "high"
     }));
     expect((await chatService.getHistory("maestro", 20, thread.id)).at(-1)).toEqual(expect.objectContaining({
       providerId: "claude",
@@ -1028,13 +1035,14 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}, options: { models?: string[]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
+}, options: { models?: string[]; reasoningEfforts?: AgentProvider["reasoningEfforts"]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
   return {
     id,
     label: id,
     capabilities: new Set(options.capabilities ?? ["conversation"]),
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
     models: async () => options.models ?? [],
+    reasoningEfforts: options.reasoningEfforts,
     execute: async (request) => {
       if (options.execute) return options.execute(request);
       options.onExecute?.(request);

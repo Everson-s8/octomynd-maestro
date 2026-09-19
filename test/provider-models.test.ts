@@ -13,6 +13,8 @@ describe("provider models configuration and propagation", () => {
     const models = await codex.models();
     expect(models).toContain("gpt-4o");
     expect(models).toContain("o3-mini");
+    expect(models).toContain("gpt-5.6-luna");
+    expect(codex.reasoningEfforts).toEqual(["minimal", "low", "medium", "high", "extra_high", "max", "ultra"]);
   });
 
   it("ClaudeProvider returns available models and honors configured model", async () => {

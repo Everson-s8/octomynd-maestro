@@ -15,7 +15,8 @@ import {
   AgentExecutionRequest,
   AgentExecutionResult,
   AgentHealth,
-  AgentProvider
+  AgentProvider,
+  AgentReasoningEffort
 } from "./types.js";
 import type {
   ImprovementReviewExecutionRequest,
@@ -60,6 +61,7 @@ export class CodexProvider implements AgentProvider {
   readonly id = "codex" as const;
   readonly label = "Codex";
   readonly capabilities = CODEX_CAPABILITIES;
+  readonly reasoningEfforts = ["minimal", "low", "medium", "high", "extra_high", "max", "ultra"] as const satisfies readonly AgentReasoningEffort[];
   readonly model: string | null;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
@@ -94,7 +96,11 @@ export class CodexProvider implements AgentProvider {
       "gpt-5.1-codex",
       "gpt-5.2-codex",
       "gpt-5.3-codex",
-      "gpt-5.4-codex"
+      "gpt-5.4-codex",
+      "gpt-5.6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
     ];
   }
 
@@ -164,6 +170,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
         "--output-last-message",
         outputPath,
         "--sandbox",
@@ -179,6 +186,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
         "--output-schema",
         schemaPath,
         "--output-last-message",

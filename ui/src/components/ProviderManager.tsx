@@ -10,6 +10,7 @@ import {
   ProviderAuthSession,
   ProviderPolicySnapshot,
   ProviderPreset,
+  ReasoningEffort,
   registerProvider,
   RegisteredCustomProvider,
   DashboardData,
@@ -33,6 +34,8 @@ type ConnectedProvider = {
   paused: boolean;
   color: string;
   models: string[];
+  reasoningEfforts: ReasoningEffort[];
+  effort: ReasoningEffort | null;
   registeredProvider: RegisteredCustomProvider | null;
 };
 
@@ -145,7 +148,7 @@ export function ProviderManager({
           preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
         const agent = agents.find((item) => item.id === runtimeId);
         const control = policy?.controls.find((item) => item.providerId === runtimeId);
-        const models = policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
+        const models = agent?.models?.length ? agent.models : policy?.availableModels?.[runtimeId] ?? preset.models ?? [];
         const activeModel = control?.model || models[0] || "";
         // The list is a runtime view, but an installed CLI that still needs
         // authentication must remain visible so the user can understand why
@@ -171,6 +174,8 @@ export function ProviderManager({
           paused,
           color: providerColor(preset.id),
           models,
+          reasoningEfforts: agent?.reasoningEfforts ?? [],
+          effort: control?.effort ?? null,
           registeredProvider: null
         };
       })
@@ -181,7 +186,7 @@ export function ProviderManager({
       const category = preset?.category ?? (local ? "local" : "api");
       const agent = agents.find((item) => item.id === provider.id);
       const control = policy?.controls.find((item) => item.providerId === provider.id);
-      const models = policy?.availableModels?.[provider.id] ?? provider.models ?? [];
+      const models = agent?.models?.length ? agent.models : policy?.availableModels?.[provider.id] ?? provider.models ?? [];
       const activeModel = control?.model || provider.model || models[0] || "";
       return {
         key: `registered:${provider.id}`,
@@ -195,6 +200,8 @@ export function ProviderManager({
         paused: control ? control.mode !== "enabled" : false,
         color: providerColor(provider.id),
         models,
+        reasoningEfforts: agent?.reasoningEfforts ?? [],
+        effort: control?.effort ?? null,
         registeredProvider: provider
       };
     });
@@ -239,13 +246,36 @@ export function ProviderManager({
       await updateProviderControl(detailProvider.providerId, {
         mode: control?.mode ?? "enabled",
         fallbackEnabled: control?.fallbackEnabled ?? true,
-        model
+        model,
+        effort: detailProvider.effort
       });
       await load();
       onChanged?.();
       onPolicyChanged?.();
     } catch (cause) {
       setError(readError(cause, translate("Unable to update the model.")));
+    } finally {
+      setDetailBusy(false);
+    }
+  };
+
+  const selectEffort = async (effort: string) => {
+    if (!detailProvider) return;
+    setDetailBusy(true);
+    setError("");
+    try {
+      const control = policy?.controls.find((item) => item.providerId === detailProvider.providerId);
+      await updateProviderControl(detailProvider.providerId, {
+        mode: control?.mode ?? "enabled",
+        fallbackEnabled: control?.fallbackEnabled ?? true,
+        model: detailProvider.model === translate("Provider default") ? null : detailProvider.model,
+        effort: (effort || null) as ReasoningEffort | null
+      });
+      await load();
+      onChanged?.();
+      onPolicyChanged?.();
+    } catch (cause) {
+      setError(readError(cause, translate("Unable to update the reasoning effort.")));
     } finally {
       setDetailBusy(false);
     }
@@ -626,7 +656,7 @@ export function ProviderManager({
                         ? translate("disabled")
                         : translate("paused")}</label>
                 </div>
-                {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
+                {provider.connected ? <span className="model-badge">{provider.model}{provider.effort ? ` · ${effortLabel(provider.effort)}` : ""}</span> : null}
               </div>
             </button>
           ))}
@@ -669,11 +699,23 @@ export function ProviderManager({
                         onClick={() => { if (!detailBusy) void selectModel(model); }}
                       >
                         <div className="radio" />
-                        <div className="tx"><b>{model}</b><small className="model-profile">{translate("Reasoning profile")}: {translate(modelProcessingLabel(model))}</small></div>
+                        <div className="tx"><b>{model}</b><small className="model-profile">{translate("Model family")}: {translate(modelProcessingLabel(model))}</small></div>
                         {model === detailProvider.models[0] ? <span className="default-tag">{translate("default")}</span> : null}
                       </div>
                     )) : <div className="model-empty">{translate("No model found")}</div>}
                   </div>
+                  {detailProvider.reasoningEfforts.length > 0 ? (
+                    <div className="provider-effort-control">
+                      <div className="pd-section-lbl">{translate("Reasoning effort")}</div>
+                      <select value={detailProvider.effort ?? ""} onChange={(event) => void selectEffort(event.target.value)} disabled={detailBusy}>
+                        <option value="">{translate("Provider default")}</option>
+                        {detailProvider.reasoningEfforts.map((effort) => (
+                          <option key={effort} value={effort}>{effortLabel(effort)}</option>
+                        ))}
+                      </select>
+                      <small>{translate("Applied separately from the model so the list stays compact.")}</small>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <div className="pd-unconfigured">
@@ -844,6 +886,18 @@ function modelProcessingLabel(model: string): "Fast" | "Balanced" | "Deep" {
   if (/(?:opus|astra|pro|thinking|reasoning|high)(?:[-_]|$)/.test(normalized)) return "Deep";
   if (/(?:nano|mini|haiku|flash|luna)(?:[-_]|$)/.test(normalized)) return "Fast";
   return "Balanced";
+}
+
+function effortLabel(effort: ReasoningEffort): string {
+  return {
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    extra_high: "Extra high",
+    max: "Max",
+    ultra: "Ultra"
+  }[effort];
 }
 
 function AuthSessionPanel({ session }: { session: ProviderAuthSession }) {

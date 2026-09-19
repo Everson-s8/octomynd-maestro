@@ -1,6 +1,6 @@
 import type { ProjectRecord } from "../db.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
-import type { AgentProviderId } from "../agents/types.js";
+import type { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import type { RepositoryState } from "../projects/repository-service.js";
 import type { ChatProjectFileFact, ChatProjectGitContext } from "./project-context.js";
 import type { ChatCommandEvidence } from "./project-command.js";
@@ -23,6 +23,7 @@ export type OperationalChatThreadRecord = {
   messageCount: number;
   providerId: AgentProviderId | null;
   model: string | null;
+  effort: AgentReasoningEffort | null;
 };
 
 export type OperationalChatThreadInput = {
@@ -33,6 +34,7 @@ export type OperationalChatThreadInput = {
   uiLocale?: ChatLocale | null;
   providerId?: AgentProviderId | null;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
 };
 
 export type ChatEvidenceTaskFact = {
@@ -218,6 +220,7 @@ export type OperationalChatRequest = {
   /** Explicit selection for this request; omitted means use the thread selection. */
   providerId?: AgentProviderId | null;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
 };
 
 export type OperationalChatResponse = {

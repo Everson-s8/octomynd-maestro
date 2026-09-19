@@ -21,7 +21,7 @@ import {
 import { MaestroDatabase, ProjectRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
-import { AgentProviderId } from "../agents/types.js";
+import { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import { inspectProjectContext } from "./project-context.js";
@@ -139,8 +139,11 @@ export class OperationalChatService {
     const selectedModel = request.model === undefined
       ? thread.model
       : normalizeSelectedModel(request.model);
-    if (thread.providerId !== selectedProviderId || thread.model !== selectedModel) {
-      this.database.updateOperationalChatThreadSelection(thread.id, selectedProviderId, selectedModel);
+    const selectedEffort = request.effort === undefined
+      ? thread.effort
+      : normalizeSelectedEffort(request.effort);
+    if (thread.providerId !== selectedProviderId || thread.model !== selectedModel || thread.effort !== selectedEffort) {
+      this.database.updateOperationalChatThreadSelection(thread.id, selectedProviderId, selectedModel, selectedEffort);
     }
 
     this.beginChatActivity(thread.id, projectKey);
@@ -266,7 +269,8 @@ export class OperationalChatService {
         accessMode,
         locale,
         selectedProviderId,
-        selectedModel
+        selectedModel,
+        selectedEffort
       );
 
     const commandReport = evidence.commands.at(-1);
@@ -969,13 +973,15 @@ export class OperationalChatService {
     projectKey: string,
     threadId: number,
     providerId: AgentProviderId | null,
-    model: string | null
+    model: string | null,
+    effort: AgentReasoningEffort | null = null
   ) {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
     const thread = this.resolveThread(normalizedKey, threadId);
     const normalizedProviderId = normalizeSelectedProviderId(providerId);
     const normalizedModel = normalizeSelectedModel(model);
+    const normalizedEffort = normalizeSelectedEffort(effort);
     if (normalizedProviderId) {
       const providers = await this.listConversationProviders();
       const provider = providers.find((item) => item.id === normalizedProviderId);
@@ -986,8 +992,11 @@ export class OperationalChatService {
       if (normalizedModel && provider.models?.length && !provider.models.includes(normalizedModel)) {
         throw new Error(`Model '${normalizedModel}' is not available for provider '${provider.label}'.`);
       }
+      if (normalizedEffort && provider.reasoningEfforts?.length && !provider.reasoningEfforts.includes(normalizedEffort)) {
+        throw new Error(`Effort '${normalizedEffort}' is not available for provider '${provider.label}'.`);
+      }
     }
-    return this.database.updateOperationalChatThreadSelection(thread.id, normalizedProviderId, normalizedModel);
+    return this.database.updateOperationalChatThreadSelection(thread.id, normalizedProviderId, normalizedModel, normalizedEffort);
   }
 
   deleteThread(projectKey: string, threadId: number): boolean {
@@ -1404,7 +1413,8 @@ export class OperationalChatService {
     accessMode: ChatAccessMode,
     locale: ChatLocale,
     selectedProviderId: AgentProviderId | null,
-    selectedModel: string | null
+    selectedModel: string | null,
+    selectedEffort: AgentReasoningEffort | null
   ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine"; model: string | null }> {
     const taskIntent = parseTaskCreationIntent(userMessage);
     if (taskIntent) {
@@ -1432,6 +1442,9 @@ export class OperationalChatService {
         }
         if (selectedModel && provider.models?.length && !provider.models.includes(selectedModel)) {
           return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, `Model '${selectedModel}' is not available for ${provider.label}.`);
+        }
+        if (selectedEffort && provider.reasoningEfforts?.length && !provider.reasoningEfforts.includes(selectedEffort)) {
+          return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, `Effort '${selectedEffort}' is not available for ${provider.label}.`);
         }
         if (!selectedLease) {
           return this.selectedProviderFailure(selectedProviderId, selectedModel, locale, "The provider is busy or could not be acquired.");
@@ -1535,7 +1548,8 @@ export class OperationalChatService {
                 humanFeedback: `${systemPrompt}\n${formatSkillPromptContext(skillContext).join("\n")}\n\nCONVERSATION HISTORY:\n${historyText}\n\nUSER QUESTION:\n${userMessage}`,
                 skillContext,
                 signal: timeoutController.signal,
-                model: selectedModel ?? lease.model ?? null
+                model: selectedModel ?? lease.model ?? null,
+                effort: selectedEffort ?? evidence.providers.find((item) => item.id === providerId)?.control.effort ?? null
               });
               if (result.outcome === "completed" && result.output.trim().length > 0) {
                 lease.release();
@@ -1829,6 +1843,12 @@ function normalizeSelectedProviderId(value?: AgentProviderId | string | null): A
 function normalizeSelectedModel(value?: string | null): string | null {
   const model = String(value ?? "").trim();
   return model ? model.slice(0, 200) : null;
+}
+
+function normalizeSelectedEffort(value?: AgentReasoningEffort | string | null): AgentReasoningEffort | null {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max" || value === "ultra"
+    ? value
+    : null;
 }
 
 function chatText(locale: ChatLocale, english: string, portuguese: string): string {

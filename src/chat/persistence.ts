@@ -9,6 +9,7 @@ import {
   ChatAccessMode,
   OperationalChatMemoryRecord
 } from "./types.js";
+import type { AgentReasoningEffort } from "../agents/types.js";
 
 type OperationalChatMessageRow = {
   id: number;
@@ -34,6 +35,7 @@ type OperationalChatThreadRow = {
   message_count: number;
   provider_id: string | null;
   model: string | null;
+  effort: AgentReasoningEffort | null;
 };
 
 type OperationalChatMemoryRow = {
@@ -55,6 +57,7 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
       access_mode TEXT NOT NULL DEFAULT 'standard',
       provider_id TEXT,
       model TEXT,
+      effort TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -100,6 +103,9 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
   }
   if (!threadColumns.some((column) => column.name === "model")) {
     db.exec("ALTER TABLE operational_chat_threads ADD COLUMN model TEXT");
+  }
+  if (!threadColumns.some((column) => column.name === "effort")) {
+    db.exec("ALTER TABLE operational_chat_threads ADD COLUMN effort TEXT");
   }
 
   const columns = db.prepare("PRAGMA table_info(operational_chat_messages)").all() as Array<{ name: string }>;
@@ -152,8 +158,8 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
 
 export function createOperationalChatPersistence(db: Database.Database) {
   const insertThreadStatement = db.prepare(`
-    INSERT INTO operational_chat_threads (project_key, title, access_mode, provider_id, model, created_at, updated_at)
-    VALUES (@projectKey, @title, @accessMode, @providerId, @model, @createdAt, @updatedAt)
+    INSERT INTO operational_chat_threads (project_key, title, access_mode, provider_id, model, effort, created_at, updated_at)
+    VALUES (@projectKey, @title, @accessMode, @providerId, @model, @effort, @createdAt, @updatedAt)
   `);
 
   const getThreadStatement = db.prepare(`
@@ -191,7 +197,7 @@ export function createOperationalChatPersistence(db: Database.Database) {
   `);
   const updateThreadSelectionStatement = db.prepare(`
     UPDATE operational_chat_threads
-    SET provider_id = @providerId, model = @model, updated_at = @updatedAt
+    SET provider_id = @providerId, model = @model, effort = @effort, updated_at = @updatedAt
     WHERE id = @id
   `);
 
@@ -265,6 +271,7 @@ export function createOperationalChatPersistence(db: Database.Database) {
         accessMode: normalizeAccessMode(input.accessMode),
         providerId: input.providerId ?? null,
         model: normalizeModel(input.model),
+        effort: normalizeEffort(input.effort),
         createdAt: now,
         updatedAt: now
       });
@@ -298,13 +305,14 @@ export function createOperationalChatPersistence(db: Database.Database) {
       return mapRowToThread(getThreadStatement.get(threadId) as OperationalChatThreadRow);
     },
 
-    updateOperationalChatThreadSelection(threadId: number, providerId: string | null, model: string | null): OperationalChatThreadRecord {
+    updateOperationalChatThreadSelection(threadId: number, providerId: string | null, model: string | null, effort: AgentReasoningEffort | null = null): OperationalChatThreadRecord {
       const thread = getThreadStatement.get(threadId) as OperationalChatThreadRow | undefined;
       if (!thread) throw new Error("Chat thread not found.");
       updateThreadSelectionStatement.run({
         id: threadId,
         providerId: providerId?.trim() || null,
         model: normalizeModel(model),
+        effort: normalizeEffort(effort),
         updatedAt: new Date().toISOString()
       });
       return mapRowToThread(getThreadStatement.get(threadId) as OperationalChatThreadRow);
@@ -437,7 +445,8 @@ function mapRowToThread(row: OperationalChatThreadRow): OperationalChatThreadRec
     updatedAt: row.updated_at,
     messageCount: Number(row.message_count ?? 0),
     providerId: (row.provider_id as OperationalChatThreadRecord["providerId"]) ?? null,
-    model: row.model ?? null
+    model: row.model ?? null,
+    effort: normalizeEffort(row.effort)
   };
 }
 
@@ -454,6 +463,12 @@ function mapRowToMemory(row: OperationalChatMemoryRow): OperationalChatMemoryRec
 
 function normalizeAccessMode(value?: string | null): ChatAccessMode {
   return value === "read_only" || value === "approval" || value === "full" ? value : "standard";
+}
+
+function normalizeEffort(value?: string | null): AgentReasoningEffort | null {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max" || value === "ultra"
+    ? value
+    : null;
 }
 
 function normalizeThreadTitle(value?: string | null): string {

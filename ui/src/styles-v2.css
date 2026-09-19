@@ -586,6 +586,9 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 .pc-chev{width:15px;height:15px;color:var(--faint);margin-left:8px;flex-shrink:0;transition:.15s}
 .prov-card:hover .pc-chev{color:var(--coral);transform:translateX(2px)}
 .model-badge{margin-left:auto;font-family:'IBM Plex Mono';font-size:10.5px;color:var(--coral);background:rgba(232,150,122,.1);border:1px solid rgba(232,150,122,.25);padding:3px 9px;border-radius:100px;max-width:58%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-effort-control{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.provider-effort-control select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit}
+.provider-effort-control small{display:block;margin-top:7px;color:var(--muted);font-size:11px;line-height:1.4}
 
 /* ============ MODAL (base) ============ */
 .modal-overlay{position:fixed;inset:0;background:rgba(10,8,6,.72);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:200;padding:24px;animation:overlayIn .2s ease both}
