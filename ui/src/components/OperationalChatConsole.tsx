@@ -15,6 +15,7 @@ import {
   selectChatProvider,
   sendChatMessage
 } from "../api";
+import { openExternalUrl } from "../external-links";
 import { formatRelative } from "../helpers";
 import { Icon } from "./Icon";
 import { translate, useI18n } from "../i18n";
@@ -197,7 +198,11 @@ export function OperationalChatConsole({
     setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale, selectedProviderId, selectedModel);
+      const chatResponse = await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale, selectedProviderId, selectedModel);
+      if (accessMode === "full" && /\b(?:start|run|inici|rod[ae]|coloque).*\b(?:project|server|projeto|servidor)\b/i.test(userText)) {
+        const runningProcess = (chatResponse.evidence?.processes ?? []).find((process: { status?: string; url?: string | null }) => process.status === "running" && process.url);
+        if (runningProcess?.url) openExternalUrl(runningProcess.url, true);
+      }
       await Promise.all([
         loadHistory(selectedProjectKey, selectedThreadId),
         loadThreads(selectedProjectKey)
@@ -227,6 +232,16 @@ export function OperationalChatConsole({
     } finally {
       setThreadBusy(false);
     }
+  };
+
+  const handleAccessModeSelection = (nextMode: ChatAccessMode) => {
+    if (nextMode === "full" && accessMode !== "full") {
+      const accepted = window.confirm(
+        translate("Full Access lets Maestro execute project commands without asking each time. It does not grant Windows administrator rights, and you can switch back at any time. Continue?")
+      );
+      if (!accepted) return;
+    }
+    setAccessMode(nextMode);
   };
 
   const handleModelSelection = async (model: string) => {
@@ -268,7 +283,10 @@ export function OperationalChatConsole({
 
     try {
       if (!selectedThreadId) return;
-      await executeChatAction(selectedProjectKey, action, selectedThreadId, accessMode, locale);
+      const actionResult = await executeChatAction(selectedProjectKey, action, selectedThreadId, accessMode, locale);
+      if (actionResult.success && action.type === "open_project_browser" && typeof action.payload?.url === "string" && isLocalProjectUrl(action.payload.url)) {
+        openExternalUrl(action.payload.url, true);
+      }
       await loadHistory(selectedProjectKey, selectedThreadId);
       if (onChanged) onChanged();
     } catch (err) {
@@ -296,9 +314,10 @@ export function OperationalChatConsole({
         </label>
         <label className="chat-access-picker" htmlFor="chat-access-select">
           <span>{translate("Access")}</span>
-          <select id="chat-access-select" value={accessMode} onChange={(e) => setAccessMode(e.target.value as ChatAccessMode)}>
+          <select id="chat-access-select" value={accessMode} onChange={(e) => handleAccessModeSelection(e.target.value as ChatAccessMode)}>
             <option value="read_only">{translate("Read-only")}</option>
             <option value="standard">{translate("Standard")}</option>
+            <option value="approval">{translate("Approval per command")}</option>
             <option value="full">{translate("Full Access")}</option>
           </select>
         </label>
@@ -368,7 +387,7 @@ export function OperationalChatConsole({
               <span>{projectLabel} · {translate("Maestro")}</span>
             </div>
             <span className="chat-context-badge">
-              {accessMode === "read_only" ? translate("read-only") : accessMode === "full" ? translate("governed full access") : translate("standard access")}
+              {accessMode === "read_only" ? translate("read-only") : accessMode === "full" ? translate("governed full access") : accessMode === "approval" ? translate("approval per command") : translate("standard access")}
             </span>
           </header>
 
@@ -459,4 +478,13 @@ export function OperationalChatConsole({
       </div>
     </section>
   );
+}
+
+function isLocalProjectUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && ["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }

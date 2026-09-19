@@ -11,6 +11,7 @@ import { createTelegramBot } from "../src/telegram/bot.js";
 import { MaestroConfig } from "../src/config.js";
 import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
 import { runGit } from "../src/git.js";
+import { ProjectProcessManager } from "../src/chat/project-process.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -236,6 +237,63 @@ describe("Unified Operational Chat (Task #52)", () => {
       accessMode: "read_only",
       action: cancel!
     })).rejects.toThrow(/read-only/i);
+  });
+
+  it("takes a coded project from install to managed server and browser URL", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({
+      name: "chat-runner-test",
+      version: "1.0.0",
+      scripts: { dev: "node -e \"console.log('Local: http://127.0.0.1:4555/'); setInterval(() => {}, 1000)\"" }
+    }), "utf8");
+    const processManager = new ProjectProcessManager();
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir, processManager });
+
+    try {
+      const started = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "start project",
+        accessMode: "full"
+      });
+      expect(started.evidence.commands.map((command) => command.command)).toEqual(expect.arrayContaining(["npm install", "npm run dev"]));
+      expect(started.evidence.processes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: "running", pid: expect.any(Number), url: "http://127.0.0.1:4555/" })
+      ]));
+
+      const open = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "open project in browser",
+        accessMode: "full"
+      });
+      const openAction = open.actions.find((action) => action.type === "open_project_browser");
+      expect(openAction).toBeDefined();
+      expect(await chatService.executeAction({
+        projectKey: "maestro",
+        surface: "dashboard",
+        accessMode: "full",
+        action: openAction!
+      })).toMatchObject({ success: true });
+
+      const stopRequest = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "stop server",
+        accessMode: "full"
+      });
+      const stopAction = stopRequest.actions.find((action) => action.type === "stop_project_process");
+      expect(stopAction).toBeDefined();
+      expect(await chatService.executeAction({
+        projectKey: "maestro",
+        surface: "dashboard",
+        accessMode: "full",
+        action: stopAction!
+      })).toMatchObject({ success: true });
+      expect(processManager.list("maestro")[0]?.status).toBe("stopped");
+    } finally {
+      chatService.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   });
 
   it("exposes resume from checkpoint for a blocked goal instead of only restarting the task", async () => {

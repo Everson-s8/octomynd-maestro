@@ -453,7 +453,7 @@ function mapRowToMemory(row: OperationalChatMemoryRow): OperationalChatMemoryRec
 }
 
 function normalizeAccessMode(value?: string | null): ChatAccessMode {
-  return value === "read_only" || value === "full" ? value : "standard";
+  return value === "read_only" || value === "approval" || value === "full" ? value : "standard";
 }
 
 function normalizeThreadTitle(value?: string | null): string {
