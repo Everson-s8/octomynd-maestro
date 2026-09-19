@@ -135,9 +135,9 @@ export function ProviderManager({
   }, [wizardOpen, detailKey]);
 
   const connectedProviders = useMemo<ConnectedProvider[]>(() => {
-    // Built-in providers that are paused (control.mode === "disabled") are hidden
-    // from the list — a removed/paused provider disappears instead of showing as
-    // A paused built-in can be re-enabled from the Connect provider flow.
+    // Keep authenticated providers visible even when paused or disabled. The
+    // card is where users can see that the connection exists and re-enable it;
+    // hiding it makes a successful login look like it vanished.
     const builtIns = presets
       .filter((preset) => preset.builtIn)
       .map((preset) => {
@@ -174,7 +174,7 @@ export function ProviderManager({
           registeredProvider: null
         };
       })
-      .filter((p) => !p.paused && agents.some((agent) => agent.id === p.providerId && agent.state !== "offline"));
+      .filter((p) => agents.some((agent) => agent.id === p.providerId && agent.state !== "offline"));
     const custom = registered.map((provider) => {
       const preset = presets.find((item) => item.id === provider.presetId);
       const local = preset?.category === "local" || provider.connectionMode === "local";
@@ -199,8 +199,7 @@ export function ProviderManager({
       };
     });
     return [...builtIns, ...custom].filter((provider) => (
-      !provider.paused
-      && (provider.connected || agents.some((agent) => agent.id === provider.providerId && agent.state === "attention"))
+      provider.connected || agents.some((agent) => agent.id === provider.providerId && agent.state === "attention")
     ));
   }, [agents, presets, registered, policy]);
 
@@ -591,7 +590,7 @@ export function ProviderManager({
         <div key={group}>
           <div className="prov-group-lbl">{group}</div>
           {groupedProviders[group].map((provider) => (
-            <button type="button" className="prov-card" key={provider.key} onClick={() => openDetail(provider.key)}>
+            <button type="button" className={`prov-card${provider.paused ? " is-paused" : ""}`} key={provider.key} onClick={() => openDetail(provider.key)}>
               <div className="head">
                 <div className="av" style={{ background: provider.color }}>{provider.label.slice(0, 1).toUpperCase()}</div>
                 <div><b>{provider.label}</b><span><i className="st-dot" />{provider.detail}</span></div>
@@ -619,7 +618,13 @@ export function ProviderManager({
                       </span>
                     );
                   })()}
-                  <label>{!provider.connected ? translate("not connected") : provider.active && (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") !== "paused" ? translate("active") : translate("paused")}</label>
+                  <label>{!provider.connected
+                    ? translate("not connected")
+                    : (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") === "enabled"
+                      ? translate("active")
+                      : (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "paused") === "disabled"
+                        ? translate("disabled")
+                        : translate("paused")}</label>
                 </div>
                 {provider.connected ? <span className="model-badge">{provider.model}</span> : null}
               </div>

@@ -1,12 +1,11 @@
 import { DashboardData } from "../api";
 import { Icon } from "../components/Icon";
 import { ImprovementLab } from "../components/ImprovementLab";
-import { OperationalChatConsole } from "../components/OperationalChatConsole";
 import { SectionHeader } from "../components/SectionHeader";
 import { TelegramConnectCard } from "../components/TelegramConnectCard";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { SkillControlPanel } from "../components/SkillControlPanel";
-import { translate } from "../i18n";
+import { getLocaleLabel, translate, useI18n } from "../i18n";
 
 export interface SettingsPageProps {
   data: DashboardData;
@@ -15,10 +14,11 @@ export interface SettingsPageProps {
 }
 
 export function SettingsPage({ data, onRefresh, onRestartOnboarding }: SettingsPageProps) {
+  const { locale } = useI18n();
   return (
     <div className="settings-page-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <div className="panel" style={{ padding: "20px" }}>
-        <SectionHeader eyebrow={translate("Language preference")} title={translate("Language")} meta={translate("English")} />
+        <SectionHeader eyebrow={translate("Language preference")} title={translate("Language")} meta={translate(getLocaleLabel(locale))} />
         <LanguageSelector />
       </div>
       <div className="panel" style={{ padding: "20px" }}>
@@ -61,8 +61,6 @@ export function SettingsPage({ data, onRefresh, onRestartOnboarding }: SettingsP
           </div>
         </div>
       </div>
-
-      <OperationalChatConsole projects={data.projects} onChanged={onRefresh} />
 
       <ImprovementLab improvements={data.improvements} onChanged={onRefresh} />
     </div>

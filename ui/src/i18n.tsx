@@ -187,6 +187,8 @@ const portuguese: Record<string, string> = {
   "Language": "Idioma",
   "English": "Inglês",
   "Brazilian Portuguese": "Português (Brasil)",
+  "Use English throughout the dashboard.": "Use inglês em todo o dashboard.",
+  "Use Brazilian Portuguese throughout the dashboard.": "Use português do Brasil em todo o dashboard.",
   "Choose the language used by the Maestro dashboard. The default is English.": "Escolha o idioma usado pelo dashboard do Maestro. O padrão é inglês.",
   "Save": "Salvar",
   "Unified orchestrator": "Orquestrador unificado",
