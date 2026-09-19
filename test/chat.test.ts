@@ -68,6 +68,26 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(history[2].senderRole).toBe("user");
   });
 
+  it("uses persisted conversation history when the deterministic fallback is active", async () => {
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Estamos revisando o projeto RepuFin e mantendo a lista de compras.",
+      uiLocale: "pt-BR"
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Você consegue resgatar o contexto do que foi falado no chat?",
+      uiLocale: "pt-BR"
+    });
+
+    expect(response.explanation).toContain("Sim, consigo recuperar o histórico");
+    expect(response.explanation).toContain("RepuFin");
+  });
+
   it("injects the selected conversation Skill into the provider prompt", async () => {
     let seen: Parameters<AgentProvider["execute"]>[0] | undefined;
     const provider = chatProvider("codex", {

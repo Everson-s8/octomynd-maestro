@@ -1572,7 +1572,7 @@ export class OperationalChatService {
     }
 
     return {
-      explanation: this.generateDeterministicExplanation(userMessage, evidence, actions, locale),
+      explanation: this.generateDeterministicExplanation(userMessage, evidence, actions, locale, history),
       providerId: "deterministic_engine",
       model: null
     };
@@ -1594,7 +1594,8 @@ export class OperationalChatService {
     userMessage: string,
     evidence: ChatEvidenceContext,
     actions: GovernedChatAction[],
-    locale: ChatLocale
+    locale: ChatLocale,
+    history: OperationalChatMessageRecord[]
   ): string {
     const normalized = userMessage.toLowerCase();
     const lines: string[] = [];
@@ -1604,6 +1605,18 @@ export class OperationalChatService {
       return locale === "pt-BR"
         ? `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botão "Criar Task" abaixo para colocá-la na fila.`
         : `I understood. I prepared a task with this objective: "${truncateChatText(taskIntent.text)}". Use the "Create task" button below to add it to the queue.`;
+    }
+
+    if (/(?:context|contexto|falad|disse|antes|chat|conversa|lembr|remember|previous|anterior|resgat)/i.test(userMessage)) {
+      const previousUserMessages = history
+        .filter((message) => message.senderRole === "user")
+        .slice(-3)
+        .map((message) => `- ${truncateChatText(message.messageText, 240)}`);
+      if (previousUserMessages.length > 0) {
+        return locale === "pt-BR"
+          ? `Sim, consigo recuperar o histórico desta conversa. As últimas solicitações registradas foram:\n${previousUserMessages.join("\n")}\n\nVou usar esse histórico junto com as evidências atuais do projeto.`
+          : `Yes, I can recover this conversation's history. The latest recorded requests were:\n${previousUserMessages.join("\n")}\n\nI will use that history together with the current project evidence.`;
+      }
     }
 
     if (/provider|conectad|saudav|saudável|offline/.test(normalized)) {
