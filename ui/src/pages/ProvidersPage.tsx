@@ -112,8 +112,8 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
     <div className="providers-page">
       <div className="top">
         <div>
-          <div className="eyebrow">AI Routing</div>
-          <h1>Providers</h1>
+          <div className="eyebrow">{translate("AI Routing")}</div>
+          <h1>{translate("Providers")}</h1>
         </div>
         <div className="top-actions">
           <span className="provider-summary">{translate("{installed} CLI(s) detected · {ready} ready for use", { installed: installed.length, ready: ready.length })}</span>

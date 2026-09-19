@@ -30,6 +30,11 @@ Para a instalação completa, providers, desktop e diagnóstico, consulte o
 [`INSTALL.pt-BR.md`](INSTALL.pt-BR.md). A documentação pública mantida está em
 [`docs.octomynd.com`](https://docs.octomynd.com/) em inglês e português.
 
+No primeiro acesso, o dashboard abre uma configuração guiada que explica o produto, verifica
+providers, oferece o cadastro de projeto ou um chat sem projeto e conduz até a primeira task.
+Ela pode ser pulada e reaberta em **Configurações > Primeiro acesso**. O idioma da interface é
+independente do idioma usado no Chat, nas tasks e nas respostas dos providers.
+
 ## CLI
 
 ```powershell
