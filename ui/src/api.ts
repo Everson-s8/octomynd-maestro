@@ -1429,7 +1429,7 @@ export type OperationalChatThread = {
   model: string | null;
 };
 
-export type ChatAccessMode = "read_only" | "standard" | "full";
+export type ChatAccessMode = "read_only" | "standard" | "approval" | "full";
 export type ChatLocale = "en" | "pt-BR";
 export const GLOBAL_CHAT_PROJECT_KEY = "__maestro__";
 

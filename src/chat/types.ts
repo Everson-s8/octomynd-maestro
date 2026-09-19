@@ -7,7 +7,7 @@ import type { ChatCommandEvidence } from "./project-command.js";
 
 export type OperationalChatSurface = "dashboard" | "telegram";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
-export type ChatAccessMode = "read_only" | "standard" | "full";
+export type ChatAccessMode = "read_only" | "standard" | "approval" | "full";
 export type ChatLocale = "en" | "pt-BR";
 
 /** Sentinel used for conversations that are not attached to a project. */
@@ -114,6 +114,19 @@ export type ChatEvidenceMemoryFact = {
   updatedAt: string;
 };
 
+export type ChatProjectProcessFact = {
+  id: string;
+  projectKey: string;
+  command: string;
+  pid: number | null;
+  status: "running" | "exited" | "stopped" | "failed";
+  startedAt: string;
+  endedAt: string | null;
+  exitCode: number | null;
+  log: string;
+  url: string | null;
+};
+
 export type OperationalChatMemoryRecord = ChatEvidenceMemoryFact;
 
 export type ChatEvidenceContext = {
@@ -128,6 +141,7 @@ export type ChatEvidenceContext = {
   files: ChatProjectFileFact[];
   git: ChatProjectGitContext;
   commands: ChatCommandEvidence[];
+  processes: ChatProjectProcessFact[];
   memories: ChatEvidenceMemoryFact[];
   warnings: string[];
   repositoryState?: RepositoryState | null;
@@ -145,7 +159,13 @@ export type GovernedChatActionType =
   | "cancel_feature_plan"
   | "cancel_task"
   | "code_change_worktree"
-  | "code_change_task";
+  | "code_change_task"
+  | "approve_command"
+  | "start_project"
+  | "list_project_processes"
+  | "show_project_process_log"
+  | "stop_project_process"
+  | "open_project_browser";
 
 export type GovernedChatAction = {
   id: string;

@@ -36,6 +36,26 @@ describe("chat command execution", () => {
     }));
   });
 
+  it("gives the same command different outcomes at each access level", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-access-"));
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "access-test", version: "1.0.0" }), "utf8");
+
+    const standard = planChatCommand("npm install");
+    expect(standard?.blockedReason).toContain("Approval or Full Access");
+
+    const approval = planChatCommand("npm install", "approval");
+    expect(approval?.blockedReason).toBeUndefined();
+    expect(approval?.standardAllowed).toBe(false);
+    expect((await executeChatCommand(approval!, tmpDir, "approval")).status).toBe("pending");
+
+    const full = planChatCommand("npm install --ignore-scripts --no-audit --no-fund", "full");
+    expect(full?.blockedReason).toBeUndefined();
+    expect((await executeChatCommand(full!, tmpDir, "full")).status).toBe("completed");
+
+    const readOnly = planChatCommand("npm install");
+    expect((await executeChatCommand(readOnly!, tmpDir, "read_only")).status).toBe("blocked");
+  });
+
   it("executes a real project command and reports a non-zero command honestly", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-command-"));
     expect(runGit(["init", "-b", "main"], tmpDir).ok).toBe(true);

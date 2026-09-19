@@ -59,6 +59,7 @@ import {
 } from "../telegram/connect.js";
 import type { TelegramSubsystemManager } from "../telegram/bot.js";
 import type { SkillRuntime } from "../skills/runtime.js";
+import type { ProjectProcessManager } from "../chat/project-process.js";
 
 const providerAuthBroker = new ProviderAuthBroker();
 const DASHBOARD_AGENT_SNAPSHOT_TIMEOUT_MS = 1_500;
@@ -136,6 +137,7 @@ export type DashboardServerOptions = {
   taskSizer?: OperationalChatServiceOptions["taskSizer"];
   skillProjectKey?: string;
   repositoryService?: ProjectRepositoryService;
+  processManager?: ProjectProcessManager;
   telegramManager?: Pick<TelegramSubsystemManager, "restart" | "getBotInfo">;
 };
 
@@ -163,6 +165,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
     taskSizer: options.taskSizer,
     skillRuntime: options.skillRuntime,
     skillProjectKey: options.skillProjectKey,
+    processManager: options.processManager,
     actionExecutor: options.goalCoordinator
       ? {
           taskCreated: async (taskId) => {

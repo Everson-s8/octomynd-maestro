@@ -1,43 +1,89 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
+import type { ChatAccessMode } from "./types.js";
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_LENGTH = 12_000;
 const SAFE_NPM_SCRIPTS = new Set(["test", "typecheck", "typecheck:ui", "build:ui", "lint"]);
 const SAFE_GIT_COMMANDS = new Set(["status", "diff", "log", "branch", "show"]);
 const SAFE_GH_COMMANDS = new Set(["pr", "run", "issue"]);
+const BLOCKED_SHELLS = new Set(["cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "bash", "sh", "zsh", "fish"]);
+const COMMAND_NAME = /^[a-z][a-z0-9._-]*$/i;
+const DIRECT_EXECUTABLES = "npm|pnpm|yarn|bun|npx|git|gh|node|python|python3|ruby|go|cargo|vite|next|webpack";
 
 export type ChatCommandEvidence = {
   requested: string;
   command: string;
-  status: "completed" | "failed" | "blocked";
+  status: "completed" | "failed" | "blocked" | "pending";
   exitCode: number | null;
   stdout: string;
   stderr: string;
   durationMs: number;
   detail: string | null;
+  pendingId?: string;
+  approvalExpiresAt?: string;
 };
 
-type ChatCommandPlan = {
+export type ChatCommandPlan = {
   requested: string;
   executable: string | null;
   args: string[];
   displayCommand: string;
+  standardAllowed: boolean;
   blockedReason?: string;
 };
+
+export function planProjectStartCommand(projectRoot: string, accessMode: ChatAccessMode): ChatCommandPlan {
+  let script = "start";
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")) as { scripts?: Record<string, unknown> };
+    const scripts = packageJson.scripts ?? {};
+    script = ["dev", "start", "serve", "preview"].find((candidate) => typeof scripts[candidate] === "string") ?? "start";
+  } catch {
+    // The command will return a real failure if the project has no package
+    // manifest; do not claim that a server was started from inference alone.
+  }
+  return planChatCommand(`npm run ${script}`, accessMode) ?? blockedPlan(
+    "start project",
+    `npm run ${script}`,
+    "The project start command could not be planned safely."
+  );
+}
+
+export function planDependencyInstallCommand(projectRoot: string, accessMode: ChatAccessMode): ChatCommandPlan {
+  const manager = fs.existsSync(path.join(projectRoot, "pnpm-lock.yaml"))
+    ? "pnpm"
+    : fs.existsSync(path.join(projectRoot, "yarn.lock"))
+      ? "yarn"
+      : fs.existsSync(path.join(projectRoot, "bun.lockb")) || fs.existsSync(path.join(projectRoot, "bun.lock"))
+        ? "bun"
+        : "npm";
+  return planChatCommand(`${manager} install`, accessMode) ?? blockedPlan(
+    "install dependencies",
+    `${manager} install`,
+    "Dependencies could not be planned safely."
+  );
+}
+
+export function isLongRunningCommand(plan: ChatCommandPlan): boolean {
+  if (plan.executable?.replace(/\.cmd$/i, "") !== "npm") return false;
+  const script = plan.args[0] === "run" ? plan.args[1] : plan.args[0];
+  return script === "start" || script === "dev" || script === "serve" || script === "preview";
+}
 
 /**
  * Turns only explicit, allow-listed chat requests into argv. It intentionally
  * does not interpret a shell expression: pipes, redirects, substitutions and
  * working-directory flags are rejected before a child process is spawned.
  */
-export function planChatCommand(message: string): ChatCommandPlan | null {
+export function planChatCommand(message: string, accessMode: ChatAccessMode = "standard"): ChatCommandPlan | null {
   const requested = message.trim();
   if (!requested) return null;
 
   const explicit = requested.match(/^(?:\/run|\/exec|run|execute|executar|execute|rode|rodar|executa)\s+(?:o\s+comando\s+)?(.+)$/i);
-  const direct = requested.match(/^(npm|pnpm|yarn|npx|git|gh)(?:\s+|$)(.*)$/i);
+  const direct = requested.match(new RegExp(`^(${DIRECT_EXECUTABLES})(?:\\s+|$)(.*)$`, "i"));
   const natural = requested.match(/^(?:rode|rodar|executa|execute|run)\s+(?:os?\s+)?(testes?|tests?|typecheck|build|lint)(?:\s+do\s+projeto)?\s*[.!]?$/i);
   const commandText = natural ? naturalCommand(natural[1]) : explicit?.[1]?.trim() ?? direct?.[0]?.trim() ?? null;
   if (!commandText) return null;
@@ -50,19 +96,31 @@ export function planChatCommand(message: string): ChatCommandPlan | null {
   if (!tokens || tokens.length === 0) return blockedPlan(requested, commandText, "The command could not be parsed safely.");
   const executable = tokens[0].toLowerCase();
   const args = tokens.slice(1);
-  const validation = validateCommand(executable, args);
+  const validation = validateCommand(executable, args, accessMode === "standard" || accessMode === "read_only");
   if (validation) return blockedPlan(requested, commandText, validation);
 
-  const resolvedExecutable = process.platform === "win32" && ["npm", "pnpm", "yarn", "npx", "gh"].includes(executable)
+  const resolvedExecutable = process.platform === "win32" && ["npm", "pnpm", "yarn", "bun", "npx", "gh"].includes(executable)
     ? `${executable}.cmd`
     : executable;
-  return { requested, executable: resolvedExecutable, args, displayCommand: [executable, ...args].join(" ") };
+  return {
+    requested,
+    executable: resolvedExecutable,
+    args,
+    displayCommand: [executable, ...args].join(" "),
+    standardAllowed: validateCommand(executable, args, true) === null
+  };
 }
 
-export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: string, accessMode: "read_only" | "standard" | "full"): Promise<ChatCommandEvidence> {
+export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: string, accessMode: ChatAccessMode): Promise<ChatCommandEvidence> {
   if (plan.blockedReason) return blockedEvidence(plan);
   if (accessMode === "read_only") {
     return blockedEvidence(plan, "Chat is read-only; switch to Standard or Full Access before running a command.");
+  }
+  if (accessMode === "standard" && !plan.standardAllowed) {
+    return blockedEvidence(plan, "This command is outside Standard access. Switch to Approval or Full Access.");
+  }
+  if (accessMode === "approval") {
+    return pendingEvidence(plan, "This command is waiting for explicit approval before execution.");
   }
   if (!projectRoot || !path.isAbsolute(projectRoot)) {
     return blockedEvidence(plan, "A registered project is required before running a command.");
@@ -72,7 +130,10 @@ export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: str
   return new Promise((resolve) => {
     const child = spawn(plan.executable!, plan.args, {
       cwd: projectRoot,
-      shell: false,
+      // Windows exposes npm/pnpm/yarn/bun through .cmd shims. Node requires
+      // the shell for those shims; the command parser has already rejected
+      // shell operators and substitutions before this point.
+      shell: process.platform === "win32" && plan.executable!.toLowerCase().endsWith(".cmd"),
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -114,7 +175,7 @@ export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: str
 export function formatChatCommandEvidence(evidence: ChatCommandEvidence, locale: "en" | "pt-BR"): string {
   const heading = locale === "pt-BR" ? "Resultado real do comando" : "Actual command result";
   const status = locale === "pt-BR"
-    ? `${evidence.status === "completed" ? "concluído" : evidence.status === "failed" ? "falhou" : "bloqueado"}`
+    ? `${evidence.status === "completed" ? "concluído" : evidence.status === "failed" ? "falhou" : evidence.status === "pending" ? "aguardando aprovação" : "bloqueado"}`
     : evidence.status;
   const output = [evidence.stdout, evidence.stderr ? `stderr:\n${evidence.stderr}` : ""].filter(Boolean).join("\n").trim() || "(no output)";
   const detail = evidence.detail ? `\n${evidence.detail}` : "";
@@ -129,14 +190,21 @@ function naturalCommand(value: string): string {
   return "npm run lint";
 }
 
-function validateCommand(executable: string, args: string[]): string | null {
-  if (!["npm", "pnpm", "yarn", "npx", "git", "gh"].includes(executable)) return "Only npm, pnpm, yarn, npx, git and gh commands are supported.";
+function validateCommand(executable: string, args: string[], strict: boolean): string | null {
+  if (!COMMAND_NAME.test(executable) || BLOCKED_SHELLS.has(executable)) return "Shell interpreters and executable paths are not allowed from chat.";
   if (args.some((arg) => arg === "-C" || arg === "--cwd" || arg === "--prefix" || path.isAbsolute(arg) || arg.split(/[\\/]/).includes(".."))) {
     return "Changing the command working directory is not allowed; commands run only in the registered project.";
   }
-  if (executable === "npm" || executable === "pnpm" || executable === "yarn") {
+  if (args.some((arg) => /(?:^|[\\/])(?:\.env(?:\.|$)|\.ssh(?:[\\/]|$)|id_rsa|authorized_keys)(?:$|[\\/])/i.test(arg))) {
+    return "Commands that target credentials or secret files are not allowed.";
+  }
+  if (["node", "deno", "bun", "python", "python3", "ruby", "perl"].includes(executable) && args.some((arg) => ["-e", "--eval", "-c", "eval"].includes(arg))) {
+    return "Inline code evaluation is not allowed from chat; use a project script instead.";
+  }
+  if (!strict) return null;
+  if (executable === "npm" || executable === "pnpm" || executable === "yarn" || executable === "bun") {
     const script = args[0] === "run" ? args[1] : args[0];
-    if (args[0] === "install" || args[0] === "i" || args[0] === "add") return "Dependency installation or modification must be requested through a governed code-change path.";
+    if (args[0] === "install" || args[0] === "i" || args[0] === "add") return "Dependency installation requires Approval or Full Access.";
     if (!script || !SAFE_NPM_SCRIPTS.has(script) || (args[0] === "run" && args.length !== 2) || (args[0] !== "run" && args.length !== 1 && script !== "test")) {
       return "Only the project's test, typecheck, UI typecheck, UI build and lint scripts can run from chat.";
     }
@@ -165,7 +233,7 @@ function tokenize(command: string): string[] | null {
 }
 
 function blockedPlan(requested: string, command: string, blockedReason: string): ChatCommandPlan {
-  return { requested, executable: null, args: [], displayCommand: command, blockedReason };
+  return { requested, executable: null, args: [], displayCommand: command, standardAllowed: false, blockedReason };
 }
 
 function blockedEvidence(plan: ChatCommandPlan, reason = plan.blockedReason ?? "The command was blocked before execution."): ChatCommandEvidence {
@@ -173,6 +241,19 @@ function blockedEvidence(plan: ChatCommandPlan, reason = plan.blockedReason ?? "
     requested: plan.requested,
     command: plan.displayCommand,
     status: "blocked",
+    exitCode: null,
+    stdout: "",
+    stderr: "",
+    durationMs: 0,
+    detail: redactSensitiveText(reason)
+  };
+}
+
+function pendingEvidence(plan: ChatCommandPlan, reason: string): ChatCommandEvidence {
+  return {
+    requested: plan.requested,
+    command: plan.displayCommand,
+    status: "pending",
     exitCode: null,
     stdout: "",
     stderr: "",
