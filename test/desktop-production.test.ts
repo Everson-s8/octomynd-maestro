@@ -44,6 +44,7 @@ describe("desktop production runtime logic", () => {
     };
 
     expect(builderConfig.files).toContain("src/desktop/auto-updater.cjs");
+    expect(builderConfig.files).toContain("skills/**/*");
     expect(builderConfig.files).not.toContain("src/desktop/**/*");
     expect(builderConfig.files).toContain("!**/*.map");
     expect(builderConfig.files).toContain("!**/*.ts");
@@ -133,6 +134,7 @@ describe("desktop production runtime logic", () => {
     expect(spawnConfig.options.env.MAESTRO_DASHBOARD_HOST).toBe("127.0.0.1");
     expect(spawnConfig.options.env.MAESTRO_DASHBOARD_PORT).toBe("4787");
     expect(spawnConfig.options.env.MAESTRO_UI_DIST).toBe(path.join("app", "ui", "dist"));
+    expect(spawnConfig.options.env.MAESTRO_SKILLS_PATH).toBe(path.join("app", "skills"));
     expect(spawnConfig.options.env.MAESTRO_RUNTIME_ROOT).toBe(path.join("app"));
     expect(spawnConfig.options.env.MAESTRO_RUNTIME_MODE).toBe("packaged");
     expect(spawnConfig.options.env.MAESTRO_DATA_DIR).toBe(path.join("data", "maestro"));

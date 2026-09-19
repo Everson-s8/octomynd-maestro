@@ -30,6 +30,9 @@ asar: false
 files:
   - "dist/**/*"
   - "ui/dist/**/*"
+  # Built-in skills are immutable, read-only runtime assets. User-generated
+  # skill versions continue to live under the per-user data directory.
+  - "skills/**/*"
   - "src/desktop/main.cjs"
   - "src/desktop/preload.cjs"
   - "src/desktop/production.cjs"

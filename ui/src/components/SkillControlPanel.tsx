@@ -37,22 +37,23 @@ export function SkillControlPanel({ data, onRefresh }: { data: DashboardData; on
   const activeSkills = data.skills.filter((skill) => skill.activeVersionId);
 
   return (
-    <section className="panel" aria-labelledby="skills-title" style={{ padding: "20px" }}>
+    <section className="panel skills-panel" aria-labelledby="skills-title">
       <SectionHeader
         eyebrow={translate("Judgment rules")}
         title={translate("Skills")}
         meta={`${activeSkills.length} ${translate("active")}`}
       />
-      <div style={{ display: "grid", gap: "16px", marginTop: "16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
-          <div>
-            <strong style={{ display: "block", color: "#fff" }}>{translate("Use skills during task execution")}</strong>
-            <small style={{ color: "var(--text-2)" }}>
+      <div className="skills-panel-body">
+        <div className="skills-runtime-row">
+          <div className="skills-runtime-copy">
+            <strong>{translate("Use skills during task execution")}</strong>
+            <small>
               {translate("Skills guide judgment and evidence. They never bypass approval, write scopes, or explicit invocation rules.")}
             </small>
           </div>
           <button
             type="button"
+            className={`skill-toggle ${settings.enabled ? "is-enabled" : ""}`}
             onClick={() => void runAction(
               "toggle",
               () => updateSkillRuntimeEnabled(!settings.enabled),
@@ -60,53 +61,65 @@ export function SkillControlPanel({ data, onRefresh }: { data: DashboardData; on
             )}
             disabled={busy !== null}
           >
-            {busy === "toggle" ? "..." : settings.enabled ? translate("Disable skills") : translate("Enable skills")}
+            <span className="skill-toggle-dot" aria-hidden="true" />
+            {busy === "toggle" ? translate("Updating") : settings.enabled ? translate("Skills enabled") : translate("Enable skills")}
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+        <div className="skills-catalog" aria-live="polite">
           {data.skills.length === 0 ? (
-            <small style={{ color: "var(--text-2)" }}>{translate("No registered skills.")}</small>
-          ) : data.skills.map((skill) => (
-            <div key={skill.qualifiedName} style={{ padding: "12px", border: "1px solid #2e323e", borderRadius: "8px", background: "rgba(255,255,255,0.02)" }}>
-              <strong style={{ display: "block", color: "#fff" }}>{skill.qualifiedName}</strong>
-              <small style={{ display: "block", color: "var(--text-2)", marginTop: "4px" }}>{skill.description}</small>
-              <small style={{ display: "block", marginTop: "8px", color: skill.activeVersionId ? "#86c98b" : "#d89d72" }}>
-                {skill.activeVersionId ? translate("Active") : translate("Not active")}
-                {skill.evaluation ? ` · ${skill.evaluation.status}` : ""}
-              </small>
+            <div className="skills-empty">
+              <span className="skills-empty-mark" aria-hidden="true">∅</span>
+              <div>
+                <strong>{translate("No registered skills")}</strong>
+                <small>{translate("Built-in skills will appear here after the application loads its catalog.")}</small>
+              </div>
             </div>
+          ) : data.skills.map((skill) => (
+            <article key={skill.qualifiedName} className={`skill-card ${skill.activeVersionId ? "is-active" : "is-inactive"}`}>
+              <div className="skill-card-head">
+                <span className="skill-card-icon" aria-hidden="true">✦</span>
+                <span className="skill-card-status">{skill.activeVersionId ? translate("Active") : translate("Not active")}</span>
+              </div>
+              <strong className="skill-card-name">{skill.qualifiedName}</strong>
+              <small className="skill-card-description">{skill.description}</small>
+              {skill.evaluation ? <span className="skill-card-evaluation">{translate("Evaluation")}: {skill.evaluation.status}</span> : null}
+            </article>
           ))}
         </div>
 
-        <div style={{ padding: "14px", border: "1px solid #2e323e", borderRadius: "8px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-            <strong style={{ color: "#fff" }}>{translate("Curator")}</strong>
-            <span style={{ color: settings.curatorAutomaticArchivalEnabled ? "#d89d72" : "#86c98b" }}>
+        <div className="skills-curator">
+          <div className="skills-curator-head">
+            <div>
+              <span className="skills-sub-eyebrow">{translate("Lifecycle")}</span>
+              <strong>{translate("Curator")}</strong>
+            </div>
+            <span className={`skills-curator-mode ${settings.curatorAutomaticArchivalEnabled ? "is-automatic" : "is-dry-run"}`}>
               {settings.curatorAutomaticArchivalEnabled ? translate("Automatic archival enabled") : translate("Dry run — no automatic archival")}
             </span>
           </div>
-          <small style={{ display: "block", color: "var(--text-2)", marginTop: "6px" }}>
+          <small className="skills-curator-help">
             {translate("The curator gate is visible here. Review its report before applying any archival action.")}
           </small>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "12px" }}>
-            <button type="button" onClick={() => void runAction("report", fetchSkillCuratorReport, translate("Curator report refreshed."))} disabled={busy !== null}>
+          <div className="skills-actions">
+            <button className="skill-action" type="button" onClick={() => void runAction("report", fetchSkillCuratorReport, translate("Curator report refreshed."))} disabled={busy !== null}>
               {busy === "report" ? "..." : translate("Refresh report")}
             </button>
-            <button type="button" onClick={() => void runAction("proposals", fetchSkillProposals, translate("Proposals refreshed."))} disabled={busy !== null}>
+            <button className="skill-action" type="button" onClick={() => void runAction("proposals", fetchSkillProposals, translate("Proposals refreshed."))} disabled={busy !== null}>
               {busy === "proposals" ? "..." : translate("Refresh proposals")}
             </button>
-            <button type="button" onClick={() => void runAction("reconcile", reconcileSkillProposals, translate("Skill proposals reconciled."))} disabled={busy !== null}>
+            <button className="skill-action" type="button" onClick={() => void runAction("reconcile", reconcileSkillProposals, translate("Skill proposals reconciled."))} disabled={busy !== null}>
               {busy === "reconcile" ? "..." : translate("Reconcile proposals")}
             </button>
-            <button type="button" onClick={() => void runAction("candidates", fetchSkillCuratorCandidates, translate("Curator candidates refreshed."))} disabled={busy !== null}>
+            <button className="skill-action" type="button" onClick={() => void runAction("candidates", fetchSkillCuratorCandidates, translate("Curator candidates refreshed."))} disabled={busy !== null}>
               {busy === "candidates" ? "..." : translate("Refresh candidates")}
             </button>
-            <button type="button" onClick={() => void runAction("process", processSkillCuratorCandidates, translate("Curator incidents processed."))} disabled={busy !== null}>
+            <button className="skill-action" type="button" onClick={() => void runAction("process", processSkillCuratorCandidates, translate("Curator incidents processed."))} disabled={busy !== null}>
               {busy === "process" ? "..." : translate("Process incidents")}
             </button>
             <button
               type="button"
+              className="skill-action skill-action-primary"
               onClick={() => void runAction("apply", applySkillCurator, translate("Curator action applied."))}
               disabled={busy !== null || !settings.curatorAutomaticArchivalEnabled}
               title={settings.curatorAutomaticArchivalEnabled ? undefined : translate("Automatic archival is disabled; this remains a dry run.")}
@@ -114,13 +127,13 @@ export function SkillControlPanel({ data, onRefresh }: { data: DashboardData; on
               {busy === "apply" ? "..." : translate("Apply curator")}
             </button>
           </div>
-          <small style={{ display: "block", color: "var(--text-2)", marginTop: "10px" }}>
+          <small className="skills-curator-count">
             {report.entries.length} {translate("skills in report")} · {report.candidates.length} {translate("candidates")}
           </small>
         </div>
 
-        {notice ? <p style={{ color: "#86c98b", margin: 0 }}>{notice}</p> : null}
-        {error ? <p style={{ color: "#e8967a", margin: 0 }}>{error}</p> : null}
+        {notice ? <p className="skills-feedback is-success" role="status">{notice}</p> : null}
+        {error ? <p className="skills-feedback is-error" role="alert">{error}</p> : null}
       </div>
     </section>
   );
