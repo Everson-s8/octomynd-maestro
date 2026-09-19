@@ -1946,7 +1946,8 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 /* =================== CHAT WORKSPACE =================== */
 .chat-page {
   display: flex;
-  min-height: calc(100vh - 90px);
+  height: calc(100vh - 90px);
+  min-height: 0;
   flex-direction: column;
   animation: fadeIn .25s ease both;
 }
@@ -2039,7 +2040,7 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   grid-template-columns: 230px minmax(0, 1fr);
   gap: 20px;
   height: auto;
-  min-height: 520px;
+  min-height: 0;
 }
 .chat-threads,
 .chat-main-panel {
@@ -2338,6 +2339,7 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   .chat-page-top { align-items: stretch; flex-direction: column; }
   .chat-project-picker, .chat-project-picker select,
   .chat-access-picker, .chat-access-picker select { width: 100%; }
+  .chat-page { height: auto; min-height: calc(100vh - 90px); }
   .chat-workspace { display: flex; height: auto; min-height: 0; flex-direction: column; }
   .chat-threads { max-height: 190px; }
   .chat-thread-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
