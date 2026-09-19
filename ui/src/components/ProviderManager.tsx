@@ -669,7 +669,7 @@ export function ProviderManager({
                         onClick={() => { if (!detailBusy) void selectModel(model); }}
                       >
                         <div className="radio" />
-                        <div className="tx"><b>{model}</b></div>
+                        <div className="tx"><b>{model}</b><small className="model-profile">{translate("Reasoning profile")}: {translate(modelProcessingLabel(model))}</small></div>
                         {model === detailProvider.models[0] ? <span className="default-tag">{translate("default")}</span> : null}
                       </div>
                     )) : <div className="model-empty">{translate("No model found")}</div>}
@@ -837,6 +837,13 @@ export function ProviderManager({
       ) : null}
     </section>
   );
+}
+
+function modelProcessingLabel(model: string): "Fast" | "Balanced" | "Deep" {
+  const normalized = model.toLowerCase();
+  if (/(?:opus|astra|pro|thinking|reasoning|high)(?:[-_]|$)/.test(normalized)) return "Deep";
+  if (/(?:nano|mini|haiku|flash|luna)(?:[-_]|$)/.test(normalized)) return "Fast";
+  return "Balanced";
 }
 
 function AuthSessionPanel({ session }: { session: ProviderAuthSession }) {

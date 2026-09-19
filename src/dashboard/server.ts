@@ -1708,6 +1708,21 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/chat/status") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
+    const threadId = Number(url.searchParams.get("threadId"));
+    if (!Number.isInteger(threadId) || threadId <= 0) {
+      sendJson(response, 400, { error: "valid_thread_id_is_required" });
+      return;
+    }
+    try {
+      sendJson(response, 200, { projectKey, threadId, activity: chatService.getActivity(projectKey, threadId) });
+    } catch (error) {
+      sendJson(response, 404, { error: "chat_status_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/chat/ask") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;

@@ -60,34 +60,34 @@ export function TelegramConnectCard({
         title={translate("Telegram bot connection")}
         meta={isConnected ? translate("Bot active") : translate("Pending")}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px", marginBottom: "16px" }}>
+      <div className="telegram-status-row">
         <span className={`sync-dot ${isConnected ? "" : "is-offline"}`} />
-        <span style={{ color: "#fff", fontWeight: 600 }}>
+        <span className="telegram-status-copy">
           {isConnected
             ? `${translate("Telegram bot connected")} (${telegramAgent?.detail ?? translate("Active")})`
             : translate("Telegram bot disconnected — configure it below to operate without the CLI.")}
         </span>
       </div>
 
-      <p style={{ fontSize: "13px", color: "#a0a5b5", marginBottom: "16px", lineHeight: "1.5" }}>
+      <p className="telegram-help-copy">
         {translate("You do not need to edit .env files manually. Paste the token from @BotFather and your numeric User ID from @userinfobot.")}
       </p>
 
       {error ? (
-        <div style={{ padding: "10px 14px", background: "rgba(255, 77, 77, 0.1)", border: "1px solid #ff4d4d", borderRadius: "6px", color: "#ff8080", fontSize: "13px", marginBottom: "16px" }}>
+        <div className="telegram-feedback is-error">
           {error}
         </div>
       ) : null}
 
       {successMsg ? (
-        <div style={{ padding: "10px 14px", background: "rgba(46, 204, 113, 0.1)", border: "1px solid #2ecc71", borderRadius: "6px", color: "#2ecc71", fontSize: "13px", marginBottom: "16px" }}>
+        <div className="telegram-feedback is-success">
           {successMsg}
         </div>
       ) : null}
 
-      <form onSubmit={(e) => void handleSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      <form onSubmit={(e) => void handleSubmit(e)} className="telegram-connect-form">
         <div>
-          <label style={{ display: "block", fontSize: "12px", color: "#a0a5b5", marginBottom: "4px" }}>
+          <label className="telegram-field-label">
             {translate("HTTP API bot token (@BotFather) *")}
           </label>
           <input
@@ -96,20 +96,12 @@ export function TelegramConnectCard({
             value={botToken}
             onChange={(e) => setBotToken(e.target.value)}
             disabled={busy}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              background: "#161922",
-              border: "1px solid #2e323e",
-              borderRadius: "6px",
-              color: "#fff",
-              fontSize: "14px"
-            }}
+            className="telegram-field"
           />
         </div>
 
         <div>
-          <label style={{ display: "block", fontSize: "12px", color: "#a0a5b5", marginBottom: "4px" }}>
+          <label className="telegram-field-label">
             {translate("Telegram User ID (@userinfobot) — optional access restriction")}
           </label>
           <input
@@ -118,35 +110,15 @@ export function TelegramConnectCard({
             value={allowedUserId}
             onChange={(e) => setAllowedUserId(e.target.value)}
             disabled={busy}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              background: "#161922",
-              border: "1px solid #2e323e",
-              borderRadius: "6px",
-              color: "#fff",
-              fontSize: "14px"
-            }}
+            className="telegram-field"
           />
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "6px" }}>
+        <div className="telegram-submit-row">
           <button
             type="submit"
             disabled={busy}
-            style={{
-              padding: "10px 20px",
-              background: "#3b82f6",
-              color: "#fff",
-              border: "none",
-              borderRadius: "6px",
-              fontWeight: 600,
-              cursor: busy ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              opacity: busy ? 0.7 : 1
-            }}
+            className="telegram-submit"
           >
             <Icon name="pulse" />
             {busy ? translate("Validating and connecting…") : isConnected ? translate("Update bot token") : translate("Connect Telegram bot")}

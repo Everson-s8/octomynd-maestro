@@ -1820,7 +1820,7 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #7868FF;
+  color: var(--coral);
   font-family: 'Fraunces', serif;
   font-size: 15px;
 }
@@ -2342,6 +2342,55 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 @media (prefers-reduced-motion: reduce) {
   .chat-spinner, .chat-thinking-dots i { animation: none; }
   .chat-body { scroll-behavior: auto; }
+}
+
+/* =================== POLISH: ONE VISUAL LANGUAGE =================== */
+.cost-display-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sepia-2);
+}
+.cost-display-icon { display: flex; padding: 10px; color: var(--coral); background: var(--warn-bg); }
+.analytics-kicker { display: block; color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+.analytics-value { display: block; color: var(--ivory); font-size: 20px; font-weight: 700; }
+.analytics-subtle { display: block; margin-top: 4px; color: var(--faint); font-size: 13px; font-weight: 500; }
+.analytics-value .analytics-subtle { display: inline; margin-top: 0; }
+.analytics-note { margin-top: 4px; }
+
+.review-overview-banner { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; }
+.review-overview-banner .eyebrow { color: var(--rust); font-weight: 600; font-size: 12px; }
+.review-overview-banner h2 { margin: 4px 0; color: var(--ivory); font-size: 24px; }
+.review-overview-banner p { margin: 0; color: var(--muted); font-size: 14px; }
+.review-overview-count { min-width: 116px; padding: 12px 20px; border: 1px solid var(--rust-dim); border-radius: var(--r-sm); background: var(--warn-bg); text-align: center; }
+.review-overview-count strong { display: block; color: var(--coral); font-size: 24px; }
+.review-overview-count span { color: var(--muted); font-size: 12px; }
+.review-author { color: var(--coral); }
+
+.telegram-status-row { display: flex; align-items: center; gap: 12px; margin: 12px 0 16px; }
+.telegram-status-copy { color: var(--ivory); font-weight: 600; }
+.telegram-help-copy { margin-bottom: 16px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.telegram-feedback { padding: 10px 14px; margin-bottom: 16px; border: 1px solid; border-radius: var(--r-sm); font-size: 13px; }
+.telegram-feedback.is-error { color: var(--coral); background: var(--err-bg); border-color: var(--err); }
+.telegram-feedback.is-success { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.telegram-connect-form { display: flex; flex-direction: column; gap: 14px; }
+.telegram-field-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+.telegram-field { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--ink); color: var(--ivory); font-size: 14px; }
+.telegram-field:focus { outline: none; border-color: var(--rust); box-shadow: 0 0 0 2px rgb(196 98 45 / 12%); }
+.telegram-submit-row { display: flex; justify-content: flex-end; margin-top: 6px; }
+.telegram-submit { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border: 1px solid var(--rust); border-radius: var(--r-sm); background: var(--rust); color: var(--ivory); font-weight: 600; cursor: pointer; }
+.telegram-submit:hover:not(:disabled) { background: var(--rust-dim); }
+.telegram-submit:disabled { cursor: not-allowed; opacity: .7; }
+
+.model-profile, .chat-model-profile { display: block; margin-top: 3px; color: var(--faint); font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 400; }
+.chat-model-profile { max-width: 180px; line-height: 1.35; }
+
+@media (max-width: 680px) {
+  .review-overview-banner { align-items: flex-start; flex-direction: column; }
+  .review-overview-count { align-self: stretch; }
 }
 
 .first-run-card { display: grid; gap: 14px; margin-bottom: 18px; padding: 22px 24px; color: var(--ivory); background: linear-gradient(135deg, rgba(196,98,45,.18), rgba(37,30,22,.94)); border: 1px solid rgba(232,150,122,.45); border-radius: 18px; box-shadow: 0 18px 60px rgba(0,0,0,.12); }

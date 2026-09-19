@@ -22,16 +22,16 @@ export function CostDisplay({
     : `${estimatedTokens}`;
 
   return (
-    <div className="cost-display-card" style={{ display: "flex", gap: "16px", alignItems: "center", background: "rgba(255,255,255,0.03)", padding: "16px", borderRadius: "10px", border: "1px solid var(--border-color, #2e323e)" }}>
-      <div className="metric-icon" style={{ background: "rgba(56, 189, 248, 0.15)", color: "#38bdf8", padding: "10px", borderRadius: "8px", display: "flex" }}>
+    <div className="cost-display-card">
+      <div className="metric-icon cost-display-icon">
         <Icon name="dollar" />
       </div>
       <div>
-        <span style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#a0a5b5", display: "block" }}>{measured ? translate("Recorded usage today") : translate("Cost today / tokens")}</span>
-        <strong style={{ fontSize: "20px", color: "#ffffff", fontWeight: 700 }}>
-          {measured && !hasUsage ? translate("Not reported") : <>{formattedCost} <small style={{ fontSize: "13px", color: "#808595", fontWeight: 500 }}>({formattedTokens} tokens)</small></>}
+        <span className="analytics-kicker">{measured ? translate("Recorded usage today") : translate("Cost today / tokens")}</span>
+        <strong className="analytics-value">
+          {measured && !hasUsage ? translate("Not reported") : <>{formattedCost} <small className="analytics-subtle">({formattedTokens} tokens)</small></>}
         </strong>
-        {measured && !hasUsage ? <small style={{ display: "block", marginTop: "4px", color: "#808595" }}>{translate("The provider did not return usage metrics.")}</small> : null}
+        {measured && !hasUsage ? <small className="analytics-subtle analytics-note">{translate("The provider did not return usage metrics.")}</small> : null}
       </div>
     </div>
   );

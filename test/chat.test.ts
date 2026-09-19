@@ -116,6 +116,46 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(seen?.humanFeedback).toContain("CONVERSATION SKILL INSTRUCTIONS");
   });
 
+  it("exposes conversation activity while a provider is still responding", async () => {
+    let markStarted!: () => void;
+    let releaseProvider!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const providerRelease = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const provider = chatProvider("codex", {
+      outcome: "completed",
+      summary: "answered",
+      output: "Resposta concluída.",
+      error: null,
+      retryable: false
+    }, {
+      execute: async () => {
+        markStarted();
+        await providerRelease;
+        return {
+          outcome: "completed",
+          summary: "answered",
+          output: "Resposta concluída.",
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    });
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir
+    });
+    const thread = chatService.createThread("maestro", "Em andamento");
+    const pending = chatService.ask({ projectKey: "maestro", threadId: thread.id, surface: "dashboard", message: "Olá" });
+
+    await started;
+    expect(chatService.getActivity("maestro", thread.id)).toMatchObject({ active: true });
+    releaseProvider();
+    await pending;
+    expect(chatService.getActivity("maestro", thread.id)).toEqual({ active: false, startedAt: null });
+  });
+
   it("keeps chat history isolated per conversation and supports deletion", async () => {
     const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
     const first = chatService.createThread("maestro", "Primeira conversa");
@@ -906,7 +946,7 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}, options: { models?: string[]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
+}, options: { models?: string[]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
   return {
     id,
     label: id,
@@ -914,6 +954,7 @@ function chatProvider(id: string, result: {
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
     models: async () => options.models ?? [],
     execute: async (request) => {
+      if (options.execute) return options.execute(request);
       options.onExecute?.(request);
       return {
         ...result,

@@ -1471,6 +1471,11 @@ export type OperationalChatResponse = {
   createdAt: string;
 };
 
+export type OperationalChatActivity = {
+  active: boolean;
+  startedAt: string | null;
+};
+
 export type OperationalChatActionResult = {
   success: boolean;
   actionTaken: string;
@@ -1533,6 +1538,13 @@ export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, li
     throw new Error(payload.error || "Unable to load chat history.");
   }
   return payload.messages;
+}
+
+export async function fetchChatActivity(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number): Promise<OperationalChatActivity> {
+  const response = await fetch(`/api/chat/status?projectKey=${encodeURIComponent(projectKey)}&threadId=${threadId}`, { cache: "no-store" });
+  const payload = await response.json() as { activity?: OperationalChatActivity; error?: string; details?: string };
+  if (!response.ok || !payload.activity) throw new Error(payload.details || payload.error || "Unable to load chat status.");
+  return payload.activity;
 }
 
 export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en", providerId?: string | null, model?: string | null): Promise<OperationalChatResponse> {

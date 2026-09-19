@@ -61,6 +61,11 @@ const GLOBAL_CHAT_PROJECT: ProjectRecord = {
   updatedAt: ""
 };
 
+export type OperationalChatActivity = {
+  active: boolean;
+  startedAt: string | null;
+};
+
 export type OperationalChatAgentRegistry = Pick<AgentRegistry, "snapshot"> & Partial<Pick<
   AgentRegistry,
   "route" | "acquire" | "acquireProvider" | "updateProviderControl"
@@ -102,6 +107,11 @@ export class OperationalChatService {
     threadId: number;
     expiresAt: number;
   }>();
+  private readonly activeChatRequests = new Map<number, {
+    projectKey: string;
+    count: number;
+    startedAt: string;
+  }>();
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
@@ -133,6 +143,8 @@ export class OperationalChatService {
       this.database.updateOperationalChatThreadSelection(thread.id, selectedProviderId, selectedModel);
     }
 
+    this.beginChatActivity(thread.id, projectKey);
+    return (async () => {
     const memory = extractExplicitMemory(request.message);
     const memorySaved = memory && accessMode !== "read_only" && projectKey !== GLOBAL_CHAT_PROJECT_KEY
       ? this.database.saveOperationalChatMemory({
@@ -260,6 +272,7 @@ export class OperationalChatService {
       accessMode,
       createdAt: savedOrchestratorMessage.createdAt
     };
+    })().finally(() => this.endChatActivity(thread.id));
   }
 
   async executeAction(request: OperationalChatActionRequest): Promise<OperationalChatActionResponse> {
@@ -879,6 +892,29 @@ export class OperationalChatService {
     this.resolveChatProject(normalizedKey);
     const thread = this.resolveThread(normalizedKey, threadId);
     return this.database.listOperationalChatMessages(normalizedKey, limit, thread.id);
+  }
+
+  getActivity(projectKey: string, threadId: number): OperationalChatActivity {
+    const normalizedKey = normalizeChatProjectKey(projectKey);
+    this.resolveChatProject(normalizedKey);
+    const activity = this.activeChatRequests.get(threadId);
+    if (!activity || activity.projectKey !== normalizedKey) return { active: false, startedAt: null };
+    return { active: true, startedAt: activity.startedAt };
+  }
+
+  private beginChatActivity(threadId: number, projectKey: string): void {
+    const current = this.activeChatRequests.get(threadId);
+    this.activeChatRequests.set(threadId, {
+      projectKey,
+      count: (current?.count ?? 0) + 1,
+      startedAt: current?.startedAt ?? new Date().toISOString()
+    });
+  }
+
+  private endChatActivity(threadId: number): void {
+    const current = this.activeChatRequests.get(threadId);
+    if (!current || current.count <= 1) this.activeChatRequests.delete(threadId);
+    else this.activeChatRequests.set(threadId, { ...current, count: current.count - 1 });
   }
 
   listThreads(projectKey: string) {
