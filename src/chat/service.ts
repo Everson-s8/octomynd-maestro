@@ -25,7 +25,9 @@ import { AgentProviderId } from "../agents/types.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
 import { inspectProjectContext } from "./project-context.js";
-import { executeChatCommand, formatChatCommandEvidence, planChatCommand } from "./project-command.js";
+import { executeChatCommand, formatChatCommandEvidence, isLongRunningCommand, planChatCommand, planDependencyInstallCommand, planProjectStartCommand, type ChatCommandPlan } from "./project-command.js";
+import { ProjectProcessManager } from "./project-process.js";
+import { randomUUID } from "node:crypto";
 import { runGit } from "../git.js";
 import type { TaskSizingResult } from "../goals/task-sizing.js";
 import type { SkillRuntime } from "../skills/runtime.js";
@@ -79,6 +81,7 @@ export type OperationalChatServiceOptions = {
     providerId: AgentProviderId | null;
     model: string | null;
   }) => Promise<TaskSizingResult>;
+  processManager?: ProjectProcessManager;
 };
 
 export class OperationalChatService {
@@ -91,6 +94,14 @@ export class OperationalChatService {
   private readonly taskSizer?: OperationalChatServiceOptions["taskSizer"];
   private readonly skillRuntime?: OperationalChatServiceOptions["skillRuntime"];
   private readonly skillProjectKey?: string;
+  private readonly processManager: ProjectProcessManager;
+  private readonly pendingCommands = new Map<string, {
+    plan: ChatCommandPlan;
+    projectKey: string;
+    projectRoot: string;
+    threadId: number;
+    expiresAt: number;
+  }>();
 
   constructor(options: OperationalChatServiceOptions) {
     this.database = options.database;
@@ -102,6 +113,7 @@ export class OperationalChatService {
     this.taskSizer = options.taskSizer;
     this.skillRuntime = options.skillRuntime;
     this.skillProjectKey = options.skillProjectKey?.trim().toLowerCase() || undefined;
+    this.processManager = options.processManager ?? new ProjectProcessManager();
   }
 
   async ask(request: OperationalChatRequest): Promise<OperationalChatResponse> {
@@ -134,14 +146,62 @@ export class OperationalChatService {
     if (memory && !memorySaved && accessMode === "read_only") {
       evidence.warnings.push("Explicit memory request was not saved because this conversation is read-only.");
     }
-    const commandPlan = planChatCommand(request.message);
+    const commandPlan = planChatCommand(request.message, accessMode);
+    let pendingCommand: { id: string; expiresAt: string } | null = null;
     if (commandPlan) {
-      const commandEvidence = await executeChatCommand(commandPlan, evidence.project.path, accessMode);
+      const requiresApproval = accessMode === "approval" && !commandPlan.blockedReason;
+      const commandEvidence = requiresApproval
+        ? (() => {
+          const queued = this.queuePendingCommand(commandPlan, evidence.project.path, projectKey, thread.id);
+          pendingCommand = { id: queued.id, expiresAt: new Date(queued.expiresAt).toISOString() };
+          return {
+            requested: commandPlan.requested,
+            command: commandPlan.displayCommand,
+            status: "pending" as const,
+            exitCode: null,
+            stdout: "",
+            stderr: "",
+            durationMs: 0,
+            detail: locale === "pt-BR" ? "Aguardando sua aprovação explícita para executar este comando." : "Waiting for your explicit approval before executing this command.",
+            pendingId: queued.id,
+            approvalExpiresAt: new Date(queued.expiresAt).toISOString()
+          };
+        })()
+        : isLongRunningCommand(commandPlan) && accessMode === "full"
+          ? await this.startManagedCommandEvidence(commandPlan, evidence.project.key, evidence.project.path, locale)
+          : await executeChatCommand(commandPlan, evidence.project.path, accessMode);
       evidence.commands.push(commandEvidence);
       evidence.summaryText = `${evidence.summaryText}\nCommand execution:\n${commandEvidence.command} => ${commandEvidence.status}`;
     }
     const taskIntent = parseTaskCreationIntent(request.message);
-    const actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
+    let actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
+    if (pendingCommand) {
+      actions.unshift({
+        id: `approve_command_${pendingCommand.id}`,
+        type: "approve_command",
+        label: chatText(locale, "Approve and run command", "Aprovar e executar comando"),
+        description: chatText(locale, "Runs this command in the registered project until it exits. The approval expires in two minutes.", "Executa este comando no projeto registrado até ele terminar. A aprovação expira em dois minutos."),
+        targetId: pendingCommand.id,
+        payload: { pendingCommandId: pendingCommand.id }
+      });
+    }
+
+    let automaticStartSummary = "";
+    if (accessMode === "full" && !commandPlan && isProjectStartRequest(request.message)) {
+      const startAction = actions.find((action) => action.type === "start_project");
+      if (startAction) {
+        const targetProjectKey = typeof startAction.payload?.projectKey === "string" ? startAction.payload.projectKey : projectKey;
+        const started = await this.installAndStartProject(targetProjectKey, locale);
+        evidence.commands.push(started.installEvidence, started.processEvidence);
+        evidence.processes = this.processManager.list(targetProjectKey);
+        evidence.summaryText = `${evidence.summaryText}\nProject execution: ${started.processEvidence.status}`;
+        automaticStartSummary = [
+          formatChatCommandEvidence(started.installEvidence, locale),
+          formatChatCommandEvidence(started.processEvidence, locale)
+        ].join("\n\n");
+        actions = actions.filter((action) => action.type !== "start_project");
+      }
+    }
 
     const savedUserMessage = this.database.saveOperationalChatMessage({
       threadId: thread.id,
@@ -169,6 +229,7 @@ export class OperationalChatService {
     const commandReport = evidence.commands.at(-1);
     const explanation = redactSensitiveText([
       routingResult.explanation,
+      automaticStartSummary,
       commandReport ? formatChatCommandEvidence(commandReport, locale) : ""
     ].filter(Boolean).join("\n\n"));
 
@@ -213,6 +274,10 @@ export class OperationalChatService {
       throw new Error(locale === "pt-BR" ? "O chat está em modo somente leitura. Troque para Standard ou Full Access para executar ações." : "Chat is read-only. Switch to Standard or Full Access to execute actions.");
     }
 
+    if (request.action.type === "approve_command") {
+      return this.executePendingCommand(request, accessMode, locale);
+    }
+
     const evidence = await this.gatherEvidenceContext(projectKey, String(request.action.payload?.text ?? request.action.label ?? ""));
     const taskIntent = request.action.type === "create_task"
       ? parseTaskCreationIntent(String(request.action.payload?.text ?? "")) ?? {
@@ -221,7 +286,17 @@ export class OperationalChatService {
       : null;
     const actionMessage = request.action.type.startsWith("code_change_")
       ? String(request.action.payload?.text ?? "")
-      : undefined;
+      : request.action.type === "start_project"
+        ? "install and start project"
+        : request.action.type === "list_project_processes"
+          ? "list managed processes"
+          : request.action.type === "show_project_process_log"
+            ? "show process log"
+            : request.action.type === "stop_project_process"
+              ? "stop process"
+              : request.action.type === "open_project_browser"
+                ? "open project in browser"
+        : undefined;
     const validActions = this.identifyGovernedActions(
       evidence,
       taskIntent?.text ? taskIntent : null,
@@ -253,6 +328,52 @@ export class OperationalChatService {
 
     try {
       switch (action.type) {
+        case "start_project": {
+          const targetProjectKey = typeof action.payload?.projectKey === "string" ? action.payload.projectKey : projectKey;
+          const started = await this.installAndStartProject(targetProjectKey, locale);
+          const installEvidence = started.installEvidence;
+          const processEvidence = started.processEvidence;
+          if (installEvidence.status !== "completed") {
+            success = false;
+            resultSummary = formatChatCommandEvidence(installEvidence, locale);
+            break;
+          }
+          success = processEvidence.status === "completed";
+          resultSummary = [
+            formatChatCommandEvidence(installEvidence, locale),
+            formatChatCommandEvidence(processEvidence, locale)
+          ].join("\n\n");
+          break;
+        }
+
+        case "list_project_processes": {
+          const processes = this.processManager.list(projectKey === GLOBAL_CHAT_PROJECT_KEY ? undefined : projectKey);
+          resultSummary = processes.length > 0
+            ? processes.map((process) => `${process.id} · ${process.status} · PID ${process.pid ?? "unknown"} · ${process.command}`).join("\n")
+            : chatText(locale, "Maestro has no managed project processes.", "O Maestro não tem processos de projeto gerenciados.");
+          break;
+        }
+
+        case "show_project_process_log": {
+          const process = this.processManager.get(String(action.targetId));
+          if (!process) throw new Error(chatText(locale, "Managed project process not found.", "Processo de projeto gerenciado não encontrado."));
+          resultSummary = `${process.command} · ${process.status}\n\n${process.log || chatText(locale, "No process output yet.", "Ainda não há saída do processo.")}`;
+          break;
+        }
+
+        case "stop_project_process": {
+          const process = this.processManager.stop(String(action.targetId));
+          resultSummary = chatText(locale, `Managed process ${process.id} stopped.`, `Processo gerenciado ${process.id} parado.`);
+          break;
+        }
+
+        case "open_project_browser": {
+          const url = typeof action.payload?.url === "string" ? action.payload.url : "";
+          if (!isSafeLocalBrowserUrl(url)) throw new Error(chatText(locale, "Only a local project URL can be opened from chat.", "O chat só pode abrir uma URL local do projeto."));
+          resultSummary = chatText(locale, `Project URL ready: ${url}`, `URL do projeto pronta: ${url}`);
+          break;
+        }
+
         case "create_task": {
           const text = typeof action.payload?.text === "string" ? action.payload.text.trim() : "";
           if (text.length < 4) throw new Error(chatText(locale, "The task text is empty or too short.", "O texto da task está vazio ou muito curto."));
@@ -619,6 +740,127 @@ export class OperationalChatService {
     return result.warning;
   }
 
+  private async installAndStartProject(projectKey: string, locale: ChatLocale): Promise<{
+    installEvidence: Awaited<ReturnType<typeof executeChatCommand>>;
+    processEvidence: Awaited<ReturnType<OperationalChatService["startManagedCommandEvidence"]>>;
+  }> {
+    const project = this.database.findProjectByKey(projectKey);
+    if (!project) throw new Error(chatText(locale, "The registered project was not found.", "O projeto registrado não foi encontrado."));
+    const installPlan = planDependencyInstallCommand(project.path, "full");
+    const installEvidence = await executeChatCommand(installPlan, project.path, "full");
+    if (installEvidence.status !== "completed") {
+      return {
+        installEvidence,
+        processEvidence: {
+          requested: "start project",
+          command: "(not started)",
+          status: "failed",
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          durationMs: 0,
+          detail: chatText(locale, "The project server was not started because dependency installation failed.", "O servidor não foi iniciado porque a instalação das dependências falhou.")
+        }
+      };
+    }
+    const startPlan = planProjectStartCommand(project.path, "full");
+    return { installEvidence, processEvidence: await this.startManagedCommandEvidence(startPlan, projectKey, project.path, locale) };
+  }
+
+  private queuePendingCommand(plan: ChatCommandPlan, projectRoot: string, projectKey: string, threadId: number): { id: string; expiresAt: number } {
+    const id = randomUUID();
+    const expiresAt = Date.now() + 120_000;
+    this.pendingCommands.set(id, { plan, projectKey, projectRoot, threadId, expiresAt });
+    setTimeout(() => {
+      const pending = this.pendingCommands.get(id);
+      if (pending && pending.expiresAt <= Date.now()) this.pendingCommands.delete(id);
+    }, 120_000);
+    return { id, expiresAt };
+  }
+
+  private async executePendingCommand(
+    request: OperationalChatActionRequest,
+    accessMode: ChatAccessMode,
+    locale: ChatLocale
+  ): Promise<OperationalChatActionResponse> {
+    const projectKey = normalizeChatProjectKey(request.projectKey);
+    const thread = this.resolveThread(projectKey, request.threadId);
+    const pendingId = String(request.action.payload?.pendingCommandId ?? request.action.targetId ?? "");
+    const pending = this.pendingCommands.get(pendingId);
+    if (!pending || pending.expiresAt <= Date.now() || pending.projectKey !== projectKey || pending.threadId !== thread.id) {
+      return {
+        success: false,
+        actionTaken: request.action.label,
+        resultSummary: chatText(locale, "This command approval expired or is no longer valid.", "A aprovação deste comando expirou ou não é mais válida.")
+      };
+    }
+    this.pendingCommands.delete(pendingId);
+    const evidence = await this.gatherEvidenceContext(projectKey, pending.plan.displayCommand);
+    const commandEvidence = isLongRunningCommand(pending.plan)
+      ? await this.startManagedCommandEvidence(pending.plan, projectKey, pending.projectRoot, locale)
+      : await executeChatCommand(pending.plan, pending.projectRoot, "full");
+    evidence.commands.push(commandEvidence);
+    const resultSummary = formatChatCommandEvidence(commandEvidence, locale);
+    const actionText = `[${chatText(locale, "Action executed", "Ação executada")}] ${request.action.label}: ${resultSummary}`;
+    this.database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey,
+      surface: request.surface,
+      senderRole: "system",
+      messageText: actionText,
+      actionTaken: JSON.stringify({ action: request.action, success: commandEvidence.status === "completed", resultSummary })
+    });
+    return {
+      success: commandEvidence.status === "completed",
+      actionTaken: request.action.label,
+      resultSummary,
+      updatedEvidence: evidence
+    };
+  }
+
+  /** Stops all processes owned by this chat service during Maestro shutdown. */
+  shutdown(): void {
+    this.processManager.shutdown();
+    this.pendingCommands.clear();
+  }
+
+  private async startManagedCommandEvidence(
+    plan: ChatCommandPlan,
+    projectKey: string,
+    projectRoot: string,
+    locale: ChatLocale
+  ) {
+    try {
+      const started = this.processManager.start(projectKey, projectRoot, plan);
+      const process = await this.processManager.waitForUrl(started.id);
+      if (!process) throw new Error("The managed process disappeared before it could be inspected.");
+      const running = process.status === "running";
+      return {
+        requested: plan.requested,
+        command: plan.displayCommand,
+        status: running ? "completed" as const : "failed" as const,
+        exitCode: process.exitCode,
+        stdout: process.log,
+        stderr: "",
+        durationMs: 0,
+        detail: running
+          ? chatText(locale, `Started managed background process ${process.id} (PID ${process.pid ?? "pending"}).${process.url ? ` Open ${process.url} in your browser.` : " It stays alive until you stop it."}`, `Processo gerenciado em background ${process.id} iniciado (PID ${process.pid ?? "pendente"}).${process.url ? ` Abra ${process.url} no navegador.` : " Ele continua vivo até você pará-lo."}`)
+          : chatText(locale, "The project process exited before it could be managed.", "O processo do projeto terminou antes de poder ser gerenciado.")
+      };
+    } catch (error) {
+      return {
+        requested: plan.requested,
+        command: plan.displayCommand,
+        status: "failed" as const,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        durationMs: 0,
+        detail: redactSensitiveText(error instanceof Error ? error.message : "The managed process could not be started.")
+      };
+    }
+  }
+
   private resolveChatProject(projectKey: string): ProjectRecord {
     if (projectKey === GLOBAL_CHAT_PROJECT_KEY) return { ...GLOBAL_CHAT_PROJECT, path: this.worktreesRoot };
     const project = this.database.findProjectByKey(projectKey);
@@ -795,6 +1037,7 @@ export class OperationalChatService {
     });
 
     const providers = this.agentRegistry ? await this.agentRegistry.snapshot() : [];
+    const processes = this.processManager.list(normalizedKey === GLOBAL_CHAT_PROJECT_KEY ? undefined : normalizedKey);
     const events = typeof this.database.listEvents === "function" ? this.database.listEvents(20) : [];
     const outbox: ChatEvidenceOutboxFact[] = events.map((e) => ({
       id: e.id,
@@ -831,6 +1074,7 @@ export class OperationalChatService {
       `Tasks (${tasks.length}): ${tasks.map((t) => `#${t.id} [${t.status}]`).join(", ") || "none"}`,
       `Feature Plans (${featurePlans.length}): ${featurePlans.map((fp) => `#${fp.id} [${fp.status}]`).join(", ") || "none"}`,
       `Providers: ${providers.map((p) => `${p.label}=${p.state}/${p.control.mode}`).join(", ") || "no providers"}`,
+      `Managed project processes: ${processes.map((process) => `${process.id} [${process.status}] pid=${process.pid ?? "none"}`).join(", ") || "none"}`,
       projectContext.summaryText,
       `Git commits:\n${projectContext.git.commits || "none"}`,
       `Git working tree:\n${projectContext.git.status || "clean or unavailable"}`,
@@ -851,6 +1095,7 @@ export class OperationalChatService {
       files: projectContext.files,
       git: projectContext.git,
       commands: [],
+      processes,
       memories: this.database.listOperationalChatMemories(normalizedKey),
       warnings: projectContext.warnings,
       repositoryState,
@@ -920,6 +1165,64 @@ export class OperationalChatService {
           description: chatText(locale, "Sends the request through Maestro's task, validation and review path.", "Envia o pedido pelo fluxo de task, validação e revisão do Maestro."),
           targetId: targetProjectKey,
           payload
+        });
+      }
+    }
+
+    const targetProjectKey = evidence.project.key === GLOBAL_CHAT_PROJECT_KEY
+      ? this.database.getDefaultProject()?.key
+      : evidence.project.key;
+    if (targetProjectKey && accessMode !== "read_only" && accessMode !== "standard" && isProjectStartRequest(userMessage ?? "")) {
+      actions.push({
+        id: "start_project",
+        type: "start_project",
+        label: chatText(locale, "Install and start project", "Instalar e iniciar projeto"),
+        description: chatText(locale, "Installs dependencies when needed and keeps the project's detected dev/start server running under Maestro management.", "Instala as dependências quando necessário e mantém o servidor dev/start detectado do projeto gerenciado pelo Maestro."),
+        targetId: targetProjectKey,
+        payload: { projectKey: targetProjectKey }
+      });
+    }
+
+    if (userMessage && isProcessListRequest(userMessage) && accessMode !== "read_only") {
+      actions.push({
+        id: "list_project_processes",
+        type: "list_project_processes",
+        label: chatText(locale, "List managed processes", "Listar processos gerenciados"),
+        description: chatText(locale, "Shows project servers started and owned by Maestro.", "Mostra os servidores do projeto iniciados e gerenciados pelo Maestro."),
+        targetId: evidence.project.key
+      });
+    }
+    if (userMessage && isProcessLogRequest(userMessage) && accessMode !== "read_only") {
+      for (const process of evidence.processes) {
+        actions.push({
+          id: `show_project_process_log_${process.id}`,
+          type: "show_project_process_log",
+          label: chatText(locale, `Show log ${process.id.slice(0, 8)}`, `Mostrar log ${process.id.slice(0, 8)}`),
+          description: chatText(locale, `Displays the redacted log for ${process.command}.`, `Exibe o log redigido de ${process.command}.`),
+          targetId: process.id
+        });
+      }
+    }
+    if (userMessage && isProcessStopRequest(userMessage) && accessMode !== "read_only") {
+      for (const process of evidence.processes.filter((item) => item.status === "running")) {
+        actions.push({
+          id: `stop_project_process_${process.id}`,
+          type: "stop_project_process",
+          label: chatText(locale, `Stop ${process.id.slice(0, 8)}`, `Parar ${process.id.slice(0, 8)}`),
+          description: chatText(locale, `Stops the Maestro-managed process with PID ${process.pid ?? "unknown"}.`, `Para o processo gerenciado pelo Maestro com PID ${process.pid ?? "desconhecido"}.`),
+          targetId: process.id
+        });
+      }
+    }
+    if (userMessage && isProcessOpenRequest(userMessage) && accessMode !== "read_only") {
+      for (const process of evidence.processes.filter((item) => item.url && isSafeLocalBrowserUrl(item.url))) {
+        actions.push({
+          id: `open_project_browser_${process.id}`,
+          type: "open_project_browser",
+          label: chatText(locale, "Open project in browser", "Abrir projeto no navegador"),
+          description: chatText(locale, `Opens the detected local URL ${process.url}.`, `Abre a URL local detectada ${process.url}.`),
+          targetId: process.id,
+          payload: { url: process.url }
         });
       }
     }
@@ -1338,6 +1641,12 @@ export class OperationalChatService {
         stderr: redactSensitiveText(command.stderr),
         detail: command.detail ? redactSensitiveText(command.detail) : null
       })),
+      processes: evidence.processes.map((process) => ({
+        ...process,
+        command: redactSensitiveText(process.command),
+        log: redactSensitiveText(process.log),
+        url: process.url ? redactSensitiveText(process.url) : null
+      })),
       memories: evidence.memories.map((memory) => ({
         ...memory,
         text: redactSensitiveText(memory.text)
@@ -1370,6 +1679,12 @@ export class OperationalChatService {
         stdout: redactSensitiveText(command.stdout),
         stderr: redactSensitiveText(command.stderr),
         detail: command.detail ? redactSensitiveText(command.detail) : null
+      })),
+      processes: evidence.processes.map((process) => ({
+        ...process,
+        command: redactSensitiveText(process.command),
+        log: redactSensitiveText(process.log),
+        url: process.url ? redactSensitiveText(process.url) : null
       })),
       memories: evidence.memories.map((memory) => ({
         ...memory,
@@ -1415,7 +1730,7 @@ function extractExplicitMemory(input: string): ExplicitChatMemory | null {
 }
 
 function normalizeAccessMode(value?: ChatAccessMode | string | null): ChatAccessMode {
-  return value === "read_only" || value === "full" ? value : "standard";
+  return value === "read_only" || value === "approval" || value === "full" ? value : "standard";
 }
 
 function normalizeChatLocale(value?: ChatLocale | string | null): ChatLocale {
@@ -1443,7 +1758,41 @@ function isOperationalChatMessage(input: string): boolean {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
-  return /\b(task|goal|provider|claude|codex|antigravity|gemini|copilot|feature\s*plan|worktree|quota|cota|log|erro|falha|bloquead|parad|trav|iniciar|comec|comecar|retomar|continuar|reiniciar|cancelar|habilitar|ativar|pausar|status|andamento|revisao|revisao|pull\s*request|\bpr\b)\b/.test(normalized);
+  return /\b(task|goal|provider|claude|codex|antigravity|gemini|copilot|feature\s*plan|worktree|quota|cota|log|erro|falha|bloquead|parad|trav|iniciar|inicie|inicia|come[cç]|rodar|rode|servidor|processo|dependenc|instal|retomar|continuar|reiniciar|cancelar|habilitar|ativar|pausar|status|andamento|revisao|revisao|pull\s*request|\bpr\b)\b/.test(normalized);
+}
+
+function isProjectStartRequest(input: string): boolean {
+  const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(?:install(?: dependencies)? and start|start (?:the )?project|run (?:the )?project|run (?:the )?server|inici(?:e|ar|a) (?:o )?(?:projeto|servidor)|coloque (?:o )?projeto para rodar|rode (?:o )?(?:projeto|servidor))\b/.test(normalized);
+}
+
+function isProcessListRequest(input: string): boolean {
+  const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(?:list|listar|show|mostrar|quais).*(?:process|servidor|server)|(?:process|processos|servidores|servers).*(?:running|rodando|ativos|active|list|listar)\b/.test(normalized);
+}
+
+function isProcessLogRequest(input: string): boolean {
+  const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(?:show|mostrar|ver|veja|read|ler).*(?:log|output|saida)|(?:log|output|saida).*(?:process|server|servidor)\b/.test(normalized);
+}
+
+function isProcessStopRequest(input: string): boolean {
+  const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(?:stop|kill|parar|pare|encerre|encerrar|desligar).*(?:process|server|servidor|projeto)|(?:process|server|servidor).*(?:stop|parar|kill)\b/.test(normalized);
+}
+
+function isProcessOpenRequest(input: string): boolean {
+  const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(?:open|abrir|abra|acessar|access).*(?:browser|navegador|url|link|projeto)|(?:browser|navegador).*(?:open|abrir|abra)\b/.test(normalized);
+}
+
+function isSafeLocalBrowserUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && ["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function isCodeChangeRequest(input: string): boolean {

@@ -40,6 +40,7 @@ import { WorkGraphCoordinator } from "./work-graphs/coordinator.js";
 import { stopAntigravitySession } from "./agents/antigravity-session.js";
 import { ProjectRepositoryService } from "./projects/repository-service.js";
 import { sizeTaskWithModel } from "./goals/task-sizing.js";
+import { ProjectProcessManager } from "./chat/project-process.js";
 
 if (process.argv.includes("telegram") && process.argv.includes("connect")) {
   const { runTelegramConnectWizard } = await import("./telegram/connect.js");
@@ -66,6 +67,7 @@ if (errors.length > 0) {
 ensureExecutionContract(config.execution);
 const database = createDatabase(config.databasePath);
 const repositoryService = new ProjectRepositoryService(database);
+const projectProcessManager = new ProjectProcessManager();
 const environmentFingerprint = captureEnvironmentFingerprint(config.execution);
 database.addEvent({
   source: "maestro",
@@ -175,6 +177,7 @@ const telegramManager = new TelegramSubsystemManager(config, database, {
   featureCoordinator,
   triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
   repositoryService,
+  processManager: projectProcessManager,
   skillRuntime: skillBootstrap?.runtime,
   skillProjectKey: config.skills.projectKey
 });
@@ -187,6 +190,7 @@ const bot = createTelegramBot(config, database, {
   featureCoordinator,
   triggerSelfUpdate: () => selfUpdateManager.triggerUpdate(),
   repositoryService,
+  processManager: projectProcessManager,
   skillRuntime: skillBootstrap?.runtime,
   skillProjectKey: config.skills.projectKey
 });
@@ -311,6 +315,7 @@ const dashboardServer = config.dashboard.enabled
     skillProjectKey: config.skills.projectKey,
     telegramManager,
     repositoryService,
+    processManager: projectProcessManager,
     taskSizer: ({ task, project, providerId, model }) => sizeTaskWithModel(agentRegistry, task, project, {
       providerId,
       model,
@@ -370,6 +375,7 @@ async function shutdown() {
   improvementReviewWorker.shutdown();
   featurePlanLifecycleWorker.shutdown();
   selfUpdateManager.shutdown();
+  projectProcessManager.shutdown();
   skillCuratorWorker?.shutdown();
   await workGraphCoordinator.shutdown();
   await goalCoordinator.shutdown();
