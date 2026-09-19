@@ -13,6 +13,13 @@ The dashboard and terminal CLI are the primary local control surfaces. Telegram 
 can receive commands, create local tasks, store events in SQLite, and send notifications when you
 configure it.
 
+On first launch, the dashboard opens a resumable setup guide. It explains the product, checks for
+a ready provider, offers project registration or a project-free chat, and leads to a first task.
+The guide can be skipped and reopened from **Settings → First-run onboarding**. The interface is
+English-first; choose **Português (Brasil)** in the guide or **Settings → Language**. This interface
+choice is independent from the language used in Chat, task descriptions, provider output, and
+documentation.
+
 Telegram belongs to the Maestro gateway, not to every managed project. Projects only need their own
 Telegram integration when that is an explicit product requirement. When a goal opens a draft pull
 request, Maestro sends the restricted Telegram user a review notification with the public PR URL.

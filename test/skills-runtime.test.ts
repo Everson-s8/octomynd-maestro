@@ -255,9 +255,9 @@ describe("SkillRuntime", () => {
       }]
     });
     const prompt = lines.join("\n");
-    expect(prompt).toContain("somente metadados");
+    expect(prompt).toContain("metadata only");
     expect(prompt).toContain("PINNED INSTRUCTIONS");
-    expect(prompt).toContain("nao substituem guardrails");
+    expect(prompt).toContain("do not replace guardrails");
   });
 });
 

@@ -137,7 +137,7 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
     const existing = findThread.get(project.project_key) as { id: number } | undefined;
     const threadId = existing?.id ?? Number(insertThread.run(
       project.project_key,
-      "Conversa do projeto",
+      "Project conversation",
       now,
       now
     ).lastInsertRowid);
@@ -310,7 +310,7 @@ export function createOperationalChatPersistence(db: Database.Database) {
       return mapRowToThread(getThreadStatement.get(threadId) as OperationalChatThreadRow);
     },
 
-    getOrCreateOperationalChatThread(projectKey: string, title = "Conversa do projeto"): OperationalChatThreadRecord {
+    getOrCreateOperationalChatThread(projectKey: string, title = "Project conversation"): OperationalChatThreadRecord {
       const existing = (listThreadsStatement.all(projectKey.trim().toLowerCase()) as OperationalChatThreadRow[])[0];
       if (existing) return mapRowToThread(existing);
       return this.createOperationalChatThread({ projectKey, title });
@@ -322,7 +322,7 @@ export function createOperationalChatPersistence(db: Database.Database) {
       const thread = input.threadId
         ? getThreadStatement.get(input.threadId) as OperationalChatThreadRow | undefined
         : (listThreadsStatement.all(projectKey) as OperationalChatThreadRow[])[0];
-      const resolvedThread = thread ?? this.createOperationalChatThread({ projectKey, title: "Conversa do projeto" });
+      const resolvedThread = thread ?? this.createOperationalChatThread({ projectKey, title: "Project conversation" });
       const resolvedProjectKey = "project_key" in resolvedThread ? resolvedThread.project_key : resolvedThread.projectKey;
       if (resolvedProjectKey !== projectKey) {
         throw new Error("Chat thread does not belong to the requested project.");

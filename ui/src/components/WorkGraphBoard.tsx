@@ -3,7 +3,7 @@ import { cancelWorkGraph, DashboardWorkGraph } from "../api";
 import { formatWorkGraphDuration, isWorkGraphCancellable } from "../workGraphs";
 import { EmptyState } from "./EmptyState";
 import { SectionHeader } from "./SectionHeader";
-import { translate } from "../i18n";
+import { translate, translateCount } from "../i18n";
 
 export function WorkGraphBoard({
   workGraphs,
@@ -32,7 +32,7 @@ export function WorkGraphBoard({
 
   return (
     <section className="panel work-graph-board" id="work-graphs" aria-labelledby="work-graphs-title">
-      <SectionHeader eyebrow="Multi-agent" title="Work Graphs" meta={`${active.length} ativo(s)`} />
+      <SectionHeader eyebrow={translate("Multi-agent")} title={translate("Work Graphs")} meta={translateCount(active.length, "1 active", "{count} active")} />
       {error ? <p className="detail-error">{error}</p> : null}
       <div className="work-graph-list">
         {workGraphs.length === 0 ? (
@@ -54,7 +54,7 @@ export function WorkGraphBoard({
                   </strong>
                 </div>
                 <small>
-                  {graph.artifactCount} artefatos · {Math.ceil(graph.artifactBytes / 1024)} KB
+                  {graph.artifactCount} {translate("artifacts")} · {Math.ceil(graph.artifactBytes / 1024)} KB
                 </small>
               </header>
               <p>{graph.objective}</p>
@@ -95,7 +95,7 @@ export function WorkGraphBoard({
                 </div>
               ) : null}
               <footer>
-                <span>Paralelo: {graph.maxParallelReaders} readers</span>
+                <span>{translate("Parallel: {count} readers", { count: graph.maxParallelReaders })}</span>
                 {isWorkGraphCancellable(graph) ? (
                   <button disabled={busyId !== null} onClick={() => void handleCancel(graph)}>
                     {busyId === graph.id ? translate("Cancelling…") : translate("Cancel graph")}

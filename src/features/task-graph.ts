@@ -152,7 +152,7 @@ export function legacyFeatureTaskContract(
 ): FeatureTaskContract {
   return {
     objective: taskText.trim(),
-    acceptanceCriteria: [`A Task #${taskId} entrega seu escopo com testes e evidencias verificaveis.`],
+    acceptanceCriteria: [`Task #${taskId} delivers its scope with tests and verifiable evidence.`],
     excludedScope: [],
     mutationScope: ["**"],
     dependsOnTaskIds: previousTaskId ? [previousTaskId] : [],

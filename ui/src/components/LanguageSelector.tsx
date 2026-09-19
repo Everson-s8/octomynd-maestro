@@ -1,4 +1,4 @@
-import { translate, useI18n } from "../i18n";
+import { getLocaleLabel, isLocale, SUPPORTED_LOCALES, translate, useI18n } from "../i18n";
 
 export function LanguageSelector() {
   const { locale, setLocale } = useI18n();
@@ -8,11 +8,16 @@ export function LanguageSelector() {
       <select
         id="maestro-language"
         value={locale}
-        onChange={(event) => setLocale(event.target.value === "pt-BR" ? "pt-BR" : "en")}
+        onChange={(event) => {
+          if (isLocale(event.target.value)) setLocale(event.target.value);
+        }}
         style={{ maxWidth: "280px" }}
       >
-        <option value="en">{translate("English")}</option>
-        <option value="pt-BR">{translate("Brazilian Portuguese")}</option>
+        {SUPPORTED_LOCALES.map((supportedLocale) => (
+          <option value={supportedLocale.id} key={supportedLocale.id}>
+            {translate(getLocaleLabel(supportedLocale.id))}
+          </option>
+        ))}
       </select>
       <small style={{ color: "var(--text-2)" }}>{translate("Choose the language used by the Maestro dashboard. The default is English.")}</small>
     </div>
