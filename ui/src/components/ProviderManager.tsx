@@ -214,9 +214,8 @@ export function ProviderManager({
   }, [agents, presets, registered, policy]);
 
   const groupedProviders = {
-    Account: connectedProviders.filter((provider) => provider.type === "account"),
-    API: connectedProviders.filter((provider) => provider.type === "api"),
-    Local: connectedProviders.filter((provider) => provider.type === "local")
+    Cloud: connectedProviders.filter((provider) => provider.type === "account"),
+    "Custom & local": connectedProviders.filter((provider) => provider.type !== "account")
   };
 
   const detailProvider = connectedProviders.find((provider) => provider.key === detailKey) ?? null;
@@ -619,9 +618,10 @@ export function ProviderManager({
     <section className="provider-manager">
       {error ? <div className="provider-feedback error" role="alert">{error}</div> : null}
       {notice ? <div className="provider-feedback success">{notice}</div> : null}
-      {(["Account", "API", "Local"] as const).map((group) => groupedProviders[group].length ? (
-        <div key={group}>
+      {(["Cloud", "Custom & local"] as const).map((group) => groupedProviders[group].length ? (
+        <div className="provider-group" key={group}>
           <div className="prov-group-lbl">{group}</div>
+          <div className="provider-card-grid">
           {groupedProviders[group].map((provider) => {
             const control = policy?.controls.find((item) => item.providerId === provider.providerId);
             const mode = control?.mode ?? (provider.registeredProvider ? "enabled" : provider.active ? "enabled" : "paused");
@@ -630,6 +630,11 @@ export function ProviderManager({
               ? "disabled"
               : agent?.state === "working" ? "processing" : "ready";
             const routedCapability = primaryCapabilityForProvider(provider.providerId, policy);
+            const routedPolicy = routedCapability
+              ? policy?.capabilities.find((item) => item.capability === routedCapability)
+              : null;
+            const displayModel = routedPolicy?.preferredModel || provider.model;
+            const displayEffort = routedPolicy?.preferredEffort || provider.effort;
             const roleLabel = routedCapability
               ? capabilityLabel(routedCapability)
               : mascotState === "processing"
@@ -640,7 +645,7 @@ export function ProviderManager({
                     ? translate("Paused")
                     : translate("Default");
             return (
-              <button type="button" className={`prov-card${provider.paused ? " is-paused" : ""}`} key={provider.key} onClick={() => openDetail(provider.key)}>
+              <button type="button" className={`prov-card${provider.paused ? " is-paused" : ""} is-mascot-${mascotState}`} key={provider.key} onClick={() => openDetail(provider.key)}>
                 <div className="head">
                   <div className={`av provider-avatar is-${mascotState}`} style={{ background: `${provider.color}1a`, color: provider.color }}>
                     <ProviderMascot color={provider.color} state={mascotState} capability={routedCapability} />
@@ -683,11 +688,12 @@ export function ProviderManager({
                           ? translate("disabled")
                           : translate("paused")}</label>
                   </div>
-                  {provider.connected ? <span className="model-badge">{provider.model}{provider.effort ? ` · ${effortLabel(provider.effort)}` : ""}</span> : null}
+                  {provider.connected ? <span className="model-badge">{displayModel}{displayEffort ? ` · ${effortLabel(displayEffort)}` : ""}</span> : null}
                 </div>
               </button>
             );
           })}
+          </div>
         </div>
       ) : null)}
       <button type="button" className="add-provider" onClick={openWizard}>
@@ -970,7 +976,7 @@ function primaryCapabilityForProvider(
   providerId: string,
   policy: (ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null | undefined
 ): AgentCapability | null {
-  const priority: AgentCapability[] = ["planning", "coding", "reviewing", "testing", "research", "conversation", "improvement_reviewing"];
+  const priority: AgentCapability[] = ["planning", "coding", "testing", "reviewing", "improvement_reviewing", "research", "conversation"];
   return priority.find((capability) => {
     const routing = policy?.capabilities.find((item) => item.capability === capability);
     return (routing?.requiredProviderId ?? routing?.order[0]) === providerId;
@@ -983,7 +989,7 @@ function capabilityLabel(capability: AgentCapability): string {
     coding: "Implementation",
     testing: "Testing",
     reviewing: "Final review",
-    improvement_reviewing: "Improvement",
+    improvement_reviewing: "Self-improvement",
     research: "Research",
     conversation: "Conversation"
   }[capability];
