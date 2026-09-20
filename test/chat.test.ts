@@ -12,6 +12,7 @@ import { MaestroConfig } from "../src/config.js";
 import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
 import { runGit } from "../src/git.js";
 import { ProjectProcessManager } from "../src/chat/project-process.js";
+import { compileOperationalChatContext } from "../src/chat/context-compiler.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -564,6 +565,60 @@ describe("Unified Operational Chat (Task #52)", () => {
       ]
     );
     expect(result?.text).toBe(synthesis);
+  });
+
+  it("compiles older turns into working memory while keeping the recent transcript", () => {
+    const messages = Array.from({ length: 24 }, (_, index) => ({
+      id: index + 1,
+      threadId: 1,
+      projectKey: "maestro",
+      surface: "dashboard" as const,
+      senderRole: index % 2 === 0 ? "user" as const : "orchestrator" as const,
+      messageText: index === 0
+        ? "Quero simplificar o sistema de despesas do apartamento, dividir automaticamente o saldo entre moradores e manter uma lista de compras."
+        : `Mensagem de acompanhamento ${index} sobre o projeto e a implementação do fluxo.`,
+      evidenceJson: null,
+      actionTaken: null,
+      providerId: null,
+      model: null,
+      createdAt: new Date(index * 1000).toISOString()
+    }));
+
+    const context = compileOperationalChatContext(messages, [], { recentMessageCount: 8 });
+    expect(context.recentMessages).toHaveLength(8);
+    expect(context.workingMemory.objective).toContain("simplificar o sistema de despesas");
+    expect(context.promptText).toContain("COMPILED WORKING MEMORY");
+  });
+
+  it("uses the synthesized brief for an automatic Full Access task", async () => {
+    const synthesis = "Olá! Analisei a problemática. O objetivo é simplificar o sistema, implementar a divisão automática das dívidas entre moradores, registrar comprovantes, manter uma lista de compras e organizar avaliações de restaurantes. Esse é o escopo para começar a implementação.";
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Synthesized task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: "veja a mensagem que usei explicando a problemática"
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: synthesis
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      message: "sim, a partir disso crie uma task para começar a implementar",
+      accessMode: "full"
+    });
+
+    expect(database.listTasks(20)[0]?.text).toBe(synthesis);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
   });
 
   it("falls back to the next conversation provider after a headless provider failure", async () => {
