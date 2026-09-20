@@ -653,14 +653,15 @@ export function ProviderManager({
                   <div className="provider-card-copy">
                     <b>{provider.label}</b>
                     <span className="provider-detail"><i className="st-dot" />{provider.detail}</span>
-                    <span className={`provider-role-chip is-${mascotState}`}>
-                      {routedCapability ? <Icon name={capabilityIcon(routedCapability) ?? "spark"} /> : null}
-                      {roleLabel}
-                    </span>
                   </div>
                   <span className="type-tag">{provider.type}</span>
                   <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
                 </div>
+                <span className={`provider-role-chip is-${mascotState}`}>
+                  {routedCapability ? <Icon name={capabilityIcon(routedCapability) ?? "spark"} /> : null}
+                  {roleLabel}
+                </span>
+                <div className="provider-summary">{providerDescription(provider.providerId)}</div>
                 <div className="prov-uso">
                   <div className="prov-uso-l">
                     {(() => {
@@ -1004,4 +1005,13 @@ function providerColor(providerId: string): string {
   if (providerId.includes("qwen")) return "#4d7a8c";
   if (providerId.includes("mistral")) return "#8a6dab";
   return "#7c634a";
+}
+
+function providerDescription(providerId: string): string {
+  if (providerId.includes("claude")) return "Modelo de ponta para engenharia de software.";
+  if (providerId.includes("codex")) return "Especialista em código e refatoração.";
+  if (providerId.includes("gemini") || providerId.includes("antigravity")) return "Modelo multimodal para análise e pesquisa.";
+  if (providerId.includes("ollama")) return "Execução local, rápida e privada.";
+  if (providerId.includes("openrouter")) return "Acesso flexível a modelos conectados.";
+  return "Provider conectado ao Maestro.";
 }

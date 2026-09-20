@@ -10,6 +10,7 @@ import {
 } from "../api";
 import { capabilityLabel } from "../helpers";
 import { translate } from "../i18n";
+import { ProviderMascot, ProviderMascotState } from "./ProviderMascot";
 
 export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   agents: DashboardData["agents"];
@@ -108,9 +109,17 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
             const selectedEffort = routing.preferredEffort && effortOptions.includes(routing.preferredEffort)
               ? routing.preferredEffort
               : "";
+            const primaryAgent = agents.find((agent) => agent.id === primaryProviderId);
+            const mascotState: ProviderMascotState = primaryAgent?.state === "working" ? "processing" : "ready";
+            const mascotColor = providerColor(primaryProviderId);
             return (
               <div className="routing-row" key={routing.capability}>
-                <div className="rname">{capabilityLabel(routing.capability)}</div>
+                <div className="rname">
+                  <span className="routing-mascot" style={{ color: mascotColor }} aria-hidden="true">
+                    <ProviderMascot color={mascotColor} state={mascotState} capability={routing.capability} />
+                  </span>
+                  <span>{capabilityLabel(routing.capability)}</span>
+                </div>
                 <div><div className="field-lbl">{translate("First")}</div>
                   <select className="sel"
                     value={primaryProviderId}
@@ -195,6 +204,16 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
           })}
     </section>
   );
+}
+
+function providerColor(providerId: string): string {
+  if (providerId.includes("claude")) return "#c4622d";
+  if (providerId.includes("gemini") || providerId.includes("antigravity")) return "#6f8f6a";
+  if (providerId.includes("ollama")) return "#5c6f8f";
+  if (providerId.includes("openrouter")) return "#8a6dab";
+  if (providerId.includes("openai") || providerId.includes("qwen")) return "#4d7a8c";
+  if (providerId.includes("mistral")) return "#8a6dab";
+  return "#7c634a";
 }
 
 function effortLabel(effort: ReasoningEffort): string {
