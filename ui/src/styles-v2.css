@@ -318,8 +318,24 @@
   .prov-card{background:var(--sepia);border:1px solid var(--line);border-radius:var(--r-lg);padding:17px;margin-bottom:11px}
   .prov-card .head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
   .prov-card .av{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-family:'Fraunces';font-weight:700;color:var(--ivory);font-size:15px;flex-shrink:0}
+  .provider-avatar{width:48px!important;height:48px!important;border-radius:14px!important;position:relative;overflow:visible}
+  .provider-avatar.is-disabled{border:1px dashed color-mix(in srgb,var(--muted) 70%,transparent);background:transparent!important}
+  .provider-mascot{width:100%;height:100%;display:grid;place-items:center;position:relative;color:var(--mascot-color);transition:opacity .2s,filter .2s}
+  .provider-mascot-glyph{width:38px;height:38px;display:grid;place-items:center;position:relative;z-index:1}
+  .provider-mascot-glyph .octo-mark{width:100%;height:100%;display:block}
+  .provider-mascot.is-disabled{opacity:.36;filter:grayscale(.45)}
+  .provider-mascot-ring{position:absolute;inset:3px;border:1px solid color-mix(in srgb,var(--mascot-color) 72%,transparent);border-radius:50%;animation:provider-mascot-pulse 2.2s ease-out infinite}
+  .provider-mascot-accessory{position:absolute;top:-4px;right:-4px;width:17px;height:17px;border:1px solid color-mix(in srgb,var(--mascot-color) 72%,var(--line));border-radius:50%;background:var(--sepia-2);color:var(--mascot-color);display:grid;place-items:center;z-index:2;box-shadow:0 4px 10px rgba(0,0,0,.18)}
+  .provider-mascot-accessory .icon{width:10px;height:10px;stroke-width:2.2}
+  @keyframes provider-mascot-pulse{0%,100%{opacity:.32;transform:scale(.92)}50%{opacity:.9;transform:scale(1.08)}}
   .prov-card .head b{font-size:14.5px;font-family:'Fraunces';color:var(--ivory);display:block}
   .prov-card .head span{font-size:11px;color:var(--muted)}
+  .prov-card .provider-card-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+  .prov-card .provider-detail{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--muted)}
+  .prov-card .provider-role-chip{display:inline-flex;align-items:center;gap:5px;width:max-content;max-width:100%;margin-top:2px;padding:3px 7px;border:1px solid color-mix(in srgb,var(--rust) 32%,var(--line));border-radius:999px;background:color-mix(in srgb,var(--rust) 7%,transparent);color:var(--coral);font:9px 'IBM Plex Mono';letter-spacing:.35px;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .prov-card .provider-role-chip .icon{width:11px;height:11px;flex:0 0 auto}
+  .prov-card .provider-role-chip.is-disabled{color:var(--muted);border-color:var(--line);background:transparent}
+  .prov-card .provider-role-chip.is-processing{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 38%,var(--line));background:color-mix(in srgb,var(--warn) 7%,transparent)}
   .prov-card .type-tag{margin-left:auto;font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:3px 8px;border-radius:100px;background:var(--sepia-2);color:var(--muted);border:1px solid var(--line)}
   .prov-uso{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
   .prov-uso-l{display:flex;align-items:center;gap:10px}

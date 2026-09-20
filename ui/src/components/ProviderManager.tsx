@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AgentCapability,
   AgentProviderId,
   cancelProviderAuth,
   deleteProvider,
@@ -19,6 +20,8 @@ import {
   updateProviderControl
 } from "../api";
 import { translate } from "../i18n";
+import { capabilityIcon, ProviderMascot, ProviderMascotState } from "./ProviderMascot";
+import { Icon } from "./Icon";
 
 type ConnectStep = "method" | "list-apikey" | "list-account" | "apikey" | "account";
 
@@ -619,47 +622,72 @@ export function ProviderManager({
       {(["Account", "API", "Local"] as const).map((group) => groupedProviders[group].length ? (
         <div key={group}>
           <div className="prov-group-lbl">{group}</div>
-          {groupedProviders[group].map((provider) => (
-            <button type="button" className={`prov-card${provider.paused ? " is-paused" : ""}`} key={provider.key} onClick={() => openDetail(provider.key)}>
-              <div className="head">
-                <div className="av" style={{ background: provider.color }}>{provider.label.slice(0, 1).toUpperCase()}</div>
-                <div><b>{provider.label}</b><span><i className="st-dot" />{provider.detail}</span></div>
-                <span className="type-tag">{provider.type}</span>
-                <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
-              </div>
-              <div className="prov-uso">
-                <div className="prov-uso-l">
-                  {(() => {
-                    const control = policy?.controls.find((item) => item.providerId === provider.providerId);
-                    const mode = control?.mode ?? (provider.registeredProvider ? "enabled" : provider.active ? "enabled" : "paused");
-                    const on = provider.connected && mode === "enabled";
-                    return (
-                      <span
-                        className={`toggle${on ? " on" : ""}${provider.connected ? "" : " unavailable"}`}
-                        role="switch"
-                        aria-checked={on}
-                        aria-disabled={!provider.connected}
-                        tabIndex={0}
-                        onClick={(event) => { if (provider.connected) void toggleProvider(provider, event); }}
-                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); if (provider.connected) void toggleProvider(provider, event); } }}
-                        title={provider.connected ? (on ? translate("Pause {provider} (connected but not routable)", { provider: provider.label }) : translate("Enable {provider}", { provider: provider.label })) : translate("{provider} is not connected on this machine", { provider: provider.label })}
-                      >
-                        <i />
-                      </span>
-                    );
-                  })()}
-                  <label>{!provider.connected
-                    ? translate("not connected")
-                    : (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "enabled") === "enabled"
-                      ? translate("active")
-                      : (policy?.controls.find((item) => item.providerId === provider.providerId)?.mode ?? "paused") === "disabled"
-                        ? translate("disabled")
-                        : translate("paused")}</label>
+          {groupedProviders[group].map((provider) => {
+            const control = policy?.controls.find((item) => item.providerId === provider.providerId);
+            const mode = control?.mode ?? (provider.registeredProvider ? "enabled" : provider.active ? "enabled" : "paused");
+            const agent = agents.find((item) => item.id === provider.providerId);
+            const mascotState: ProviderMascotState = mode !== "enabled" || !provider.connected
+              ? "disabled"
+              : agent?.state === "working" ? "processing" : "ready";
+            const routedCapability = primaryCapabilityForProvider(provider.providerId, policy);
+            const roleLabel = routedCapability
+              ? capabilityLabel(routedCapability)
+              : mascotState === "processing"
+                ? translate("Processing")
+                : mode === "disabled"
+                  ? translate("Disabled")
+                  : mode === "paused"
+                    ? translate("Paused")
+                    : translate("Default");
+            return (
+              <button type="button" className={`prov-card${provider.paused ? " is-paused" : ""}`} key={provider.key} onClick={() => openDetail(provider.key)}>
+                <div className="head">
+                  <div className={`av provider-avatar is-${mascotState}`} style={{ background: `${provider.color}1a`, color: provider.color }}>
+                    <ProviderMascot color={provider.color} state={mascotState} capability={routedCapability} />
+                  </div>
+                  <div className="provider-card-copy">
+                    <b>{provider.label}</b>
+                    <span className="provider-detail"><i className="st-dot" />{provider.detail}</span>
+                    <span className={`provider-role-chip is-${mascotState}`}>
+                      {routedCapability ? <Icon name={capabilityIcon(routedCapability) ?? "spark"} /> : null}
+                      {roleLabel}
+                    </span>
+                  </div>
+                  <span className="type-tag">{provider.type}</span>
+                  <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
                 </div>
-                {provider.connected ? <span className="model-badge">{provider.model}{provider.effort ? ` · ${effortLabel(provider.effort)}` : ""}</span> : null}
-              </div>
-            </button>
-          ))}
+                <div className="prov-uso">
+                  <div className="prov-uso-l">
+                    {(() => {
+                      const on = provider.connected && mode === "enabled";
+                      return (
+                        <span
+                          className={`toggle${on ? " on" : ""}${provider.connected ? "" : " unavailable"}`}
+                          role="switch"
+                          aria-checked={on}
+                          aria-disabled={!provider.connected}
+                          tabIndex={0}
+                          onClick={(event) => { if (provider.connected) void toggleProvider(provider, event); }}
+                          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); if (provider.connected) void toggleProvider(provider, event); } }}
+                          title={provider.connected ? (on ? translate("Pause {provider} (connected but not routable)", { provider: provider.label }) : translate("Enable {provider}", { provider: provider.label })) : translate("{provider} is not connected on this machine", { provider: provider.label })}
+                        >
+                          <i />
+                        </span>
+                      );
+                    })()}
+                    <label>{!provider.connected
+                      ? translate("not connected")
+                      : mode === "enabled"
+                        ? translate("active")
+                        : mode === "disabled"
+                          ? translate("disabled")
+                          : translate("paused")}</label>
+                  </div>
+                  {provider.connected ? <span className="model-badge">{provider.model}{provider.effort ? ` · ${effortLabel(provider.effort)}` : ""}</span> : null}
+                </div>
+              </button>
+            );
+          })}
         </div>
       ) : null)}
       <button type="button" className="add-provider" onClick={openWizard}>
@@ -936,6 +964,29 @@ function readError(cause: unknown, fallback: string): string {
 
 function isProviderConnected(state: DashboardData["agents"][number]["state"] | undefined): boolean {
   return state === "ready" || state === "working";
+}
+
+function primaryCapabilityForProvider(
+  providerId: string,
+  policy: (ProviderPolicySnapshot & { availableModels?: Record<string, string[]> }) | null | undefined
+): AgentCapability | null {
+  const priority: AgentCapability[] = ["planning", "coding", "reviewing", "testing", "research", "conversation", "improvement_reviewing"];
+  return priority.find((capability) => {
+    const routing = policy?.capabilities.find((item) => item.capability === capability);
+    return (routing?.requiredProviderId ?? routing?.order[0]) === providerId;
+  }) ?? null;
+}
+
+function capabilityLabel(capability: AgentCapability): string {
+  return {
+    planning: "Planning",
+    coding: "Implementation",
+    testing: "Testing",
+    reviewing: "Final review",
+    improvement_reviewing: "Improvement",
+    research: "Research",
+    conversation: "Conversation"
+  }[capability];
 }
 
 function providerColor(providerId: string): string {
