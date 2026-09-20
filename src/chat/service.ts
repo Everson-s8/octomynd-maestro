@@ -1930,9 +1930,7 @@ export function parseTaskCreationIntent(
   // is the previous user message. Do not send the meta-instruction itself to
   // the task worker as if it were the project requirement.
   if (isContextualTaskFollowUp(text)) {
-    const context = [...priorMessages]
-      .reverse()
-      .find((message) => message.senderRole === "user" && isUsefulTaskContext(message.messageText));
+    const context = selectTaskContext(priorMessages);
     if (context) return { text: context.messageText.trim() };
   }
 
@@ -1971,7 +1969,32 @@ function isContextualTaskFollowUp(text: string): boolean {
 function isUsefulTaskContext(text: string): boolean {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length < 40) return false;
-  return !/^(?:eu\s+)?(?:quero|preciso|pode|por favor)?\s*(?:crie|criar|abra|abrir)\s+(?:uma\s+)?task\b/i.test(normalized);
+  return !/^(?:eu\s+)?(?:quero|preciso|pode|por favor)?\s*(?:crie|criar|abra|abrir)\s+(?:uma\s+)?task\b/i.test(normalized)
+    && !/^(?:sim,?\s+)?(?:consigo|posso)\s+(?:recuperar|conversar)\s+(?:o\s+)?hist[oó]rico/i.test(normalized)
+    && !/^nenhuma\s+task\s+parada/i.test(normalized);
+}
+
+function selectTaskContext(
+  priorMessages: Pick<OperationalChatMessageRecord, "senderRole" | "messageText">[]
+): Pick<OperationalChatMessageRecord, "senderRole" | "messageText"> | null {
+  const candidates = [...priorMessages]
+    .reverse()
+    .filter((message) => isUsefulTaskContext(message.messageText));
+
+  // When the user says "a partir disso", "essa explicação" or similar, the
+  // immediately preceding assistant answer is often the useful task brief:
+  // it has already organized the user's requirements into an implementable
+  // scope. Prefer that synthesis over a short message such as "veja acima".
+  const synthesizedBrief = candidates.find((message) => (
+    message.senderRole === "orchestrator"
+    && message.messageText.trim().length >= 160
+    && /\b(?:objetivo|escopo|problema|sistema|implementar|funcionalidade|requisito|gest[aã]o|d[ií]vida)\b/i.test(message.messageText)
+  ));
+  if (synthesizedBrief) return synthesizedBrief;
+
+  // If the assistant only acknowledged the conversation, fall back to the
+  // latest substantial user message that contains the actual requirements.
+  return candidates.find((message) => message.senderRole === "user") ?? candidates[0] ?? null;
 }
 
 function truncateChatText(value: string, max = 180): string {

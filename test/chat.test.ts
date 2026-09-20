@@ -554,6 +554,18 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
   });
 
+  it("uses the Maestro synthesis when the user says to create a task from that explanation", () => {
+    const synthesis = "Olá! Analisei a problemática. O objetivo é simplificar o sistema, implementar a divisão automática das dívidas entre moradores, registrar comprovantes, manter uma lista de compras e organizar avaliações de restaurantes. Esse é o escopo para começar a implementação.";
+    const result = parseTaskCreationIntent(
+      "sim, a partir disso crie uma task para começar a implementar",
+      [
+        { senderRole: "user", messageText: "veja a mensagem que usei explicando a problemática" },
+        { senderRole: "orchestrator", messageText: synthesis }
+      ]
+    );
+    expect(result?.text).toBe(synthesis);
+  });
+
   it("falls back to the next conversation provider after a headless provider failure", async () => {
     const antigravity = chatProvider("antigravity", {
       outcome: "failed",
