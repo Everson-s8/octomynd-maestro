@@ -1,4 +1,4 @@
-import type { AgentCapability, AgentProviderId } from "./types.js";
+import type { AgentCapability, AgentProviderId, AgentReasoningEffort } from "./types.js";
 
 export type ProviderMode = "enabled" | "paused" | "disabled";
 
@@ -7,6 +7,7 @@ export type ProviderControl = {
   mode: ProviderMode;
   fallbackEnabled: boolean;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
   updatedAt: string | null;
 };
 
@@ -15,6 +16,7 @@ export type CapabilityRoutingPolicy = {
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
   preferredModel?: string | null;
+  preferredEffort?: AgentReasoningEffort | null;
   updatedAt: string | null;
 };
 
@@ -26,9 +28,11 @@ export type ProviderPolicySnapshot = {
 
 export type ProviderControlUpdate = Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled"> & {
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
 };
 export type CapabilityRoutingUpdate = Pick<CapabilityRoutingPolicy, "capability" | "order" | "requiredProviderId"> & {
   preferredModel?: string | null;
+  preferredEffort?: AgentReasoningEffort | null;
 };
 
 export interface ProviderPolicyStore {
@@ -80,6 +84,7 @@ export function defaultProviderPolicySnapshot(): ProviderPolicySnapshot {
       order,
       requiredProviderId: null,
       preferredModel: null,
+      preferredEffort: null,
       updatedAt: null
     }))
   };

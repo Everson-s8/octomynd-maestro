@@ -13,6 +13,8 @@ describe("provider models configuration and propagation", () => {
     const models = await codex.models();
     expect(models).toContain("gpt-4o");
     expect(models).toContain("o3-mini");
+    expect(models).toContain("gpt-5.6-luna");
+    expect(codex.reasoningEfforts).toEqual(["minimal", "low", "medium", "high", "extra_high", "max", "ultra"]);
   });
 
   it("ClaudeProvider returns available models and honors configured model", async () => {
@@ -94,7 +96,7 @@ describe("provider models configuration and propagation", () => {
     expect(defaultArgs).toContain("faster-model");
   });
 
-  it("persists and retrieves provider controls model and capability routing preferred model in SQLite", () => {
+  it("persists and retrieves provider controls plus per-capability model and effort in SQLite", () => {
     const db = createDatabase(":memory:");
     const persistence = db;
 
@@ -102,6 +104,7 @@ describe("provider models configuration and propagation", () => {
     let snapshot = persistence.getProviderPolicySnapshot();
     expect(snapshot.controls).toEqual([]);
     expect(snapshot.capabilities.find((c) => c.capability === "coding")?.preferredModel).toBeNull();
+    expect(snapshot.capabilities.find((c) => c.capability === "coding")?.preferredEffort).toBeNull();
 
     // Update provider control with a model
     persistence.updateProviderControl({
@@ -116,7 +119,8 @@ describe("provider models configuration and propagation", () => {
       capability: "coding",
       order: ["codex", "claude", "antigravity"],
       requiredProviderId: "codex",
-      preferredModel: "o3-mini"
+      preferredModel: "o3-mini",
+      preferredEffort: "low"
     });
 
     snapshot = persistence.getProviderPolicySnapshot();
@@ -125,6 +129,7 @@ describe("provider models configuration and propagation", () => {
 
     const codingRouting = snapshot.capabilities.find((c) => c.capability === "coding");
     expect(codingRouting?.preferredModel).toBe("o3-mini");
+    expect(codingRouting?.preferredEffort).toBe("low");
     expect(codingRouting?.requiredProviderId).toBe("codex");
 
     // Atomic update of multiple controls

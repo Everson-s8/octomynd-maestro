@@ -3,7 +3,8 @@ import {
   AgentExecutionResult,
   AgentHealth,
   AgentProvider,
-  AgentProviderId
+  AgentProviderId,
+  AgentReasoningEffort
 } from "./types.js";
 import type { FailureCategory } from "./failure.js";
 import { BackgroundHealthProber } from "./health-prober.js";
@@ -19,6 +20,7 @@ export type RoutedAgent = {
   provider: AgentProvider;
   health: AgentHealth;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
 };
 
 export type AgentLease = RoutedAgent & {
@@ -46,10 +48,12 @@ export type AgentProviderSnapshot = {
   detail: string;
   models?: string[];
   currentModel?: string | null;
+  reasoningEfforts?: AgentReasoningEffort[];
   control: {
     mode: "enabled" | "paused" | "disabled";
     fallbackEnabled: boolean;
     model?: string | null;
+    effort?: AgentReasoningEffort | null;
   };
 };
 
@@ -152,7 +156,8 @@ export class AgentRegistry {
       const health = await provider.health();
       if (health.state === "ready") {
         const model = this.resolveModelForExecution(providerId, capability);
-        return { provider, health, model };
+        const effort = this.resolveEffortForExecution(providerId, capability);
+        return { provider, health, model, effort };
       }
     }
     return null;
@@ -175,10 +180,12 @@ export class AgentRegistry {
       this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
       let released = false;
       const model = this.resolveModelForExecution(providerId, capability);
+      const effort = this.resolveEffortForExecution(providerId, capability);
       return {
         provider,
         health,
         model,
+        effort,
         release: (feedback) => {
           if (released) return;
           released = true;
@@ -216,10 +223,12 @@ export class AgentRegistry {
     this.activeLeases.set(providerId, (this.activeLeases.get(providerId) ?? 0) + 1);
     let released = false;
     const model = this.resolveModelForExecution(providerId, capability);
+    const effort = this.resolveEffortForExecution(providerId, capability);
     return {
       provider,
       health,
       model,
+      effort,
       release: (feedback) => {
         if (released) return;
         released = true;
@@ -298,6 +307,9 @@ export class AgentRegistry {
             : "ready";
       const availableModels = provider.models ? await provider.models() : [];
       const configuredModel = controls.get(provider.id)?.model ?? provider.model ?? null;
+      const models = configuredModel && !availableModels.includes(configuredModel)
+        ? [...availableModels, configuredModel]
+        : availableModels;
       return {
         id: provider.id,
         label: provider.label,
@@ -307,12 +319,14 @@ export class AgentRegistry {
         activeCount,
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
         detail: cooldown?.detail ?? health.detail,
-        models: availableModels,
+        models,
         currentModel: configuredModel,
+        reasoningEfforts: [...(provider.reasoningEfforts ?? [])],
         control: {
           mode: controls.get(provider.id)?.mode ?? "enabled",
           fallbackEnabled: controls.get(provider.id)?.fallbackEnabled ?? true,
-          model: configuredModel
+          model: configuredModel,
+          effort: controls.get(provider.id)?.effort ?? null
         }
       };
     }));
@@ -346,7 +360,10 @@ export class AgentRegistry {
       if (models.length === 0) {
         models = provider.models ? await provider.models() : [];
       }
-      result[provider.id] = models;
+      const configuredModel = this.policySnapshot().controls.find((control) => control.providerId === provider.id)?.model ?? provider.model ?? null;
+      result[provider.id] = configuredModel && !models.includes(configuredModel)
+        ? [...models, configuredModel]
+        : models;
     }
     return result;
   }
@@ -388,6 +405,17 @@ export class AgentRegistry {
     }
     const provider = this.providers.get(providerId);
     return provider?.model ?? null;
+  }
+
+  private resolveEffortForExecution(providerId: AgentProviderId, capability?: AgentCapability): AgentReasoningEffort | null {
+    const policy = this.policySnapshot();
+    if (capability) {
+      const capabilityRouting = policy.capabilities.find((c) => c.capability === capability);
+      if (capabilityRouting?.preferredEffort && capabilityRouting.order[0] === providerId) {
+        return capabilityRouting.preferredEffort;
+      }
+    }
+    return policy.controls.find((c) => c.providerId === providerId)?.effort ?? null;
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {

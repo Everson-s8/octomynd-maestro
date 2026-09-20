@@ -12,6 +12,8 @@ import type { FailureCategory } from "./failure.js";
 import type { FeatureTaskContract } from "../features/task-graph.js";
 
 export type AgentProviderId = "codex" | "claude" | "antigravity" | (string & {});
+export const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "extra_high", "max", "ultra"] as const;
+export type AgentReasoningEffort = typeof REASONING_EFFORTS[number];
 export type AgentCapability =
   | "planning"
   | "coding"
@@ -72,6 +74,7 @@ export type AgentExecutionRequest = {
   deadlineAt?: number;
   signal?: AbortSignal;
   model?: string | null;
+  effort?: AgentReasoningEffort | null;
   /** Semantic acceptance criteria extracted during task sizing, when available. */
   acceptanceCriteria?: string[];
 };
@@ -106,6 +109,7 @@ export interface ProviderAdapter {
   label: string;
   capabilities: ReadonlySet<AgentCapability>;
   model?: string | null;
+  readonly reasoningEfforts?: readonly AgentReasoningEffort[];
   health(): Promise<AgentHealth>;
   /** Invalidate discovery/health caches after a CLI is installed or logged in. */
   refresh?(): void | Promise<void>;

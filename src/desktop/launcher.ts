@@ -104,7 +104,7 @@ export function checkViteConfigBase(viteConfigPath: string): { valid: boolean; b
     const content = fs.readFileSync(viteConfigPath, "utf8");
     const match = /base:\s*["']([^"']+)["']/.exec(content);
     if (match) {
-      return { valid: match[1] === "./", base: match[1] };
+      return { valid: match[1] === "/", base: match[1] };
     }
     return { valid: false };
   } catch {

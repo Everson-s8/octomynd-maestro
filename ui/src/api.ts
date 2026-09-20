@@ -408,6 +408,9 @@ export type DashboardData = {
     taskId?: number;
     projectKey?: string;
     phase?: string;
+    reasoningEfforts?: ReasoningEffort[];
+    models?: string[];
+    currentModel?: string | null;
   }>;
 };
 
@@ -421,11 +424,13 @@ export type AgentCapability =
   | "research"
   | "conversation";
 export type ProviderMode = "enabled" | "paused" | "disabled";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "extra_high" | "max" | "ultra";
 export type ProviderControl = {
   providerId: AgentProviderId;
   mode: ProviderMode;
   fallbackEnabled: boolean;
   model?: string | null;
+  effort?: ReasoningEffort | null;
   updatedAt: string | null;
 };
 export type CapabilityRoutingPolicy = {
@@ -433,6 +438,7 @@ export type CapabilityRoutingPolicy = {
   order: AgentProviderId[];
   requiredProviderId: AgentProviderId | null;
   preferredModel?: string | null;
+  preferredEffort?: ReasoningEffort | null;
   updatedAt: string | null;
 };
 export type ProviderPolicySnapshot = {
@@ -481,7 +487,7 @@ export async function refreshProviders(): Promise<void> {
 
 export async function updateProviderControl(
   providerId: AgentProviderId,
-  input: Pick<ProviderControl, "mode" | "fallbackEnabled"> & { model?: string | null }
+  input: Pick<ProviderControl, "mode" | "fallbackEnabled"> & { model?: string | null; effort?: ReasoningEffort | null }
 ): Promise<ProviderControl> {
   const response = await fetch(`/api/provider-policy/providers/${providerId}`, {
     method: "PUT",
@@ -494,7 +500,7 @@ export async function updateProviderControl(
 }
 
 export async function updateProviderControls(
-  controls: Array<Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled"> & { model?: string | null }>
+  controls: Array<Pick<ProviderControl, "providerId" | "mode" | "fallbackEnabled"> & { model?: string | null; effort?: ReasoningEffort | null }>
 ): Promise<ProviderControl[]> {
   const response = await fetch("/api/provider-policy/providers", {
     method: "PUT",
@@ -559,7 +565,7 @@ export async function testProviderConnection(input: {
 
 export async function updateCapabilityRouting(
   capability: AgentCapability,
-  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId"> & { preferredModel?: string | null }
+  input: Pick<CapabilityRoutingPolicy, "order" | "requiredProviderId"> & { preferredModel?: string | null; preferredEffort?: ReasoningEffort | null }
 ): Promise<CapabilityRoutingPolicy> {
   const response = await fetch(`/api/provider-policy/capabilities/${capability}`, {
     method: "PUT",
@@ -1427,6 +1433,7 @@ export type OperationalChatThread = {
   messageCount: number;
   providerId: string | null;
   model: string | null;
+  effort: ReasoningEffort | null;
 };
 
 export type ChatAccessMode = "read_only" | "standard" | "approval" | "full";
@@ -1455,7 +1462,8 @@ export type ChatProviderOption = {
   state: string;
   models?: string[];
   currentModel?: string | null;
-  control: { mode: string; fallbackEnabled: boolean; model?: string | null };
+  reasoningEfforts?: ReasoningEffort[];
+  control: { mode: string; fallbackEnabled: boolean; model?: string | null; effort?: ReasoningEffort | null };
 };
 
 export type OperationalChatResponse = {
@@ -1469,6 +1477,11 @@ export type OperationalChatResponse = {
   providerId?: string;
   model?: string | null;
   createdAt: string;
+};
+
+export type OperationalChatActivity = {
+  active: boolean;
+  startedAt: string | null;
 };
 
 export type OperationalChatActionResult = {
@@ -1496,12 +1509,13 @@ export async function selectChatProvider(
   projectKey: string,
   threadId: number,
   providerId: string | null,
-  model: string | null
+  model: string | null,
+  effort: ReasoningEffort | null = null
 ): Promise<OperationalChatThread> {
   const response = await fetch(`/api/chat/threads/${threadId}/provider`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, providerId, model })
+    body: JSON.stringify({ projectKey, providerId, model, effort })
   });
   const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
   if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Unable to select the chat provider.");
@@ -1535,11 +1549,18 @@ export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, li
   return payload.messages;
 }
 
-export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en", providerId?: string | null, model?: string | null): Promise<OperationalChatResponse> {
+export async function fetchChatActivity(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number): Promise<OperationalChatActivity> {
+  const response = await fetch(`/api/chat/status?projectKey=${encodeURIComponent(projectKey)}&threadId=${threadId}`, { cache: "no-store" });
+  const payload = await response.json() as { activity?: OperationalChatActivity; error?: string; details?: string };
+  if (!response.ok || !payload.activity) throw new Error(payload.details || payload.error || "Unable to load chat status.");
+  return payload.activity;
+}
+
+export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, message: string, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en", providerId?: string | null, model?: string | null, effort?: ReasoningEffort | null): Promise<OperationalChatResponse> {
   const response = await fetch("/api/chat/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectKey, threadId, message, accessMode, uiLocale, providerId, model, surface: "dashboard" })
+    body: JSON.stringify({ projectKey, threadId, message, accessMode, uiLocale, providerId, model, effort, surface: "dashboard" })
   });
   const payload = await response.json() as OperationalChatResponse & { error?: string; details?: string };
   if (!response.ok || !payload.explanation) {

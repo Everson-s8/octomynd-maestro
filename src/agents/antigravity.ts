@@ -65,6 +65,7 @@ export class AntigravityProvider implements AgentProvider {
   readonly id = "antigravity" as const;
   readonly label = "Gemini Antigravity";
   readonly capabilities = ANTIGRAVITY_CAPABILITIES;
+  readonly reasoningEfforts = ["low", "medium", "high"] as const;
   private readonly executionLimits: ProviderExecutionLimits;
   readonly model: string | null;
   private readonly effort: "low" | "medium" | "high";

@@ -438,7 +438,10 @@ export class FeatureCoordinator {
       }
       let result;
       try {
-        result = await lease.provider.execute(this.buildReviewRequest(feature, state));
+        const request = this.buildReviewRequest(feature, state);
+        request.model = lease.model;
+        request.effort = lease.effort;
+        result = await lease.provider.execute(request);
       } finally {
         lease.release(result);
       }

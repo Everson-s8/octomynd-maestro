@@ -7,13 +7,14 @@ import type {
   ProviderPolicySnapshot
 } from "./policy.js";
 import { defaultProviderPolicySnapshot } from "./policy.js";
-import type { AgentCapability, AgentProviderId } from "./types.js";
+import type { AgentCapability, AgentProviderId, AgentReasoningEffort } from "./types.js";
 
 type ProviderControlRow = {
   provider_id: AgentProviderId;
   mode: ProviderControl["mode"];
   fallback_enabled: number;
   model: string | null;
+  effort: AgentReasoningEffort | null;
   updated_at: string;
 };
 
@@ -22,6 +23,7 @@ type CapabilityRoutingRow = {
   provider_order_json: string;
   required_provider_id: AgentProviderId | null;
   preferred_model: string | null;
+  preferred_effort: AgentReasoningEffort | null;
   updated_at: string;
 };
 
@@ -32,6 +34,7 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
       mode TEXT NOT NULL DEFAULT 'enabled' CHECK(mode IN ('enabled', 'paused', 'disabled')),
       fallback_enabled INTEGER NOT NULL DEFAULT 1 CHECK(fallback_enabled IN (0, 1)),
       model TEXT,
+      effort TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -40,6 +43,7 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
       provider_order_json TEXT NOT NULL DEFAULT '[]',
       required_provider_id TEXT,
       preferred_model TEXT,
+      preferred_effort TEXT,
       updated_at TEXT NOT NULL
     );
   `);
@@ -49,12 +53,18 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
     if (!controlColumns.some((col) => col.name === "model")) {
       db.exec("ALTER TABLE provider_controls ADD COLUMN model TEXT;");
     }
+    if (!controlColumns.some((col) => col.name === "effort")) {
+      db.exec("ALTER TABLE provider_controls ADD COLUMN effort TEXT;");
+    }
   } catch {}
 
   try {
     const routingColumns = db.prepare("PRAGMA table_info(provider_capability_routing)").all() as Array<{ name: string }>;
     if (!routingColumns.some((col) => col.name === "preferred_model")) {
       db.exec("ALTER TABLE provider_capability_routing ADD COLUMN preferred_model TEXT;");
+    }
+    if (!routingColumns.some((col) => col.name === "preferred_effort")) {
+      db.exec("ALTER TABLE provider_capability_routing ADD COLUMN preferred_effort TEXT;");
     }
   } catch {}
 }
@@ -78,20 +88,23 @@ export function createProviderPolicyPersistence(db: Database.Database) {
     const now = new Date().toISOString();
     const existing = db.prepare("SELECT * FROM provider_controls WHERE provider_id = ?").get(input.providerId) as ProviderControlRow | undefined;
     const modelToSave = input.model !== undefined ? (input.model?.trim() || null) : (existing?.model ?? null);
+    const effortToSave = input.effort !== undefined ? (input.effort || null) : (existing?.effort ?? null);
 
     db.prepare(`
-      INSERT INTO provider_controls (provider_id, mode, fallback_enabled, model, updated_at)
-      VALUES (@providerId, @mode, @fallbackEnabled, @model, @now)
+      INSERT INTO provider_controls (provider_id, mode, fallback_enabled, model, effort, updated_at)
+      VALUES (@providerId, @mode, @fallbackEnabled, @model, @effort, @now)
       ON CONFLICT(provider_id) DO UPDATE SET
         mode = excluded.mode,
         fallback_enabled = excluded.fallback_enabled,
         model = excluded.model,
+        effort = excluded.effort,
         updated_at = excluded.updated_at
     `).run({
       providerId: input.providerId,
       mode: input.mode,
       fallbackEnabled: input.fallbackEnabled ? 1 : 0,
       model: modelToSave,
+      effort: effortToSave,
       now
     });
 
@@ -106,11 +119,12 @@ export function createProviderPolicyPersistence(db: Database.Database) {
           .filter((item) => item !== input.providerId);
         const requiredProviderId = row.required_provider_id === input.providerId ? null : row.required_provider_id;
         const preferredModel = row.required_provider_id === input.providerId ? null : row.preferred_model;
+        const preferredEffort = row.required_provider_id === input.providerId ? null : normalizeEffort(row.preferred_effort);
         db.prepare(`
           UPDATE provider_capability_routing
-          SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, updated_at = ?
+          SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, preferred_effort = ?, updated_at = ?
           WHERE capability = ?
-        `).run(JSON.stringify(order), requiredProviderId, preferredModel, now, row.capability);
+        `).run(JSON.stringify(order), requiredProviderId, preferredModel, preferredEffort, now, row.capability);
       }
     }
     return mapControl(db.prepare("SELECT * FROM provider_controls WHERE provider_id = ?")
@@ -132,21 +146,26 @@ export function createProviderPolicyPersistence(db: Database.Database) {
       const preferredModelToSave = input.preferredModel !== undefined
         ? (input.preferredModel?.trim() || null)
         : (existing?.preferred_model ?? null);
+      const preferredEffortToSave = input.preferredEffort !== undefined
+        ? (input.preferredEffort ?? null)
+        : normalizeEffort(existing?.preferred_effort);
 
       db.prepare(`
         INSERT INTO provider_capability_routing (
-          capability, provider_order_json, required_provider_id, preferred_model, updated_at
-        ) VALUES (@capability, @orderJson, @requiredProviderId, @preferredModel, @now)
+          capability, provider_order_json, required_provider_id, preferred_model, preferred_effort, updated_at
+        ) VALUES (@capability, @orderJson, @requiredProviderId, @preferredModel, @preferredEffort, @now)
         ON CONFLICT(capability) DO UPDATE SET
           provider_order_json = excluded.provider_order_json,
           required_provider_id = excluded.required_provider_id,
           preferred_model = excluded.preferred_model,
+          preferred_effort = excluded.preferred_effort,
           updated_at = excluded.updated_at
       `).run({
         capability: input.capability,
         orderJson: JSON.stringify([...new Set(input.order)]),
         requiredProviderId: input.requiredProviderId,
         preferredModel: preferredModelToSave,
+        preferredEffort: preferredEffortToSave,
         now
       });
       return mapRouting(db.prepare("SELECT * FROM provider_capability_routing WHERE capability = ?")
@@ -163,11 +182,12 @@ export function createProviderPolicyPersistence(db: Database.Database) {
             .filter((item) => item !== providerId);
           const requiredProviderId = row.required_provider_id === providerId ? null : row.required_provider_id;
           const preferredModel = row.required_provider_id === providerId ? null : row.preferred_model;
+          const preferredEffort = row.required_provider_id === providerId ? null : normalizeEffort(row.preferred_effort);
           db.prepare(`
             UPDATE provider_capability_routing
-            SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, updated_at = ?
+            SET provider_order_json = ?, required_provider_id = ?, preferred_model = ?, preferred_effort = ?, updated_at = ?
             WHERE capability = ?
-          `).run(JSON.stringify(order), requiredProviderId, preferredModel, now, row.capability);
+          `).run(JSON.stringify(order), requiredProviderId, preferredModel, preferredEffort, now, row.capability);
         }
         return getProviderPolicySnapshot();
       })();
@@ -181,8 +201,15 @@ function mapControl(row: ProviderControlRow): ProviderControl {
     mode: row.mode,
     fallbackEnabled: Boolean(row.fallback_enabled),
     model: row.model ?? null,
+    effort: normalizeEffort(row.effort),
     updatedAt: row.updated_at
   };
+}
+
+function normalizeEffort(value: string | null | undefined): AgentReasoningEffort | null {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max" || value === "ultra"
+    ? value
+    : null;
 }
 
 function mapRouting(row: CapabilityRoutingRow): CapabilityRoutingPolicy {
@@ -191,6 +218,7 @@ function mapRouting(row: CapabilityRoutingRow): CapabilityRoutingPolicy {
     order: JSON.parse(row.provider_order_json) as AgentProviderId[],
     requiredProviderId: row.required_provider_id,
     preferredModel: row.preferred_model ?? null,
+    preferredEffort: normalizeEffort(row.preferred_effort),
     updatedAt: row.updated_at
   };
 }

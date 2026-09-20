@@ -709,6 +709,7 @@ export async function runTaskGoal(
           deadlineAt: goalDeadlineAt,
           signal: options.signal,
           model: routed.model,
+          effort: routed.effort,
           acceptanceCriteria: dna?.acceptanceCriteria
         });
       } catch (error) {

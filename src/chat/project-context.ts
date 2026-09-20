@@ -5,10 +5,24 @@ import { runGit } from "../git.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
 const MAX_TREE_ENTRIES = 240;
-const MAX_READ_FILES = 6;
+const MAX_READ_FILES = 10;
 const MAX_FILE_BYTES = 24_000;
-const MAX_TOTAL_BYTES = 80_000;
+const MAX_TOTAL_BYTES = 120_000;
 const MAX_GIT_OUTPUT = 8_000;
+
+const DEFAULT_CONTEXT_FILES = [
+  "README.md",
+  "AGENTS.md",
+  "package.json",
+  "tsconfig.json",
+  "vite.config.ts",
+  "src/index.ts",
+  "src/main.ts",
+  "src/App.tsx",
+  "ui/src/App.tsx",
+  "docs/README.md"
+];
+const BROAD_CONTEXT_REQUEST = /\b(?:project|projeto|context|contexto|architecture|arquitetura|structure|estrutura|study|estud|analys|analis|review|revis|implement|implemen|refactor|refator|task|tarefa|downloaded|baixad|code|codigo|app|application|aplicacao)\b/i;
 
 const IGNORED_DIRECTORIES = new Set([
   ".git", ".maestro", "node_modules", "dist", "build", "coverage", "release",
@@ -64,7 +78,9 @@ export function inspectProjectContext(projectRoot: string, userMessage = ""): Ch
   const requestedPaths = extractRequestedPaths(userMessage);
   const readCandidates = requestedPaths.length > 0
     ? requestedPaths
-    : ["README.md", "package.json", "src/index.ts", "ui/src/App.tsx"];
+    : BROAD_CONTEXT_REQUEST.test(userMessage)
+      ? DEFAULT_CONTEXT_FILES
+      : DEFAULT_CONTEXT_FILES.slice(0, 4);
   const files: ChatProjectFileFact[] = [];
   let totalBytes = 0;
   for (const relativePath of readCandidates) {
@@ -98,6 +114,7 @@ export function inspectProjectContext(projectRoot: string, userMessage = ""): Ch
 
   const git = inspectProjectGit(root, /\b(?:pr|pull\s*request|github|ci|workflow|remote|actions?)\b/i.test(userMessage));
   const summaryParts = [
+    "The registered project tree and selected text files below are the source of truth for this answer; do not claim project knowledge that is not present in this evidence.",
     `Files visible in project scope (${tree.length} entries${tree.length >= MAX_TREE_ENTRIES ? ", truncated" : ""}): ${tree.join(", ") || "none"}`,
     `Files read for this question: ${files.map((file) => `${file.path}${file.truncated ? " (truncated)" : ""}`).join(", ") || "none"}`,
     `Git: ${git.available ? `${git.branch ?? "detached HEAD"}, ${git.headSha ?? "no commit"}` : git.detail ?? "unavailable"}`

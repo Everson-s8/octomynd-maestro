@@ -15,7 +15,8 @@ import {
   AgentExecutionRequest,
   AgentExecutionResult,
   AgentHealth,
-  AgentProvider
+  AgentProvider,
+  AgentReasoningEffort
 } from "./types.js";
 import type {
   ImprovementReviewExecutionRequest,
@@ -60,6 +61,7 @@ export class CodexProvider implements AgentProvider {
   readonly id = "codex" as const;
   readonly label = "Codex";
   readonly capabilities = CODEX_CAPABILITIES;
+  readonly reasoningEfforts = ["minimal", "low", "medium", "high", "extra_high", "max", "ultra"] as const satisfies readonly AgentReasoningEffort[];
   readonly model: string | null;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
@@ -94,7 +96,11 @@ export class CodexProvider implements AgentProvider {
       "gpt-5.1-codex",
       "gpt-5.2-codex",
       "gpt-5.3-codex",
-      "gpt-5.4-codex"
+      "gpt-5.4-codex",
+      "gpt-5.6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
     ];
   }
 
@@ -164,6 +170,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
         "--output-last-message",
         outputPath,
         "--sandbox",
@@ -179,6 +186,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
         "--output-schema",
         schemaPath,
         "--output-last-message",
@@ -456,7 +464,7 @@ export function isCodexAuthenticationError(errorText: string): boolean {
 }
 
 export function resolveCodexCliEntry(): string | null {
-  const candidates = [
+  const packageCandidates = [
     process.env.APPDATA
       ? path.join(process.env.APPDATA, "npm", "node_modules", "@openai", "codex", "bin", "codex.js")
       : "",
@@ -464,17 +472,67 @@ export function resolveCodexCliEntry(): string | null {
       ? path.join(process.env.NPM_CONFIG_PREFIX, "node_modules", "@openai", "codex", "bin", "codex.js")
       : ""
   ].filter(Boolean);
-  const found = candidates.find((candidate) => fs.existsSync(candidate));
-  if (found) return found;
+  const foundPackage = packageCandidates.find((candidate) => fs.existsSync(candidate));
+  const packageVersion = foundPackage ? readCodexPackageVersion(foundPackage) : null;
+  const pathCandidates = discoverCodexPathCandidates();
 
+  // A test/dev shim may not have package metadata. Preserve that explicit
+  // candidate, while preferring a newer real CLI when the installed versions
+  // can be compared.
+  if (foundPackage && !packageVersion) return foundPackage;
+  const newerPathCandidate = pathCandidates
+    .filter((candidate) => candidate.version && (!packageVersion || compareVersions(candidate.version, packageVersion) > 0))
+    .sort((left, right) => compareVersions(right.version!, left.version!))[0];
+  return newerPathCandidate?.entry ?? foundPackage ?? pathCandidates[0]?.entry ?? null;
+}
+
+function discoverCodexPathCandidates(): Array<{ entry: string; version: string | null }> {
+  const command = process.platform === "win32" ? "codex.cmd" : "codex";
   try {
-    const cmd = process.platform === "win32" ? "codex.cmd" : "codex";
-    // Windows Defender frequently pushes cold .cmd->node shims past 3s; a
-    // slow probe must not flip the provider to offline between polls.
-    const res = spawnSync(cmd, ["--version"], { windowsHide: true, timeout: 10_000 });
-    if (res.status === 0) return cmd;
-  } catch {}
-  return null;
+    const result = process.platform === "win32"
+      ? spawnSync("where.exe", [command], { encoding: "utf8", windowsHide: true, timeout: 10_000 })
+      : spawnSync("which", [command], { encoding: "utf8", timeout: 10_000 });
+    if (result.status !== 0) return [];
+    return String(result.stdout ?? "")
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((commandPath) => unwrapCodexCommand(commandPath))
+      .filter((entry): entry is string => entry !== null && fs.existsSync(entry))
+      .map((entry) => ({ entry, version: readCodexPackageVersion(entry) }));
+  } catch {
+    return [];
+  }
+}
+
+function unwrapCodexCommand(commandPath: string): string | null {
+  if (process.platform !== "win32" || !commandPath.toLowerCase().endsWith(".cmd")) return commandPath;
+  const bundledEntry = path.join(path.dirname(commandPath), "node_modules", "@openai", "codex", "bin", "codex.js");
+  return fs.existsSync(bundledEntry) ? bundledEntry : commandPath;
+}
+
+function readCodexPackageVersion(entry: string): string | null {
+  try {
+    const packagePath = path.join(path.dirname(entry), "..", "package.json");
+    const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8")) as { version?: unknown };
+    return typeof parsed.version === "string" ? parseCodexVersion(parsed.version) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseCodexVersion(value: string): string | null {
+  const match = /(?:codex(?:-cli)?\s*)?v?(\d+\.\d+\.\d+)/i.exec(value);
+  return match?.[1] ?? null;
+}
+
+function compareVersions(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) - (b[index] ?? 0);
+  }
+  return 0;
 }
 
 function failure(

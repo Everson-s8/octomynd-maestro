@@ -10,8 +10,10 @@ import {
   OperationalChatThread,
   ChatAccessMode,
   GLOBAL_CHAT_PROJECT_KEY,
+  ReasoningEffort,
   createChatThread,
   deleteChatThread,
+  fetchChatActivity,
   selectChatProvider,
   sendChatMessage
 } from "../api";
@@ -36,6 +38,7 @@ export function OperationalChatConsole({
   const [messages, setMessages] = useState<OperationalChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [chatActivity, setChatActivity] = useState<{ active: boolean; startedAt: string | null }>({ active: false, startedAt: null });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [threadBusy, setThreadBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -45,8 +48,9 @@ export function OperationalChatConsole({
   const [chatProviders, setChatProviders] = useState<import("../api").ChatProviderOption[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort | null>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -64,16 +68,19 @@ export function OperationalChatConsole({
     if (!projectKey) return;
     try {
       setError(null);
-      let nextThreads = await fetchChatThreads(projectKey);
-      if (nextThreads.length === 0) {
-        nextThreads = [await createChatThread(projectKey)];
-      }
+      const nextThreads = await fetchChatThreads(projectKey);
       setThreads(nextThreads);
-      setSelectedThreadId((current) => nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0].id);
-      const selected = nextThreads.find((thread) => thread.id === selectedThreadId) ?? nextThreads[0];
-      setAccessMode(selected.accessMode);
-      setSelectedProviderId(selected.providerId);
-      setSelectedModel(selected.model);
+      setSelectedThreadId((current) => nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0]?.id ?? null);
+      const selected = nextThreads[0];
+      if (selected) {
+        setAccessMode(selected.accessMode);
+        setSelectedProviderId(selected.providerId);
+        setSelectedModel(selected.model);
+        setSelectedEffort(selected.effort);
+      } else {
+        setSelectedThreadId(null);
+        setChatActivity({ active: false, startedAt: null });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
     }
@@ -105,6 +112,30 @@ export function OperationalChatConsole({
     }
   }, [selectedProjectKey, selectedThreadId, loadHistory]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedProjectKey || selectedThreadId === null) {
+      setChatActivity({ active: false, startedAt: null });
+      return;
+    }
+
+    const refreshActivity = async () => {
+      try {
+        const activity = await fetchChatActivity(selectedProjectKey, selectedThreadId);
+        if (!cancelled) setChatActivity(activity);
+      } catch {
+        // The history remains usable if an older server does not expose status yet.
+      }
+    };
+
+    void refreshActivity();
+    const timer = window.setInterval(() => void refreshActivity(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedProjectKey, selectedThreadId]);
+
   useLayoutEffect(() => {
     const element = chatBodyRef.current;
     if (!element) return;
@@ -114,17 +145,28 @@ export function OperationalChatConsole({
     return () => window.cancelAnimationFrame(frame);
   }, [messages, loading, historyLoading, selectedThreadId]);
 
+  useLayoutEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    if (element.value) {
+      element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
+    }
+  }, [inputText, selectedThreadId]);
+
   useEffect(() => () => {
     if (deleteConfirmTimer.current !== null) window.clearTimeout(deleteConfirmTimer.current);
   }, []);
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
+  const isResponding = loading || chatActivity.active;
 
   useEffect(() => {
     if (selectedThread) {
       setAccessMode(selectedThread.accessMode);
       setSelectedProviderId(selectedThread.providerId);
       setSelectedModel(selectedThread.model);
+      setSelectedEffort(selectedThread.effort);
     }
   }, [selectedThread]);
 
@@ -179,32 +221,47 @@ export function OperationalChatConsole({
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedProjectKey || !selectedThreadId || loading) return;
+    if (!inputText.trim() || !selectedProjectKey || isResponding) return;
 
     const userText = inputText.trim();
     setInputText("");
     setLoading(true);
     setError(null);
 
-    const tempUserMsg: OperationalChatMessage = {
-      id: Date.now(),
-      threadId: selectedThreadId,
-      projectKey: selectedProjectKey,
-      surface: "dashboard",
-      senderRole: "user",
-      messageText: userText,
-      createdAt: new Date().toISOString()
-    };
-    setMessages((prev) => [...prev, tempUserMsg]);
+    let activeThreadId = selectedThreadId;
 
     try {
-      const chatResponse = await sendChatMessage(selectedProjectKey, userText, selectedThreadId, accessMode, locale, selectedProviderId, selectedModel);
-      if (accessMode === "full" && /\b(?:start|run|inici|rod[ae]|coloque).*\b(?:project|server|projeto|servidor)\b/i.test(userText)) {
+      if (activeThreadId === null) {
+        const thread = await createChatThread(selectedProjectKey, translate("New conversation"), accessMode);
+        activeThreadId = thread.id;
+        setThreads((current) => [thread, ...current]);
+        setSelectedThreadId(thread.id);
+        setAccessMode(thread.accessMode);
+        setSelectedProviderId(thread.providerId);
+        setSelectedModel(thread.model);
+      }
+
+      const tempUserMsg: OperationalChatMessage = {
+        id: Date.now(),
+        threadId: activeThreadId,
+        projectKey: selectedProjectKey,
+        surface: "dashboard",
+        senderRole: "user",
+        messageText: userText,
+        createdAt: new Date().toISOString()
+      };
+      setMessages((prev) => [...prev, tempUserMsg]);
+
+      const chatResponse = await sendChatMessage(selectedProjectKey, userText, activeThreadId, accessMode, locale, selectedProviderId, selectedModel, selectedEffort);
+      const startedProjectCommand = accessMode === "full" && (chatResponse.evidence?.commands ?? []).some((command: { command?: string; status?: string }) => (
+        command.status === "completed" && /\bnpm(?:\.cmd)?\s+run\s+(?:dev|start|serve|preview)\b/i.test(command.command ?? "")
+      ));
+      if (startedProjectCommand) {
         const runningProcess = (chatResponse.evidence?.processes ?? []).find((process: { status?: string; url?: string | null }) => process.status === "running" && process.url);
         if (runningProcess?.url) openExternalUrl(runningProcess.url, true);
       }
       await Promise.all([
-        loadHistory(selectedProjectKey, selectedThreadId),
+        loadHistory(selectedProjectKey, activeThreadId),
         loadThreads(selectedProjectKey)
       ]);
       if (onChanged) onChanged();
@@ -212,6 +269,7 @@ export function OperationalChatConsole({
       setError(err instanceof Error ? err.message : translate("Unable to send the message."));
     } finally {
       setLoading(false);
+      setChatActivity({ active: false, startedAt: null });
     }
   };
 
@@ -220,13 +278,15 @@ export function OperationalChatConsole({
     const nextProviderId = providerId || null;
     const provider = chatProviders.find((item) => item.id === nextProviderId);
     const nextModel = nextProviderId ? provider?.currentModel ?? provider?.models?.[0] ?? null : null;
+    const nextEffort = nextProviderId ? provider?.control.effort ?? null : null;
     setThreadBusy(true);
     setError(null);
     try {
-      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, nextProviderId, nextModel);
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, nextProviderId, nextModel, nextEffort);
       setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
       setSelectedProviderId(thread.providerId);
       setSelectedModel(thread.model);
+      setSelectedEffort(thread.effort);
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to select the chat provider."));
     } finally {
@@ -249,11 +309,28 @@ export function OperationalChatConsole({
     setThreadBusy(true);
     setError(null);
     try {
-      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, model || null);
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, model || null, selectedEffort);
       setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
       setSelectedModel(thread.model);
+      setSelectedEffort(thread.effort);
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to select the chat model."));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const handleEffortSelection = async (effort: string) => {
+    if (!selectedThreadId || !selectedProviderId || threadBusy) return;
+    const nextEffort = (effort || null) as ReasoningEffort | null;
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await selectChatProvider(selectedProjectKey, selectedThreadId, selectedProviderId, selectedModel, nextEffort);
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+      setSelectedEffort(thread.effort);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to select the reasoning effort."));
     } finally {
       setThreadBusy(false);
     }
@@ -341,6 +418,18 @@ export function OperationalChatConsole({
                 <option key={model} value={model}>{model}</option>
               ))}
             </select>
+            {selectedModel ? <small className="chat-model-profile">{translate("Model family")}: {translate(modelProcessingLabel(selectedModel))}</small> : null}
+          </label>
+        ) : null}
+        {selectedProviderId && (chatProviders.find((provider) => provider.id === selectedProviderId)?.reasoningEfforts?.length ?? 0) > 0 ? (
+          <label className="chat-access-picker" htmlFor="chat-effort-select">
+            <span>{translate("Effort")}</span>
+            <select id="chat-effort-select" value={selectedEffort ?? ""} onChange={(e) => void handleEffortSelection(e.target.value)} disabled={threadBusy}>
+              <option value="">{translate("Provider default")}</option>
+              {(chatProviders.find((provider) => provider.id === selectedProviderId)?.reasoningEfforts ?? []).map((effort) => (
+                <option key={effort} value={effort}>{effortLabel(effort)}</option>
+              ))}
+            </select>
           </label>
         ) : null}
       </div>
@@ -377,7 +466,7 @@ export function OperationalChatConsole({
               </div>
             ))}
           </div>
-          {threads.length === 0 ? <div className="chat-thread-empty">{translate("Click + to start a conversation.")}</div> : null}
+          {threads.length === 0 ? <div className="chat-thread-empty">{translate("Your first message will create the conversation.")}</div> : null}
         </aside>
 
         <div className="chat-main-panel">
@@ -393,7 +482,7 @@ export function OperationalChatConsole({
 
           {error ? <div className="chat-error" role="alert">{error}</div> : null}
 
-          <div className="chat-body" ref={chatBodyRef} aria-busy={loading || historyLoading}>
+          <div className="chat-body" ref={chatBodyRef} aria-busy={isResponding || historyLoading}>
             {historyLoading ? (
               <div className="chat-loading-history"><span className="chat-spinner" /> {translate("Loading conversation…")}</div>
             ) : messages.length === 0 ? (
@@ -402,7 +491,7 @@ export function OperationalChatConsole({
                 <h2>{translate("New conversation")}</h2>
                 <p>{selectedProjectKey === GLOBAL_CHAT_PROJECT_KEY
                   ? translate("Talk to Maestro about providers, projects, and execution.")
-                  : translate("Ask about this project, a blocked task, or any implementation question.")}</p>
+                  : translate("Ask about this project, a blocked task, or any implementation question.")} {translate("Type below to start; you do not need to create a chat first.")}</p>
               </div>
             ) : (
               messages.map((msg) => {
@@ -443,7 +532,7 @@ export function OperationalChatConsole({
               })
             )}
 
-            {loading ? (
+            {isResponding ? (
               <div className="chat-thinking" role="status" aria-live="polite">
                 <div className="chat-avatar"><Icon name="ghost" /></div>
                 <div className="chat-thinking-card">
@@ -461,16 +550,26 @@ export function OperationalChatConsole({
           </div>
 
           <form className="chat-input" onSubmit={handleSend}>
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
-              placeholder={loading ? translate("Maestro is responding") : translate("Ask Maestro…")}
+              rows={1}
+              placeholder={isResponding ? translate("Maestro is responding") : translate("Ask Maestro…")}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              disabled={loading || historyLoading || !selectedThreadId}
+              onChange={(e) => {
+                setInputText(e.target.value);
+                e.currentTarget.style.height = "auto";
+                e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 180)}px`;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+              disabled={isResponding || historyLoading}
               aria-label={translate("Message Maestro")}
             />
-            <button type="submit" disabled={loading || historyLoading || !inputText.trim() || !selectedThreadId} title={translate("Send message")} aria-label={translate("Send message")}>
+            <button type="submit" disabled={isResponding || historyLoading || !inputText.trim()} title={translate("Send message")} aria-label={translate("Send message")}>
               <Icon name="send" />
             </button>
           </form>
@@ -487,4 +586,24 @@ function isLocalProjectUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function modelProcessingLabel(model: string): "Fast" | "Balanced" | "Deep" {
+  const normalized = model.toLowerCase();
+  if (/(?:opus|astra|pro|thinking|reasoning|high)(?:[-_]|$)/.test(normalized)) return "Deep";
+  if (/(?:nano|mini|haiku|flash|luna)(?:[-_]|$)/.test(normalized)) return "Fast";
+  return "Balanced";
+}
+
+function effortLabel(effort: ReasoningEffort): string {
+  const labels: Record<ReasoningEffort, string> = {
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    extra_high: "Extra high",
+    max: "Max",
+    ultra: "Ultra"
+  };
+  return labels[effort];
 }

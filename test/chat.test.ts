@@ -12,6 +12,7 @@ import { MaestroConfig } from "../src/config.js";
 import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
 import { runGit } from "../src/git.js";
 import { ProjectProcessManager } from "../src/chat/project-process.js";
+import { compileOperationalChatContext } from "../src/chat/context-compiler.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -68,6 +69,26 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(history[2].senderRole).toBe("user");
   });
 
+  it("uses persisted conversation history when the deterministic fallback is active", async () => {
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Estamos revisando o projeto RepuFin e mantendo a lista de compras.",
+      uiLocale: "pt-BR"
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Você consegue resgatar o contexto do que foi falado no chat?",
+      uiLocale: "pt-BR"
+    });
+
+    expect(response.explanation).toContain("Sim, consigo recuperar o histórico");
+    expect(response.explanation).toContain("RepuFin");
+  });
+
   it("injects the selected conversation Skill into the provider prompt", async () => {
     let seen: Parameters<AgentProvider["execute"]>[0] | undefined;
     const provider = chatProvider("codex", {
@@ -114,6 +135,46 @@ describe("Unified Operational Chat (Task #52)", () => {
 
     expect(seen?.skillContext).toEqual(skillContext);
     expect(seen?.humanFeedback).toContain("CONVERSATION SKILL INSTRUCTIONS");
+  });
+
+  it("exposes conversation activity while a provider is still responding", async () => {
+    let markStarted!: () => void;
+    let releaseProvider!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const providerRelease = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const provider = chatProvider("codex", {
+      outcome: "completed",
+      summary: "answered",
+      output: "Resposta concluída.",
+      error: null,
+      retryable: false
+    }, {
+      execute: async () => {
+        markStarted();
+        await providerRelease;
+        return {
+          outcome: "completed",
+          summary: "answered",
+          output: "Resposta concluída.",
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    });
+    const chatService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: tmpDir
+    });
+    const thread = chatService.createThread("maestro", "Em andamento");
+    const pending = chatService.ask({ projectKey: "maestro", threadId: thread.id, surface: "dashboard", message: "Olá" });
+
+    await started;
+    expect(chatService.getActivity("maestro", thread.id)).toMatchObject({ active: true });
+    releaseProvider();
+    await pending;
+    expect(chatService.getActivity("maestro", thread.id)).toEqual({ active: false, startedAt: null });
   });
 
   it("keeps chat history isolated per conversation and supports deletion", async () => {
@@ -296,6 +357,50 @@ describe("Unified Operational Chat (Task #52)", () => {
     }
   });
 
+  it("executes an explicit natural-language dev-server request in Full Access", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({
+      name: "chat-natural-command-test",
+      version: "1.0.0",
+      scripts: { dev: "node -e \"console.log('Local: http://127.0.0.1:4556/'); setInterval(() => {}, 1000)\"" }
+    }), "utf8");
+    const processManager = new ProjectProcessManager();
+    let providerPrompt = "";
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "reported evidence",
+      output: "O servidor foi iniciado conforme a evidência.",
+      error: null,
+      retryable: false
+    }, { onExecute: (request) => { providerPrompt = request.humanFeedback ?? ""; } });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([provider]),
+      processManager
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "eu quero que você dê npm run dev para mim",
+        accessMode: "full"
+      });
+
+      expect(response.evidence.commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "npm run dev", status: "completed" })
+      ]));
+      expect(response.evidence.processes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: "running", url: "http://127.0.0.1:4556/" })
+      ]));
+      expect(providerPrompt).toContain("Full Access rule");
+      expect(providerPrompt).not.toContain("wait for the confirmation button");
+    } finally {
+      chatService.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  });
+
   it("exposes resume from checkpoint for a blocked goal instead of only restarting the task", async () => {
     const task = database.createTask("Continue the financial app implementation", "test", "maestro");
     database.updateTaskStatus(task.id, "blocked");
@@ -405,6 +510,146 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
+  });
+
+  it("creates an explicitly requested task directly in Full Access", async () => {
+    const request = "A partir disso analise o projeto e crie uma task para o Maestro rodar: simplificar o fluxo de despesas e dividir o saldo entre os moradores.";
+    expect(parseTaskCreationIntent(request)?.text).toBe(request);
+    expect(parseTaskCreationIntent("não crie uma task agora, apenas explique a ideia")).toBeNull();
+
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: request,
+      accessMode: "full"
+    });
+
+    expect(database.listTasks(20)).toHaveLength(1);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para) @maestro/);
+    expect(response.actions.some((action) => action.type === "create_task")).toBe(false);
+  });
+
+  it("uses the previous user context when task creation is requested as a follow-up", async () => {
+    const context = "Quero um sistema simples para dividir as contas do apartamento entre os moradores, registrar quem pagou cada despesa e reduzir automaticamente a dívida de quem ainda precisa pagar sua parte.";
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Context task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: context
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      message: "eu estou pedindo para você criar uma task nova, eu te mandei o contexto",
+      accessMode: "full"
+    });
+
+    const task = database.listTasks(20)[0];
+    expect(task?.text).toBe(context);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
+  });
+
+  it("uses the Maestro synthesis when the user says to create a task from that explanation", () => {
+    const synthesis = "Olá! Analisei a problemática. O objetivo é simplificar o sistema, implementar a divisão automática das dívidas entre moradores, registrar comprovantes, manter uma lista de compras e organizar avaliações de restaurantes. Esse é o escopo para começar a implementação.";
+    const result = parseTaskCreationIntent(
+      "sim, a partir disso crie uma task para começar a implementar",
+      [
+        { senderRole: "user", messageText: "veja a mensagem que usei explicando a problemática" },
+        { senderRole: "orchestrator", messageText: synthesis }
+      ]
+    );
+    expect(result?.text).toBe(synthesis);
+  });
+
+  it("compiles older turns into working memory while keeping the recent transcript", () => {
+    const messages = Array.from({ length: 24 }, (_, index) => ({
+      id: index + 1,
+      threadId: 1,
+      projectKey: "maestro",
+      surface: "dashboard" as const,
+      senderRole: index % 2 === 0 ? "user" as const : "orchestrator" as const,
+      messageText: index === 0
+        ? "Quero simplificar o sistema de despesas do apartamento, dividir automaticamente o saldo entre moradores e manter uma lista de compras."
+        : `Mensagem de acompanhamento ${index} sobre o projeto e a implementação do fluxo.`,
+      evidenceJson: null,
+      actionTaken: null,
+      providerId: null,
+      model: null,
+      createdAt: new Date(index * 1000).toISOString()
+    }));
+
+    const context = compileOperationalChatContext(messages, [], { recentMessageCount: 8 });
+    expect(context.recentMessages).toHaveLength(8);
+    expect(context.workingMemory.objective).toContain("simplificar o sistema de despesas");
+    expect(context.promptText).toContain("COMPILED WORKING MEMORY");
+  });
+
+  it("uses the synthesized brief for an automatic Full Access task", async () => {
+    const synthesis = "Olá! Analisei a problemática. O objetivo é simplificar o sistema, implementar a divisão automática das dívidas entre moradores, registrar comprovantes, manter uma lista de compras e organizar avaliações de restaurantes. Esse é o escopo para começar a implementação.";
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Synthesized task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: "veja a mensagem que usei explicando a problemática"
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: synthesis
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      message: "sim, a partir disso crie uma task para começar a implementar",
+      accessMode: "full"
+    });
+
+    expect(database.listTasks(20)[0]?.text).toBe(synthesis);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
+  });
+
+  it("does not answer a context-to-task interpretation request as a new conversation", async () => {
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Interpret task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: "Quero simplificar o sistema de despesas, dividir automaticamente as dívidas entre moradores e manter uma lista de compras."
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: "Entendi o objetivo do projeto: simplificar o sistema de despesas, dividir automaticamente as dívidas entre moradores e manter uma lista de compras para começar a implementação."
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      uiLocale: "pt-BR",
+      message: "veja aí o que estávamos falando para interpretar e ver qual task é para ser criada"
+    });
+
+    expect(response.explanation).toContain("interpretar a conversa");
+    expect(response.explanation).toContain("simplificar o sistema de despesas");
+    expect(response.explanation).not.toContain("Me conte um pouco mais");
   });
 
   it("falls back to the next conversation provider after a headless provider failure", async () => {
@@ -627,13 +872,17 @@ describe("Unified Operational Chat (Task #52)", () => {
 
   it("persists an explicit provider/model selection and never falls back from it", async () => {
     const selectedModels: string[] = [];
+    const selectedEfforts: string[] = [];
     const claude = chatProvider("claude", {
       outcome: "completed",
       summary: "Claude answered",
       output: "Resposta do Claude selecionado.",
       error: null,
       retryable: false
-    }, { models: ["claude-sonnet-4"], onExecute: (request) => selectedModels.push(request.model ?? "") });
+    }, { models: ["claude-sonnet-4"], reasoningEfforts: ["low", "high"], onExecute: (request) => {
+      selectedModels.push(request.model ?? "");
+      selectedEfforts.push(request.effort ?? "");
+    } });
     const codex = chatProvider("codex", {
       outcome: "completed",
       summary: "Codex answered",
@@ -651,15 +900,18 @@ describe("Unified Operational Chat (Task #52)", () => {
       surface: "dashboard",
       message: "Explique o estado do projeto.",
       providerId: "claude",
-      model: "claude-sonnet-4"
+      model: "claude-sonnet-4",
+      effort: "high"
     });
 
     expect(response.providerId).toBe("claude");
     expect(response.model).toBe("claude-sonnet-4");
     expect(selectedModels).toEqual(["claude-sonnet-4"]);
+    expect(selectedEfforts).toEqual(["high"]);
     expect(database.getOperationalChatThread(thread.id)).toEqual(expect.objectContaining({
       providerId: "claude",
-      model: "claude-sonnet-4"
+      model: "claude-sonnet-4",
+      effort: "high"
     }));
     expect((await chatService.getHistory("maestro", 20, thread.id)).at(-1)).toEqual(expect.objectContaining({
       providerId: "claude",
@@ -697,6 +949,32 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(strictResponse.providerId).toBe("antigravity");
     expect(strictResponse.explanation).toContain("No fallback was used");
     expect((await strictService.getHistory("maestro", 20, strictThread.id)).at(-1)?.providerId).toBe("antigravity");
+
+    const incompatibleCodex = chatProvider("codex", {
+      outcome: "failed",
+      summary: "Codex failed",
+      output: "",
+      error: `2026 ERROR codex_models_manager::cache: failed to load models cache: unknown variant \`max\`, expected one of \`none\`, \`minimal\`, \`low\`, \`medium\`, \`high\`, \`xhigh\`; body: {\"models\":[${"x".repeat(10_000)}]}`,
+      retryable: false
+    }, { models: ["gpt-5.6-luna"] });
+    const conciseFailureService = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([incompatibleCodex]),
+      worktreesRoot: tmpDir
+    });
+    const conciseThread = conciseFailureService.createThread("maestro", "Erro de compatibilidade");
+    const conciseFailure = await conciseFailureService.ask({
+      projectKey: "maestro",
+      threadId: conciseThread.id,
+      surface: "dashboard",
+      message: "Teste o Codex",
+      providerId: "codex",
+      model: "gpt-5.6-luna",
+      uiLocale: "pt-BR"
+    });
+    expect(conciseFailure.explanation).toContain("atualize o Codex CLI");
+    expect(conciseFailure.explanation).not.toContain('"models"');
+    expect(conciseFailure.explanation.length).toBeLessThan(500);
   });
 
   it("offers governed or direct worktree code paths and verifies the direct change", async () => {
@@ -906,14 +1184,16 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}, options: { models?: string[]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void } = {}): AgentProvider {
+}, options: { models?: string[]; reasoningEfforts?: AgentProvider["reasoningEfforts"]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
   return {
     id,
     label: id,
     capabilities: new Set(options.capabilities ?? ["conversation"]),
     health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
     models: async () => options.models ?? [],
+    reasoningEfforts: options.reasoningEfforts,
     execute: async (request) => {
+      if (options.execute) return options.execute(request);
       options.onExecute?.(request);
       return {
         ...result,

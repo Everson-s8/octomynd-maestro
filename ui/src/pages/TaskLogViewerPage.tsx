@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { OctoMark } from "../components/OctoMark";
 import { Icon } from "../components/Icon";
+import { LoadingSpinner } from "../components/LoadingSpinner";
 import { formatRelative, taskStatusLabel } from "../helpers";
 import { isOpenableExternalUrl, openExternalUrl } from "../external-links";
 import { getLocale, translate } from "../i18n";
@@ -264,18 +265,7 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
   };
 
   if (loading) {
-    return (
-      <div className="task-log-page">
-        <div className="task-log-loading" role="status" aria-live="polite">
-          <OctoMark large />
-          <div className="task-log-loading-text">
-            <b>{translate("Syncing task")} #{taskId}</b>
-            <span>{translate("Fetching local telemetry and events…")}</span>
-          </div>
-          <div className="task-log-loading-rail" aria-hidden="true"><i /></div>
-        </div>
-      </div>
-    );
+    return <LoadingSpinner />;
   }
 
   if (error && !logs) {
