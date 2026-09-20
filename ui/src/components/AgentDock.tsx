@@ -21,6 +21,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   const policy = externalPolicy !== undefined ? externalPolicy : localPolicy;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedCapability, setSelectedCapability] = useState<AgentCapability>("planning");
 
   // Only route to connected providers: paused/disabled are excluded from the
   // Control plane (they're connected but not routable) and don't appear as an
@@ -75,135 +76,119 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
     }
   };
 
+  const routings = policy?.capabilities ?? [];
+  const selectedRouting = routings.find((item) => item.capability === selectedCapability) ?? routings[0];
+
+  if (!selectedRouting) {
+    return (
+      <section className="panel provider-routing" id="provider-routing">
+        <div className="panel-head"><div><div className="lbl">Control plane</div><h3>{translate("Priority by function")}</h3></div><span>{translate("persistent")}</span></div>
+        {error ? <p className="provider-error">{error}</p> : null}
+        <p className="provider-routing-copy">{translate("Choose the first provider, preferred model, and fallback rule.")}</p>
+      </section>
+    );
+  }
+
+  // Resolve the effective "first" to an actually-eligible provider. The
+  // configured order may still reference a paused or removed provider.
+  const eligible = providers.map((provider) => String(provider.id));
+  const firstStr = String(selectedRouting.order[0]);
+  const primaryProviderId = eligible.includes(firstStr) ? firstStr : eligible[0] ?? "";
+  const primaryProvider = providers.find((provider) => provider.id === primaryProviderId);
+  const availableModels = primaryProvider?.models?.length
+    ? primaryProvider.models
+    : policy?.models?.[primaryProviderId] ?? [];
+  const modelOptions = [...new Set([
+    ...availableModels,
+    ...(selectedRouting.preferredModel ? [selectedRouting.preferredModel] : [])
+  ])];
+  const selectedModel = selectedRouting.preferredModel && modelOptions.includes(selectedRouting.preferredModel)
+    ? selectedRouting.preferredModel
+    : "";
+  const availableEfforts = primaryProvider?.reasoningEfforts ?? [];
+  const effortOptions = [...new Set([
+    ...availableEfforts,
+    ...(selectedRouting.preferredEffort ? [selectedRouting.preferredEffort] : [])
+  ])];
+  const selectedEffort = selectedRouting.preferredEffort && effortOptions.includes(selectedRouting.preferredEffort)
+    ? selectedRouting.preferredEffort
+    : "";
+  const primaryAgent = agents.find((agent) => agent.id === primaryProviderId);
+  const mascotState: ProviderMascotState = primaryAgent?.state === "working" ? "processing" : "ready";
+  const mascotColor = providerColor(primaryProviderId);
+
   return (
     <section className="panel provider-routing" id="provider-routing">
-      <div className="panel-head">
-        <div><div className="lbl">Control plane</div><h3>{translate("Priority by function")}</h3></div>
-        <span>{translate("persistent")}</span>
+      <div className="routing-layout">
+        <div className="routing-overview">
+          <div className="lbl">Routing por função</div>
+          <h2>{capabilityLabel(selectedRouting.capability)}</h2>
+          <p>{capabilityDescription(selectedRouting.capability)}</p>
+        </div>
+        <div className="routing-editor">
+          <div className="routing-editor-head">
+            <div><div className="lbl">Control plane</div><p>{translate("Choose the first provider, preferred model, and fallback rule.")}</p></div>
+            <span>{translate("persistent")}</span>
+          </div>
+          {error ? <p className="provider-error">{error}</p> : null}
+          <div className="routing-function-row">
+            <label className="routing-editor-field routing-function-field">
+              <span className="field-lbl">{translate("Function")}</span>
+              <select className="sel routing-function-select" value={selectedRouting.capability} disabled={busy !== null} onChange={(event) => setSelectedCapability(event.target.value as AgentCapability)}>
+                {routings.map((routing) => <option value={routing.capability} key={routing.capability}>{capabilityLabel(routing.capability)}</option>)}
+              </select>
+            </label>
+            <span className="routing-help">ⓘ {translate("How routing works?")}</span>
+          </div>
+          <div className="routing-editor-grid">
+            <label className="routing-editor-field routing-provider-field">
+              <span className="field-lbl">{translate("Provider")}</span>
+              <span className="routing-provider-control">
+                <span className="routing-provider-mascot" style={{ color: mascotColor }} aria-hidden="true"><ProviderMascot color={mascotColor} state={mascotState} capability={selectedRouting.capability} /></span>
+                <select className="sel" value={primaryProviderId} disabled={busy !== null} onChange={(event) => void changeRouting(selectedRouting.capability, event.target.value as AgentProviderId, selectedRouting.requiredProviderId, event.target.value === primaryProviderId ? selectedRouting.preferredModel : null, event.target.value === primaryProviderId ? selectedRouting.preferredEffort : null)}>
+                  {providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.label}</option>)}
+                </select>
+              </span>
+            </label>
+            <label className="routing-editor-field">
+              <span className="field-lbl">{translate("Model")}</span>
+              <select className="sel" value={selectedModel} disabled={busy !== null || modelOptions.length === 0} onChange={(event) => void changeRouting(selectedRouting.capability, primaryProviderId as AgentProviderId, selectedRouting.requiredProviderId, event.target.value || null)}>
+                <option value="" title={translate("Provider default")}>{translate("Default")}</option>
+                {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
+              </select>
+            </label>
+            <label className="routing-editor-field">
+              <span className="field-lbl">{translate("Effort")}</span>
+              <select className="sel" value={selectedEffort} disabled={busy !== null || effortOptions.length === 0} onChange={(event) => void changeRouting(selectedRouting.capability, primaryProviderId as AgentProviderId, selectedRouting.requiredProviderId, selectedModel || null, (event.target.value || null) as ReasoningEffort | null)}>
+                <option value="" title={translate("Provider default")}>{translate("Default")}</option>
+                {effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabel(effort)}</option>)}
+              </select>
+            </label>
+            <label className="routing-editor-field">
+              <span className="field-lbl">{translate("Rule")}</span>
+              <select className="sel" value={selectedRouting.requiredProviderId ?? "auto"} disabled={busy !== null} onChange={(event) => void changeRouting(selectedRouting.capability, primaryProviderId as AgentProviderId, event.target.value === "auto" ? null : event.target.value as AgentProviderId, selectedModel || null, (selectedEffort || null) as ReasoningEffort | null)}>
+                <option value="auto">{translate("Automatic fallback")}</option>
+                {providers.map((provider) => <option value={provider.id} key={provider.id}>{translate("Only {provider}", { provider: provider.label })}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="routing-info">ⓘ {primaryProvider?.label ?? translate("Provider")} {translate("will be used for {function} tasks.", { function: capabilityLabel(selectedRouting.capability) })}</div>
+        </div>
       </div>
-      {error ? <p className="provider-error">{error}</p> : null}
-      <p className="provider-routing-copy">{translate("Choose the first provider, preferred model, and fallback rule.")}</p>
-          {(policy?.capabilities ?? []).map((routing) => {
-            // Resolve the effective "first" to an actually-eligible provider (the
-            // configured order may still reference a paused/removed provider).
-            const eligible = providers.map((p) => String(p.id));
-            const firstStr = String(routing.order[0]);
-            const primaryProviderId: string =
-              eligible.includes(firstStr) ? firstStr : eligible[0] ?? "";
-            const primaryProvider = providers.find((provider) => provider.id === primaryProviderId);
-            const availableModels = primaryProvider?.models?.length
-              ? primaryProvider.models
-              : policy?.models?.[primaryProviderId] ?? [];
-            const modelOptions = [...new Set([
-              ...availableModels,
-              ...(routing.preferredModel ? [routing.preferredModel] : [])
-            ])];
-            const selectedModel = routing.preferredModel && modelOptions.includes(routing.preferredModel)
-              ? routing.preferredModel
-              : "";
-            const availableEfforts = primaryProvider?.reasoningEfforts ?? [];
-            const effortOptions = [...new Set([
-              ...availableEfforts,
-              ...(routing.preferredEffort ? [routing.preferredEffort] : [])
-            ])];
-            const selectedEffort = routing.preferredEffort && effortOptions.includes(routing.preferredEffort)
-              ? routing.preferredEffort
-              : "";
-            const primaryAgent = agents.find((agent) => agent.id === primaryProviderId);
-            const mascotState: ProviderMascotState = primaryAgent?.state === "working" ? "processing" : "ready";
-            const mascotColor = providerColor(primaryProviderId);
-            return (
-              <div className="routing-row" key={routing.capability}>
-                <div className="rname">
-                  <span className="routing-mascot" style={{ color: mascotColor }} aria-hidden="true">
-                    <ProviderMascot color={mascotColor} state={mascotState} capability={routing.capability} />
-                  </span>
-                  <span>{capabilityLabel(routing.capability)}</span>
-                </div>
-                <div><div className="field-lbl">{translate("First")}</div>
-                  <select className="sel"
-                    value={primaryProviderId}
-                    disabled={busy !== null}
-                    onChange={(event) =>
-                      void changeRouting(
-                        routing.capability,
-                        event.target.value as AgentProviderId,
-                        routing.requiredProviderId,
-                        event.target.value === primaryProviderId ? routing.preferredModel : null,
-                        event.target.value === primaryProviderId ? routing.preferredEffort : null
-                      )
-                    }
-                  >
-                    {providers.map((provider) => (
-                      <option value={provider.id} key={provider.id}>
-                        {provider.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div><div className="field-lbl">{translate("Model")}</div>
-                  <select
-                    className="sel"
-                    value={selectedModel}
-                    disabled={busy !== null || modelOptions.length === 0}
-                    onChange={(event) =>
-                      void changeRouting(
-                        routing.capability,
-                        primaryProviderId as AgentProviderId,
-                        routing.requiredProviderId,
-                        event.target.value || null
-                      )
-                    }
-                  >
-                    <option value="" title={translate("Provider default")}>{translate("Default")}</option>
-                    {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
-                  </select>
-                </div>
-                <div><div className="field-lbl">{translate("Effort")}</div>
-                  <select
-                    className="sel"
-                    value={selectedEffort}
-                    disabled={busy !== null || effortOptions.length === 0}
-                    onChange={(event) =>
-                      void changeRouting(
-                        routing.capability,
-                        primaryProviderId as AgentProviderId,
-                        routing.requiredProviderId,
-                        selectedModel || null,
-                        (event.target.value || null) as ReasoningEffort | null
-                      )
-                    }
-                  >
-                    <option value="" title={translate("Provider default")}>{translate("Default")}</option>
-                    {effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabel(effort)}</option>)}
-                  </select>
-                </div>
-                <div><div className="field-lbl">{translate("Rule")}</div><select className="sel"
-                    value={routing.requiredProviderId ?? "auto"}
-                    disabled={busy !== null}
-                    onChange={(event) =>
-                      void changeRouting(
-                        routing.capability,
-                        primaryProviderId as AgentProviderId,
-                        event.target.value === "auto" ? null : (event.target.value as AgentProviderId),
-                        selectedModel || null,
-                        (selectedEffort || null) as ReasoningEffort | null
-                      )
-                    }
-                  >
-                    <option value="auto">{translate("Automatic fallback")}</option>
-                    {providers.map((provider) => (
-                      <option value={provider.id} key={provider.id}>
-                        {translate("Only {provider}", { provider: provider.label })}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            );
-          })}
     </section>
   );
+}
+
+function capabilityDescription(capability: AgentCapability): string {
+  return translate({
+    planning: "Define the approach and break the work into a clear plan.",
+    coding: "Implement the planned changes directly in the project.",
+    testing: "Run checks and validate that the implementation works.",
+    reviewing: "Inspect the final result for quality, safety, and regressions.",
+    improvement_reviewing: "Find opportunities to improve the project and its workflow.",
+    research: "Investigate the project and gather the context needed to decide.",
+    conversation: "Answer questions and keep the project conversation moving."
+  }[capability]);
 }
 
 function providerColor(providerId: string): string {

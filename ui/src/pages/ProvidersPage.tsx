@@ -132,7 +132,7 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
       </p>
       {scanSummary ? <div className="provider-feedback success" role="status">{scanSummary}</div> : null}
       {refreshError ? <div className="provider-feedback error" role="alert">{refreshError}</div> : null}
-      <div className="prov-grid">
+      <div className="providers-stack">
         <ProviderManager
           agents={data.agents}
           externalPolicy={policy}
@@ -141,6 +141,7 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
           onPolicyChanged={refreshPolicy}
           onChanged={() => { void onRefresh?.(); }}
         />
+        <div className="routing-divider" aria-hidden="true" />
         <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
       </div>
     </div>
