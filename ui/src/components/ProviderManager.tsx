@@ -620,7 +620,7 @@ export function ProviderManager({
       {notice ? <div className="provider-feedback success">{notice}</div> : null}
       {(["Cloud", "Custom & local"] as const).map((group) => groupedProviders[group].length ? (
         <div className="provider-group" key={group}>
-          <div className="prov-group-lbl">{group}</div>
+          <div className="prov-group-lbl">{translate(group)}</div>
           <div className="provider-card-grid">
           {groupedProviders[group].map((provider) => {
             const control = policy?.controls.find((item) => item.providerId === provider.providerId);
@@ -652,9 +652,9 @@ export function ProviderManager({
                   </div>
                   <div className="provider-card-copy">
                     <b>{provider.label}</b>
-                    <span className="provider-detail"><i className="st-dot" />{provider.detail}</span>
+                    <span className="provider-detail"><i className="st-dot" />{localizedProviderDetail(provider.detail)}</span>
                   </div>
-                  <span className="type-tag">{provider.type}</span>
+                  <span className="type-tag">{provider.type === "account" ? translate("Account") : provider.type === "local" ? translate("Local") : translate("Custom")}</span>
                   <svg className="pc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
                 </div>
                 <span className={`provider-role-chip is-${mascotState}`}>
@@ -985,7 +985,7 @@ function primaryCapabilityForProvider(
 }
 
 function capabilityLabel(capability: AgentCapability): string {
-  return {
+  return translate(({
     planning: "Planning",
     coding: "Implementation",
     testing: "Testing",
@@ -993,7 +993,7 @@ function capabilityLabel(capability: AgentCapability): string {
     improvement_reviewing: "Self-improvement",
     research: "Research",
     conversation: "Conversation"
-  }[capability];
+  }[capability]));
 }
 
 function providerColor(providerId: string): string {
@@ -1008,10 +1008,17 @@ function providerColor(providerId: string): string {
 }
 
 function providerDescription(providerId: string): string {
-  if (providerId.includes("claude")) return "Modelo de ponta para engenharia de software.";
-  if (providerId.includes("codex")) return "Especialista em código e refatoração.";
-  if (providerId.includes("gemini") || providerId.includes("antigravity")) return "Modelo multimodal para análise e pesquisa.";
-  if (providerId.includes("ollama")) return "Execução local, rápida e privada.";
-  if (providerId.includes("openrouter")) return "Acesso flexível a modelos conectados.";
-  return "Provider conectado ao Maestro.";
+  if (providerId.includes("claude")) return translate("Leading model for software engineering.");
+  if (providerId.includes("codex")) return translate("Code and refactoring specialist.");
+  if (providerId.includes("gemini") || providerId.includes("antigravity")) return translate("Multimodal model for analysis and research.");
+  if (providerId.includes("ollama")) return translate("Fast and private local execution.");
+  if (providerId.includes("openrouter")) return translate("Flexible access to connected models.");
+  return translate("Provider connected to Maestro.");
+}
+
+function localizedProviderDetail(detail: string): string {
+  const suffix = " CLI authenticated";
+  return detail.endsWith(suffix)
+    ? `${detail.slice(0, -suffix.length)} ${translate("CLI authenticated")}`
+    : translate(detail);
 }

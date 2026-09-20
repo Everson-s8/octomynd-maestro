@@ -82,7 +82,7 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
   if (!selectedRouting) {
     return (
       <section className="panel provider-routing" id="provider-routing">
-        <div className="panel-head"><div><div className="lbl">Control plane</div><h3>{translate("Priority by function")}</h3></div><span>{translate("persistent")}</span></div>
+        <div className="panel-head"><div><div className="lbl">{translate("Control plane")}</div><h3>{translate("Priority by function")}</h3></div><span>{translate("persistent")}</span></div>
         {error ? <p className="provider-error">{error}</p> : null}
         <p className="provider-routing-copy">{translate("Choose the first provider, preferred model, and fallback rule.")}</p>
       </section>
@@ -121,13 +121,13 @@ export function AgentDock({ agents, policy: externalPolicy, onPolicyChanged }: {
     <section className="panel provider-routing" id="provider-routing">
       <div className="routing-layout">
         <div className="routing-overview">
-          <div className="lbl">Routing por função</div>
+          <div className="lbl">{translate("Routing by function")}</div>
           <h2>{capabilityLabel(selectedRouting.capability)}</h2>
           <p>{capabilityDescription(selectedRouting.capability)}</p>
         </div>
         <div className="routing-editor">
           <div className="routing-editor-head">
-            <div><div className="lbl">Control plane</div><p>{translate("Choose the first provider, preferred model, and fallback rule.")}</p></div>
+            <div><div className="lbl">{translate("Control plane")}</div><p>{translate("Choose the first provider, preferred model, and fallback rule.")}</p></div>
             <span>{translate("persistent")}</span>
           </div>
           {error ? <p className="provider-error">{error}</p> : null}
