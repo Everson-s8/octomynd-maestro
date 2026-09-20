@@ -148,6 +148,7 @@ export class OperationalChatService {
 
     this.beginChatActivity(thread.id, projectKey);
     return (async () => {
+    const priorConversation = this.database.listOperationalChatMessages(projectKey, 12, thread.id);
     const memory = extractExplicitMemory(request.message);
     const memorySaved = memory && accessMode !== "read_only" && projectKey !== GLOBAL_CHAT_PROJECT_KEY
       ? this.database.saveOperationalChatMemory({
@@ -196,7 +197,7 @@ export class OperationalChatService {
       }
       evidence.summaryText = `${evidence.summaryText}\nCommand execution:\n${commandEvidence.command} => ${commandEvidence.status}`;
     }
-    const taskIntent = parseTaskCreationIntent(request.message);
+    const taskIntent = parseTaskCreationIntent(request.message, priorConversation);
     let actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
     if (pendingCommand) {
       actions.unshift({
@@ -1417,7 +1418,7 @@ export class OperationalChatService {
     selectedModel: string | null,
     selectedEffort: AgentReasoningEffort | null
   ): Promise<{ explanation: string; providerId: AgentProviderId | "deterministic_engine"; model: string | null }> {
-    const taskIntent = parseTaskCreationIntent(userMessage);
+    const taskIntent = parseTaskCreationIntent(userMessage, history);
     if (taskIntent) {
       return {
         explanation: locale === "pt-BR"
@@ -1917,9 +1918,23 @@ function isCodeChangeRequest(input: string): boolean {
  * questions about tasks as mutations. The old parser only accepted
  * "criar task: ..." and silently ignored "Crie essa task: ...".
  */
-export function parseTaskCreationIntent(input: string): TaskCreationIntent | null {
+export function parseTaskCreationIntent(
+  input: string,
+  priorMessages: Pick<OperationalChatMessageRecord, "senderRole" | "messageText">[] = []
+): TaskCreationIntent | null {
   const text = input.trim();
   if (!text) return null;
+
+  // A common chat follow-up is "crie uma task, eu te mandei o contexto".
+  // The current message is only an instruction to act; the actual objective
+  // is the previous user message. Do not send the meta-instruction itself to
+  // the task worker as if it were the project requirement.
+  if (isContextualTaskFollowUp(text)) {
+    const context = [...priorMessages]
+      .reverse()
+      .find((message) => message.senderRole === "user" && isUsefulTaskContext(message.messageText));
+    if (context) return { text: context.messageText.trim() };
+  }
 
   const explicit = /^(?:eu\s+)?(?:quero\s+)?(?:crie|criar|cadastrar|cadastre|abrir|abra|faca|faça)\b[\s\S]*?\btask\b/i.exec(text);
   if (explicit) {
@@ -1945,6 +1960,18 @@ export function parseTaskCreationIntent(input: string): TaskCreationIntent | nul
   // explicit request when it is not phrased as a question.
   const projectRequest = /^(?:eu\s+)?quero\s+criar\s+(.{4,})$/i.exec(text);
   return projectRequest ? { text: projectRequest[1].trim() } : null;
+}
+
+function isContextualTaskFollowUp(text: string): boolean {
+  const asksForTask = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
+  const refersToContext = /\b(?:contexto|isso|acima|anterior|mensagem|mandei|enviado|descrito|descrevi|novamente|com\s+base|a\s+partir)\b/i.test(text);
+  return asksForTask && refersToContext;
+}
+
+function isUsefulTaskContext(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length < 40) return false;
+  return !/^(?:eu\s+)?(?:quero|preciso|pode|por favor)?\s*(?:crie|criar|abra|abrir)\s+(?:uma\s+)?task\b/i.test(normalized);
 }
 
 function truncateChatText(value: string, max = 180): string {

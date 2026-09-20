@@ -529,6 +529,31 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(response.actions.some((action) => action.type === "create_task")).toBe(false);
   });
 
+  it("uses the previous user context when task creation is requested as a follow-up", async () => {
+    const context = "Quero um sistema simples para dividir as contas do apartamento entre os moradores, registrar quem pagou cada despesa e reduzir automaticamente a dívida de quem ainda precisa pagar sua parte.";
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Context task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: context
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      message: "eu estou pedindo para você criar uma task nova, eu te mandei o contexto",
+      accessMode: "full"
+    });
+
+    const task = database.listTasks(20)[0];
+    expect(task?.text).toBe(context);
+    expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
+  });
+
   it("falls back to the next conversation provider after a headless provider failure", async () => {
     const antigravity = chatProvider("antigravity", {
       outcome: "failed",

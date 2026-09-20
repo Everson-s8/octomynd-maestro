@@ -145,6 +145,15 @@ export function OperationalChatConsole({
     return () => window.cancelAnimationFrame(frame);
   }, [messages, loading, historyLoading, selectedThreadId]);
 
+  useLayoutEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    if (element.value) {
+      element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
+    }
+  }, [inputText, selectedThreadId]);
+
   useEffect(() => () => {
     if (deleteConfirmTimer.current !== null) window.clearTimeout(deleteConfirmTimer.current);
   }, []);

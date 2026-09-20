@@ -79,10 +79,10 @@ describe("Desktop Launcher & Electron Entry", () => {
     const viteConfigPath = path.join(tmpDir, "vite.config.ts");
     expect(checkViteConfigBase(viteConfigPath).valid).toBe(false);
 
-    fs.writeFileSync(viteConfigPath, `export default defineConfig({ base: "./" });`);
+    fs.writeFileSync(viteConfigPath, `export default defineConfig({ base: "/" });`);
     const check = checkViteConfigBase(viteConfigPath);
     expect(check.valid).toBe(true);
-    expect(check.base).toBe("./");
+    expect(check.base).toBe("/");
   });
 
   it("provides valid default window options for Electron BrowserWindow", () => {

@@ -3,7 +3,9 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 export default defineConfig({
-  base: "./",
+  // BrowserRouter is used by the dashboard. Absolute asset URLs keep direct
+  // deep links such as /tasks/1/logs from looking for JS under that route.
+  base: "/",
   root: path.resolve(import.meta.dirname),
   plugins: [react()],
   server: {
