@@ -1630,11 +1630,20 @@ export class OperationalChatService {
     const normalized = userMessage.toLowerCase();
     const lines: string[] = [];
 
-    const taskIntent = parseTaskCreationIntent(userMessage);
+    const taskIntent = parseTaskCreationIntent(userMessage, history);
     if (taskIntent) {
       return locale === "pt-BR"
         ? `Entendi. Preparei a Task com este objetivo: "${truncateChatText(taskIntent.text)}". Use o botão "Criar Task" abaixo para colocá-la na fila.`
         : `I understood. I prepared a task with this objective: "${truncateChatText(taskIntent.text)}". Use the "Create task" button below to add it to the queue.`;
+    }
+
+    if (isTaskInterpretationRequest(userMessage)) {
+      const context = resolveTaskContext(history);
+      if (context) {
+        return locale === "pt-BR"
+          ? `Entendi. Você está pedindo para eu interpretar a conversa e identificar a task, não para começar uma conversa nova. O objetivo que encontrei no contexto é:\n\n"${truncateChatText(context.messageText, 900)}"\n\nEssa é a base que deve ser transformada em task; não vou substituir esse contexto por uma resposta genérica.`
+          : `I understand. You are asking me to interpret the conversation and identify the task, not start a new conversation. The objective I found in context is:\n\n"${truncateChatText(context.messageText, 900)}"\n\nThat is the basis to turn into a task; I will not replace this context with a generic reply.`;
+      }
     }
 
     if (/(?:context|contexto|falad|disse|antes|chat|conversa|lembr|remember|previous|anterior|resgat)/i.test(userMessage)) {
@@ -1924,6 +1933,17 @@ function isCodeChangeRequest(input: string): boolean {
   const codeTarget = /\b(?:code|codigo|arquivo|file|bug|feature|funcionalidade|endpoint|componente|component|interface|script|projeto|project|api|ui|frontend|backend)\b/.test(normalized)
     || /\.(?:ts|tsx|js|jsx|py|rs|go|java|c|cpp|css|html|json)\b/.test(normalized);
   return changeVerb && codeTarget;
+}
+
+function isTaskInterpretationRequest(input: string): boolean {
+  const normalized = input
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  const asksToInterpret = /\b(?:interpret|analis|entend|entender|ver\s+qual|identific)\w*\b/.test(normalized);
+  const refersToTask = /\b(?:task|tarefa)\b/.test(normalized);
+  const refersToConversation = /\b(?:context|conversa|historico|estavamos|falando|mensagem|criad|criar)\b/.test(normalized);
+  return asksToInterpret && refersToTask && refersToConversation;
 }
 
 /**

@@ -621,6 +621,37 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
   });
 
+  it("does not answer a context-to-task interpretation request as a new conversation", async () => {
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Interpret task");
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: "Quero simplificar o sistema de despesas, dividir automaticamente as dívidas entre moradores e manter uma lista de compras."
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "maestro",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: "Entendi o objetivo do projeto: simplificar o sistema de despesas, dividir automaticamente as dívidas entre moradores e manter uma lista de compras para começar a implementação."
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      threadId: thread.id,
+      surface: "dashboard",
+      uiLocale: "pt-BR",
+      message: "veja aí o que estávamos falando para interpretar e ver qual task é para ser criada"
+    });
+
+    expect(response.explanation).toContain("interpretar a conversa");
+    expect(response.explanation).toContain("simplificar o sistema de despesas");
+    expect(response.explanation).not.toContain("Me conte um pouco mais");
+  });
+
   it("falls back to the next conversation provider after a headless provider failure", async () => {
     const antigravity = chatProvider("antigravity", {
       outcome: "failed",
