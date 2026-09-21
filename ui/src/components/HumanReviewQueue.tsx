@@ -32,9 +32,10 @@ export function HumanReviewQueue({
   };
   const isChangeSafetyPassed = changeSafetyGate.status === "passed";
   const hasGitHubPullRequest = selected ? isOpenableExternalUrl(selected.pullRequestUrl) : false;
+  const noteRequired = (decision: HumanReviewDecision) => decision !== "approved";
 
   async function decide(decision: HumanReviewDecision) {
-    if (!selected || note.trim().length < 4 || !hasGitHubPullRequest) return;
+    if (!selected || (noteRequired(decision) && note.trim().length < 4) || !hasGitHubPullRequest) return;
     setBusy(decision);
     setError(null);
     try {
@@ -156,7 +157,6 @@ export function HumanReviewQueue({
                 <textarea
                   value={note}
                   onChange={(event) => setNote(event.target.value)}
-                  minLength={4}
                   maxLength={1200}
                   placeholder={translate("Explain why to approve, request changes, or reject.")}
                 />
@@ -179,7 +179,7 @@ export function HumanReviewQueue({
                 </button>
                 <button
                   className="decision-approve"
-                  disabled={busy !== null || note.trim().length < 4 || !isChangeSafetyPassed || !hasGitHubPullRequest}
+                  disabled={busy !== null || !isChangeSafetyPassed || !hasGitHubPullRequest}
                   title={!hasGitHubPullRequest
                     ? translate("No GitHub PR exists for this run. Install/authenticate GitHub CLI and run delivery again.")
                     : !isChangeSafetyPassed

@@ -71,9 +71,12 @@ export class ReviewCoordinator {
     if (item.status === "approved" || item.status === "rejected") {
       throw new Error(`Goal #${runId} already has a final human decision.`);
     }
-    if (!note.trim()) throw new Error("Decision justification is required.");
-    if (note.trim().length > 1_200) throw new Error("Decision justification exceeds 1200 characters.");
-    if (containsSensitiveText(note)) {
+    const normalizedNote = note.trim() || (decision === "approved"
+      ? "Approved for merge from the Maestro dashboard."
+      : "");
+    if (!normalizedNote) throw new Error("Decision justification is required.");
+    if (normalizedNote.length > 1_200) throw new Error("Decision justification exceeds 1200 characters.");
+    if (containsSensitiveText(normalizedNote)) {
       throw new Error("Decision justification contains a secret or private local path.");
     }
     if (decision === "approved" && item.changeSafetyGate.status !== "passed") {
@@ -115,7 +118,7 @@ export class ReviewCoordinator {
     if (decision === "changes_requested") await this.github.markDraft(item.pullRequestUrl);
     if (decision === "rejected") await this.github.close(item.pullRequestUrl);
 
-    const review = this.database.addHumanReview({ runId, decision, note, source });
+    const review = this.database.addHumanReview({ runId, decision, note: normalizedNote, source });
     this.database.addEvent({
       source: "human",
       type: `review.${decision}`,

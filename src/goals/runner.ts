@@ -11,6 +11,7 @@ import type {
 import { AgentRegistry } from "../agents/registry.js";
 import { AgentCapability, AgentExecutionResult, AgentProviderId } from "../agents/types.js";
 import { classifyFailure } from "../agents/failure.js";
+import { repairWorktreeAccess } from "../environment/doctor.js";
 import { GoalDeliveryHandler } from "./delivery.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import { compressStepOutput, dedupeTokenEfficientHandoffs } from "../runtime/compression.js";
@@ -109,7 +110,14 @@ export async function runTaskGoal(
     ? run.currentPhase
     : (dna?.phases[0] as GoalPhase) ?? run.currentPhase;
   let stepCount = run.stepCount;
-  let excluded = initialExcludedProviders(database, run, phase);
+  let excluded = excludedProvidersForPhase(
+    database,
+    registry,
+    run.id,
+    phase,
+    dna,
+    initialExcludedProviders(database, run, phase)
+  );
   // ── F01 guard: track whether the last completed validation pass actually
   // passed. A failed (or never-run) validation must never be masked by phase
   // budget exhaustion into a "deliver anyway" transition. When requireTests is
@@ -217,6 +225,29 @@ export async function runTaskGoal(
         task.id,
         hasValidationAttempt ? "budget_exhausted" : undefined
       );
+    }
+
+    // A review is an acceptance gate, not a ceremonial final response. When
+    // more than one reviewer-capable provider is registered, do not let the
+    // same provider that implemented the change approve its own work. This
+    // keeps quota fallback from silently turning into self-approval, while
+    // preserving single-provider installations as a valid operating mode.
+    const reviewGate = independentReviewGate(database, registry, run.id, dna);
+    if (reviewGate) {
+      database.addEvent({
+        source: "maestro",
+        type: "goal.review_independence_blocked",
+        text: reviewGate.message,
+        taskId: task.id,
+        metadata: {
+          runId: run.id,
+          implementationProviders: reviewGate.implementationProviders,
+          reviewingProvider: reviewGate.reviewingProvider,
+          independentReviewers: reviewGate.independentReviewers,
+          reason: reviewGate.reason
+        }
+      });
+      return finishRun(database, currentRun, "blocked", phase, stepCount, reviewGate.message, task.id);
     }
 
     const worktreePath = task.worktreePath;
@@ -350,7 +381,7 @@ export async function runTaskGoal(
         const nextDnaPhase = dnaPhases[phaseIndex + 1];
         if (nextDnaPhase) {
           phase = nextDnaPhase;
-          excluded = new Set();
+          excluded = excludedProvidersForPhase(database, registry, run.id, phase, dna);
           continue;
         }
       }
@@ -462,7 +493,7 @@ export async function runTaskGoal(
         });
         if (validation.status === "passed") {
           phase = "reviewing";
-          excluded = new Set();
+          excluded = excludedProvidersForPhase(database, registry, run.id, phase, dna);
           continue;
         }
       }
@@ -700,7 +731,10 @@ export async function runTaskGoal(
             enabled: tokenRuntimeEnabled,
             rtk
           },
-          humanFeedback: latestChangeRequest(database, run.id),
+          humanFeedback: [
+            latestChangeRequest(database, run.id),
+            latestGoalGuidance(database, task.id, run.id)
+          ].filter((value): value is string => Boolean(value)).join("\n\n") || null,
           skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
           resumeContext: formatCheckpointForResume(database.getLatestGoalCheckpoint(run.id)),
@@ -920,7 +954,13 @@ export async function runTaskGoal(
         );
       }
 
-      if (circuitDecision?.reason === "no_progress") {
+      const recoverableBlockedResult = result.outcome === "blocked"
+        && isRecoverableProviderFailure(
+          result.failureCategory ?? classifyFailure(result.summary || result.error || "", result.failureCategory === "timeout"),
+          result.summary || result.error || ""
+        );
+
+      if (circuitDecision?.reason === "no_progress" && !recoverableBlockedResult) {
         database.finishGoalStep({
           id: goalStep.id,
           status: "failed",
@@ -976,7 +1016,7 @@ export async function runTaskGoal(
         );
       }
 
-      if (circuitDecision && result.outcome !== "failed") {
+      if (circuitDecision && result.outcome !== "failed" && !recoverableBlockedResult) {
         return finishCircuitBreak(
           database,
           currentRun,
@@ -989,7 +1029,74 @@ export async function runTaskGoal(
       }
 
       if (result.outcome === "blocked") {
-        return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id);
+        const failureDetail = result.summary || result.error || "Goal blocked.";
+        const failureCategory = result.failureCategory
+          ?? classifyFailure(failureDetail, result.failureCategory === "timeout");
+        if (task.worktreePath && isWorktreeWriteFailure(failureCategory, failureDetail)) {
+          const alreadyRetriedAfterRepair = database.listEventsForTask(task.id, 500).some((event) => (
+            event.type === "goal.worktree_repair_attempted"
+            && Number(event.metadata?.runId) === run.id
+            && event.metadata?.phase === phase
+            && event.metadata?.retryProvider === routed.provider.id
+          ));
+          if (!alreadyRetriedAfterRepair) {
+            const repair = repairWorktreeAccess(task.worktreePath);
+            database.addEvent({
+              source: "maestro",
+              type: "goal.worktree_repair_attempted",
+              text: repair.detail,
+              taskId: task.id,
+              metadata: {
+                runId: run.id,
+                stepId: goalStep.id,
+                phase,
+                providerId: routed.provider.id,
+                retryProvider: repair.repaired ? routed.provider.id : null,
+                repaired: repair.repaired,
+                failureCategory
+              }
+            });
+            if (repair.repaired) {
+              excluded.delete(routed.provider.id);
+              continue;
+            }
+          }
+        }
+        if (isRecoverableProviderFailure(failureCategory, result.summary || result.error || "")) {
+          excluded.add(routed.provider.id);
+          const fallback = await registry.route(CAPABILITIES[phase], excluded);
+          const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
+          database.addEvent({
+            source: "maestro",
+            type: fallback ? "goal.provider_block_fallback" : "goal.provider_block_wait",
+            text: fallback
+              ? `${routed.provider.label} was blocked during ${phase}; routing to ${fallback.provider.label}.`
+              : `${routed.provider.label} was blocked during ${phase}; preserving the Goal for recovery.`,
+            taskId: task.id,
+            metadata: {
+              runId: run.id,
+              stepId: goalStep.id,
+              phase,
+              fromProvider: routed.provider.id,
+              toProvider: fallback?.provider.id ?? null,
+              failureCategory,
+              worktreePreserved: true,
+              resumeCheckpointId: resumeCheckpoint?.id ?? null,
+              preservedFiles: resumeCheckpoint?.changedFiles ?? []
+            }
+          });
+          if (fallback) continue;
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            result.summary || result.error || "Provider blocked; waiting for recovery.",
+            task.id,
+            { reason: failureCategory, retryAfterMs: result.retryAfterMs ?? 30_000, provider: routed.provider.id }
+          );
+        }
+        return finishRun(database, currentRun, "blocked", phase, stepCount, result.summary || result.error || "Goal blocked.", task.id, failureCategory);
       }
       if (result.outcome === "failed") {
         // A circuit decision is a safety boundary for the current execution
@@ -1126,7 +1233,7 @@ export async function runTaskGoal(
         return await deliverGoal();
       }
       phase = nextPhase;
-      excluded = new Set();
+      excluded = excludedProvidersForPhase(database, registry, run.id, phase, dna);
     }
 
     // A goal only terminates on a real loop (watchdog), not on a raw step count.
@@ -1372,6 +1479,117 @@ function initialExcludedProviders(
     excluded.delete(run.lastProvider);
   }
   return excluded;
+}
+
+function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: number): string | null {
+  const event = database.listEventsForTask(taskId, 500)
+    .filter((item) => item.type === "goal.human_guidance" && Number(item.metadata?.runId) === runId)
+    .at(-1);
+  if (!event?.text) return null;
+  return `User guidance for this Goal:\n${redactSensitiveText(event.text).slice(0, 5000)}`;
+}
+
+function isRecoverableProviderFailure(category: string, detail = ""): category is GoalWaitReason {
+  if (new Set([
+    "quota",
+    "auth_required",
+    "timeout",
+    "offline",
+    "capacity",
+    "permission_denied",
+    "environment_error",
+    "configuration_error"
+  ]).has(category)) return true;
+  return /permission|access denied|read[- ]only|write lock|file lock|worktree.*(?:write|lock)|eacces|eperm/i.test(detail);
+}
+
+function isWorktreeWriteFailure(category: string, detail: string): boolean {
+  return category === "permission_denied"
+    || /permission|access denied|read[- ]only|write lock|file lock|worktree.*(?:write|lock)|eacces|eperm/i.test(detail);
+}
+
+type IndependentReviewGate = {
+  message: string;
+  reason: "missing_review" | "self_review";
+  implementationProviders: string[];
+  reviewingProvider: string | null;
+  independentReviewers: string[];
+};
+
+function excludedProvidersForPhase(
+  database: MaestroDatabase,
+  registry: AgentRegistry,
+  runId: number,
+  phase: GoalPhase,
+  dna?: TaskDNA,
+  base: Set<AgentProviderId> = new Set()
+): Set<AgentProviderId> {
+  if (phase !== "reviewing" || !dna?.requireReview) return base;
+
+  const implementationProviders = [...new Set(
+    database.listGoalSteps(runId)
+      .filter((step) => step.phase === "implementing" && step.status === "completed")
+      .map((step) => step.provider)
+      .filter((provider): provider is AgentProviderId => typeof provider === "string" && provider.length > 0)
+  )];
+  const reviewerIds = registry.list()
+    .filter((provider) => provider.capabilities.has("reviewing"))
+    .map((provider) => provider.id);
+  const hasIndependentReviewer = reviewerIds.some((providerId) => !implementationProviders.includes(providerId));
+  if (!hasIndependentReviewer) return base;
+
+  const excluded = new Set(base);
+  implementationProviders.forEach((providerId) => excluded.add(providerId));
+  return excluded;
+}
+
+function independentReviewGate(
+  database: MaestroDatabase,
+  registry: AgentRegistry,
+  runId: number,
+  dna?: TaskDNA
+): IndependentReviewGate | null {
+  if (!dna?.requireReview) return null;
+
+  const steps = database.listGoalSteps(runId);
+  const implementationProviders = [...new Set(
+    steps
+      .filter((step) => step.phase === "implementing" && step.status === "completed")
+      .map((step) => step.provider)
+      .filter((provider): provider is AgentProviderId => typeof provider === "string" && provider.length > 0)
+  )];
+  const reviewers = registry.list()
+    .filter((provider) => provider.capabilities.has("reviewing"))
+    .map((provider) => provider.id);
+  const independentReviewers = reviewers.filter((providerId) => !implementationProviders.includes(providerId));
+  const latestReview = [...steps]
+    .reverse()
+    .find((step) => step.phase === "reviewing" && step.status === "completed");
+
+  if (!latestReview) {
+    return {
+      message: "Delivery blocked: this task requires an acceptance review, but no completed review evidence is available.",
+      reason: "missing_review",
+      implementationProviders,
+      reviewingProvider: null,
+      independentReviewers
+    };
+  }
+
+  if (
+    independentReviewers.length > 0
+    && implementationProviders.includes(latestReview.provider)
+  ) {
+    return {
+      message: `Delivery blocked: ${latestReview.provider} implemented this task and cannot be its sole acceptance reviewer. Route the review to an independent reviewer (${independentReviewers.join(", ")}) and resume the Goal.`,
+      reason: "self_review",
+      implementationProviders,
+      reviewingProvider: latestReview.provider,
+      independentReviewers
+    };
+  }
+
+  return null;
 }
 
 function isAgentProviderId(value: unknown): value is AgentProviderId {

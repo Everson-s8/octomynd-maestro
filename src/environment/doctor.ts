@@ -272,6 +272,37 @@ function writeProbe(root: string, name: EnvironmentCheck["name"]): EnvironmentCh
   }
 }
 
+/**
+ * Repairs only reversible worktree access flags before a Goal is abandoned.
+ * This is intentionally narrower than changing ownership or deleting files:
+ * a stale read-only bit is safe to clear, while a locked/missing workspace is
+ * reported back to the coordinator for provider fallback or human guidance.
+ */
+export function repairWorktreeAccess(workspacePath: string): { repaired: boolean; detail: string } {
+  if (!workspacePath || !fs.existsSync(workspacePath)) {
+    return { repaired: false, detail: "The task worktree does not exist." };
+  }
+  try {
+    if (process.platform === "win32") {
+      spawnSync("attrib", ["-R", `${workspacePath}\\*`, "/S", "/D"], {
+        cwd: workspacePath,
+        windowsHide: true,
+        stdio: "ignore"
+      });
+    }
+    try { fs.chmodSync(workspacePath, 0o755); } catch { /* probe below is authoritative */ }
+    const probe = path.join(workspacePath, `.maestro-repair-${process.pid}-${crypto.randomUUID()}`);
+    fs.writeFileSync(probe, "ok", "utf8");
+    fs.rmSync(probe, { force: true });
+    return { repaired: true, detail: "The worktree is writable after clearing reversible access flags." };
+  } catch (error) {
+    return {
+      repaired: false,
+      detail: error instanceof Error ? error.message : "The worktree is still not writable."
+    };
+  }
+}
+
 function binaryCheck(
   name: "typescript" | "test_runner",
   dependencyRoot: string | null,
