@@ -8,6 +8,7 @@ export type FailureCategory =
   | "permission_denied"
   | "unsupported_capability"
   | "environment_error"
+  | "configuration_error"
   | "invalid_output"
   | "user_cancelled"
   | "prompt_too_large"
@@ -41,6 +42,7 @@ const CATEGORY_LABELS: Record<FailureCategory, string> = {
   permission_denied: "permission denied",
   unsupported_capability: "unsupported capability",
   environment_error: "environment error",
+  configuration_error: "invalid provider configuration",
   invalid_output: "invalid output",
   user_cancelled: "cancelled by the user",
   prompt_too_large: "prompt size exceeded",
@@ -57,6 +59,7 @@ const QUOTA_PATTERN = /usage limit|session limit|rate limit|quota|credits exhaus
 const AUTH_PATTERN = /\b401\b|unauthorized|authentication|not logged in|please run \/login|sign in|invalid credentials|login required/i;
 export const PERMISSION_PATTERN = /\b403\b|permission(?:\s+was)?\s+denied|access denied|permission check failed|user denied permission|auto[- ]denied|cannot prompt for|required the ["']command["'] permission|headless mode cannot prompt|soft[- ]denied|permiss[aã]o negada|verifica[cç][aã]o de permiss[aã]o|\beacces\b|\beperm\b/i;
 const ENVIRONMENT_PATTERN = /cannot find module|command not found|\benoent\b|module_not_found|node_module/i;
+const CONFIGURATION_PATTERN = /invalid_request_error|invalid_enum_value|invalid (?:argument|parameter|value)|unsupported (?:argument|parameter|value)/i;
 const OFFLINE_PATTERN = /connection refused|network is unreachable|\boffline\b|dns lookup failed|getaddrinfo\b|econnrefused|etimedout|socket hang up/i;
 const CAPACITY_PATTERN = /resource_exhausted|no provider available|all providers busy|overloaded|capacity|high demand|server is busy/i;
 const PROMPT_TOO_LARGE_PATTERN = /enametoolong|e2big|argument list too long|prompt too (large|long)|command line too long|request entity too large|context length exceeded|maximum context length/i;
@@ -186,6 +189,7 @@ export function classifyFailure(text: string, contextOrTimedOut?: boolean | Fail
   if (USER_CANCELLED_PATTERN.test(text)) return "user_cancelled";
   if (OUTPUT_LIMIT_PATTERN.test(text)) return "output_limit";
   if (INVALID_OUTPUT_PATTERN.test(text)) return "invalid_output";
+  if (CONFIGURATION_PATTERN.test(text)) return "configuration_error";
   if (QUOTA_PATTERN.test(text)) return "quota";
   if (AUTH_PATTERN.test(text)) return "auth_required";
   if (PERMISSION_PATTERN.test(text)) return "permission_denied";

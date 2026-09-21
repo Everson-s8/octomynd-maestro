@@ -294,8 +294,8 @@ async function taskRuntimeCommand(operation: "start" | "cancel" | "retry" | "del
   let payload: { task?: TaskRecord; run?: Record<string, unknown>; goal?: Record<string, unknown> };
   if (operation === "start") {
     const maxStepsIndex = argv.indexOf("--max-steps");
-    const requested = maxStepsIndex >= 0 ? Number(argv[maxStepsIndex + 1]) : 12;
-    const maxSteps = Number.isInteger(requested) ? Math.min(30, Math.max(4, requested)) : 12;
+    const requested = maxStepsIndex >= 0 ? Number(argv[maxStepsIndex + 1]) : 150;
+    const maxSteps = Number.isInteger(requested) ? Math.min(150, Math.max(4, requested)) : 150;
     payload = await requestDashboardJson(`/api/tasks/${taskId}/goal`, {
       method: "POST",
       body: JSON.stringify({ maxSteps })

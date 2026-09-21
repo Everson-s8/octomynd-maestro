@@ -152,6 +152,7 @@ export type ChatEvidenceContext = {
 
 export type GovernedChatActionType =
   | "create_task"
+  | "start_goal"
   | "unblock_provider"
   | "retry_task"
   | "resume_goal"
@@ -205,6 +206,26 @@ export type OperationalChatMessageInput = {
   createdAt?: string;
 };
 
+export type OperationalChatActivity = {
+  active: boolean;
+  startedAt: string | null;
+  phase: "idle" | "thinking" | "tool" | "finished" | "cancelled" | "budget_exhausted";
+  iteration: number;
+  maxIterations: number;
+  toolCalls: number;
+  maxToolCalls: number;
+  toolName: string | null;
+  detail: string | null;
+};
+
+export type OperationalChatActivityEvent = OperationalChatActivity & {
+  id: number;
+  threadId: number;
+  projectKey: string;
+  requestId: string;
+  createdAt: string;
+};
+
 export type OperationalChatRequest = {
   projectKey: string;
   threadId?: number | null;
@@ -234,6 +255,12 @@ export type OperationalChatResponse = {
   providerId: AgentProviderId | "deterministic_engine";
   model: string | null;
   accessMode: ChatAccessMode;
+  loopStats?: {
+    iterations: number;
+    toolCalls: number;
+    toolsUsed: string[];
+    stopReason: "model_finished" | "budget_exhausted" | "cancelled";
+  };
   createdAt: string;
 };
 
@@ -259,6 +286,7 @@ export type OperationalChatActionResponse = {
 
 export type ChatActionExecutor = {
   taskCreated?(taskId: number): void | Promise<void>;
+  startGoal?(taskId: number): void | Promise<void>;
   retryTask?(taskId: number): void;
   resumeGoal?(runId: number): void;
   cancelTask?(taskId: number): void;

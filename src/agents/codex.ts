@@ -57,6 +57,13 @@ export type CodexProviderOptions = Partial<ProviderExecutionLimits> & {
   executionLimits?: number | Partial<ProviderExecutionLimits>;
 };
 
+/** Translate Maestro's provider-neutral effort labels to Codex CLI values. */
+export function codexReasoningEffort(effort: AgentReasoningEffort): string {
+  if (effort === "extra_high") return "xhigh";
+  if (effort === "ultra") return "max";
+  return effort;
+}
+
 export class CodexProvider implements AgentProvider {
   readonly id = "codex" as const;
   readonly label = "Codex";
@@ -170,7 +177,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
-        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${codexReasoningEffort(request.effort)}\"`] : []),
         "--output-last-message",
         outputPath,
         "--sandbox",
@@ -186,7 +193,7 @@ export class CodexProvider implements AgentProvider {
         "--color",
         "never",
         ...(selectedModel ? ["--model", selectedModel] : []),
-        ...(request.effort ? ["--config", `model_reasoning_effort=\"${request.effort}\"`] : []),
+        ...(request.effort ? ["--config", `model_reasoning_effort=\"${codexReasoningEffort(request.effort)}\"`] : []),
         "--output-schema",
         schemaPath,
         "--output-last-message",

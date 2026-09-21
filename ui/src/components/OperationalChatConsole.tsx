@@ -11,9 +11,13 @@ import {
   ChatAccessMode,
   GLOBAL_CHAT_PROJECT_KEY,
   ReasoningEffort,
+  OperationalChatActivity,
+  OperationalChatActivityEvent,
+  cancelChat,
   createChatThread,
   deleteChatThread,
   fetchChatActivity,
+  fetchChatActivityEvents,
   selectChatProvider,
   sendChatMessage
 } from "../api";
@@ -38,7 +42,8 @@ export function OperationalChatConsole({
   const [messages, setMessages] = useState<OperationalChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
-  const [chatActivity, setChatActivity] = useState<{ active: boolean; startedAt: string | null }>({ active: false, startedAt: null });
+  const [chatActivity, setChatActivity] = useState<OperationalChatActivity>(idleChatActivity());
+  const [activityEvents, setActivityEvents] = useState<OperationalChatActivityEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [threadBusy, setThreadBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -79,7 +84,7 @@ export function OperationalChatConsole({
         setSelectedEffort(selected.effort);
       } else {
         setSelectedThreadId(null);
-        setChatActivity({ active: false, startedAt: null });
+        setChatActivity(idleChatActivity());
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
@@ -115,14 +120,21 @@ export function OperationalChatConsole({
   useEffect(() => {
     let cancelled = false;
     if (!selectedProjectKey || selectedThreadId === null) {
-      setChatActivity({ active: false, startedAt: null });
+      setChatActivity(idleChatActivity());
+      setActivityEvents([]);
       return;
     }
 
     const refreshActivity = async () => {
       try {
-        const activity = await fetchChatActivity(selectedProjectKey, selectedThreadId);
-        if (!cancelled) setChatActivity(activity);
+        const [activity, events] = await Promise.all([
+          fetchChatActivity(selectedProjectKey, selectedThreadId),
+          fetchChatActivityEvents(selectedProjectKey, selectedThreadId, 80)
+        ]);
+        if (!cancelled) {
+          setChatActivity(activity);
+          setActivityEvents(events);
+        }
       } catch {
         // The history remains usable if an older server does not expose status yet.
       }
@@ -143,7 +155,7 @@ export function OperationalChatConsole({
       element.scrollTop = element.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, loading, historyLoading, selectedThreadId]);
+  }, [messages, loading, historyLoading, activityEvents, selectedThreadId]);
 
   useLayoutEffect(() => {
     const element = inputRef.current;
@@ -160,6 +172,16 @@ export function OperationalChatConsole({
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const isResponding = loading || chatActivity.active;
+
+  const handleCancelChat = async () => {
+    if (!selectedThreadId || !chatActivity.active) return;
+    try {
+      setChatActivity((current) => ({ ...current, phase: "cancelled", detail: translate("Cancellation requested…") }));
+      await cancelChat(selectedProjectKey, selectedThreadId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to cancel chat execution."));
+    }
+  };
 
   useEffect(() => {
     if (selectedThread) {
@@ -269,7 +291,7 @@ export function OperationalChatConsole({
       setError(err instanceof Error ? err.message : translate("Unable to send the message."));
     } finally {
       setLoading(false);
-      setChatActivity({ active: false, startedAt: null });
+      setChatActivity(idleChatActivity());
     }
   };
 
@@ -536,9 +558,26 @@ export function OperationalChatConsole({
               <div className="chat-thinking" role="status" aria-live="polite">
                 <div className="chat-avatar"><Icon name="ghost" /></div>
                 <div className="chat-thinking-card">
-                  <span>{translate("Maestro is responding")}</span>
+                  <div>
+                    <strong>{chatActivity.phase === "tool" ? translate("Maestro is checking the project") : translate("Maestro is reasoning")}</strong>
+                    <small>{chatActivity.detail || translate("Studying the conversation and project evidence…")}</small>
+                    <small>{translate("Iteration")} {chatActivity.iteration}/{chatActivity.maxIterations} · {translate("Tools")} {chatActivity.toolCalls}/{chatActivity.maxToolCalls}</small>
+                  </div>
                   <div className="chat-thinking-dots"><i /><i /><i /></div>
+                  <button type="button" className="chat-cancel-button" onClick={() => void handleCancelChat()} disabled={chatActivity.phase === "cancelled"}>{translate("Cancel")}</button>
                 </div>
+              </div>
+            ) : null}
+            {activityEvents.length > 0 ? (
+              <div className="chat-process-timeline" aria-label={translate("Maestro process") }>
+                <div className="chat-process-title">{translate("Process")}</div>
+                {activityEvents.slice(-8).map((event) => (
+                  <div className={`chat-process-event phase-${event.phase}`} key={event.id}>
+                    <span className="chat-process-dot" aria-hidden="true" />
+                    <span>{event.toolName ? `${activityPhaseLabel(event.phase, locale)}: ${event.toolName}` : activityPhaseLabel(event.phase, locale)}</span>
+                    <small>{event.detail || translate("State updated")}</small>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
@@ -577,6 +616,23 @@ export function OperationalChatConsole({
       </div>
     </section>
   );
+}
+
+function idleChatActivity(): OperationalChatActivity {
+  return { active: false, startedAt: null, phase: "idle", iteration: 0, maxIterations: 10, toolCalls: 0, maxToolCalls: 14, toolName: null, detail: null };
+}
+
+function activityPhaseLabel(phase: OperationalChatActivityEvent["phase"], locale: string): string {
+  if (locale !== "pt-BR") return phase;
+  const labels: Record<OperationalChatActivityEvent["phase"], string> = {
+    idle: "ocioso",
+    thinking: "raciocinando",
+    tool: "ferramenta",
+    finished: "concluído",
+    cancelled: "cancelado",
+    budget_exhausted: "limite atingido"
+  };
+  return labels[phase];
 }
 
 function isLocalProjectUrl(value: string): boolean {

@@ -15,6 +15,7 @@ export type CompiledChatContext = {
     decisions: string[];
     constraints: string[];
     openQuestions: string[];
+    digest: string[];
   };
   recentMessages: OperationalChatMessageRecord[];
   promptText: string;
@@ -89,14 +90,19 @@ function compileWorkingMemory(
     && !HISTORY_MESSAGE.test(message.messageText)
   ));
   const objective = (syntheses.at(-1) ?? [...substantialUsers].sort((a, b) => b.messageText.length - a.messageText.length)[0])?.messageText.trim() ?? null;
-  const source = [substantialUsers.at(-1)?.messageText, syntheses.at(-1)?.messageText].filter(Boolean).join("\n");
+  const digest = [...messages]
+    .filter((message) => isUsefulTaskContext(message.messageText))
+    .slice(-10)
+    .map((message) => `${message.senderRole.toUpperCase()}: ${compact(message.messageText, message.senderRole === "orchestrator" ? 1_800 : 1_200)}`);
+  const source = digest.join("\n");
 
   return {
     objective: objective ? compact(objective, 3_200) : null,
     requirements: extractListItems(source, 10),
     decisions: memories.filter((memory) => memory.kind === "decision").slice(0, 8).map((memory) => compact(memory.text, 300)),
     constraints: memories.filter((memory) => memory.kind === "constraint").slice(0, 8).map((memory) => compact(memory.text, 300)),
-    openQuestions: extractQuestions(source, 6)
+    openQuestions: extractQuestions(source, 6),
+    digest
   };
 }
 
@@ -127,6 +133,7 @@ function formatWorkingMemory(
     `DECISIONS:\n${formatLines(memory.decisions)}`,
     `CONSTRAINTS:\n${formatLines(memory.constraints)}`,
     `OPEN QUESTIONS:\n${formatLines(memory.openQuestions)}`,
+    `SOURCE DIGEST (recent substantive turns; meta requests and generic acknowledgements excluded):\n${formatLines(memory.digest)}`,
     memories.length === 0 ? "No persistent project memories." : "Persistent memories are listed separately in project evidence."
   ].join("\n");
 }

@@ -65,7 +65,7 @@ export class GoalCoordinator {
     private readonly taskSizing?: (taskId: number) => Promise<TaskSizingResult>
   ) {}
 
-  start(taskId: number, maxSteps = 12): GoalRunRecord {
+  start(taskId: number, maxSteps = MAESTRO_GOAL_MAX_STEPS): GoalRunRecord {
     if (this.shuttingDown) {
       throw new Error("Goal coordinator is shutting down.");
     }

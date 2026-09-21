@@ -1367,7 +1367,7 @@ export async function retryFeaturePlan(featurePlanId: number, reason = ""): Prom
   return payload;
 }
 
-export async function startTaskGoal(taskId: number, maxSteps = 12): Promise<GoalRun> {
+export async function startTaskGoal(taskId: number, maxSteps = 150): Promise<GoalRun> {
   const response = await fetch(`/api/tasks/${taskId}/goal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1451,6 +1451,7 @@ export type OperationalChatMessage = {
   actionTaken?: string | null;
   providerId?: string | null;
   model?: string | null;
+  loopStats?: { iterations: number; toolCalls: number; toolsUsed: string[]; stopReason: string };
   createdAt: string;
 };
 
@@ -1482,6 +1483,21 @@ export type OperationalChatResponse = {
 export type OperationalChatActivity = {
   active: boolean;
   startedAt: string | null;
+  phase: "idle" | "thinking" | "tool" | "finished" | "cancelled" | "budget_exhausted";
+  iteration: number;
+  maxIterations: number;
+  toolCalls: number;
+  maxToolCalls: number;
+  toolName: string | null;
+  detail: string | null;
+};
+
+export type OperationalChatActivityEvent = OperationalChatActivity & {
+  id: number;
+  threadId: number;
+  projectKey: string;
+  requestId: string;
+  createdAt: string;
 };
 
 export type OperationalChatActionResult = {
@@ -1553,6 +1569,24 @@ export async function fetchChatActivity(projectKey = GLOBAL_CHAT_PROJECT_KEY, th
   const response = await fetch(`/api/chat/status?projectKey=${encodeURIComponent(projectKey)}&threadId=${threadId}`, { cache: "no-store" });
   const payload = await response.json() as { activity?: OperationalChatActivity; error?: string; details?: string };
   if (!response.ok || !payload.activity) throw new Error(payload.details || payload.error || "Unable to load chat status.");
+  return payload.activity;
+}
+
+export async function fetchChatActivityEvents(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number, limit = 100): Promise<OperationalChatActivityEvent[]> {
+  const response = await fetch(`/api/chat/activity-events?projectKey=${encodeURIComponent(projectKey)}&threadId=${threadId}&limit=${limit}`, { cache: "no-store" });
+  const payload = await response.json() as { events?: OperationalChatActivityEvent[]; error?: string; details?: string };
+  if (!response.ok || !payload.events) throw new Error(payload.details || payload.error || "Unable to load chat activity events.");
+  return payload.events;
+}
+
+export async function cancelChat(projectKey = GLOBAL_CHAT_PROJECT_KEY, threadId: number): Promise<OperationalChatActivity> {
+  const response = await fetch("/api/chat/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, threadId })
+  });
+  const payload = await response.json() as { activity?: OperationalChatActivity; error?: string; details?: string };
+  if (!response.ok || !payload.activity) throw new Error(payload.details || payload.error || "Unable to cancel chat execution.");
   return payload.activity;
 }
 

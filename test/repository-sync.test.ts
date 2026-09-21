@@ -84,6 +84,20 @@ describe("project repository synchronization", () => {
     expect(() => service.prepareTaskBase(project)).toThrow(RepositorySyncError);
     expect(database.getProjectByKey("dirty").syncState).toBe("dirty");
     expect(fs.existsSync(path.join(canonicalPath, "uncommitted.txt"))).toBe(true);
+
+    const base = service.prepareTaskBase(project, { allowDirty: true });
+    expect(base.state.syncState).toBe("dirty");
+    expect(base.baseCommitSha).toMatch(/^[a-f0-9]{40}$/);
+
+    const task = database.createTask("prepare from dirty checkout", "dashboard", "dirty");
+    const prepared = new ApplicationCommands(database).prepareTask(
+      { channel: "dashboard" },
+      task.id,
+      path.join(tempDir, "worktrees")
+    );
+    expect(prepared.task.status).toBe("planning");
+    expect(fs.existsSync(path.join(prepared.worktreePath, "uncommitted.txt"))).toBe(false);
+    expect(fs.readFileSync(path.join(canonicalPath, "uncommitted.txt"), "utf8")).toBe("keep me\n");
   }, 30_000);
 
   it("reports divergence instead of choosing a side silently", () => {

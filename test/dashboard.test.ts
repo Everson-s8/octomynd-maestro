@@ -95,6 +95,17 @@ describe("dashboard", () => {
       });
       expect(dashboardResponse.status).toBe(201);
 
+      const viteProxyResponse = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:4788",
+          "Sec-Fetch-Site": "same-origin"
+        },
+        body
+      });
+      expect(viteProxyResponse.status).toBe(201);
+
       const cliResponse = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -748,7 +759,26 @@ describe("dashboard", () => {
       expect(deleteResponse.status).toBe(200);
       expect(() => database.getTask(disposable.task.id)).toThrow("not found");
 
-      const createdTask = database.listTasksByProject("boo")[0];
+      const queuedStartResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", text: "start without a separate prepare click" })
+      });
+      const queuedStart = await queuedStartResponse.json() as { task: { id: number } };
+      const autoStartResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${queuedStart.task.id}/goal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      expect(autoStartResponse.status).toBe(202);
+      const autoPreparedTask = database.getTask(queuedStart.task.id);
+      expect(["planning", "done"]).toContain(autoPreparedTask.status);
+      expect(autoPreparedTask.worktreePath).toContain(path.join("worktrees", "boo"));
+      const autoGoalPayload = await autoStartResponse.json() as { prepared: boolean; run: { id: number } };
+      expect(autoGoalPayload.prepared).toBe(true);
+      await waitFor(() => database.getGoalRun(autoGoalPayload.run.id).status !== "running");
+      expect(database.getGoalRun(autoGoalPayload.run.id).status).toBe("completed");
+
+      const createdTask = database.listTasksByProject("boo").find((task) => task.text === "nova task visual")!;
       const prepareResponse = await fetch(
         `http://127.0.0.1:${port}/api/tasks/${createdTask.id}/prepare`,
         { method: "POST" }

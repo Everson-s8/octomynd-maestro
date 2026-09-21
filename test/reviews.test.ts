@@ -145,7 +145,7 @@ describe("human review queue", () => {
     expect(database.getTask(run.taskId).status).toBe("done");
   });
 
-  it("records the approval and leaves reconciliation pending when the local checkout cannot sync after merge", async () => {
+  it("marks the task done while leaving local reconciliation pending after merge", async () => {
     const run = reviewableGoal();
     const github = new FakeGitHubGateway();
     const reviews = new ReviewCoordinator(
@@ -162,7 +162,7 @@ describe("human review queue", () => {
 
     expect(github.actions).toEqual(["ready", "merge"]);
     expect(result.review.decision).toBe("approved");
-    expect(database.getTask(run.taskId).status).toBe("ready_to_merge");
+    expect(database.getTask(run.taskId).status).toBe("done");
     expect(database.getLatestHumanReview(run.id)?.decision).toBe("approved");
     expect(database.listEvents(20).some((event) => event.type === "repository.reconcile_failed")).toBe(true);
   });

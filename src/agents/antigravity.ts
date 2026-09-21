@@ -224,6 +224,9 @@ export class AntigravityProvider implements AgentProvider {
       ),
       cwd,
       provider: this.id,
+      stdin: request.capability === "conversation"
+        ? buildAntigravityStreamInput(request)
+        : undefined,
       timeoutMs: this.executionLimits.maxRuntimeMs,
       inactivityTimeoutMs: this.executionLimits.inactivityTimeoutMs,
       deadlineAt: request.deadlineAt,
@@ -246,6 +249,9 @@ export class AntigravityProvider implements AgentProvider {
       };
     }
 
+    const normalizedOutput = request.capability === "conversation"
+      ? parseAntigravityStreamOutput(processResult.stdout)
+      : processResult.stdout.trim();
     const diagnostics = [processResult.stderr, processResult.stdout]
       .filter(Boolean)
       .join("\n")
@@ -280,7 +286,7 @@ export class AntigravityProvider implements AgentProvider {
         model: selectedModel ?? "antigravity"
       };
     }
-    if (processResult.exitCode !== 0 || !processResult.stdout.trim()) {
+    if (processResult.exitCode !== 0 || !normalizedOutput) {
       const category = classifyFailure(diagnostics, {
         provider: this.id,
         phase: request.phase,
@@ -323,7 +329,7 @@ export class AntigravityProvider implements AgentProvider {
       detail: "Antigravity CLI authenticated",
       checkedAt: new Date().toISOString()
     }, 30_000);
-    const output = processResult.stdout.trim();
+    const output = normalizedOutput;
     const reviewDecision = request.phase === "reviewing"
       ? parseFinalReviewDecision(output)
       : null;
@@ -335,7 +341,9 @@ export class AntigravityProvider implements AgentProvider {
           ? "Antigravity requested concrete changes."
           : "Antigravity did not explicitly approve the final review."
         : `Antigravity completed the ${request.phase} phase.`,
-      structuredPayload: request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
+      structuredPayload: request.capability === "conversation"
+        ? null
+        : request.phase === "reviewing" ? { reviewDecision } : { phase: request.phase },
       artifactsProduced: [],
       output,
       error: null,
@@ -485,9 +493,27 @@ export function buildAntigravityArgs(
   // ('--model X conflicts with --effort=Y'), so omit --effort when the model id
   // already pins it; otherwise pass the configured effort for vanilla models.
   const carriesEffort = /(?:^|-)high$|(?:^|-)medium$|(?:^|-)low$/i.test(model ?? "");
+  if (request.capability === "conversation") {
+    const args = [
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--mode",
+      writable ? "accept-edits" : "plan",
+      "--sandbox",
+      "--add-dir",
+      request.task.worktreePath || request.project.path,
+      "--print-timeout",
+      `${Math.ceil(printTimeoutMs / 1_000)}s`
+    ];
+    if (!carriesEffort) args.push("--effort", effort);
+    if (model) args.push("--model", model);
+    return args;
+  }
   const args = [
     "--print",
-    request.capability === "conversation" ? buildConversationPrompt(request) : buildAgentGoalPrompt(request),
+    buildAgentGoalPrompt(request),
     "--output-format",
     "text",
     "--mode",
@@ -503,6 +529,43 @@ export function buildAntigravityArgs(
   }
   if (model) args.push("--model", model);
   return args;
+}
+
+function buildAntigravityStreamInput(request: AgentExecutionRequest): string {
+  return `${JSON.stringify({
+    event: "user",
+    message: { role: "user", content: buildConversationPrompt(request) }
+  })}\n`;
+}
+
+function parseAntigravityStreamOutput(output: string): string {
+  const events = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
+      } catch {
+        return [];
+      }
+    });
+  const result = [...events].reverse().find((event) => event.event === "result");
+  if (result) {
+    const payload = result.result;
+    if (payload && typeof payload === "object") {
+      const response = (payload as Record<string, unknown>).response;
+      if (typeof response === "string") return response.trim();
+    }
+  }
+  const deltas = events
+    .filter((event) => event.event === "step_update")
+    .map((event) => event.step_update)
+    .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
+    .map((value) => typeof value.text_delta === "string" ? value.text_delta : "")
+    .join("");
+  return deltas.trim();
 }
 
 export function resolveAntigravityExecutable(explicitPath?: string): string | null {

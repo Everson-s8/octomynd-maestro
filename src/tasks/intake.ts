@@ -8,18 +8,16 @@ export type TaskIntake = {
  * request separately for auditability. This is intentionally deterministic:
  * the task must still be creatable when no provider is available.
  */
-export function deriveTaskIntake(originalRequest: string): TaskIntake {
+export function deriveTaskIntake(originalRequest: string, overrides: Partial<TaskIntake> = {}): TaskIntake {
   const original = compact(originalRequest);
   const cleaned = stripFraming(original);
   const clause = firstClause(cleaned);
   const title = titleFromClause(clause || cleaned || original);
+  const suppliedTitle = compact(overrides.title ?? "");
+  const suppliedSpecification = String(overrides.specification ?? "").trim();
   return {
-    title,
-    specification: [
-      `Objective: ${original}`,
-      "",
-      "Execution directive: inspect the existing context, implement only the necessary scope, validate the result, and record blockers or limitations with evidence."
-    ].join("\n")
+    title: truncate(suppliedTitle || title, 120),
+    specification: suppliedSpecification || defaultSpecification(original)
   };
 }
 
@@ -75,4 +73,30 @@ function capitalize(value: string): string {
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1).trim()}…`;
+}
+
+function defaultSpecification(original: string): string {
+  return [
+    "## Context",
+    "This task was derived from the user's project conversation. Preserve the original request as evidence and verify the current implementation before changing it.",
+    "",
+    "## Objective",
+    original || "Clarify and implement the requested project change.",
+    "",
+    "## Scope",
+    "Implement the behavior explicitly requested in the objective. Reuse the existing architecture and avoid unrelated changes or invented requirements.",
+    "",
+    "## Acceptance criteria",
+    "- The requested objective is implemented in the existing project.",
+    "- The result is understandable and actionable by the Maestro execution flow.",
+    "- Existing behavior outside this scope remains intact.",
+    "",
+    "## Validation",
+    "- Inspect the relevant project context before implementation.",
+    "- Run the focused tests, type checks, or build validation available for the changed area.",
+    "- Record blockers, assumptions, and evidence if validation cannot be completed.",
+    "",
+    "## Constraints",
+    "- Do not infer unrelated product requirements; surface material ambiguity instead of guessing."
+  ].join("\n");
 }

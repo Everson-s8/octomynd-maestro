@@ -15,7 +15,7 @@ import {
 } from "../db.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { ApplicationCommandError } from "../commands/errors.js";
-import { GoalCoordinator } from "../goals/coordinator.js";
+import { GoalCoordinator, MAESTRO_GOAL_MAX_STEPS } from "../goals/coordinator.js";
 import { buildDashboardSnapshot, providerAgentPresence } from "./snapshot.js";
 import { ReviewCoordinator } from "../reviews/coordinator.js";
 import { BacklogAutopilot } from "../backlog/autopilot.js";
@@ -181,6 +181,13 @@ export function createDashboardServer(options: DashboardServerOptions) {
                 taskId
               });
             }
+          },
+          startGoal: (taskId) => {
+            const task = options.database.getTask(taskId);
+            if (!task.worktreePath) {
+              commands.prepareTask({ channel: "dashboard" }, taskId, options.config.worktreesPath);
+            }
+            options.goalCoordinator!.start(taskId);
           },
           retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
           resumeGoal: (runId) => {
@@ -1735,6 +1742,39 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/chat/activity-events") {
+    const projectKey = url.searchParams.get("projectKey")?.trim().toLowerCase() || GLOBAL_CHAT_PROJECT_KEY;
+    const threadId = Number(url.searchParams.get("threadId"));
+    const requestedLimit = Number(url.searchParams.get("limit") ?? 100);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(500, Math.max(1, requestedLimit)) : 100;
+    if (!Number.isInteger(threadId) || threadId <= 0) {
+      sendJson(response, 400, { error: "valid_thread_id_is_required" });
+      return;
+    }
+    try {
+      sendJson(response, 200, { projectKey, threadId, events: chatService.getActivityEvents(projectKey, threadId, limit) });
+    } catch (error) {
+      sendJson(response, 404, { error: "chat_activity_events_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/chat/cancel") {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
+    const threadId = body.threadId === undefined || body.threadId === null ? Number(url.searchParams.get("threadId")) : Number(body.threadId);
+    if (!Number.isInteger(threadId) || threadId <= 0) {
+      sendJson(response, 400, { error: "valid_thread_id_is_required" });
+      return;
+    }
+    try {
+      sendJson(response, 200, { projectKey, threadId, activity: chatService.cancelChat(projectKey, threadId) });
+    } catch (error) {
+      sendJson(response, 404, { error: "chat_cancel_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/chat/ask") {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
@@ -1870,11 +1910,20 @@ async function routeRequest(
     }
     const taskId = Number(goalStartMatch[1]);
     const body = await readJsonBody(request);
-    const requestedMaxSteps = typeof body.maxSteps === "number" ? body.maxSteps : 12;
-    const maxSteps = Math.min(30, Math.max(4, Math.trunc(requestedMaxSteps)));
     try {
+      // "Start goal" is the user-facing execution action. It owns the
+      // preparation boundary too, so a queued task cannot get stranded merely
+      // because nobody clicked a separate worktree button first.
+      const task = options.database.getTask(taskId);
+      let prepared = Boolean(task.worktreePath);
+      if (!prepared) {
+        commands.prepareTask({ channel: "dashboard" }, taskId, options.config.worktreesPath);
+        prepared = true;
+      }
+      const requestedMaxSteps = typeof body.maxSteps === "number" ? body.maxSteps : MAESTRO_GOAL_MAX_STEPS;
+      const maxSteps = Math.min(MAESTRO_GOAL_MAX_STEPS, Math.max(4, Math.trunc(requestedMaxSteps)));
       const run = options.goalCoordinator.start(taskId, maxSteps);
-      sendJson(response, 202, { run });
+      sendJson(response, 202, { run, prepared });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown goal start error";
       const status = message.includes("not found") ? 404 : 409;
@@ -2158,12 +2207,14 @@ function isSameLocalDashboardOrigin(origin: string, hostHeader: string | string[
 
     const originHost = normalizeHostname(originUrl.hostname);
     const targetHost = normalizeHostname(targetUrl.hostname);
+    // In local development Vite serves the UI on 4788 and proxies API
+    // mutations to Maestro on 4787. Both ends are loopback-only, so the
+    // port differs by design; keep the stricter same-port check for any
+    // non-loopback host.
+    if (isLoopbackHost(originHost) && isLoopbackHost(targetHost)) return true;
     const originPort = originUrl.port || "80";
     const targetPort = targetUrl.port || "80";
-    if (originPort !== targetPort) return false;
-
-    return originHost === targetHost
-      || (isLoopbackHost(originHost) && isLoopbackHost(targetHost));
+    return originHost === targetHost && originPort === targetPort;
   } catch {
     return false;
   }
