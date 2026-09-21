@@ -14,7 +14,10 @@
  * Usage: maestro chat [--project <key>] [--full]
  */
 import { createInterface } from "node:readline";
+import path from "node:path";
 import { createDatabase } from "../db.js";
+import type { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
+import { REASONING_EFFORTS } from "../agents/types.js";
 import { loadConfig } from "../config.js";
 import { createAgentRegistry } from "../agents/runtime.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
@@ -61,7 +64,7 @@ const OCTOPUS = [
   "    '-'     '--'    '-'"
 ].join("\n");
 
-function banner(locale: "pt-BR" | "en"): void {
+function banner(locale: "pt-BR" | "en", projectKey: string): void {
   console.log(`\n${MAGENTA}${OCTOPUS}${RESET}`);
   console.log(`${DIM}${"─".repeat(46)}${RESET}`);
   console.log(
@@ -69,6 +72,7 @@ function banner(locale: "pt-BR" | "en"): void {
       ? `${DIM}Chat de trabalho — escreva sua solicitação ou /help. Ctrl+C cancela.${RESET}`
       : `${DIM}Working chat — type your request or /help. Ctrl+C cancels.${RESET}`
   );
+  console.log(`${DIM}${locale === "pt-BR" ? "Contexto automático" : "Automatic context"}: @${projectKey}${RESET}`);
 }
 
 // ─── Progress rendering (single line under the input) ────────────────────────
@@ -127,9 +131,12 @@ function userLocale(): "pt-BR" | "en" {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export async function chatCommand(argv: string[]): Promise<number> {
   const locale = userLocale();
+  const projectArgument = optionValue(argv, "--project");
   const projectKey = argv.includes("--project")
-    ? argv[argv.indexOf("--project") + 1]?.toLowerCase()
+    ? normalizeProjectKey(projectArgument)
     : undefined;
+  const initialProvider = optionValue(argv, "--provider");
+  const initialModel = optionValue(argv, "--model");
   const fullAccess = argv.includes("--full");
   const noBanner = argv.includes("--no-banner");
 
@@ -146,8 +153,8 @@ export async function chatCommand(argv: string[]): Promise<number> {
   };
   const service = new OperationalChatService(serviceOptions);
 
-  const effectiveProject = projectKey ?? inferProject(database);
-  if (!effectiveProject) {
+  let activeProjectKey: string = projectKey ?? inferProject(database) ?? "";
+  if (!activeProjectKey) {
     console.error(
       locale === "pt-BR"
         ? "Nenhum projeto encontrado. Registre um com: maestro project add <chave> <caminho-ou-url>"
@@ -159,20 +166,26 @@ export async function chatCommand(argv: string[]): Promise<number> {
 
   const accessMode = fullAccess ? "full" : "standard";
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt(`${CYAN}${BOLD}maestro${RESET}${DIM}@${GRAY}${effectiveProject}${RESET}${DIM}›${RESET} `);
+  rl.setPrompt(`${CYAN}${BOLD}maestro${RESET}${DIM}›${RESET} `);
 
   let threadId: number | null = null;
   let turnActive = false;
+  let selectedProviderId: AgentProviderId | null = initialProvider as AgentProviderId | null;
+  let selectedModel: string | null = initialModel ?? null;
+  let selectedEffort: AgentReasoningEffort | null = null;
 
   const send = async (message: string): Promise<void> => {
     turnActive = true;
     const request: OperationalChatRequest = {
-      projectKey: effectiveProject,
+      projectKey: activeProjectKey,
       threadId: threadId ?? null,
       surface: "cli",
       message,
       uiLocale: locale,
       accessMode,
+      ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(selectedEffort ? { effort: selectedEffort } : {})
     };
     startProgress(locale === "pt-BR" ? "trabalhando…" : "working…");
 
@@ -180,8 +193,8 @@ export async function chatCommand(argv: string[]): Promise<number> {
     const poll = setInterval(() => {
       try {
         const live = threadId == null
-          ? service.getActiveChat(effectiveProject)
-          : { threadId, activity: service.getActivity(effectiveProject, threadId) };
+          ? service.getActiveChat(activeProjectKey)
+          : { threadId, activity: service.getActivity(activeProjectKey, threadId) };
         if (live) {
           threadId = live.threadId;
           updateProgress(activityLine(live.activity, locale));
@@ -212,7 +225,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
         if (fullAccess) {
           try {
             const result = await service.executeAction({
-              projectKey: effectiveProject,
+              projectKey: activeProjectKey,
               threadId: response.threadId,
               surface: "cli",
               action,
@@ -234,7 +247,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
           if (answer) {
             try {
               const result = await service.executeAction({
-                projectKey: effectiveProject,
+                projectKey: activeProjectKey,
                 threadId: response.threadId,
                 surface: "cli",
                 action,
@@ -285,9 +298,92 @@ export async function chatCommand(argv: string[]): Promise<number> {
     if (input === "/help" || input === "/ajuda") {
       console.log(
         locale === "pt-BR"
-          ? "Comandos: /exit sair · /clear limpar · /full alternar Full Access · Ctrl+C cancelar turno"
-          : "Commands: /exit quit · /clear clear · /full toggle Full Access · Ctrl+C cancel turn"
+          ? "Comandos: /projects · /project [chave] · /project_add · /tasks · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancelar"
+          : "Commands: /projects · /project [key] · /project_add · /tasks · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancel"
       );
+      rl.prompt();
+      return;
+    }
+    if (input === "/projects" || input === "/project list") {
+      const projects = database.listProjects(100);
+      console.log(projects.length === 0
+        ? `${DIM}${locale === "pt-BR" ? "Nenhum projeto cadastrado." : "No projects registered."}${RESET}`
+        : projects.map((project) => `${project.key === activeProjectKey ? "▸" : " "} @${project.key} — ${project.name} (${project.defaultBranch})`).join("\n"));
+      rl.prompt();
+      return;
+    }
+    if (input === "/project" || input.startsWith("/project ")) {
+      const requested = normalizeProjectKey(input.split(/\s+/)[1]);
+      if (!requested) {
+        console.log(`${DIM}${locale === "pt-BR" ? "Projeto ativo" : "Active project"}: @${activeProjectKey}${RESET}`);
+      } else {
+        const project = database.findProjectByKey(requested);
+        if (!project) {
+          console.log(`${RED}${locale === "pt-BR" ? `Projeto @${requested} não encontrado.` : `Project @${requested} not found.`}${RESET}`);
+        } else {
+          activeProjectKey = project.key;
+          threadId = null;
+          console.log(`${DIM}${locale === "pt-BR" ? "Contexto alterado para" : "Context switched to"}: @${activeProjectKey}${RESET}`);
+        }
+      }
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/project_add")) {
+      const [, rawKey, ...targetParts] = input.split(/\s+/);
+      const target = targetParts.join(" ").trim();
+      if (!rawKey || !target) {
+        console.log(`${RED}${locale === "pt-BR" ? "Uso: /project_add chave caminho-do-repositorio" : "Usage: /project_add key repository-path"}${RESET}`);
+      } else {
+        try {
+          const result = commands.registerProject({ channel: "cli" }, { key: normalizeProjectKey(rawKey)!, path: target });
+          console.log(`${GREEN}${locale === "pt-BR" ? "Projeto cadastrado" : "Project registered"}: @${result.project.key}${RESET}`);
+        } catch (error) {
+          console.log(`${RED}${error instanceof Error ? error.message : String(error)}${RESET}`);
+        }
+      }
+      rl.prompt();
+      return;
+    }
+    if (input === "/tasks" || input === "/queue") {
+      const tasks = database.listTasksByProject(activeProjectKey, 20);
+      console.log(tasks.length === 0
+        ? `${DIM}${locale === "pt-BR" ? "Nenhuma task recente." : "No recent tasks."}${RESET}`
+        : tasks.map((task) => `#${task.id} [${task.status}] ${task.title || task.text}`).join("\n"));
+      rl.prompt();
+      return;
+    }
+    if (input === "/context") {
+      console.log(`${DIM}${locale === "pt-BR" ? "Contexto ativo" : "Active context"}: @${activeProjectKey}${RESET}`);
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/model") || input.startsWith("/provider")) {
+      const [, provider, ...modelParts] = input.split(/\s+/);
+      if (!provider || provider === "auto" || provider === "automatico" || provider === "automático") {
+        selectedProviderId = null;
+        selectedModel = null;
+        console.log(`${DIM}${locale === "pt-BR" ? "Roteamento automático ativado." : "Automatic routing enabled."}${RESET}`);
+      } else {
+        selectedProviderId = provider as AgentProviderId;
+        selectedModel = modelParts.join(" ").trim() || null;
+        console.log(`${DIM}${locale === "pt-BR" ? "Provider selecionado" : "Selected provider"}: ${selectedProviderId}${selectedModel ? ` · ${selectedModel}` : ""}${RESET}`);
+      }
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/effort")) {
+      const [, effort] = input.split(/\s+/);
+      if (!effort || effort === "auto" || effort === "automatico" || effort === "automático") {
+        selectedEffort = null;
+      } else if (REASONING_EFFORTS.includes(effort as AgentReasoningEffort)) {
+        selectedEffort = effort as AgentReasoningEffort;
+      } else {
+        console.log(`${RED}${locale === "pt-BR" ? `Nível inválido. Use: ${REASONING_EFFORTS.join(", ")}` : `Invalid level. Use: ${REASONING_EFFORTS.join(", ")}`}${RESET}`);
+        rl.prompt();
+        return;
+      }
+      console.log(`${DIM}${locale === "pt-BR" ? "Esforço" : "Effort"}: ${selectedEffort ?? "automatico"}${RESET}`);
       rl.prompt();
       return;
     }
@@ -338,7 +434,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
     console.log(
       `\n${DIM}${locale === "pt-BR" ? "cancelando…" : "cancelling…"}${RESET}`
     );
-    service.cancelChat(effectiveProject, threadId);
+    service.cancelChat(activeProjectKey, threadId);
   });
 
   rl.on("close", () => {
@@ -347,7 +443,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
     // while a turn is still running, and the OS reclaims the file anyway.
   });
 
-  if (!noBanner) banner(locale);
+  if (!noBanner) banner(locale, activeProjectKey);
   rl.prompt();
   return 0;
 }
@@ -364,6 +460,12 @@ function promptYesNo(rl: ReturnType<typeof createInterface>, question: string): 
 function inferProject(database: ReturnType<typeof createDatabase>): string | null {
   try {
     const rows = database.listProjects?.() ?? [];
+    const cwd = path.resolve(process.cwd());
+    const matching = rows.find((project) => {
+      const root = path.resolve(project.path);
+      return cwd === root || cwd.startsWith(`${root}${path.sep}`);
+    });
+    if (matching) return matching.key;
     if (rows.length > 0) return rows[0].key;
     return null;
   } catch {
@@ -371,4 +473,13 @@ function inferProject(database: ReturnType<typeof createDatabase>): string | nul
     const key = cwd.split(/[\\/]/).pop()?.toLowerCase();
     return key || null;
   }
+}
+
+function optionValue(argv: string[], option: string): string | undefined {
+  const index = argv.indexOf(option);
+  return index >= 0 ? argv[index + 1]?.trim() || undefined : undefined;
+}
+
+function normalizeProjectKey(value: string | undefined): string | undefined {
+  return value?.replaceAll("\\_", "_").replace(/^@+/, "").toLowerCase();
 }

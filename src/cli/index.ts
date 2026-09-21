@@ -118,12 +118,17 @@ Commands:
                         Inspect persisted task activity in the terminal.
   task followup <id> <text>
                         Create a queued follow-up linked to an existing task.
+  maestro (no command)
+                        Open the interactive chat with automatic project context.
   start                 Launch the Maestro orchestrator (dashboard UI + API + workers).
   restart [--port N] [--host H]
                         Restart a running Maestro process on the current code.
   dashboard             Launch the web dashboard UI (http://127.0.0.1:4788).
-  chat [--project K] [--full]
+  chat [--project K] [--provider ID] [--model ID] [--full]
                         Open the interactive terminal chat (working agent).
+  login <id>            Log in to a provider (shortcut for providers login).
+  codex|claude|antigravity
+                        Open chat pinned to that provider.
   logs <task-id> [--follow] [--limit N]
                         Inspect persisted task activity in the terminal.
   followup <task-id> <text>
@@ -783,9 +788,11 @@ async function providersLoginCommand(argv: string[]): Promise<void> {
 
 async function main(): Promise<void> {
   const [, , command, ...argv] = process.argv;
+  const startsWithChatOption = Boolean(command?.startsWith("--") && command !== "--help");
+  const effectiveCommand = command == null || startsWithChatOption ? "chat" : command;
+  const chatArgs = startsWithChatOption ? [command!, ...argv] : argv;
 
-  switch (command) {
-    case undefined:
+  switch (effectiveCommand) {
     case "help":
     case "--help":
       printHelp();
@@ -832,7 +839,15 @@ async function main(): Promise<void> {
       break;
     }
     case "chat":
-      await chatCommand(argv);
+      await chatCommand(chatArgs);
+      break;
+    case "login":
+      await providersLoginCommand(argv);
+      break;
+    case "codex":
+    case "claude":
+    case "antigravity":
+      await chatCommand(["--provider", effectiveCommand, ...argv]);
       break;
     case "start":
       await startCommand();
