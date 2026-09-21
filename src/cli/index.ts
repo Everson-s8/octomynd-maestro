@@ -9,7 +9,6 @@ import { createDatabase } from "../db.js";
 import type { ProjectRecord, TaskRecord } from "../db.js";
 import { loadConfig } from "../config.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
-import { CommandOrigin } from "../commands/types.js";
 import { chatCommand } from "./chat.js";
 import { PROVIDER_PRESETS } from "../agents/provider-config.js";
 import { ProviderAuthBroker } from "../agents/provider-auth.js";
@@ -23,14 +22,7 @@ import {
 import { findProcessOnPort, killProcessGracefully } from "../runtime/port-process.js";
 import { detectGitDefaultBranch } from "../git.js";
 import { requestDashboardJson } from "./dashboard-client.js";
-
-function cliOrigin(): CommandOrigin {
-  return { channel: "maestro" };
-}
-
-function cliDataDir(): string {
-  return path.resolve(process.env.MAESTRO_DATA_DIR?.trim() || process.cwd());
-}
+import { cliDataDir, cliOrigin, envDbPath } from "./env.js";
 
 function isPackagedCli(): boolean {
   return process.env.MAESTRO_CLI_MODE === "packaged";
@@ -98,12 +90,6 @@ function commandAvailable(command: string): boolean {
   } catch {
     return false;
   }
-}
-
-function envDbPath(): string {
-  const configured = process.env.MAESTRO_DB_PATH;
-  if (configured && path.isAbsolute(configured)) return configured;
-  return path.resolve(cliDataDir(), configured ?? ".maestro/maestro.db");
 }
 
 function printHelp(): void {
@@ -846,11 +832,11 @@ async function main(): Promise<void> {
       break;
     }
     case "chat":
-          await chatCommand(argv);
-          break;
-        case "start":
-          await startCommand();
-          break;
+      await chatCommand(argv);
+      break;
+    case "start":
+      await startCommand();
+      break;
     case "restart":
       await restartCommand(argv);
       break;

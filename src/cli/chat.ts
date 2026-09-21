@@ -146,7 +146,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
   };
   const service = new OperationalChatService(serviceOptions);
 
-  const effectiveProject = projectKey ?? inferProject(database, locale);
+  const effectiveProject = projectKey ?? inferProject(database);
   if (!effectiveProject) {
     console.error(
       locale === "pt-BR"
@@ -178,10 +178,14 @@ export async function chatCommand(argv: string[]): Promise<number> {
 
     // Poll activity while the ask runs so the user sees the loop working.
     const poll = setInterval(() => {
-      if (!threadId) return;
       try {
-        const activity = service.getActivity(effectiveProject, threadId);
-        updateProgress(activityLine(activity, locale));
+        const live = threadId == null
+          ? service.getActiveChat(effectiveProject)
+          : { threadId, activity: service.getActivity(effectiveProject, threadId) };
+        if (live) {
+          threadId = live.threadId;
+          updateProgress(activityLine(live.activity, locale));
+        }
       } catch {
         /* no activity yet — keep the generic line */
       }
@@ -273,7 +277,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
         rl.prompt();
         return;
       }
-      service.shutdown?.();
+      service.shutdown();
       database.close();
       rl.close();
       return;
@@ -319,7 +323,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
     if (!turnActive) {
       // Idle: a second Ctrl+C exits cleanly.
       if (rl.line.length === 0) {
-        service.shutdown?.();
+        service.shutdown();
         database.close();
         rl.close();
         return;
@@ -334,7 +338,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
     console.log(
       `\n${DIM}${locale === "pt-BR" ? "cancelando…" : "cancelling…"}${RESET}`
     );
-    service.cancelChat(effectiveProject, threadId ?? 0);
+    service.cancelChat(effectiveProject, threadId);
   });
 
   rl.on("close", () => {
@@ -357,10 +361,7 @@ function promptYesNo(rl: ReturnType<typeof createInterface>, question: string): 
 }
 
 // ─── Pragmatic project inference from the DB ─────────────────────────────────
-function inferProject(
-  database: ReturnType<typeof createDatabase>,
-  locale: "pt-BR" | "en"
-): string | null {
+function inferProject(database: ReturnType<typeof createDatabase>): string | null {
   try {
     const rows = database.listProjects?.() ?? [];
     if (rows.length > 0) return rows[0].key;

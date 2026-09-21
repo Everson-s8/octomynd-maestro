@@ -49,6 +49,8 @@
     "rebuild:desktop-native": "node scripts/rebuild-desktop-native.mjs",
     "dist:win": "npm run rebuild:desktop-native && electron-builder --win --config electron-builder.yml",
     "release:win": "node scripts/build-desktop.mjs && npm run rebuild:desktop-native && electron-builder --win --config electron-builder.yml",
+    "verify:release": "node scripts/verify-desktop-release.mjs",
+    "verify:release:github": "node scripts/verify-desktop-release.mjs --github",
     "postrelease:win": "node scripts/rebuild-test-native.mjs",
     "typecheck:ui": "tsc --noEmit -p ui/tsconfig.json",
     "smoke": "tsx src/smoke.ts",

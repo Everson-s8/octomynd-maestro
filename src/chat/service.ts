@@ -831,8 +831,8 @@ export class OperationalChatService {
     providerId: AgentProviderId | null;
     model: string | null;
     origin: CommandOrigin;
-        locale: ChatLocale;
-      }): Promise<{ success: boolean; summary: string }> {
+    locale: ChatLocale;
+  }): Promise<{ success: boolean; summary: string }> {
     if (!this.agentRegistry) {
       throw new Error(chatText(input.locale, "Agent registry is unavailable.", "O registro de providers está indisponível."));
     }
@@ -1134,18 +1134,32 @@ export class OperationalChatService {
     return { ...latest.progress, requestId: latest.requestId };
   }
 
+  /** Return the latest live chat request for a project, including its thread. */
+  getActiveChat(projectKey: string): { threadId: number; activity: OperationalChatActivity } | null {
+    const normalizedKey = normalizeChatProjectKey(projectKey);
+    this.resolveChatProject(normalizedKey);
+    const active = [...this.activeChatRequests.values()]
+      .filter((request) => request.projectKey === normalizedKey)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+      .at(-1);
+    return active
+      ? { threadId: active.threadId, activity: { ...active.progress, requestId: active.requestId } }
+      : null;
+  }
+
   getActivityEvents(projectKey: string, threadId: number, limit = 100): OperationalChatActivityEvent[] {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
     return this.database.listOperationalChatActivityEvents(normalizedKey, threadId, limit);
   }
 
-  cancelChat(projectKey: string, threadId: number): OperationalChatActivity {
+  cancelChat(projectKey: string, threadId?: number | null): OperationalChatActivity {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
-    const requestIds = this.activeChatByThread.get(threadId);
-    const activities = [...(requestIds ?? [])]
-      .map((requestId) => this.activeChatRequests.get(requestId))
+    const activities = (threadId == null
+      ? [...this.activeChatRequests.values()]
+      : [...(this.activeChatByThread.get(threadId) ?? [])]
+        .map((requestId) => this.activeChatRequests.get(requestId)))
       .filter((activity): activity is NonNullable<typeof activity> => Boolean(activity && activity.projectKey === normalizedKey));
     if (activities.length === 0) return idleChatActivity(this.chatBudget);
     for (const activity of activities) {

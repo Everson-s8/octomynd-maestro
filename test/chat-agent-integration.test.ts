@@ -141,14 +141,14 @@ describe("chat agent loop integration", () => {
       }
     };
     const service = new OperationalChatService({ database, agentRegistry: new AgentRegistry([provider]), worktreesRoot: dir });
-    const thread = service.createThread("apto", "Cancelamento");
-    const pending = service.ask({ projectKey: "apto", threadId: thread.id, surface: "dashboard", message: "estude o projeto" });
+    const pending = service.ask({ projectKey: "apto", threadId: null, surface: "dashboard", message: "estude o projeto" });
     await startedPromise;
-    expect(service.getActivity("apto", thread.id)).toMatchObject({ active: true, phase: "thinking", requestId: expect.any(String) });
-    expect(service.cancelChat("apto", thread.id)).toMatchObject({ active: true, phase: "cancelled" });
+    const live = service.getActiveChat("apto");
+    expect(live).toMatchObject({ threadId: expect.any(Number), activity: { active: true, phase: "thinking", requestId: expect.any(String) } });
+    expect(service.cancelChat("apto")).toMatchObject({ active: true, phase: "cancelled" });
     await expect(pending).rejects.toThrow("cancelled");
-    expect(service.getActivity("apto", thread.id)).toMatchObject({ active: false, phase: "idle" });
-    const activityEvents = database.listOperationalChatActivityEvents("apto", thread.id);
+    expect(service.getActivity("apto", live!.threadId)).toMatchObject({ active: false, phase: "idle" });
+    const activityEvents = database.listOperationalChatActivityEvents("apto", live!.threadId);
     expect(activityEvents.map((event) => event.phase)).toEqual(expect.arrayContaining(["thinking", "cancelled"]));
   });
 

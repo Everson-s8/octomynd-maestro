@@ -3,7 +3,7 @@ import type { CommandOrigin } from "../commands/types.js";
 
 /** Origin marker used by CLI-originated commands (shared by chat and task commands). */
 export function cliOrigin(): CommandOrigin {
-  return { channel: "maestro" };
+  return { channel: "cli" };
 }
 
 /** Data directory for CLI-mode state; overridable with MAESTRO_DATA_DIR. */
