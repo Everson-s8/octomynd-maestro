@@ -298,10 +298,22 @@ export async function chatCommand(argv: string[]): Promise<number> {
     if (input === "/help" || input === "/ajuda") {
       console.log(
         locale === "pt-BR"
-          ? "Comandos: /projects · /project [chave] · /project_add · /tasks · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancelar"
-          : "Commands: /projects · /project [key] · /project_add · /tasks · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancel"
+          ? "Comandos: /projects · /project [chave] · /project_add · /tasks · /providers · /provider · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancelar"
+          : "Commands: /projects · /project [key] · /project_add · /tasks · /providers · /provider · /model · /effort · /context · /exit · /clear · /full · Ctrl+C cancel"
       );
       rl.prompt();
+      return;
+    }
+    if (input === "/providers") {
+      void agentRegistry.snapshot().then((providers) => {
+        console.log(providers.length === 0
+          ? `${DIM}${locale === "pt-BR" ? "Nenhum provider detectado." : "No providers detected."}${RESET}`
+          : providers.map((provider) => `${provider.id === selectedProviderId ? "▸" : " "} ${provider.id} — ${provider.state}${provider.currentModel ? ` · ${provider.currentModel}` : ""}`).join("\n"));
+        rl.prompt();
+      }).catch((error) => {
+        console.log(`${RED}${error instanceof Error ? error.message : String(error)}${RESET}`);
+        rl.prompt();
+      });
       return;
     }
     if (input === "/projects" || input === "/project list") {
@@ -358,17 +370,24 @@ export async function chatCommand(argv: string[]): Promise<number> {
       rl.prompt();
       return;
     }
-    if (input.startsWith("/model") || input.startsWith("/provider")) {
-      const [, provider, ...modelParts] = input.split(/\s+/);
+    if (input === "/provider" || input.startsWith("/provider ")) {
+      const [, provider] = input.split(/\s+/);
       if (!provider || provider === "auto" || provider === "automatico" || provider === "automático") {
         selectedProviderId = null;
         selectedModel = null;
         console.log(`${DIM}${locale === "pt-BR" ? "Roteamento automático ativado." : "Automatic routing enabled."}${RESET}`);
       } else {
         selectedProviderId = provider as AgentProviderId;
-        selectedModel = modelParts.join(" ").trim() || null;
-        console.log(`${DIM}${locale === "pt-BR" ? "Provider selecionado" : "Selected provider"}: ${selectedProviderId}${selectedModel ? ` · ${selectedModel}` : ""}${RESET}`);
+        selectedModel = null;
+        console.log(`${DIM}${locale === "pt-BR" ? "Provider selecionado" : "Selected provider"}: ${selectedProviderId}${RESET}`);
       }
+      rl.prompt();
+      return;
+    }
+    if (input === "/model" || input.startsWith("/model ")) {
+      const model = input.split(/\s+/).slice(1).join(" ").trim();
+      selectedModel = !model || model === "auto" || model === "automatico" || model === "automático" ? null : model;
+      console.log(`${DIM}${locale === "pt-BR" ? "Modelo" : "Model"}: ${selectedModel ?? "automatico"}${RESET}`);
       rl.prompt();
       return;
     }
