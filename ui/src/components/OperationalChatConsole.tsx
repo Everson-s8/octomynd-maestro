@@ -41,7 +41,10 @@ export function OperationalChatConsole({
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
   const [messages, setMessages] = useState<OperationalChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
-  const [loading, setLoading] = useState(false);
+  // A Goal may be running while the user sends follow-up guidance. Keep a
+  // count instead of a boolean so one completed request cannot hide another
+  // request that is still being processed.
+  const [loading, setLoading] = useState(0);
   const [chatActivity, setChatActivity] = useState<OperationalChatActivity>(idleChatActivity());
   const [activityEvents, setActivityEvents] = useState<OperationalChatActivityEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -57,6 +60,8 @@ export function OperationalChatConsole({
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
+  const shouldFollowLatestRef = useRef(true);
+  const pendingScrollToLatestRef = useRef(false);
 
   useEffect(() => {
     void fetchChatProviders().then(setChatProviders).catch(() => setChatProviders([]));
@@ -85,6 +90,7 @@ export function OperationalChatConsole({
       } else {
         setSelectedThreadId(null);
         setChatActivity(idleChatActivity());
+        setActivityEvents([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
@@ -95,6 +101,8 @@ export function OperationalChatConsole({
     if (selectedProjectKey) {
       setSelectedThreadId(null);
       setMessages([]);
+      setChatActivity(idleChatActivity());
+      setActivityEvents([]);
       void loadThreads(selectedProjectKey);
     }
   }, [selectedProjectKey, loadThreads]);
@@ -125,15 +133,30 @@ export function OperationalChatConsole({
       return;
     }
 
+    // Switching conversations must not briefly show the previous run while
+    // the new status request is in flight.
+    setChatActivity(idleChatActivity());
+    setActivityEvents([]);
+
     const refreshActivity = async () => {
       try {
-        const [activity, events] = await Promise.all([
-          fetchChatActivity(selectedProjectKey, selectedThreadId),
-          fetchChatActivityEvents(selectedProjectKey, selectedThreadId, 80)
-        ]);
+        const activity = await fetchChatActivity(selectedProjectKey, selectedThreadId);
         if (!cancelled) {
           setChatActivity(activity);
-          setActivityEvents(events);
+          if (!activity.active) {
+            // Activity events are an audit trail, not the live process panel.
+            // Once a run ends, the panel must not resurrect its old entries.
+            setActivityEvents([]);
+            return;
+          }
+
+          const events = await fetchChatActivityEvents(selectedProjectKey, selectedThreadId, 80);
+          if (cancelled) return;
+          // Keep only the current run. The endpoint intentionally retains
+          // historical events for diagnostics, but they do not belong in the
+          // live PROCESSO card.
+          const requestId = activity.requestId ?? events.at(-1)?.requestId ?? null;
+          setActivityEvents(requestId ? events.filter((event) => event.requestId === requestId) : []);
         }
       } catch {
         // The history remains usable if an older server does not expose status yet.
@@ -148,14 +171,32 @@ export function OperationalChatConsole({
     };
   }, [selectedProjectKey, selectedThreadId]);
 
-  useLayoutEffect(() => {
+  const scrollToLatest = useCallback((force = false) => {
     const element = chatBodyRef.current;
-    if (!element) return;
+    if (!element || (!force && !shouldFollowLatestRef.current)) return;
     const frame = window.requestAnimationFrame(() => {
       element.scrollTop = element.scrollHeight;
+      shouldFollowLatestRef.current = true;
+      pendingScrollToLatestRef.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, loading, historyLoading, activityEvents, selectedThreadId]);
+  }, []);
+
+  // Loading a conversation is an explicit navigation event, so it may start
+  // at the latest message. Activity polling is deliberately absent here:
+  // reading older messages must never be interrupted by a status refresh.
+  useLayoutEffect(() => {
+    if (historyLoading) return;
+    return scrollToLatest(true);
+  }, [historyLoading, selectedThreadId, scrollToLatest]);
+
+  // New messages follow the latest position only when the user was already
+  // there or when a send/action explicitly requested it. This preserves the
+  // user's reading position while the activity timeline keeps refreshing.
+  useLayoutEffect(() => {
+    if (historyLoading) return;
+    return scrollToLatest(pendingScrollToLatestRef.current);
+  }, [messages, loading, historyLoading, scrollToLatest]);
 
   useLayoutEffect(() => {
     const element = inputRef.current;
@@ -171,7 +212,14 @@ export function OperationalChatConsole({
   }, []);
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
-  const isResponding = loading || chatActivity.active;
+  const isResponding = loading > 0 || chatActivity.active;
+
+  useEffect(() => {
+    if (loading !== 0 || chatActivity.active) return;
+    if (chatActivity.phase === "idle" && activityEvents.length === 0) return;
+    setChatActivity(idleChatActivity());
+    setActivityEvents([]);
+  }, [activityEvents.length, chatActivity.active, chatActivity.phase, loading]);
 
   const handleCancelChat = async () => {
     if (!selectedThreadId || !chatActivity.active) return;
@@ -205,6 +253,8 @@ export function OperationalChatConsole({
       setThreads((current) => [thread, ...current]);
       setSelectedThreadId(thread.id);
       setMessages([]);
+      shouldFollowLatestRef.current = true;
+      pendingScrollToLatestRef.current = true;
       setAccessMode(thread.accessMode);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     } catch (err) {
@@ -243,12 +293,16 @@ export function OperationalChatConsole({
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedProjectKey || isResponding) return;
+    if (!inputText.trim() || !selectedProjectKey || historyLoading) return;
 
     const userText = inputText.trim();
     setInputText("");
-    setLoading(true);
+    setLoading((current) => current + 1);
     setError(null);
+    setChatActivity(idleChatActivity());
+    setActivityEvents([]);
+    shouldFollowLatestRef.current = true;
+    pendingScrollToLatestRef.current = true;
 
     let activeThreadId = selectedThreadId;
 
@@ -290,8 +344,9 @@ export function OperationalChatConsole({
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to send the message."));
     } finally {
-      setLoading(false);
-      setChatActivity(idleChatActivity());
+      setLoading((current) => {
+        return Math.max(0, current - 1);
+      });
     }
   };
 
@@ -366,6 +421,7 @@ export function OperationalChatConsole({
       "cancel_task",
       "cancel_feature_plan",
       "resume_goal",
+      "guide_goal",
       "unblock_provider",
       "code_change_worktree",
       "code_change_task"
@@ -379,6 +435,8 @@ export function OperationalChatConsole({
 
     setActionExecuting(action.id);
     setError(null);
+    shouldFollowLatestRef.current = true;
+    pendingScrollToLatestRef.current = true;
 
     try {
       if (!selectedThreadId) return;
@@ -504,7 +562,16 @@ export function OperationalChatConsole({
 
           {error ? <div className="chat-error" role="alert">{error}</div> : null}
 
-          <div className="chat-body" ref={chatBodyRef} aria-busy={isResponding || historyLoading}>
+          <div
+            className="chat-body"
+            ref={chatBodyRef}
+            aria-busy={isResponding || historyLoading}
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+              shouldFollowLatestRef.current = distanceFromBottom <= 48;
+            }}
+          >
             {historyLoading ? (
               <div className="chat-loading-history"><span className="chat-spinner" /> {translate("Loading conversation…")}</div>
             ) : messages.length === 0 ? (
@@ -568,7 +635,7 @@ export function OperationalChatConsole({
                 </div>
               </div>
             ) : null}
-            {activityEvents.length > 0 ? (
+            {chatActivity.active && activityEvents.length > 0 ? (
               <div className="chat-process-timeline" aria-label={translate("Maestro process") }>
                 <div className="chat-process-title">{translate("Process")}</div>
                 {activityEvents.slice(-8).map((event) => (
@@ -605,10 +672,10 @@ export function OperationalChatConsole({
                   e.currentTarget.form?.requestSubmit();
                 }
               }}
-              disabled={isResponding || historyLoading}
+              disabled={historyLoading}
               aria-label={translate("Message Maestro")}
             />
-            <button type="submit" disabled={isResponding || historyLoading || !inputText.trim()} title={translate("Send message")} aria-label={translate("Send message")}>
+            <button type="submit" disabled={historyLoading || !inputText.trim()} title={translate("Send message")} aria-label={translate("Send message")}>
               <Icon name="send" />
             </button>
           </form>
@@ -619,7 +686,7 @@ export function OperationalChatConsole({
 }
 
 function idleChatActivity(): OperationalChatActivity {
-  return { active: false, startedAt: null, phase: "idle", iteration: 0, maxIterations: 10, toolCalls: 0, maxToolCalls: 14, toolName: null, detail: null };
+  return { requestId: null, active: false, startedAt: null, phase: "idle", iteration: 0, maxIterations: 10, toolCalls: 0, maxToolCalls: 14, toolName: null, detail: null };
 }
 
 function activityPhaseLabel(phase: OperationalChatActivityEvent["phase"], locale: string): string {

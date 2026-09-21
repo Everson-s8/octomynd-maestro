@@ -93,9 +93,10 @@ describe("SkillEvaluationHarness", () => {
       "repository:diagnose-goal-failure",
       "repository:final-feature-review",
       "repository:implement-task-safely",
-      "repository:improvement-reviewing"
+      "repository:improvement-reviewing",
+      "repository:product-design"
     ]);
-    expect(database.listSkillEvaluations()).toHaveLength(5);
+    expect(database.listSkillEvaluations()).toHaveLength(6);
     expect(database.listSkillEvaluations().every((evaluation) => evaluation.status === "passed")).toBe(true);
     expect(result.runtime.prepareContext({
       runId: null,
@@ -111,6 +112,13 @@ describe("SkillEvaluationHarness", () => {
       taskText: "Judge this bounded evidence pack.",
       projectKey: "maestro"
     }).loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:improvement-reviewing"]);
+    expect(result.runtime.prepareContext({
+      runId: null,
+      phase: "planning",
+      capability: "planning",
+      taskText: "Redesign the dashboard interface and its loading state.",
+      projectKey: "maestro"
+    }).loaded.map((skill) => skill.qualifiedName)).toContain("repository:product-design");
   });
 });
 

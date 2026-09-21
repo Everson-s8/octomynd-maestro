@@ -134,6 +134,18 @@ describe("human review queue", () => {
     expect(github.actions).not.toContain("merge");
   });
 
+  it("allows approving a clean PR without a written rationale", async () => {
+    const run = reviewableGoal();
+    const github = new FakeGitHubGateway();
+    const reviews = new ReviewCoordinator(database, idleGoalCoordinator(), github);
+
+    const result = await reviews.decide(run.id, "approved", "");
+
+    expect(github.actions).toEqual(["ready"]);
+    expect(result.review.note).toBe("Approved for merge from the Maestro dashboard.");
+    expect(database.getTask(run.taskId).status).toBe("ready_to_merge");
+  });
+
   it("merges an approved PR when the dashboard requests delivery", async () => {
     const run = reviewableGoal();
     const github = new FakeGitHubGateway();
@@ -323,7 +335,7 @@ describe("human review queue", () => {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ decision: "approved", note: "API review completed." })
+          body: JSON.stringify({ decision: "approved" })
         }
       );
       expect(decisionResponse.status).toBe(200);

@@ -1481,6 +1481,8 @@ export type OperationalChatResponse = {
 };
 
 export type OperationalChatActivity = {
+  /** Identifies the live execution represented by this snapshot. */
+  requestId?: string | null;
   active: boolean;
   startedAt: string | null;
   phase: "idle" | "thinking" | "tool" | "finished" | "cancelled" | "budget_exhausted";

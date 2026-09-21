@@ -42,6 +42,15 @@ describe("task intake metadata", () => {
     }
   });
 
+  it("makes stateful work prove both current and clean runtime state", () => {
+    const specification = deriveTaskIntake("remover mocks e tornar a persistência real").specification;
+
+    expect(specification).toContain("existing data/state");
+    expect(specification).toContain("clean state");
+    expect(specification).toContain("already-used state");
+    expect(specification).toContain("real runtime path");
+  });
+
   it("persists an agent-produced implementation brief separately from the audit text", () => {
     const intake = deriveTaskIntake("crie uma task a partir disso", {
       title: "Simplificar as despesas do apartamento",

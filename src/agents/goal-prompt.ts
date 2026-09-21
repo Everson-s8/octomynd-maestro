@@ -48,6 +48,7 @@ export function buildAgentGoalPrompt(
     `Task #${request.task.id}: ${request.task.title || request.task.text}`,
     `Original user request: ${request.task.text}`,
     ...(request.task.specification ? ["Task specification:", request.task.specification] : []),
+    "Execution contract: inspect the current repository and runtime state before editing. If the task mentions mocks, fixtures, seed data, persistence, migration, startup, or user-visible state, validate both a clean state and an already-used state when applicable; do not treat a passing build as proof that the requested state transition works.",
     `Phase: ${request.phase}`,
     phaseInstruction,
     ...formatFeatureTaskContract(request.featureTaskContract),

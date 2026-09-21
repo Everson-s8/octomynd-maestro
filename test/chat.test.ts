@@ -12,7 +12,9 @@ import { MaestroConfig } from "../src/config.js";
 import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
 import { runGit } from "../src/git.js";
 import { ProjectProcessManager } from "../src/chat/project-process.js";
+import { planProjectStartCommand } from "../src/chat/project-command.js";
 import { compileOperationalChatContext } from "../src/chat/context-compiler.js";
+import { isRecoveryRequest } from "../src/chat/recovery.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -405,6 +407,69 @@ describe("Unified Operational Chat (Task #52)", () => {
     }
   });
 
+  it("runs an agent-requested dev server in the background and does not duplicate it", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({
+      name: "chat-agent-server-test",
+      version: "1.0.0",
+      scripts: { dev: "node -e \"console.log('Local: http://127.0.0.1:4557/'); setInterval(() => {}, 1000)\"" }
+    }), "utf8");
+    const processManager = new ProjectProcessManager();
+    let calls = 0;
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "completed",
+      output: "",
+      error: null,
+      retryable: false
+    }, {
+      execute: async () => {
+        calls += 1;
+        const turn = calls === 1
+          ? { type: "tool_call", name: "run_command", arguments: { command: "npm run dev" } }
+          : { type: "final", response: "O servidor está ativo em background." };
+        return {
+          outcome: "completed",
+          summary: "completed",
+          output: JSON.stringify(turn),
+          structuredPayload: turn,
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([provider]),
+      processManager
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "A task terminou, reinicie o serviço para eu testar.",
+        accessMode: "full"
+      });
+
+      expect(response.evidence.commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "npm run dev", status: "completed" })
+      ]));
+      expect(response.evidence.processes).toEqual([
+        expect.objectContaining({ status: "running", url: "http://127.0.0.1:4557/" })
+      ]);
+      expect(processManager.list("maestro")).toHaveLength(1);
+
+      const sameProcess = processManager.start("maestro", tmpDir, planProjectStartCommand(tmpDir, "full"));
+      expect(sameProcess.id).toBe(processManager.list("maestro")[0]?.id);
+      expect(processManager.list("maestro")).toHaveLength(1);
+    } finally {
+      chatService.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  });
+
   it("exposes resume from checkpoint for a blocked goal instead of only restarting the task", async () => {
     const task = database.createTask("Continue the financial app implementation", "test", "maestro");
     database.updateTaskStatus(task.id, "blocked");
@@ -439,6 +504,86 @@ describe("Unified Operational Chat (Task #52)", () => {
         expect.objectContaining({ type: "retry_task", targetId: task.id })
       ])
     );
+  });
+
+  it("uses recent user context to interpret an acknowledgement as a recovery command", () => {
+    expect(isRecoveryRequest("acho que agora você consegue", ["tente novamente desbloquear essa task"])).toBe(true);
+    expect(isRecoveryRequest("acho que agora você consegue", ["qual é o status do projeto?"])).toBe(false);
+  });
+
+  it("interprets an explicit unblock request and resumes the only blocked Goal automatically", async () => {
+    const task = database.createTask("Continue the financial app implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 6,
+      lastError: "provider permission denied",
+      failureCategory: "permission_denied"
+    });
+    const resumed: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      actionExecutor: {
+        resumeGoal: (runId) => resumed.push(runId)
+      }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      message: "Tente novamente desbloquear, fiz uns ajustes no Maestro."
+    });
+
+    expect(resumed).toEqual([run.id]);
+    expect(response.explanation).toContain(`Goal #${run.id} for Task #${task.id} resumed`);
+    expect(response.actions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "resume_goal", targetId: run.id })
+      ])
+    );
+  });
+
+  it("carries a prior recovery request into a short follow-up acknowledgement", async () => {
+    const task = database.createTask("Continue the financial app implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 6,
+      lastError: "provider permission denied",
+      failureCategory: "permission_denied"
+    });
+    const resumed: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      actionExecutor: {
+        resumeGoal: (runId) => resumed.push(runId)
+      }
+    });
+
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "tente novamente desbloquear essa task"
+    });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      message: "acho que agora você consegue"
+    });
+
+    expect(resumed).toEqual([run.id]);
+    expect(response.explanation).toContain(`Goal #${run.id} for Task #${task.id} resumed`);
   });
 
   it("executes safe governed actions directly from chat", async () => {

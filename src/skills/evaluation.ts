@@ -74,7 +74,7 @@ export class SkillEvaluationHarness {
             taskText: item.prompt,
             phase: item.phase,
             capability: item.capability
-          }, snapshot.policy.capabilities);
+          }, snapshot.policy.capabilities, snapshot.policy.focus);
           const matched = score > 0;
           const passed = matched === item.expectMatch;
           checks.push({

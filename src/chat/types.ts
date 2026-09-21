@@ -156,6 +156,7 @@ export type GovernedChatActionType =
   | "unblock_provider"
   | "retry_task"
   | "resume_goal"
+  | "guide_goal"
   | "rerun_review"
   | "resume_feature_plan"
   | "retry_feature_plan"
@@ -207,6 +208,8 @@ export type OperationalChatMessageInput = {
 };
 
 export type OperationalChatActivity = {
+  /** Identifies the live execution represented by this snapshot. */
+  requestId?: string | null;
   active: boolean;
   startedAt: string | null;
   phase: "idle" | "thinking" | "tool" | "finished" | "cancelled" | "budget_exhausted";

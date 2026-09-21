@@ -1,6 +1,6 @@
 import type { AgentCapability } from "../agents/types.js";
 import type { GoalPhase, MaestroDatabase, SkillRecord, SkillVersionRecord } from "../db.js";
-import type { SkillExecutionContext, SkillOperatingSystem } from "./types.js";
+import type { SkillExecutionContext, SkillFocus, SkillOperatingSystem, SkillPolicy } from "./types.js";
 import { SkillVersionStore } from "./store.js";
 
 export type SkillInvocationPhase = GoalPhase | "conversation" | "improvement_reviewing";
@@ -232,6 +232,7 @@ function isApplicable(
   if (!version.policy.operatingSystems.includes(process.platform as SkillOperatingSystem)) {
     return false;
   }
+  if (!focusMatches(version.policy, request.taskText)) return false;
   return true;
 }
 
@@ -239,7 +240,8 @@ export function scoreSkillRelevance(
   name: string,
   description: string,
   request: Pick<SkillRuntimeRequest, "taskText" | "phase" | "capability">,
-  supportedCapabilities?: readonly AgentCapability[]
+  supportedCapabilities?: readonly AgentCapability[],
+  focus?: readonly SkillFocus[]
 ): number {
   void name;
   void description;
@@ -252,10 +254,27 @@ export function scoreSkillRelevance(
     reviewing: "reviewing"
   };
   if (supportedCapabilities && !supportedCapabilities.includes(request.capability)) return 0;
+  if (focus && !focusMatches({ focus: [...focus] }, request.taskText)) return 0;
   const expectedCapability = request.phase in phaseCapability
     ? phaseCapability[request.phase as GoalPhase]
     : request.phase;
   return request.capability === expectedCapability && Boolean(request.taskText.trim()) ? 10 : 0;
+}
+
+function focusMatches(policy: Pick<SkillPolicy, "focus">, taskText: string): boolean {
+  const focus = policy.focus ?? ["general"];
+  if (focus.includes("general")) return true;
+  const requested = inferSkillFocus(taskText);
+  return focus.some((item) => requested.includes(item));
+}
+
+export function inferSkillFocus(taskText: string): SkillFocus[] {
+  const normalized = taskText
+    .toLocaleLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  const productDesign = /\b(?:ui|ux|app|aplicacao|site|web|frontend|front-end|interface|screen|screens|tela|telas|pagina|layout|visual|designer|design|estilo|tema|cor|tipografia|componente|componentes|css|responsive|responsiv|mobile|desktop|navegacao|fluxo do usuario|jornada|usabilidade|acessibilidade|loading|animacao|modal|dashboard)\b/.test(normalized);
+  return productDesign ? ["product_design"] : ["general"];
 }
 
 function skillName(version: SkillVersionRecord): string {

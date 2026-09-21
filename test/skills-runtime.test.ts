@@ -95,6 +95,38 @@ describe("SkillRuntime", () => {
     expect(database.listGoalSkillPins(createRun("unrelated").id)).toEqual([]);
   });
 
+  it("loads a focused product-design Skill only for interface work", () => {
+    const root = path.join(tempDir, "skills");
+    writeSkill(root, "product-design", {
+      description: "Guide UI work with observable design evidence.",
+      body: "DESIGN PROCEDURE",
+      risk: "low",
+      implicit: true,
+      capability: "planning",
+      focus: "product_design"
+    });
+    const store = registerAndActivateAll(root);
+    const runtime = new SkillRuntime(database, store);
+
+    const design = runtime.prepareContext({
+      runId: null,
+      phase: "planning",
+      capability: "planning",
+      taskText: "Redesign the dashboard interface and improve empty states.",
+      projectKey: "maestro"
+    });
+    expect(design.loaded.map((skill) => skill.qualifiedName)).toEqual(["repository:product-design"]);
+
+    const backend = runtime.prepareContext({
+      runId: null,
+      phase: "planning",
+      capability: "planning",
+      taskText: "Migrate the billing database and add an index.",
+      projectKey: "maestro"
+    });
+    expect(backend.loaded).toEqual([]);
+  });
+
   it("does not inject skills when the operator disables the runtime", () => {
     const root = path.join(tempDir, "skills");
     writeSkill(root, "review-feature", {
@@ -305,6 +337,7 @@ function writeSkill(
     risk: "low" | "medium" | "high";
     implicit: boolean;
     capability?: "planning" | "coding" | "reviewing" | "conversation" | "improvement_reviewing";
+    focus?: "product_design";
   }
 ): void {
   const skillPath = path.join(root, name);
@@ -331,9 +364,9 @@ function writeSkill(
     "cases:",
     "  - id: trigger",
     "    type: trigger",
-    "    prompt: review the feature",
-    "    phase: reviewing",
-    "    capability: reviewing",
+    `    prompt: ${input.focus === "product_design" ? "redesign the dashboard interface" : "review the feature"}`,
+    `    phase: ${input.focus === "product_design" ? "planning" : "reviewing"}`,
+    `    capability: ${input.capability ?? (input.focus === "product_design" ? "planning" : "reviewing")}`,
     "    expectMatch: true",
     "  - id: content",
     "    type: content",
@@ -345,6 +378,7 @@ function writeSkill(
     "owner: system",
     `risk: ${input.risk}`,
     `allowImplicitInvocation: ${input.implicit}`,
+    ...(input.focus ? [`focus: [${input.focus}]`] : []),
     `capabilities: [${input.capability ?? "reviewing"}]`,
     `operatingSystems: [${process.platform}]`,
     "network: none",

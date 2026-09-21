@@ -144,12 +144,159 @@ describe("chat agent loop integration", () => {
     const thread = service.createThread("apto", "Cancelamento");
     const pending = service.ask({ projectKey: "apto", threadId: thread.id, surface: "dashboard", message: "estude o projeto" });
     await startedPromise;
-    expect(service.getActivity("apto", thread.id)).toMatchObject({ active: true, phase: "thinking" });
+    expect(service.getActivity("apto", thread.id)).toMatchObject({ active: true, phase: "thinking", requestId: expect.any(String) });
     expect(service.cancelChat("apto", thread.id)).toMatchObject({ active: true, phase: "cancelled" });
     await expect(pending).rejects.toThrow("cancelled");
     expect(service.getActivity("apto", thread.id)).toMatchObject({ active: false, phase: "idle" });
     const activityEvents = database.listOperationalChatActivityEvents("apto", thread.id);
     expect(activityEvents.map((event) => event.phase)).toEqual(expect.arrayContaining(["thinking", "cancelled"]));
+  });
+
+  it("persists live Goal guidance instead of creating a second task", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-guidance-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const task = new ApplicationCommands(database).createTask(
+      { channel: "dashboard", userId: null, username: null },
+      { projectKey: "apto", text: "Implementar o fluxo do apartamento" }
+    );
+    database.updateTaskWorktree({ id: task.id, status: "implementing", branchName: "maestro/task-guidance", worktreePath: dir });
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "running", currentPhase: "implementing", stepCount: 2, lastProvider: "codex" });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Orientar Goal" });
+    let providerCalls = 0;
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        providerCalls += 1;
+        const turn = providerCalls === 1
+          ? { type: "tool_call", name: "governed_action", arguments: { action: "guide_goal", actionId: `guide_goal_${run.id}` } }
+          : { type: "final", response: "Registrei a nova orientação no Goal atual e mantive o checkpoint." };
+        return {
+          outcome: "completed",
+          summary: "completed",
+          output: JSON.stringify(turn),
+          structuredPayload: turn,
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    };
+    const service = new OperationalChatService({ database, agentRegistry: new AgentRegistry([provider]), worktreesRoot: dir, chatBudget: { maxIterations: 4, maxToolCalls: 3 } });
+
+    await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Redirecione o Goal para priorizar os testes e continue a execução."
+    });
+
+    expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
+    expect(database.listEventsForTask(task.id).find((event) => event.type === "goal.human_guidance")).toMatchObject({
+      taskId: task.id,
+      text: "Redirecione o Goal para priorizar os testes e continue a execução."
+    });
+    expect(database.getGoalRun(run.id).status).toBe("running");
+  });
+
+  it("applies an explicit redirection to the active Goal before asking the provider", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-guidance-core-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const task = new ApplicationCommands(database).createTask(
+      { channel: "dashboard", userId: null, username: null },
+      { projectKey: "apto", text: "Implementar o fluxo do apartamento" }
+    );
+    database.updateTaskWorktree({ id: task.id, status: "implementing", branchName: "maestro/task-guidance-core", worktreePath: dir });
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "running", currentPhase: "implementing", stepCount: 2, lastProvider: "codex" });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Redirecionar Goal" });
+    let providerCalls = 0;
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        providerCalls += 1;
+        const turn = { type: "final", response: "Entendi a nova direção e continuei o Goal existente." };
+        return { outcome: "completed", summary: "completed", output: JSON.stringify(turn), structuredPayload: turn, error: null, retryable: false, durationMs: 1 };
+      }
+    };
+    const service = new OperationalChatService({ database, agentRegistry: new AgentRegistry([provider]), worktreesRoot: dir });
+
+    const response = await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Foque nos testes da implementação atual e continue o Goal."
+    });
+
+    expect(providerCalls).toBe(1);
+    expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
+    expect(database.listEventsForTask(task.id).some((event) => event.type === "goal.human_guidance")).toBe(true);
+    expect(response.explanation).toContain("nova direção");
+    expect(response.actions.some((action) => action.type === "guide_goal")).toBe(false);
+  });
+
+  it("reopens a blocked Goal from chat without creating a replacement run", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-reopen-goal-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const task = new ApplicationCommands(database).createTask(
+      { channel: "dashboard", userId: null, username: null },
+      { projectKey: "apto", text: "Continuar a implementação do apartamento" }
+    );
+    database.updateTaskWorktree({ id: task.id, status: "blocked", branchName: "maestro/task-reopen", worktreePath: dir });
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "blocked", currentPhase: "implementing", stepCount: 4, lastError: "permission denied", failureCategory: "permission_denied" });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Retomar Goal" });
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        const turn = { type: "final", response: "O Goal foi reaberto do checkpoint atual." };
+        return { outcome: "completed", summary: "completed", output: JSON.stringify(turn), structuredPayload: turn, error: null, retryable: false, durationMs: 1 };
+      }
+    };
+    const service = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: dir,
+      actionExecutor: {
+        resumeGoal: (runId) => {
+          const current = database.getGoalRun(runId);
+          database.updateGoalRun({ id: runId, status: "waiting_provider", currentPhase: current.currentPhase, stepCount: current.stepCount, nextRetryAt: null });
+          database.updateTaskStatus(current.taskId, current.currentPhase);
+        }
+      }
+    });
+
+    await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Desbloqueie o Goal e continue a implementação atual a partir do checkpoint."
+    });
+
+    expect(database.listGoalRunsForTask(task.id)).toHaveLength(1);
+    expect(database.getGoalRun(run.id).status).toBe("waiting_provider");
+    expect(database.getTask(task.id).status).toBe("implementing");
   });
 
   it("answers a blocked-task question from refreshed project state evidence", async () => {

@@ -73,6 +73,45 @@ describe("goal runner", () => {
     }]);
   });
 
+  it("passes the latest human Goal guidance into the next provider step", async () => {
+    const projectDir = path.join(tempDir, "guidance-project");
+    const worktreeDir = path.join(tempDir, "guidance-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "guidance", path: projectDir });
+    const task = database.createTask("follow the active Goal direction", "dashboard", "guidance");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const run = database.createGoalRun(task.id, 1);
+    database.addEvent({
+      source: "dashboard",
+      type: "goal.human_guidance",
+      text: "Priorize os testes de integração antes de revisar a interface.",
+      taskId: task.id,
+      metadata: { runId: run.id, phase: "planning" }
+    });
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "planning",
+      stepCount: 0,
+      waitReason: "capacity",
+      nextRetryAt: null
+    });
+    let receivedFeedback = "";
+    const provider = new FakeProvider("codex", ["planning"], (request) => {
+      receivedFeedback = request.humanFeedback ?? "";
+      return completed("planned with guidance");
+    });
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1,
+      existingRun: run
+    });
+
+    expect(receivedFeedback).toContain("Priorize os testes de integração antes de revisar a interface.");
+  });
+
   it("records a governed Work Graph adoption decision before routing without fanning out automatically", async () => {
     const projectDir = path.join(tempDir, "work-graph-project");
     const worktreeDir = path.join(tempDir, "work-graph-worktree");
@@ -576,6 +615,49 @@ describe("goal runner", () => {
     expect(database.listEvents().some((event) => event.type === "goal.completed")).toBe(true);
   }, 15_000);
 
+  it("routes acceptance to an independent reviewer when one is available", async () => {
+    const projectDir = path.join(tempDir, "independent-review-project");
+    const worktreeDir = path.join(tempDir, "independent-review-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "independent", path: projectDir });
+    const task = database.createTask("verify a stateful feature", "dashboard", "independent");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const dna: TaskDNA = {
+      complexity: "medium",
+      phases: ["planning", "implementing", "testing", "reviewing"],
+      phaseBudgets: { planning: 1, implementing: 1, testing: 1, reviewing: 1 },
+      requireReview: true,
+      requireTests: true,
+      allowIteration: false,
+      rationale: "independent-review gate test"
+    };
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], (request) => (
+      request.phase === "reviewing"
+        ? { ...completed("approved"), structuredPayload: { reviewDecision: "approved" } }
+        : completed(`${request.phase} completed`)
+    ));
+    const reviewer = new FakeProvider("independent-reviewer", ["reviewing"], () => (
+      { ...completed("independent reviewer available"), structuredPayload: { reviewDecision: "approved" } }
+    ));
+    let deliveryCalls = 0;
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, reviewer]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      taskDNA: dna,
+      delivery: async () => {
+        deliveryCalls += 1;
+        return { commitSha: "should-not-deliver", pullRequestUrl: "https://example.invalid/pr", branchName: "task" };
+      }
+    });
+
+    expect(run.status).toBe("completed");
+    expect(deliveryCalls).toBe(1);
+    expect(database.listGoalSteps(run.id).find((step) => step.phase === "reviewing")?.provider)
+      .toBe("independent-reviewer");
+  }, 15_000);
+
   // ── Task #121 replay ─────────────────────────────────────────────────
   // Task #121 was a backend refactor whose reviewer kept requesting changes
   // (the old "find 5 improvements" prompt) until the goal ran away on step
@@ -777,6 +859,42 @@ describe("goal runner", () => {
     expect(failedStepEvent?.metadata.processRuntime).toMatchObject({
       outputStats: { receivedChars: 5, retainedChars: 5 }
     });
+  });
+
+  it("treats a recoverable provider block as fallback or waiting, not a terminal Goal block", async () => {
+    const projectDir = path.join(tempDir, "blocked-fallback-project");
+    const worktreeDir = path.join(tempDir, "blocked-fallback-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "blockedfallback", path: projectDir });
+    const task = database.createTask("finish after a provider permission block", "dashboard", "blockedfallback");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+
+    const antigravity = new FakeProvider("antigravity", ["planning", "coding", "testing", "reviewing"], (request) => request.phase === "implementing"
+      ? {
+        outcome: "blocked",
+        summary: "headless permission check failed while writing the worktree",
+        output: "",
+        error: "permission denied",
+        durationMs: 1,
+        retryable: false,
+        failureCategory: "permission_denied"
+      }
+      : completed("Antigravity step"));
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude recovered the implementation"));
+
+    const run = await runTaskGoal(
+      database,
+      new AgentRegistry([antigravity, claude]),
+      task.id,
+      { artifactsRoot: path.join(tempDir, "artifacts"), maxSteps: 8 }
+    );
+
+    expect(run.status).toBe("completed");
+    expect(database.listEvents().some((event) => event.type === "goal.provider_block_fallback")).toBe(true);
+    expect(database.listEvents().some((event) => event.type === "goal.blocked")).toBe(false);
+    expect(database.listGoalSteps(run.id).find((step) => step.phase === "implementing" && step.provider === "antigravity")?.status).toBe("blocked");
+    expect(database.listGoalSteps(run.id).find((step) => step.phase === "implementing" && step.provider === "claude")?.status).toBe("completed");
   });
 
   it("tries a healthy fallback before a cumulative circuit breaker blocks the goal", async () => {

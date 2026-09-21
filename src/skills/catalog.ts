@@ -6,6 +6,7 @@ import type { AgentCapability } from "../agents/types.js";
 import { scanWorktreePathsForSecrets } from "../security/secrets.js";
 import {
   DEFAULT_SKILL_CATALOG_LIMITS,
+  SKILL_FOCUSES,
   SKILL_NETWORK_POLICIES,
   SKILL_OPERATING_SYSTEMS,
   SKILL_OWNERS,
@@ -16,6 +17,7 @@ import {
   SkillCatalogSnapshot,
   SkillMetadata,
   SkillOperatingSystem,
+  SkillFocus,
   SkillOwner,
   SkillPolicy,
   SkillRisk,
@@ -28,6 +30,7 @@ const POLICY_KEYS = new Set([
   "owner",
   "risk",
   "allowImplicitInvocation",
+  "focus",
   "capabilities",
   "operatingSystems",
   "network",
@@ -292,6 +295,9 @@ function parseSkillPolicy(content: string, scope: SkillCatalogRoot["scope"]): Sk
       defaults.allowImplicitInvocation,
       "allowImplicitInvocation"
     ),
+    focus: parsed.focus === undefined
+      ? defaults.focus
+      : enumArray(parsed.focus, SKILL_FOCUSES, ["general"], "focus") as SkillFocus[],
     capabilities: enumArray(parsed.capabilities, CAPABILITIES, defaults.capabilities, "capabilities"),
     operatingSystems: enumArray(
       parsed.operatingSystems,

@@ -7,7 +7,7 @@ import { computeLegacyTaskDNAFromText, computeTaskDNAFromText } from "./task-dna
 import { GoalDeliveryHandler } from "./delivery.js";
 import { GoalNotificationHandler, GoalProgressNotificationHandler } from "../telegram/notifications.js";
 import { Scheduler, SystemScheduler } from "./scheduler.js";
-import { EnvironmentBlockedError } from "../environment/doctor.js";
+import { EnvironmentBlockedError, repairWorktreeAccess } from "../environment/doctor.js";
 import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { DeterministicValidationRunner } from "../validation/runner.js";
 import type { SkillRuntime } from "../skills/runtime.js";
@@ -83,7 +83,22 @@ export class GoalCoordinator {
       ? Object.values(taskDNA.phaseBudgets).reduce((a, b) => a + b, 0) + 5
       : maxSteps;
 
-    const readiness = this.preflight?.(taskId);
+    let readiness = this.preflight?.(taskId);
+    if (
+      readiness?.status === "environment_blocked"
+      && task.worktreePath
+      && readiness.checks.some((item) => item.name === "worktree" && item.status === "failed")
+    ) {
+      const repair = repairWorktreeAccess(task.worktreePath);
+      this.database.addEvent({
+        source: "maestro",
+        type: "goal.worktree_repair_attempted",
+        text: repair.detail,
+        taskId,
+        metadata: { worktreePath: task.worktreePath, repaired: repair.repaired }
+      });
+      if (repair.repaired) readiness = this.preflight?.(taskId) ?? readiness;
+    }
     if (readiness?.status === "environment_blocked") {
       // Soft-degrade (F-hotfix): a missing VALIDATION toolchain (tsc/vitest/
       // better-sqlite3 in the target workspace) must not hard-block the goal.

@@ -23,6 +23,7 @@ describe("SkillCatalog", () => {
         "owner: system",
         "risk: low",
         "allowImplicitInvocation: true",
+        "focus: [product_design]",
         "capabilities: [research]",
         "operatingSystems: [win32, linux]",
         "network: none",
@@ -50,6 +51,7 @@ describe("SkillCatalog", () => {
     expect(snapshot.skills[0]?.policy).toMatchObject({
       owner: "system",
       allowImplicitInvocation: true,
+      focus: ["product_design"],
       capabilities: ["research"],
       operatingSystems: ["win32", "linux"]
     });

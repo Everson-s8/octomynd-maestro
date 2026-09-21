@@ -28,7 +28,10 @@ const REVIEW_RULES = [
   "REQUEST CHANGES only when a required criterion is unmet, a required test fails, or there is a concrete critical/high defect.",
   "Optional suggestions (naming, cosmetic refactor, out-of-scope UX) do NOT justify changes_requested; list them as non-blocking.",
   "Do not invent a fixed number of improvements and do not apply a UX/visual rubric to backend work with no UI in scope.",
-  "If evidence for a criterion is missing, request changes citing which criterion and which evidence is absent."
+  "If evidence for a criterion is missing, request changes citing which criterion and which evidence is absent.",
+  "Treat provider summaries as claims, not proof: inspect the diff and available validation evidence before approving.",
+  "For data, persistence, migration, mock, fixture, startup, or user-visible behavior, require evidence that covers the relevant existing/non-empty state as well as a clean/empty state when the task contract calls for it; a build alone is insufficient.",
+  "Do not approve your own implementation when an independent reviewer is available; report that the review must be routed independently."
 ];
 
 /**

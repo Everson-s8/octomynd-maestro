@@ -939,12 +939,13 @@ async function routeRequest(
     }
     const body = await readJsonBody(request);
     const decision = readEnum(body.decision, ["approved", "changes_requested", "rejected"]);
-    const note = readString(body.note);
+    const suppliedNote = readString(body.note)?.trim() ?? "";
     const mergeAfterApproval = body.merge === true;
-    if (!decision || !note) {
+    if (!decision || (decision !== "approved" && !suppliedNote)) {
       sendJson(response, 400, { error: "decision_and_justification_are_required" });
       return;
     }
+    const note = suppliedNote || "Approved for merge from the Maestro dashboard.";
     try {
       const result = await options.reviewCoordinator.decide(
         Number(reviewDecisionMatch[1]),
