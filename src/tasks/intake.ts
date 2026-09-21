@@ -78,7 +78,7 @@ function truncate(value: string, max: number): string {
 function defaultSpecification(original: string): string {
   return [
     "## Context",
-    "This task was derived from the user's project conversation. Preserve the original request as evidence and verify the current implementation before changing it.",
+    "This task was derived from the user's project conversation. Preserve the original request as evidence and verify the current implementation before changing it. Separate current behavior, existing data/state, and the requested outcome.",
     "",
     "## Objective",
     original || "Clarify and implement the requested project change.",
@@ -89,11 +89,14 @@ function defaultSpecification(original: string): string {
     "## Acceptance criteria",
     "- The requested objective is implemented in the existing project.",
     "- The result is understandable and actionable by the Maestro execution flow.",
+    "- If the task changes data, persistence, startup, mocks, fixtures, or user-visible state, verify both a clean state and an already-used state; do not assume a fresh browser or empty database.",
+    "- For UI or visual work, define the user flow, visual intent, required states, responsive/accessibility expectations, and rendered evidence before calling the surface complete.",
     "- Existing behavior outside this scope remains intact.",
     "",
     "## Validation",
     "- Inspect the relevant project context before implementation.",
     "- Run the focused tests, type checks, or build validation available for the changed area.",
+    "- For user-visible, stateful, persistence, migration, mock, or startup changes, exercise the real runtime path and record evidence from both existing and clean state when applicable.",
     "- Record blockers, assumptions, and evidence if validation cannot be completed.",
     "",
     "## Constraints",

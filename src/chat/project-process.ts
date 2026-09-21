@@ -13,6 +13,7 @@ export type ProjectProcessManagerOptions = {
 };
 
 type ManagedProcess = ChatProjectProcessFact & {
+  projectRoot: string;
   child: ChildProcess | null;
 };
 
@@ -31,11 +32,21 @@ export class ProjectProcessManager {
     if (!path.isAbsolute(projectRoot)) throw new Error("A registered project is required before starting a server.");
     if (!plan.executable || plan.blockedReason) throw new Error(plan.blockedReason ?? "The project command is not executable.");
 
+    const normalizedRoot = path.resolve(projectRoot);
+    const existing = [...this.processes.values()].find((process) =>
+      process.status === "running" &&
+      process.projectKey === projectKey &&
+      process.projectRoot === normalizedRoot &&
+      process.command === plan.displayCommand
+    );
+    if (existing) return this.snapshot(existing);
+
     const id = randomUUID();
     const now = new Date().toISOString();
     const record: ManagedProcess = {
       id,
       projectKey,
+      projectRoot: normalizedRoot,
       command: plan.displayCommand,
       pid: null,
       status: "running",
@@ -126,7 +137,7 @@ export class ProjectProcessManager {
   }
 
   private snapshot(process: ManagedProcess): ChatProjectProcessFact {
-    const { child: _child, ...snapshot } = process;
+    const { child: _child, projectRoot: _projectRoot, ...snapshot } = process;
     return { ...snapshot, log: redactSensitiveText(snapshot.log) };
   }
 }

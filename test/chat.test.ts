@@ -12,6 +12,7 @@ import { MaestroConfig } from "../src/config.js";
 import type { AgentCapability, AgentProvider } from "../src/agents/types.js";
 import { runGit } from "../src/git.js";
 import { ProjectProcessManager } from "../src/chat/project-process.js";
+import { planProjectStartCommand } from "../src/chat/project-command.js";
 import { compileOperationalChatContext } from "../src/chat/context-compiler.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
@@ -399,6 +400,69 @@ describe("Unified Operational Chat (Task #52)", () => {
       ]));
       expect(providerPrompt).toContain("Full Access rule");
       expect(providerPrompt).not.toContain("wait for the confirmation button");
+    } finally {
+      chatService.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  });
+
+  it("runs an agent-requested dev server in the background and does not duplicate it", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({
+      name: "chat-agent-server-test",
+      version: "1.0.0",
+      scripts: { dev: "node -e \"console.log('Local: http://127.0.0.1:4557/'); setInterval(() => {}, 1000)\"" }
+    }), "utf8");
+    const processManager = new ProjectProcessManager();
+    let calls = 0;
+    const provider = chatProvider("claude", {
+      outcome: "completed",
+      summary: "completed",
+      output: "",
+      error: null,
+      retryable: false
+    }, {
+      execute: async () => {
+        calls += 1;
+        const turn = calls === 1
+          ? { type: "tool_call", name: "run_command", arguments: { command: "npm run dev" } }
+          : { type: "final", response: "O servidor está ativo em background." };
+        return {
+          outcome: "completed",
+          summary: "completed",
+          output: JSON.stringify(turn),
+          structuredPayload: turn,
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([provider]),
+      processManager
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey: "maestro",
+        surface: "dashboard",
+        message: "A task terminou, reinicie o serviço para eu testar.",
+        accessMode: "full"
+      });
+
+      expect(response.evidence.commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "npm run dev", status: "completed" })
+      ]));
+      expect(response.evidence.processes).toEqual([
+        expect.objectContaining({ status: "running", url: "http://127.0.0.1:4557/" })
+      ]);
+      expect(processManager.list("maestro")).toHaveLength(1);
+
+      const sameProcess = processManager.start("maestro", tmpDir, planProjectStartCommand(tmpDir, "full"));
+      expect(sameProcess.id).toBe(processManager.list("maestro")[0]?.id);
+      expect(processManager.list("maestro")).toHaveLength(1);
     } finally {
       chatService.shutdown();
       await new Promise((resolve) => setTimeout(resolve, 1_000));
