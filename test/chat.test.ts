@@ -174,7 +174,11 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(chatService.getActivity("maestro", thread.id)).toMatchObject({ active: true });
     releaseProvider();
     await pending;
-    expect(chatService.getActivity("maestro", thread.id)).toEqual({ active: false, startedAt: null });
+    expect(chatService.getActivity("maestro", thread.id)).toMatchObject({ active: false, startedAt: null, phase: "idle" });
+    expect(chatService.getActivityEvents("maestro", thread.id).map((event) => event.phase)).toEqual(
+      expect.arrayContaining(["thinking", "finished"])
+    );
+    expect(chatService.getActivityEvents("maestro", thread.id).at(-1)).toMatchObject({ active: false, phase: "finished" });
   });
 
   it("keeps chat history isolated per conversation and supports deletion", async () => {
@@ -477,6 +481,38 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(staleActionResult.resultSummary).toContain("no longer applicable");
   });
 
+  it("offers and executes Start Goal for a queued task through chat", async () => {
+    const task = database.createTask("Implement queued change", "test", "maestro");
+    const startedTaskIds: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      actionExecutor: {
+        startGoal: (taskId) => { startedTaskIds.push(taskId); }
+      }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      message: "Inicie o goal da task que está na fila",
+      uiLocale: "pt-BR"
+    });
+    const startAction = response.actions.find((action) => action.type === "start_goal" && action.targetId === task.id);
+    expect(startAction).toBeDefined();
+
+    const result = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      action: startAction!,
+      uiLocale: "pt-BR"
+    });
+
+    expect(result.success).toBe(true);
+    expect(startedTaskIds).toEqual([task.id]);
+    expect(result.resultSummary).toContain(`Goal da Task #${task.id} iniciado`);
+  });
+
   it("recognizes the task wording used by users and queues it only after confirmation", async () => {
     const longObjective = "A ideia inicial é fazer um projeto de controle de finanças, organizar gastos do apartamento e acompanhar investimentos.";
     expect(parseTaskCreationIntent(`Crie essa task: ${longObjective}`)?.text).toBe(longObjective);
@@ -498,6 +534,8 @@ describe("Unified Operational Chat (Task #52)", () => {
 
     const createAction = response.actions.find((action) => action.type === "create_task");
     expect(createAction).toBeDefined();
+    expect(createAction?.payload?.title).toBeTruthy();
+    expect(String(createAction?.payload?.specification)).toContain("## Acceptance criteria");
     expect(database.listTasks(20)).toHaveLength(0);
     expect(response.explanation).toContain("Create task");
 
@@ -526,6 +564,7 @@ describe("Unified Operational Chat (Task #52)", () => {
     });
 
     expect(database.listTasks(20)).toHaveLength(1);
+    expect(database.getTask(1).specification).toContain("## Validation");
     expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para) @maestro/);
     expect(response.actions.some((action) => action.type === "create_task")).toBe(false);
   });
@@ -552,6 +591,8 @@ describe("Unified Operational Chat (Task #52)", () => {
 
     const task = database.listTasks(20)[0];
     expect(task?.text).toBe(context);
+    expect(task?.specification).toContain("## Objective");
+    expect(task?.specification).toContain("## Constraints");
     expect(response.explanation).toMatch(/Task #\d+ (?:created for|criada para)/);
   });
 

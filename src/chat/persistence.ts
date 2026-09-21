@@ -7,7 +7,8 @@ import {
   OperationalChatSenderRole,
   OperationalChatSurface,
   ChatAccessMode,
-  OperationalChatMemoryRecord
+  OperationalChatMemoryRecord,
+  OperationalChatActivityEvent
 } from "./types.js";
 import type { AgentReasoningEffort } from "../agents/types.js";
 
@@ -46,6 +47,23 @@ type OperationalChatMemoryRow = {
   source_thread_id: number | null;
   created_at: string;
   updated_at: string;
+};
+
+type OperationalChatActivityEventRow = {
+  id: number;
+  thread_id: number;
+  project_key: string;
+  request_id: string;
+  active: number;
+  started_at: string | null;
+  phase: string;
+  iteration: number;
+  max_iterations: number;
+  tool_calls: number;
+  max_tool_calls: number;
+  tool_name: string | null;
+  detail: string | null;
+  created_at: string;
 };
 
 export function migrateOperationalChatPersistence(db: Database.Database): void {
@@ -92,6 +110,24 @@ export function migrateOperationalChatPersistence(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_operational_chat_memories_project
       ON operational_chat_memories(project_key, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS operational_chat_activity_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL,
+      project_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      started_at TEXT,
+      phase TEXT NOT NULL,
+      iteration INTEGER NOT NULL DEFAULT 0,
+      max_iterations INTEGER NOT NULL DEFAULT 0,
+      tool_calls INTEGER NOT NULL DEFAULT 0,
+      max_tool_calls INTEGER NOT NULL DEFAULT 0,
+      tool_name TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_operational_chat_activity_thread
+      ON operational_chat_activity_events(project_key, thread_id, id DESC);
   `);
 
   const threadColumns = db.prepare("PRAGMA table_info(operational_chat_threads)").all() as Array<{ name: string }>;
@@ -204,6 +240,9 @@ export function createOperationalChatPersistence(db: Database.Database) {
   const deleteThreadMessagesStatement = db.prepare(`
     DELETE FROM operational_chat_messages WHERE thread_id = ?
   `);
+  const deleteThreadActivityEventsStatement = db.prepare(`
+    DELETE FROM operational_chat_activity_events WHERE thread_id = ?
+  `);
   const deleteThreadStatement = db.prepare(`
     DELETE FROM operational_chat_threads WHERE id = ? AND project_key = ?
   `);
@@ -259,6 +298,32 @@ export function createOperationalChatPersistence(db: Database.Database) {
   const deleteMemoryStatement = db.prepare(`
     DELETE FROM operational_chat_memories WHERE project_key = ? AND id = ?
   `);
+  const insertActivityEventStatement = db.prepare(`
+    INSERT INTO operational_chat_activity_events (
+      thread_id, project_key, request_id, active, started_at, phase, iteration,
+      max_iterations, tool_calls, max_tool_calls, tool_name, detail, created_at
+    ) VALUES (
+      @threadId, @projectKey, @requestId, @active, @startedAt, @phase, @iteration,
+      @maxIterations, @toolCalls, @maxToolCalls, @toolName, @detail, @createdAt
+    )
+  `);
+  const listActivityEventsStatement = db.prepare(`
+    SELECT * FROM operational_chat_activity_events
+    WHERE project_key = ? AND thread_id = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `);
+  const getActivityEventStatement = db.prepare(`
+    SELECT * FROM operational_chat_activity_events WHERE id = ?
+  `);
+  const pruneActivityEventsStatement = db.prepare(`
+    DELETE FROM operational_chat_activity_events
+    WHERE project_key = ? AND thread_id = ? AND id NOT IN (
+      SELECT id FROM operational_chat_activity_events
+      WHERE project_key = ? AND thread_id = ?
+      ORDER BY id DESC LIMIT 500
+    )
+  `);
 
   return {
     createOperationalChatThread(input: OperationalChatThreadInput): OperationalChatThreadRecord {
@@ -293,6 +358,7 @@ export function createOperationalChatPersistence(db: Database.Database) {
       if (!thread || thread.project_key !== normalizedKey) return false;
       const deleted = db.transaction(() => {
         deleteThreadMessagesStatement.run(threadId);
+        deleteThreadActivityEventsStatement.run(threadId);
         return deleteThreadStatement.run(threadId, normalizedKey).changes > 0;
       })();
       return deleted;
@@ -415,6 +481,39 @@ export function createOperationalChatPersistence(db: Database.Database) {
 
     deleteOperationalChatMemory(projectKey: string, memoryId: number): boolean {
       return deleteMemoryStatement.run(projectKey.trim().toLowerCase(), memoryId).changes > 0;
+    },
+
+    appendOperationalChatActivityEvent(input: {
+      threadId: number;
+      projectKey: string;
+      requestId: string;
+      activity: Omit<OperationalChatActivityEvent, "id" | "threadId" | "projectKey" | "requestId" | "createdAt">;
+    }): OperationalChatActivityEvent {
+      const createdAt = new Date().toISOString();
+      const projectKey = input.projectKey.trim().toLowerCase();
+      const info = insertActivityEventStatement.run({
+        threadId: input.threadId,
+        projectKey,
+        requestId: input.requestId,
+        active: input.activity.active ? 1 : 0,
+        startedAt: input.activity.startedAt,
+        phase: input.activity.phase,
+        iteration: input.activity.iteration,
+        maxIterations: input.activity.maxIterations,
+        toolCalls: input.activity.toolCalls,
+        maxToolCalls: input.activity.maxToolCalls,
+        toolName: input.activity.toolName,
+        detail: input.activity.detail,
+        createdAt
+      });
+      pruneActivityEventsStatement.run(projectKey, input.threadId, projectKey, input.threadId);
+      return mapRowToActivityEvent(getActivityEventStatement.get(Number(info.lastInsertRowid)) as OperationalChatActivityEventRow);
+    },
+
+    listOperationalChatActivityEvents(projectKey: string, threadId: number, limit = 100): OperationalChatActivityEvent[] {
+      return (listActivityEventsStatement.all(projectKey.trim().toLowerCase(), threadId, Math.max(1, Math.min(500, limit))) as OperationalChatActivityEventRow[])
+        .reverse()
+        .map(mapRowToActivityEvent);
     }
   };
 }
@@ -458,6 +557,25 @@ function mapRowToMemory(row: OperationalChatMemoryRow): OperationalChatMemoryRec
     sourceThreadId: row.source_thread_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function mapRowToActivityEvent(row: OperationalChatActivityEventRow): OperationalChatActivityEvent {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    projectKey: row.project_key,
+    requestId: row.request_id,
+    active: Boolean(row.active),
+    startedAt: row.started_at,
+    phase: row.phase as OperationalChatActivityEvent["phase"],
+    iteration: row.iteration,
+    maxIterations: row.max_iterations,
+    toolCalls: row.tool_calls,
+    maxToolCalls: row.max_tool_calls,
+    toolName: row.tool_name,
+    detail: row.detail,
+    createdAt: row.created_at
   };
 }
 

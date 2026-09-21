@@ -119,7 +119,7 @@ export function planChatCommand(message: string, accessMode: ChatAccessMode = "s
   };
 }
 
-export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: string, accessMode: ChatAccessMode): Promise<ChatCommandEvidence> {
+export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: string, accessMode: ChatAccessMode, signal?: AbortSignal): Promise<ChatCommandEvidence> {
   if (plan.blockedReason) return blockedEvidence(plan);
   if (accessMode === "read_only") {
     return blockedEvidence(plan, "Chat is read-only; switch to Standard or Full Access before running a command.");
@@ -169,12 +169,21 @@ export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: str
       child.kill();
       finish("failed", null, `Command timed out after ${COMMAND_TIMEOUT_MS} ms.`);
     }, COMMAND_TIMEOUT_MS);
+    const abort = () => {
+      child.kill();
+      clearTimeout(timeout);
+      finish("failed", null, "Command cancelled by the user.");
+    };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     child.once("error", (error) => {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
       finish("failed", null, error.message);
     });
     child.once("close", (code) => {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
       finish(code === 0 ? "completed" : "failed", code, code === 0 ? null : `Command exited with code ${code ?? "unknown"}.`);
     });
   });

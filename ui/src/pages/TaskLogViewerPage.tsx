@@ -5,7 +5,6 @@ import {
   TaskLogs,
   TaskLogRun,
   TaskLogStep,
-  prepareTask,
   resumeGoal,
   startTaskGoal
 } from "../api";
@@ -231,19 +230,6 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-  };
-
-  const handlePrepare = async () => {
-    if (!logs) return;
-    setActionBusy(true);
-    try {
-      await prepareTask(logs.task.id);
-      await loadLogs(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : translate("Failed to prepare the worktree."));
-    } finally {
-      setActionBusy(false);
-    }
   };
 
   const handleStartGoal = async () => {
@@ -650,20 +636,13 @@ export function TaskLogViewerPage({ taskIdParam, onBack }: TaskLogViewerPageProp
               <p>
                 {translate("This task is currently") } <b>{taskStatusLabel(task.status)}</b>.
                 {!task.worktreePrepared
-                  ? ` ${translate("The first step is to prepare the isolated worktree.")}`
+                  ? ` ${translate("Starting the goal will prepare the isolated worktree automatically.")}`
                   : ` ${translate("The worktree is ready. You can start the autonomous goal.")}`}
               </p>
               <div className="empty-log-actions">
-                {!task.worktreePrepared && (
-                  <button type="button" className="btn-new" onClick={handlePrepare} disabled={actionBusy}>
-                    {actionBusy ? translate("Preparing…") : translate("Prepare worktree")}
-                  </button>
-                )}
-                {task.worktreePrepared && (
-                  <button type="button" className="btn-new" onClick={handleStartGoal} disabled={actionBusy}>
-                    {actionBusy ? translate("Starting goal…") : translate("Start autonomous goal")}
-                  </button>
-                )}
+                <button type="button" className="btn-new" onClick={handleStartGoal} disabled={actionBusy}>
+                  {actionBusy ? translate("Starting goal…") : translate("Start autonomous goal")}
+                </button>
               </div>
             </div>
           ) : filteredSteps.length === 0 ? (

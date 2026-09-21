@@ -74,19 +74,6 @@ export function TaskDetail({
     setError(null);
     try {
       await prepareTask(taskId);
-      // Prepare alone leaves the task parked in "planning" with no provider
-      // attached — users reported it as "nothing happens". Fire the goal right
-      // away so the flow actually starts; a failure here is non-fatal because
-      // the user can still press "Iniciar goal" manually.
-      try {
-        await startTaskGoal(taskId);
-      } catch (goalError) {
-        setError(
-          goalError instanceof Error
-            ? `${translate("Worktree prepared, but execution did not start")}: ${goalError.message} ${translate("Check that a provider is connected in Providers.")}`
-            : translate("Worktree prepared, but execution did not start. Check that a provider is connected.")
-        );
-      }
       await onPrepared();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : translate("Unable to prepare the task."));
@@ -301,7 +288,6 @@ export function TaskDetail({
           <button
             className="goal-action"
             disabled={
-              !task.worktreePrepared ||
               ["running", "waiting_provider"].includes(goal?.status ?? "") ||
               startingGoal ||
               ["done", "awaiting_human", "ready_to_merge", "rejected", "cancelled"].includes(task.status)
@@ -322,7 +308,7 @@ export function TaskDetail({
               ? translate("Resume goal from checkpoint")
               : task.worktreePrepared
               ? translate("Start goal")
-              : translate("Prepare the worktree first")}
+              : translate("Prepare worktree and start goal")}
             <Icon name="pulse" />
           </button>
           {goal ? (

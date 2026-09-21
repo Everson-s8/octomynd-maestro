@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodexProvider,
+  codexReasoningEffort,
   buildCodexGoalPrompt,
   codexSandboxForCapability,
   codexSandboxForRequest,
@@ -13,6 +14,12 @@ import {
 import { AgentExecutionRequest } from "../src/agents/types.js";
 
 describe("codex provider", () => {
+  it("translates Maestro effort labels to Codex CLI values", () => {
+    expect(codexReasoningEffort("extra_high")).toBe("xhigh");
+    expect(codexReasoningEffort("ultra")).toBe("max");
+    expect(codexReasoningEffort("high")).toBe("high");
+  });
+
   it("uses workspace-write only for coding and testing", () => {
     expect(codexSandboxForCapability("planning")).toBe("read-only");
     expect(codexSandboxForCapability("reviewing")).toBe("read-only");

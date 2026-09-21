@@ -443,8 +443,7 @@ export function buildClaudeGoalArgs(
       "--add-dir",
       cwd,
       "--no-session-persistence",
-      ...(model ? ["--model", model] : []),
-      buildConversationPrompt(request)
+      ...(model ? ["--model", model] : [])
     ];
   }
   const writable = isWritableExecution(request);
@@ -541,6 +540,7 @@ async function executeClaudeGoal(
     args: buildClaudeGoalArgs(cli, request, cwd, model),
     cwd,
     provider: "claude",
+    stdin: request.capability === "conversation" ? buildConversationPrompt(request) : undefined,
     timeoutMs: limits.maxRuntimeMs,
     // Claude --print commonly buffers the response until completion, so its
     // inactivity window is intentionally longer than Codex's streaming window.

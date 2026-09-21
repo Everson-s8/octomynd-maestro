@@ -34,7 +34,10 @@ export function createWorktreePlan(
   };
 }
 
-export function validateGitProject(project: ProjectRecord): string[] {
+export function validateGitProject(
+  project: ProjectRecord,
+  options: { allowDirty?: boolean } = {}
+): string[] {
   const errors: string[] = [];
 
   if (!fs.existsSync(project.path)) {
@@ -49,7 +52,7 @@ export function validateGitProject(project: ProjectRecord): string[] {
   const status = runGit(["status", "--porcelain"], project.path);
   if (!status.ok) {
     errors.push(`Cannot read Git status: ${status.stderr || status.stdout}`);
-  } else if (status.stdout.trim()) {
+  } else if (status.stdout.trim() && !options.allowDirty) {
     errors.push("Project Git working tree is dirty. Commit, stash or clean it before preparing a Maestro task.");
   }
 
@@ -268,7 +271,7 @@ export function bootstrapEmptyRepository(
   // Includes untracked files — a dirty first-commit attempt would mix user
   // data into the scaffolded commit.
   if (status.stdout.trim()) {
-    return fail("Repository has uncommitted changes; commit or clean them before Maestro creates the initial commit.");
+    return fail("Repository is dirty and has uncommitted changes; commit or clean them before Maestro creates the initial commit.");
   }
 
   try {

@@ -100,12 +100,13 @@ describe("provider failure classification", () => {
     expect(classifyFailure("context length exceeded")).toBe("prompt_too_large");
   });
 
-  it("enforces explicit retryability rules across all 12 categories", () => {
+  it("enforces explicit retryability rules across all 13 categories", () => {
     const retryableList: FailureCategory[] = ["quota", "auth_required", "timeout", "offline", "capacity"];
     const nonRetryableList: FailureCategory[] = [
       "output_limit",
       "permission_denied",
       "environment_error",
+      "configuration_error",
       "invalid_output",
       "user_cancelled",
       "prompt_too_large",
@@ -118,6 +119,12 @@ describe("provider failure classification", () => {
     for (const cat of nonRetryableList) {
       expect(isRetryableFailureCategory(cat)).toBe(false);
     }
+  });
+
+  it("does not classify provider parameter errors as quota failures", () => {
+    expect(classifyFailure("invalid_request_error: Invalid value: 'extra_high'"))
+      .toBe("configuration_error");
+    expect(isRetryableFailureCategory("configuration_error")).toBe(false);
   });
 
   it("verifies enoent and cannot-find-module are classified as environment_error and NOT retryable", () => {

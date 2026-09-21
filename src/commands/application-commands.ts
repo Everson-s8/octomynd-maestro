@@ -74,6 +74,8 @@ export type RegisterProjectOutcome = {
 export type CreateTaskInput = {
   text: string;
   projectKey?: string | null;
+  title?: string | null;
+  specification?: string | null;
 };
 
 export type CreateFollowUpTaskInput = {
@@ -487,7 +489,10 @@ export class ApplicationCommands {
       throw notFoundError("No project registered.");
     }
 
-    const intake = deriveTaskIntake(text);
+    const intake = deriveTaskIntake(text, {
+      title: input.title ?? undefined,
+      specification: input.specification ?? undefined
+    });
     const task = this.database.createTask(text, origin.channel, project.key, null, intake.title, intake.specification);
 
     this.database.addEvent({
@@ -1384,7 +1389,11 @@ export class ApplicationCommands {
     }
 
     let project = this.database.getProjectByKey(task.projectKey);
-    const validationErrors = validateGitProject(project);
+    // Task worktrees are created from an exact committed HEAD. A dirty
+    // canonical checkout is therefore safe to prepare: its uncommitted files
+    // stay in the user's checkout and are never copied into the isolated task
+    // worktree. Repository synchronization itself remains strict.
+    const validationErrors = validateGitProject(project, { allowDirty: true });
     if (validationErrors.length > 0) {
       const failure = validationError(validationErrors.join("\n"), validationErrors);
       this.recordPrepareFailure(origin, task.id, failure.details);
@@ -1395,6 +1404,15 @@ export class ApplicationCommands {
     // so the worktree step below would fail with "fatal: invalid reference".
     // Give the project its first commit instead of blocking the task.
     if (!hasAnyCommit(project.path)) {
+      // There is no exact commit to base a worktree on yet. Do not silently
+      // absorb an uncommitted first-run checkout into Maestro's bootstrap
+      // commit; ask the user to decide what belongs in that initial commit.
+      const bootstrapValidationErrors = validateGitProject(project);
+      if (bootstrapValidationErrors.length > 0) {
+        const failure = conflictError(bootstrapValidationErrors.join("\n"));
+        this.recordPrepareFailure(origin, task.id, failure.details);
+        throw failure;
+      }
       const bootstrap = bootstrapEmptyRepository(project.path, project.key);
       if (!bootstrap.ok) {
         const failure = conflictError(
@@ -1429,7 +1447,7 @@ export class ApplicationCommands {
 
     let repositoryBase;
     try {
-      repositoryBase = this.repositoryService.prepareTaskBase(project);
+      repositoryBase = this.repositoryService.prepareTaskBase(project, { allowDirty: true });
       project = this.database.getProjectByKey(project.key);
     } catch (error) {
       const failure = conflictError(
@@ -1486,6 +1504,7 @@ export class ApplicationCommands {
         canonicalHeadSha: repositoryBase.state.canonicalHeadSha,
         remoteHeadSha: repositoryBase.state.remoteHeadSha,
         syncState: repositoryBase.state.syncState,
+        workingTreePreserved: repositoryBase.state.syncState === "dirty",
         dependencyTaskIds: baseline.dependencyTaskIds
       }
     });

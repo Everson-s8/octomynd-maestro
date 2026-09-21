@@ -83,7 +83,6 @@ export class ReviewCoordinator {
       throw new Error("High-severity security alerts must be resolved before approval.");
     }
 
-    let mergeReconciliationPending = false;
     if (decision === "approved") {
       await this.github.markReady(item.pullRequestUrl);
       if (mergeAfterApproval) {
@@ -100,7 +99,6 @@ export class ReviewCoordinator {
           } catch (error) {
             // GitHub has already accepted the merge. Preserve the human review
             // and let the normal reconciliation poll retry the local checkout.
-            mergeReconciliationPending = true;
             this.database.addEvent({
               source: "github",
               type: "repository.reconcile_failed",
@@ -129,7 +127,7 @@ export class ReviewCoordinator {
     if (decision === "approved") {
       this.database.updateTaskStatus(
         item.taskId,
-        mergeAfterApproval && !mergeReconciliationPending ? "done" : "ready_to_merge"
+        mergeAfterApproval ? "done" : "ready_to_merge"
       );
     }
     if (decision === "rejected") this.database.updateTaskStatus(item.taskId, "rejected");
@@ -185,7 +183,6 @@ export class ReviewCoordinator {
                 taskId: task.id,
                 metadata: { runId: run.id, pullRequestUrl: run.pullRequestUrl }
               });
-              continue;
             }
           }
           nextStatus = "done";

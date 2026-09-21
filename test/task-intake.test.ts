@@ -41,4 +41,22 @@ describe("task intake metadata", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("persists an agent-produced implementation brief separately from the audit text", () => {
+    const intake = deriveTaskIntake("crie uma task a partir disso", {
+      title: "Simplificar as despesas do apartamento",
+      specification: [
+        "## Context\nO fluxo atual ainda usa mocks.",
+        "## Objective\nRegistrar despesas compartilhadas.",
+        "## Scope\nCalcular a parte de cada morador.",
+        "## Acceptance criteria\n- A dívida é recalculada após um pagamento.",
+        "## Validation\n- Executar os testes do fluxo.",
+        "## Constraints\n- Não alterar módulos fora do escopo."
+      ].join("\n\n")
+    });
+
+    expect(intake.title).toBe("Simplificar as despesas do apartamento");
+    expect(intake.specification).toContain("## Acceptance criteria");
+    expect(intake.specification).not.toContain("crie uma task a partir disso");
+  });
 });

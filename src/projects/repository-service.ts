@@ -37,6 +37,15 @@ export type RepositoryBase = {
   state: RepositoryState;
 };
 
+export type PrepareTaskBaseOptions = {
+  /**
+   * Allow a task worktree to be based on the canonical checkout's current
+   * commit while preserving its uncommitted files in place. This is scoped to
+   * task preparation; normal synchronization remains strict by default.
+   */
+  allowDirty?: boolean;
+};
+
 export class RepositorySyncError extends Error {
   constructor(public readonly state: RepositoryState) {
     super(state.detail ?? `Repository @${state.projectKey} cannot be synchronized (${state.syncState}).`);
@@ -148,7 +157,7 @@ export class ProjectRepositoryService {
     return this.persist(project, this.state(project, syncState, canonicalHeadSha, remoteHeadSha, currentBranch, true, detailFor(syncState), lastFetchAt));
   }
 
-  synchronize(project: ProjectRecord): RepositoryState {
+  synchronize(project: ProjectRecord, options: PrepareTaskBaseOptions = {}): RepositoryState {
     const lock = acquireSyncLock(project.path);
     if (!lock) {
       const state = this.persist(project, this.state(
@@ -163,14 +172,28 @@ export class ProjectRepositoryService {
       throw new RepositorySyncError(state);
     }
     try {
-      return this.synchronizeUnlocked(project);
+      return this.synchronizeUnlocked(project, options);
     } finally {
       lock.release();
     }
   }
 
-  private synchronizeUnlocked(project: ProjectRecord): RepositoryState {
+  private synchronizeUnlocked(project: ProjectRecord, options: PrepareTaskBaseOptions = {}): RepositoryState {
     let state = this.inspectUnlocked(project, true);
+    // A task worktree is created from an exact commit, so it is safe to use
+    // the canonical HEAD while leaving the user's dirty files untouched. Do
+    // not merge, reset, stash, or commit here. This escape hatch is explicit;
+    // ordinary synchronization still rejects dirty repositories.
+    if (state.syncState === "dirty" && options.allowDirty) {
+      if (!state.canonicalHeadSha) {
+        throw new RepositorySyncError({
+          ...state,
+          syncState: "unavailable",
+          detail: "No exact canonical commit is available for task preparation."
+        });
+      }
+      return state;
+    }
     if (state.syncState === "stale") {
       const reset = runGit(["merge", "--ff-only", `refs/remotes/origin/${project.defaultBranch}`], project.path);
       if (!reset.ok) {
@@ -191,12 +214,12 @@ export class ProjectRepositoryService {
     return state;
   }
 
-  prepareTaskBase(project: ProjectRecord): RepositoryBase {
-    const state = this.synchronize(project);
+  prepareTaskBase(project: ProjectRecord, options: PrepareTaskBaseOptions = {}): RepositoryBase {
+    const state = this.synchronize(project, options);
     if (!state.canonicalHeadSha) throw new RepositorySyncError({ ...state, syncState: "unavailable", detail: "No exact canonical commit is available for task preparation." });
     return {
       baseRef: state.canonicalHeadSha,
-      baseBranch: state.defaultBranch,
+      baseBranch: state.currentBranch ?? state.defaultBranch,
       baseCommitSha: state.canonicalHeadSha,
       state
     };
