@@ -52,7 +52,7 @@ Maestro ships with a global-style CLI (`maestro`) so onboarding feels identical 
 ### Step 1: Clone Repository & Install Dependencies
 
 ```bash
-git clone https://github.com/Everson-s8/octomynd-maestro.git
+git clone https://github.com/Octomynd/octomynd-maestro.git
 cd octomynd-maestro
 npm install
 ```
