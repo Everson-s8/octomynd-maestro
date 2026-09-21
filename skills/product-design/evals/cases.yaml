@@ -1,0 +1,22 @@
+schemaVersion: 1
+cases:
+  - id: design-scope-trigger
+    type: trigger
+    prompt: Redesign the dashboard interface and improve its loading and empty states.
+    phase: planning
+    capability: planning
+    expectMatch: true
+  - id: backend-scope-exclusion
+    type: trigger
+    prompt: Migrate the billing database and add an index for faster queries.
+    phase: planning
+    capability: planning
+    expectMatch: false
+  - id: content-contract
+    type: content
+    requiredPhrases:
+      - "design contract"
+      - "rendered"
+      - "unverified"
+    forbiddenPhrases:
+      - "invent unrelated redesigns"

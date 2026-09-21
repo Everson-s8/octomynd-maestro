@@ -9,6 +9,7 @@ const BUILTIN_SKILLS = new Set([
   "repository:implement-task-safely",
   "repository:final-feature-review",
   "repository:conversation",
+  "repository:product-design",
   "repository:improvement-reviewing"
 ]);
 

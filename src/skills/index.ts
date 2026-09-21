@@ -45,6 +45,7 @@ export type {
   SkillMetadata,
   LoadedSkillContext,
   SkillNetworkPolicy,
+  SkillFocus,
   SkillOperatingSystem,
   SkillOwner,
   SkillPolicy,

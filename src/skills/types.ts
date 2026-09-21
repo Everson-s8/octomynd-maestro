@@ -4,12 +4,14 @@ export const SKILL_SCOPES = ["system", "user", "repository", "project"] as const
 export const SKILL_OWNERS = ["system", "user", "agent"] as const;
 export const SKILL_RISKS = ["low", "medium", "high"] as const;
 export const SKILL_NETWORK_POLICIES = ["none", "restricted", "full"] as const;
+export const SKILL_FOCUSES = ["general", "product_design"] as const;
 export const SKILL_OPERATING_SYSTEMS = ["win32", "linux", "darwin"] as const;
 
 export type SkillScope = typeof SKILL_SCOPES[number];
 export type SkillOwner = typeof SKILL_OWNERS[number];
 export type SkillRisk = typeof SKILL_RISKS[number];
 export type SkillNetworkPolicy = typeof SKILL_NETWORK_POLICIES[number];
+export type SkillFocus = typeof SKILL_FOCUSES[number];
 export type SkillOperatingSystem = typeof SKILL_OPERATING_SYSTEMS[number];
 
 export type SkillPolicy = {
@@ -17,6 +19,8 @@ export type SkillPolicy = {
   owner: SkillOwner;
   risk: SkillRisk;
   allowImplicitInvocation: boolean;
+  /** Optional domain focus. Missing legacy values mean general-purpose. */
+  focus?: SkillFocus[];
   capabilities: AgentCapability[];
   operatingSystems: SkillOperatingSystem[];
   network: SkillNetworkPolicy;

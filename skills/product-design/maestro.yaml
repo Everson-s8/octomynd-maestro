@@ -1,0 +1,12 @@
+schemaVersion: 1
+owner: system
+risk: low
+allowImplicitInvocation: true
+focus: [product_design]
+capabilities: [planning, coding, testing, reviewing]
+operatingSystems: [win32, linux, darwin]
+network: none
+readScopes: ['.']
+writeScopes: []
+maxRuntimeMs: 120000
+maxOutputChars: 12000
