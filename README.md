@@ -1,10 +1,24 @@
 # Octomynd Maestro
 
+<p align="center">
+  <strong>Open-source systems for useful AI work, visible execution, and local-first control.</strong>
+</p>
+
+<p align="center">
+  Octomynd is the brand. Maestro is its current public product: a governed orchestrator for coding
+  agents, projects, tasks, and delivery workflows.
+</p>
+
 [![CI](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A local, chat-first orchestrator for Antigravity, Codex, Claude, and GitHub workflows, with a
-local visual command center to track projects, backlog, agents, and events.
+Maestro is a local, chat-first orchestrator for Antigravity, Codex, Claude, and GitHub workflows,
+with a visual command center to track projects, backlog, agents, goals, and events.
+
+The Octomynd direction is broader than any single data-warehouse or analytics product. We are
+building a family of focused open-source tools that keep context, execution, credentials, and
+failure visible instead of hiding important decisions behind a black box. Future data-focused
+projects may join the ecosystem later; Maestro is the current product and distribution focus.
 
 Maestro uses the authenticated CLIs or API credentials that you choose. It does not require
 `OPENAI_API_KEY` and does not create a separate OpenAI API billing surface.
@@ -35,13 +49,14 @@ request, Maestro sends the restricted Telegram user a review notification with t
 
 ## Documentation
 
-The maintained user documentation is published at [docs.octomynd.com](https://docs.octomynd.com/)
-with English and Brazilian Portuguese guides. Start with the
-[Maestro guide](https://docs.octomynd.com/en/) or the local
+The maintained user documentation is published at the canonical
+[docs.octomynd.com/en/](https://docs.octomynd.com/en/) entry point, with English and Brazilian
+Portuguese guides. Start with the
+[Maestro guide](https://docs.octomynd.com/en/maestro/) or the local
 [`INSTALL.md`](INSTALL.md) for a development checkout.
 
 This repository contains the runtime and source-level design notes. Product guides, onboarding
-walkthroughs, and operational documentation live in the separate
+walkthroughs, and operational documentation are maintained in the public
 [`Octomynd/octomynd-docs`](https://github.com/Octomynd/octomynd-docs) repository.
 For a local Portuguese quick start, see [`README.pt-BR.md`](README.pt-BR.md) and
 [`INSTALL.pt-BR.md`](INSTALL.pt-BR.md).
