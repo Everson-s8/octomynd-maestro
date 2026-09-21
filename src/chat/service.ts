@@ -176,6 +176,10 @@ export class OperationalChatService {
     // retained conversation, instead of making the last 10 messages the only
     // memory the assistant can see.
     const priorConversation = this.database.listOperationalChatMessages(projectKey, undefined, thread.id);
+    const recentUserMessages = priorConversation
+      .filter((message) => message.senderRole === "user")
+      .slice(-8)
+      .map((message) => message.messageText);
     const memory = extractExplicitMemory(request.message);
     const memorySaved = memory && accessMode !== "read_only" && projectKey !== GLOBAL_CHAT_PROJECT_KEY
       ? this.database.saveOperationalChatMemory({
@@ -230,7 +234,10 @@ export class OperationalChatService {
       evidence.summaryText = `${evidence.summaryText}\nCommand execution:\n${commandEvidence.command} => ${commandEvidence.status}`;
     }
     const taskIntent = useAgentLoop ? null : parseTaskCreationIntent(request.message, priorConversation);
-    let actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale);
+    let actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale, {
+      providerId: selectedProviderId,
+      model: selectedModel
+    }, recentUserMessages);
     if (pendingCommand) {
       actions.unshift({
         id: `approve_command_${pendingCommand.id}`,
@@ -280,7 +287,7 @@ export class OperationalChatService {
         ...evidence.goals.map((goal) => ({ type: "goal" as const, id: goal.runId, status: goal.status })),
         ...evidence.tasks.map((task) => ({ type: "task" as const, id: task.id, status: task.status })),
         ...evidence.providers.map((provider) => ({ type: "provider" as const, id: provider.id, status: provider.control.mode }))
-      ])
+      ], recentUserMessages)
       : null;
     const recoveryAction = recoveryDecision
       ? actions.find((action) => action.type === recoveryDecision.type && String(action.targetId) === String(recoveryDecision.targetId))
@@ -1443,7 +1450,8 @@ export class OperationalChatService {
     userMessage?: string,
     accessMode: ChatAccessMode = "standard",
     locale: ChatLocale = "en",
-    selection: { providerId: AgentProviderId | null; model: string | null } = { providerId: null, model: null }
+    selection: { providerId: AgentProviderId | null; model: string | null } = { providerId: null, model: null },
+    recentUserMessages: readonly string[] = []
   ): GovernedChatAction[] {
     const actions: GovernedChatAction[] = [];
     const hasActiveGoal = evidence.goals.some((goal) => ["running", "waiting_provider", "blocked", "failed"].includes(goal.status));
@@ -1573,7 +1581,7 @@ export class OperationalChatService {
     // palette just because the project happens to have a blocked task. The
     // actions remain available for explicit operational requests and for the
     // Telegram /chat_action command, which calls this method without text.
-    if (userMessage && !taskIntent && !isOperationalChatMessage(userMessage) && !isGoalGuidanceRequest(userMessage) && !isRecoveryRequest(userMessage)) {
+    if (userMessage && !taskIntent && !isOperationalChatMessage(userMessage) && !isGoalGuidanceRequest(userMessage) && !isRecoveryRequest(userMessage, recentUserMessages)) {
       return this.filterActionsByAccessMode(actions, accessMode);
     }
 

@@ -14,6 +14,7 @@ import { runGit } from "../src/git.js";
 import { ProjectProcessManager } from "../src/chat/project-process.js";
 import { planProjectStartCommand } from "../src/chat/project-command.js";
 import { compileOperationalChatContext } from "../src/chat/context-compiler.js";
+import { isRecoveryRequest } from "../src/chat/recovery.js";
 
 describe("Unified Operational Chat (Task #52)", () => {
   let tmpDir: string;
@@ -505,6 +506,11 @@ describe("Unified Operational Chat (Task #52)", () => {
     );
   });
 
+  it("uses recent user context to interpret an acknowledgement as a recovery command", () => {
+    expect(isRecoveryRequest("acho que agora você consegue", ["tente novamente desbloquear essa task"])).toBe(true);
+    expect(isRecoveryRequest("acho que agora você consegue", ["qual é o status do projeto?"])).toBe(false);
+  });
+
   it("interprets an explicit unblock request and resumes the only blocked Goal automatically", async () => {
     const task = database.createTask("Continue the financial app implementation", "dashboard", "maestro");
     database.updateTaskStatus(task.id, "blocked");
@@ -540,6 +546,44 @@ describe("Unified Operational Chat (Task #52)", () => {
         expect.objectContaining({ type: "resume_goal", targetId: run.id })
       ])
     );
+  });
+
+  it("carries a prior recovery request into a short follow-up acknowledgement", async () => {
+    const task = database.createTask("Continue the financial app implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 6,
+      lastError: "provider permission denied",
+      failureCategory: "permission_denied"
+    });
+    const resumed: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      actionExecutor: {
+        resumeGoal: (runId) => resumed.push(runId)
+      }
+    });
+
+    await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "tente novamente desbloquear essa task"
+    });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      message: "acho que agora você consegue"
+    });
+
+    expect(resumed).toEqual([run.id]);
+    expect(response.explanation).toContain(`Goal #${run.id} for Task #${task.id} resumed`);
   });
 
   it("executes safe governed actions directly from chat", async () => {

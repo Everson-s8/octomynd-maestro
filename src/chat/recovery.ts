@@ -16,8 +16,8 @@ export type RecoveryDecision = {
  * message, so callers do not need to know how users phrase "try again" or
  * which lifecycle action is appropriate for the current state.
  */
-export function resolveRecoveryDecision(message: string, targets: RecoveryTarget[]): RecoveryDecision | null {
-  if (!isRecoveryRequest(message)) return null;
+export function resolveRecoveryDecision(message: string, targets: RecoveryTarget[], recentUserMessages: readonly string[] = []): RecoveryDecision | null {
+  if (!isRecoveryRequest(message, recentUserMessages)) return null;
 
   const resumableGoals = targets.filter((target) => target.type === "goal" && ["blocked", "failed", "waiting_provider"].includes(target.status));
   if (resumableGoals.length === 1) {
@@ -39,7 +39,7 @@ export function resolveRecoveryDecision(message: string, targets: RecoveryTarget
   return null;
 }
 
-export function isRecoveryRequest(input: string): boolean {
+export function isRecoveryRequest(input: string, recentUserMessages: readonly string[] = []): boolean {
   const normalized = input
     .toLowerCase()
     .normalize("NFD")
@@ -48,5 +48,19 @@ export function isRecoveryRequest(input: string): boolean {
   if (!normalized || /\?\s*$/.test(normalized)) return false;
   if (/^(?:como|por que|porque|o que|what|why|how)\b/.test(normalized)) return false;
 
-  return /\b(?:desbloque\w*|retom\w*|reinici\w*|reabr\w*|retry|resume|unblock|reopen|continue|prossegu\w*|tente\s+novamente|tentar\s+novamente|try\s+again|run\s+again|de\s+novo)\b/.test(normalized);
+  if (/\b(?:desbloque\w*|retom\w*|reinici\w*|reabr\w*|retry|resume|unblock|reopen|continue|prossegu\w*|tente\s+novamente|tentar\s+novamente|try\s+again|run\s+again|de\s+novo)\b/.test(normalized)) {
+    return true;
+  }
+
+  // A short acknowledgement often follows the actual recovery request:
+  // "tente novamente" -> "acho que agora você consegue". In that case the
+  // conversation, not the last sentence alone, is the user's command.
+  const acknowledgement = /^(?:acho|creio|acredito|agora|talvez|pode|consegue|sim|isso|certo|ok|vamos)\b[\s\S]{0,180}\b(?:consegue|conseguir|pode|podemos|agora|tenta|tente|funciona|funcionar)\b/.test(normalized)
+    || /\b(?:agora|dessa\s+vez)\b[\s\S]{0,120}\b(?:consegue|pode|tenta|funciona)\b/.test(normalized);
+  if (!acknowledgement) return false;
+
+  return recentUserMessages.some((message) => {
+    const prior = message.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return /\b(?:desbloque\w*|retom\w*|reinici\w*|reabr\w*|retry|resume|unblock|reopen|tente\s+novamente|tentar\s+novamente|try\s+again|run\s+again|de\s+novo)\b/.test(prior);
+  });
 }
