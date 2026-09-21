@@ -32,7 +32,7 @@
   "scripts": {
     "setup": "tsx src/wizard.ts",
     "telegram:connect": "tsx src/telegram/connect.ts",
-    "cli": "tsx src/cli/index.ts",
+    "cli": "node scripts/ensure-node-native.mjs && tsx src/cli/index.ts",
     "cli:setup": "tsx src/cli/index.ts setup",
     "cli:telegram": "tsx src/cli/index.ts telegram connect",
     "cli:start": "tsx src/cli/index.ts start",
