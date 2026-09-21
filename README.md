@@ -9,16 +9,17 @@
   agents, projects, tasks, and delivery workflows.
 </p>
 
-[![CI](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Everson-s8/octomynd-maestro/actions/workflows/ci.yml)
+[![CI](https://github.com/Octomynd/octomynd-maestro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Octomynd/octomynd-maestro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Maestro is a local, chat-first orchestrator for Antigravity, Codex, Claude, and GitHub workflows,
 with a visual command center to track projects, backlog, agents, goals, and events.
 
-The Octomynd direction is broader than any single data-warehouse or analytics product. We are
-building a family of focused open-source tools that keep context, execution, credentials, and
-failure visible instead of hiding important decisions behind a black box. Future data-focused
-projects may join the ecosystem later; Maestro is the current product and distribution focus.
+The Octomynd direction is broader than any single product. Octomynd is the umbrella open-source
+brand and its data-warehouse product connects schema, context, SQL, and evidence for governed
+analytics. Maestro is the complementary harness for coding agents and software delivery. Together
+they keep context, execution, credentials, and failure visible instead of hiding important
+decisions behind a black box.
 
 Maestro uses the authenticated CLIs or API credentials that you choose. It does not require
 `OPENAI_API_KEY` and does not create a separate OpenAI API billing surface.

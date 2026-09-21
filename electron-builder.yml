@@ -81,7 +81,7 @@ nsis:
 # The GH_TOKEN at build time authorizes the upload; the app reads it publicly.
 publish:
   provider: github
-  owner: Everson-s8
+  owner: Octomynd
   repo: octomynd-maestro
 
 # A terminal launcher is installed beside Maestro.exe. It invokes the compiled
