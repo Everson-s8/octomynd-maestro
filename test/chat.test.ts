@@ -505,6 +505,43 @@ describe("Unified Operational Chat (Task #52)", () => {
     );
   });
 
+  it("interprets an explicit unblock request and resumes the only blocked Goal automatically", async () => {
+    const task = database.createTask("Continue the financial app implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "implementing",
+      stepCount: 6,
+      lastError: "provider permission denied",
+      failureCategory: "permission_denied"
+    });
+    const resumed: number[] = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      actionExecutor: {
+        resumeGoal: (runId) => resumed.push(runId)
+      }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      message: "Tente novamente desbloquear, fiz uns ajustes no Maestro."
+    });
+
+    expect(resumed).toEqual([run.id]);
+    expect(response.explanation).toContain(`Goal #${run.id} for Task #${task.id} resumed`);
+    expect(response.actions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "resume_goal", targetId: run.id })
+      ])
+    );
+  });
+
   it("executes safe governed actions directly from chat", async () => {
     const task = database.createTask("Fix broken task", "test", "maestro");
     database.updateTaskStatus(task.id, "failed");

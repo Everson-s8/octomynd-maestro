@@ -49,6 +49,7 @@ import {
   type CompiledChatContext
 } from "./context-compiler.js";
 import { deriveTaskIntake } from "../tasks/intake.js";
+import { isRecoveryRequest, resolveRecoveryDecision } from "./recovery.js";
 
 // A local CLI has cold-start/auth/session overhead. Eight seconds made a
 // normal conversational reply look like a provider failure and immediately
@@ -273,6 +274,37 @@ export class OperationalChatService {
       }
     }
 
+    let automaticRecoverySummary = "";
+    const recoveryDecision = accessMode === "full" && !commandPlan
+      ? resolveRecoveryDecision(request.message, [
+        ...evidence.goals.map((goal) => ({ type: "goal" as const, id: goal.runId, status: goal.status })),
+        ...evidence.tasks.map((task) => ({ type: "task" as const, id: task.id, status: task.status })),
+        ...evidence.providers.map((provider) => ({ type: "provider" as const, id: provider.id, status: provider.control.mode }))
+      ])
+      : null;
+    const recoveryAction = recoveryDecision
+      ? actions.find((action) => action.type === recoveryDecision.type && String(action.targetId) === String(recoveryDecision.targetId))
+      : undefined;
+    if (recoveryAction) {
+      const recoveryResult = await this.executeAction({
+        projectKey,
+        threadId: thread.id,
+        surface: request.surface,
+        accessMode,
+        uiLocale: locale,
+        action: recoveryAction,
+        userId: request.userId,
+        username: request.username
+      });
+      if (recoveryResult.success) {
+        automaticRecoverySummary = recoveryResult.resultSummary;
+        actions = actions.filter((action) => action.id !== recoveryAction.id);
+        evidence.summaryText = `${evidence.summaryText}\nRecovery: ${automaticRecoverySummary}`;
+      } else {
+        evidence.warnings.push(recoveryResult.resultSummary);
+      }
+    }
+
     let automaticStartSummary = "";
     let automaticTaskSummary = "";
     if (!useAgentLoop && accessMode === "full" && taskIntent) {
@@ -317,7 +349,7 @@ export class OperationalChatService {
     }
 
     const conversationHistory = compiledContext.recentMessages;
-    const routingResult = automaticTaskSummary
+    const routingResult = automaticTaskSummary || automaticRecoverySummary
       ? { explanation: "", providerId: "deterministic_engine" as const, model: null }
       : await this.synthesizeExplanation(
         request.message,
@@ -346,6 +378,7 @@ export class OperationalChatService {
       routingResult.explanation,
       automaticTaskSummary,
       automaticGoalGuidanceSummary,
+      automaticRecoverySummary,
       automaticStartSummary,
       commandReport ? formatChatCommandEvidence(commandReport, locale) : ""
     ].filter(Boolean).join("\n\n"));
@@ -1540,7 +1573,7 @@ export class OperationalChatService {
     // palette just because the project happens to have a blocked task. The
     // actions remain available for explicit operational requests and for the
     // Telegram /chat_action command, which calls this method without text.
-    if (userMessage && !taskIntent && !isOperationalChatMessage(userMessage) && !isGoalGuidanceRequest(userMessage)) {
+    if (userMessage && !taskIntent && !isOperationalChatMessage(userMessage) && !isGoalGuidanceRequest(userMessage) && !isRecoveryRequest(userMessage)) {
       return this.filterActionsByAccessMode(actions, accessMode);
     }
 
@@ -1598,7 +1631,7 @@ export class OperationalChatService {
     }
 
     for (const goal of evidence.goals) {
-      if (["blocked", "failed"].includes(goal.status)) {
+      if (["blocked", "failed", "waiting_provider"].includes(goal.status)) {
         actions.push({
           id: `resume_goal_${goal.runId}`,
           type: "resume_goal",
