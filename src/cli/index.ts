@@ -10,6 +10,7 @@ import type { ProjectRecord, TaskRecord } from "../db.js";
 import { loadConfig } from "../config.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { CommandOrigin } from "../commands/types.js";
+import { chatCommand } from "./chat.js";
 import { PROVIDER_PRESETS } from "../agents/provider-config.js";
 import { ProviderAuthBroker } from "../agents/provider-auth.js";
 import {
@@ -135,6 +136,8 @@ Commands:
   restart [--port N] [--host H]
                         Restart a running Maestro process on the current code.
   dashboard             Launch the web dashboard UI (http://127.0.0.1:4788).
+  chat [--project K] [--full]
+                        Open the interactive terminal chat (working agent).
   logs <task-id> [--follow] [--limit N]
                         Inspect persisted task activity in the terminal.
   followup <task-id> <text>
@@ -842,9 +845,12 @@ async function main(): Promise<void> {
       }
       break;
     }
-    case "start":
-      await startCommand();
-      break;
+    case "chat":
+          await chatCommand(argv);
+          break;
+        case "start":
+          await startCommand();
+          break;
     case "restart":
       await restartCommand(argv);
       break;

@@ -23,6 +23,7 @@ import {
 import { MaestroDatabase, ProjectRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
+import type { CommandOrigin } from "../commands/types.js";
 import { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
@@ -829,9 +830,9 @@ export class OperationalChatService {
     text: string;
     providerId: AgentProviderId | null;
     model: string | null;
-    origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null };
-    locale: ChatLocale;
-  }): Promise<{ success: boolean; summary: string }> {
+    origin: CommandOrigin;
+        locale: ChatLocale;
+      }): Promise<{ success: boolean; summary: string }> {
     if (!this.agentRegistry) {
       throw new Error(chatText(input.locale, "Agent registry is unavailable.", "O registro de providers está indisponível."));
     }
@@ -948,7 +949,7 @@ export class OperationalChatService {
     }
   }
 
-  private originForCommand(origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null }) {
+  private originForCommand(origin: CommandOrigin) {
     return { channel: origin.channel, userId: origin.userId, username: origin.username } as const;
   }
 

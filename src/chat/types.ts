@@ -5,7 +5,7 @@ import type { RepositoryState } from "../projects/repository-service.js";
 import type { ChatProjectFileFact, ChatProjectGitContext } from "./project-context.js";
 import type { ChatCommandEvidence } from "./project-command.js";
 
-export type OperationalChatSurface = "dashboard" | "telegram";
+export type OperationalChatSurface = "dashboard" | "telegram" | "cli";
 export type OperationalChatSenderRole = "user" | "orchestrator" | "system";
 export type ChatAccessMode = "read_only" | "standard" | "approval" | "full";
 export type ChatLocale = "en" | "pt-BR";
