@@ -23,6 +23,7 @@ import {
 import { MaestroDatabase, ProjectRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
+import type { CommandOrigin } from "../commands/types.js";
 import { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import { ProjectRepositoryService, RepositorySyncError } from "../projects/repository-service.js";
@@ -829,7 +830,7 @@ export class OperationalChatService {
     text: string;
     providerId: AgentProviderId | null;
     model: string | null;
-    origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null };
+    origin: CommandOrigin;
     locale: ChatLocale;
   }): Promise<{ success: boolean; summary: string }> {
     if (!this.agentRegistry) {
@@ -948,7 +949,7 @@ export class OperationalChatService {
     }
   }
 
-  private originForCommand(origin: { channel: "dashboard" | "telegram"; userId: string | null; username: string | null }) {
+  private originForCommand(origin: CommandOrigin) {
     return { channel: origin.channel, userId: origin.userId, username: origin.username } as const;
   }
 
@@ -1133,18 +1134,32 @@ export class OperationalChatService {
     return { ...latest.progress, requestId: latest.requestId };
   }
 
+  /** Return the latest live chat request for a project, including its thread. */
+  getActiveChat(projectKey: string): { threadId: number; activity: OperationalChatActivity } | null {
+    const normalizedKey = normalizeChatProjectKey(projectKey);
+    this.resolveChatProject(normalizedKey);
+    const active = [...this.activeChatRequests.values()]
+      .filter((request) => request.projectKey === normalizedKey)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+      .at(-1);
+    return active
+      ? { threadId: active.threadId, activity: { ...active.progress, requestId: active.requestId } }
+      : null;
+  }
+
   getActivityEvents(projectKey: string, threadId: number, limit = 100): OperationalChatActivityEvent[] {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
     return this.database.listOperationalChatActivityEvents(normalizedKey, threadId, limit);
   }
 
-  cancelChat(projectKey: string, threadId: number): OperationalChatActivity {
+  cancelChat(projectKey: string, threadId?: number | null): OperationalChatActivity {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
-    const requestIds = this.activeChatByThread.get(threadId);
-    const activities = [...(requestIds ?? [])]
-      .map((requestId) => this.activeChatRequests.get(requestId))
+    const activities = (threadId == null
+      ? [...this.activeChatRequests.values()]
+      : [...(this.activeChatByThread.get(threadId) ?? [])]
+        .map((requestId) => this.activeChatRequests.get(requestId)))
       .filter((activity): activity is NonNullable<typeof activity> => Boolean(activity && activity.projectKey === normalizedKey));
     if (activities.length === 0) return idleChatActivity(this.chatBudget);
     for (const activity of activities) {

@@ -76,22 +76,36 @@ npm run dist:win
 npm run release:win
 ```
 
-Output: `release/Maestro-Setup-<version>-x64.exe`, where `<version>` comes from
-`package.json`. The artifact name is deterministic and versioned for sharing.
+Output: `release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, and
+`release/latest.yml`, where `<version>` comes from `package.json`. The artifact
+names are deterministic and versioned for sharing. Verify the complete update
+set before publishing:
+
+```powershell
+npm run verify:release
+```
 The initial build is unsigned; a production release pipeline should add a
 Windows code-signing certificate before public distribution.
 
 ### Free public distribution
 
 The unsigned beta can be distributed without a paid certificate through GitHub
-Releases. Publish the installer together with its SHA-256 checksum and keep the
-source repository public:
+Releases. Publish all three update artifacts together; uploading only the `.exe`
+breaks `electron-updater` because installed apps cannot find `latest.yml`:
 
 ```powershell
-$artifact = Get-ChildItem .\release\Maestro-Setup-*-x64.exe | Select-Object -First 1
+$version = node -p "require('./package.json').version"
+npm run verify:release
+$files = @(
+  ".\release\Maestro-Setup-$version-x64.exe",
+  ".\release\Maestro-Setup-$version-x64.exe.blockmap",
+  ".\release\latest.yml"
+)
+gh release create "v$version" $files `
+  --title "Maestro v$version" --generate-notes
+$artifact = Get-Item ".\release\Maestro-Setup-$version-x64.exe"
 Get-FileHash $artifact.FullName -Algorithm SHA256
-gh release create "v$(node -p "require('./package.json').version")" $artifact.FullName `
-  --title "Maestro v$(node -p "require('./package.json').version")" --generate-notes
+npm run verify:release:github
 ```
 
 Copy the resulting SHA-256 value into the release notes. Users should download
