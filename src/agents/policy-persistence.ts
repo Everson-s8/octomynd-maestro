@@ -28,10 +28,14 @@ type CapabilityRoutingRow = {
 };
 
 export function migrateProviderPolicyPersistence(db: Database.Database) {
+  const hadConnectionTable = db.prepare(
+    "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'provider_connections'"
+  ).get() !== undefined;
   db.exec(`
     CREATE TABLE IF NOT EXISTS provider_connections (
       provider_id TEXT PRIMARY KEY,
-      connected_at TEXT NOT NULL
+      connected_at TEXT NOT NULL,
+      connection_source TEXT NOT NULL DEFAULT 'explicit'
     );
 
     CREATE TABLE IF NOT EXISTS provider_controls (
@@ -53,17 +57,19 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
     );
   `);
 
-  // Before explicit connection state existed, a built-in provider became
-  // visible only after the user changed its control row. Preserve those
-  // intentional connections during upgrade, while keeping providers that
-  // were merely compiled into the runtime (and disabled/removed providers)
-  // out of the new active set.
-  db.exec(`
-    INSERT OR IGNORE INTO provider_connections (provider_id, connected_at)
-    SELECT provider_id, updated_at
-    FROM provider_controls
-    WHERE mode IN ('enabled', 'paused');
-  `);
+  // A previous migration promoted every enabled provider control into an
+  // active connection. That made compiled-in providers appear as connected
+  // even when the user had never authenticated them. Existing rows from that
+  // migration are explicitly stale and must not be routed or shown as active.
+  // A fresh table uses the explicit default above; an older table is marked
+  // legacy when the source column is added and cleaned once.
+  if (hadConnectionTable) {
+    const connectionColumns = db.prepare("PRAGMA table_info(provider_connections)").all() as Array<{ name: string }>;
+    if (!connectionColumns.some((col) => col.name === "connection_source")) {
+      db.exec("ALTER TABLE provider_connections ADD COLUMN connection_source TEXT NOT NULL DEFAULT 'legacy';");
+    }
+    db.exec("DELETE FROM provider_connections WHERE connection_source = 'legacy';");
+  }
 
   try {
     const controlColumns = db.prepare("PRAGMA table_info(provider_controls)").all() as Array<{ name: string }>;
@@ -158,8 +164,8 @@ export function createProviderPolicyPersistence(db: Database.Database) {
 
     markProviderConnected(providerId: AgentProviderId): void {
       db.prepare(`
-        INSERT INTO provider_connections (provider_id, connected_at)
-        VALUES (?, ?)
+        INSERT INTO provider_connections (provider_id, connected_at, connection_source)
+        VALUES (?, ?, 'explicit')
         ON CONFLICT(provider_id) DO NOTHING
       `).run(providerId, new Date().toISOString());
     },

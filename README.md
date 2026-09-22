@@ -153,7 +153,9 @@ disables fallback for the selected one; it is intended for temporary quota conse
 Provider connections are explicit: a CLI being installed on the machine does not activate it.
 Only providers the user connects are eligible for routing; disconnecting one removes it from the
 active route immediately and leaves no phantom provider in the UI, while preserving its adapter so
-the user can reconnect it later. The dashboard shows the installed Maestro version and, in a
+the user can reconnect it later. When upgrading an older database, stale inferred connection rows
+are discarded and the user must reconnect the providers they want to use. The dashboard shows the
+installed Maestro version and, in a
 packaged build, reports update availability/download progress and offers the restart that applies a
 downloaded release.
 

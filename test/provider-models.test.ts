@@ -1,12 +1,38 @@
 import { describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import { createDatabase } from "../src/db.js";
 import { CodexProvider } from "../src/agents/codex.js";
 import { ClaudeProvider } from "../src/agents/claude.js";
 import { CustomCliProvider, buildCustomCliArgs } from "../src/agents/custom-cli.js";
 import { AntigravityProvider } from "../src/agents/antigravity.js";
 import { AgentExecutionRequest } from "../src/agents/types.js";
+import { createProviderPolicyPersistence, migrateProviderPolicyPersistence } from "../src/agents/policy-persistence.js";
 
 describe("provider models configuration and propagation", () => {
+  it("does not infer a provider connection from policy controls", () => {
+    const db = new Database(":memory:");
+    migrateProviderPolicyPersistence(db);
+    const persistence = createProviderPolicyPersistence(db);
+
+    persistence.updateProviderControl({ providerId: "claude", mode: "enabled", fallbackEnabled: true });
+    expect(persistence.listConnectedProviderIds()).toEqual([]);
+
+    persistence.markProviderConnected("claude");
+    expect(persistence.listConnectedProviderIds()).toEqual(["claude"]);
+    db.close();
+  });
+
+  it("cleans connection rows created by the legacy inferred-connection migration", () => {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE provider_connections (provider_id TEXT PRIMARY KEY, connected_at TEXT NOT NULL)");
+    db.prepare("INSERT INTO provider_connections (provider_id, connected_at) VALUES (?, ?)").run("claude", new Date().toISOString());
+
+    migrateProviderPolicyPersistence(db);
+    const persistence = createProviderPolicyPersistence(db);
+    expect(persistence.listConnectedProviderIds()).toEqual([]);
+    db.close();
+  });
+
   it("CodexProvider returns available models and honors configured model", async () => {
     const codex = new CodexProvider({ model: "gpt-4o" });
     expect(codex.model).toBe("gpt-4o");
