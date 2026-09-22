@@ -250,6 +250,35 @@ describe("Feature Task scheduling", () => {
     expect(database.listEvents().some((event) => event.type === "backlog.dependency_recovery_requested")).toBe(true);
   });
 
+  it("keeps a proven dependency loop as a genuine terminal block", async () => {
+    database.registerProject({ key: "maestro", path: tempDir });
+    const dependency = database.createTask("Looping dependency", "test", "maestro");
+    const dependent = database.createTask("Do not run stale descendant", "test", "maestro");
+    database.createFeaturePlan({
+      projectKey: "maestro",
+      objective: "Preserve loop safety",
+      acceptanceCriteria: ["A proven loop is visible"],
+      taskIds: [dependency.id, dependent.id],
+      taskContracts: contractsFor(dependency.id, dependent.id)
+    });
+    database.updateTaskStatus(dependency.id, "blocked");
+    const run = database.createGoalRun(dependency.id);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "testing",
+      stepCount: 4,
+      maxSteps: 12,
+      failureCategory: "loop",
+      lastError: "proven loop"
+    });
+
+    await autopilot([]).tick();
+
+    expect(database.getTask(dependent.id).status).toBe("blocked");
+    expect(database.getLastEvent()?.metadata.reason).toBe(`dependency_goal_loop_${dependency.id}`);
+  });
+
   it("starts an independent parallel Task in the same project when scopes are disjoint", async () => {
     database.registerProject({ key: "maestro", path: tempDir });
     const left = database.createTask("Implement left module", "test", "maestro");

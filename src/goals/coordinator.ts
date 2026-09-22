@@ -274,6 +274,9 @@ export class GoalCoordinator {
       ["blocked", "failed", "waiting_provider"].includes(candidate.status)
     ));
     if (!run) throw new Error(`Task #${taskId} has no Goal run to recover.`);
+    if (run.failureCategory === "loop") {
+      throw new Error(`Goal #${run.id} reached a proven execution loop and requires human review.`);
+    }
     return this.resumeExistingRun(run.id);
   }
 

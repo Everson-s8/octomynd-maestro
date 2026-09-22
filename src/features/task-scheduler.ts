@@ -74,6 +74,14 @@ export function evaluateFeatureTaskReadiness(
   const node = requirePlanTask(featurePlan, task.id);
   for (const dependencyId of transitiveDependencyIds(featurePlan.tasks, task.id)) {
     const dependency = database.getTask(dependencyId);
+    const latestDependencyRun = database.listGoalRunsForTask(dependency.id).at(-1);
+    if (latestDependencyRun?.failureCategory === "loop") {
+      return {
+        state: "blocked",
+        reason: `dependency_goal_loop_${dependency.id}`,
+        featurePlan
+      };
+    }
     if (FAILED_DEPENDENCY_STATES.has(dependency.status)) {
       return {
         state: "blocked",
