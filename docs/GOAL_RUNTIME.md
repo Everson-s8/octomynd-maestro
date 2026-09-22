@@ -155,9 +155,12 @@ condition, the task becomes `waiting_provider`, the goal persists its typed wait
 environment/permission recovery attempt; a provider failure must not silently route to a provider
 that is disconnected or has never been connected.
 Retryable provider failures are recorded as attempts but do not consume the goal's semantic step
-budget. When a waiting run resumes, the last failed provider is temporarily excluded so an
-available fallback is tried first. If no alternative exists, the original provider remains eligible
-for a later retry.
+budget. When a waiting run resumes, providers that already failed or blocked in that phase are
+excluded so an available fallback is tried first. A fresh quota/capacity wait may make the last
+provider eligible again after its cooldown. Environment and permission failures are not blindly
+replayed against the same provider; the user can explicitly select a connected provider from Chat,
+which grants that provider one retry from the preserved checkpoint. If that retry fails, automatic
+resume will not repeat it until the user selects it again. Disconnected providers remain ineligible.
 
 The provider control plane computes the earliest recovery across every capable provider. A Claude
 quota failure therefore cannot force a ten-minute wait when Codex's timeout cooldown ends in fifteen

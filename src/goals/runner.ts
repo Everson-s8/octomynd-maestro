@@ -1517,17 +1517,47 @@ function initialExcludedProviders(
 ): Set<AgentProviderId> {
   if (run.status !== "waiting_provider") return new Set();
   const failed = database.listGoalSteps(run.id)
-    .filter((step) => step.phase === phase && step.status === "failed")
+    .filter((step) => step.phase === phase && (step.status === "failed" || step.status === "blocked"))
     .map((step) => step.provider)
     .filter(isAgentProviderId);
   const excluded = new Set(failed);
-  if (
-    (run.waitReason === "quota" || run.waitReason === "capacity" || run.waitReason === "environment_error" || run.waitReason === "permission_denied")
-    && isAgentProviderId(run.lastProvider)
-  ) {
-    excluded.delete(run.lastProvider);
+  const preferredProviderId = isAgentProviderId(run.preferredProviderId)
+    ? run.preferredProviderId
+    : null;
+  if (preferredProviderId && wasProviderSelectedAfterItsLatestFailure(database, run, phase, preferredProviderId)) {
+    // A user-selected provider gets one explicit retry even if it failed
+    // earlier in this phase. The next failure is newer than the selection,
+    // so subsequent automatic resumes will not keep retrying it forever.
+    excluded.delete(preferredProviderId);
+  }
+  if (isAgentProviderId(run.lastProvider)) {
+    const lastProviderHasFailedThisPhase = failed.includes(run.lastProvider);
+    const transientProviderWait = run.waitReason === "quota" || run.waitReason === "capacity";
+    if (!lastProviderHasFailedThisPhase || transientProviderWait) excluded.delete(run.lastProvider);
   }
   return excluded;
+}
+
+function wasProviderSelectedAfterItsLatestFailure(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase,
+  providerId: AgentProviderId
+): boolean {
+  const events = database.listEventsForTask(run.taskId, 500)
+    .filter((event) => Number(event.metadata?.runId) === run.id && event.metadata?.phase === phase);
+  const latestSelection = events
+    .filter((event) => event.type === "goal.provider_selected" && event.metadata?.providerId === providerId)
+    .at(-1);
+  if (!latestSelection) return false;
+
+  const latestFailure = events
+    .filter((event) => (
+      (event.type === "goal.step_failed" || event.type === "goal.step_blocked")
+      && event.source === providerId
+    ))
+    .at(-1);
+  return !latestFailure || latestSelection.id > latestFailure.id;
 }
 
 function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: number): string | null {
