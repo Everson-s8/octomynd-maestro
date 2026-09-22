@@ -2539,3 +2539,44 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   .first-run-actions { align-items: stretch; flex-direction: column; }
   .first-run-actions button { width: 100%; }
 }
+:root {
+  --maestro-update-bg: rgba(31, 122, 133, 0.18);
+}
+
+.maestro-runtime-badge {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 36px));
+  padding: 8px 12px;
+  border: 1px solid rgba(232, 150, 122, 0.28);
+  border-radius: 999px;
+  background: rgba(18, 15, 13, 0.94);
+  color: var(--text-2, #c7b9a9);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  font: 11px/1.2 var(--mono, monospace);
+  letter-spacing: .04em;
+}
+
+.maestro-runtime-badge button {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #c4622d;
+  color: #fff4e8;
+  cursor: pointer;
+  font: inherit;
+}
+
+@media (max-width: 700px) {
+  .maestro-runtime-badge {
+    right: 10px;
+    bottom: 10px;
+    flex-wrap: wrap;
+    border-radius: 14px;
+  }
+}

@@ -341,6 +341,7 @@ export type DashboardData = {
   generatedAt: string;
   daemon: {
     name: string;
+    version: string;
     state: "online";
     access: "restricted" | "unrestricted";
     dashboardHost: string;
@@ -695,6 +696,19 @@ export async function deleteProvider(providerId: string): Promise<RegisteredCust
   const payload = await response.json() as { removed?: boolean; providers?: RegisteredCustomProvider[]; error?: string };
   if (!response.ok) throw new Error(payload.error || "Unable to remove the provider.");
   return payload.providers ?? [];
+}
+
+export async function connectBuiltInProvider(presetId: string): Promise<{ connected: boolean; providerId: string }> {
+  const response = await fetch("/api/providers/connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presetId })
+  });
+  const payload = await response.json() as { connected?: boolean; providerId?: string; error?: string; detail?: string };
+  if (!response.ok || !payload.connected || !payload.providerId) {
+    throw new Error(payload.detail || payload.error || "Unable to connect the provider.");
+  }
+  return { connected: true, providerId: payload.providerId };
 }
 
 export async function discoverProviderModels(input: {

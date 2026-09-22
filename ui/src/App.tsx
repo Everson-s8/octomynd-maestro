@@ -9,12 +9,13 @@ import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
 import { useI18n, translate } from "./i18n";
 import { resetOnboarding } from "./components/FirstRunOnboarding";
-import { DesktopUpdateStatus } from "./external-links";
+import { DesktopUpdateStatus, installDesktopUpdate } from "./external-links";
 
 function getDesktopBridge() {
   return (window as Window & {
-    maestroDesktop?: {
-      onUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => (() => void) | void;
+      maestroDesktop?: {
+        installUpdate?: () => Promise<unknown>;
+        onUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => (() => void) | void;
     };
   }).maestroDesktop;
 }
@@ -30,6 +31,7 @@ export default function App() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
 
   const refresh = useCallback(async (activity = false) => {
     if (activity) setRefreshing(true);
@@ -51,6 +53,7 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = getDesktopBridge()?.onUpdateStatus?.((status) => {
+      setUpdateStatus((previous) => ({ ...previous, ...status }));
       setUpdateError(status.event === "error" ? status.message || translate("Automatic updates are unavailable.") : null);
     });
     return typeof unsubscribe === "function" ? unsubscribe : undefined;
@@ -70,6 +73,16 @@ export default function App() {
     {updateError ? <div className="error-banner" role="alert">
       <span>{translate("Automatic updates are unavailable.")} {updateError}</span>
       <button onClick={() => setUpdateError(null)}>{translate("Dismiss")}</button>
+    </div> : null}
+    {data ? <div className="maestro-runtime-badge" role="status">
+      <span>{translate("Maestro")} v{data.daemon.version}</span>
+      {updateStatus?.event === "downloading" || updateStatus?.event === "progress" ? (
+        <span>{translate("Update available")} {updateStatus.version ? `v${updateStatus.version}` : ""} · {updateStatus.percent ?? 0}%</span>
+      ) : updateStatus?.event === "ready" ? (
+        <button type="button" onClick={() => void installDesktopUpdate()}>
+          {translate("Restart to update")} {updateStatus.version ? `v${updateStatus.version}` : ""}
+        </button>
+      ) : null}
     </div> : null}
     {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} onRestartOnboarding={handleRestartOnboarding} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
