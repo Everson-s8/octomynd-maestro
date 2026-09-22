@@ -170,8 +170,10 @@ export function TaskDetail({
 
   const canPrepare = task.status === "queued" && !task.worktreePrepared;
   const canCancel = !["done", "failed", "rejected", "cancelled"].includes(task.status);
-  const canDelete = !["planning", "implementing", "testing", "reviewing"].includes(task.status)
-    && (!goal || !["running", "waiting_provider"].includes(goal.status));
+  // The backend deletes disposable tasks and archives historical evidence. A
+  // stale task in planning must remain removable; only an active Goal is
+  // protected because it still owns a running process or retry timer.
+  const canDelete = !goal || !["running", "waiting_provider"].includes(goal.status);
   const canResumeGoal = Boolean(goal && ["blocked", "failed"].includes(goal.status));
 
   return (
