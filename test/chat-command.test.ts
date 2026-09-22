@@ -36,6 +36,10 @@ describe("chat command execution", () => {
     expect(planChatCommand("npm install")).toEqual(expect.objectContaining({
       blockedReason: expect.stringContaining("Dependency installation")
     }));
+    expect(planChatCommand("uv sync")).toEqual(expect.objectContaining({
+      blockedReason: expect.stringContaining("Approval or Full Access")
+    }));
+    expect(planChatCommand("uv sync", "full")?.blockedReason).toBeUndefined();
     expect(planChatCommand("git status; type C:\\secrets.txt")).toEqual(expect.objectContaining({
       blockedReason: expect.stringContaining("Shell operators")
     }));

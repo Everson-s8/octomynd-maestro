@@ -385,6 +385,87 @@ describe("chat agent loop integration", () => {
     expect(database.getTask(task.id).status).toBe("implementing");
   });
 
+  it("repairs a blocked Goal environment inside its worktree, records evidence and then resumes that Goal", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-goal-environment-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const worktree = path.join(dir, "worktrees", "task-python-env");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, "package.json"), JSON.stringify({
+      name: "goal-env-recovery-test",
+      version: "1.0.0",
+      scripts: { repair: "node -e \"require('fs').appendFileSync('recovery-proof.txt','x')\"" }
+    }), "utf8");
+    const task = new ApplicationCommands(database).createTask(
+      { channel: "dashboard", userId: null, username: null },
+      { projectKey: "apto", text: "Prepare the local test environment and continue implementation." }
+    );
+    database.updateTaskWorktree({ id: task.id, status: "blocked", branchName: "maestro/task-python-env", worktreePath: worktree });
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "testing",
+      stepCount: 4,
+      lastError: "Python test environment is missing.",
+      failureCategory: "environment_error"
+    });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Recover Goal test environment" });
+    const turns = [
+      { type: "tool_call", name: "goal_workspace_command", arguments: { runId: run.id, command: "npm run repair" } },
+      { type: "tool_call", name: "goal_workspace_command", arguments: { runId: run.id, command: "npm run repair" } },
+      { type: "tool_call", name: "governed_action", arguments: { action: "resume_goal", targetId: run.id } },
+      { type: "final", response: "O ambiente foi reparado no worktree, o comando duplicado foi evitado e a Goal existente foi retomada." }
+    ];
+    let providerCalls = 0;
+    let resumeCalls = 0;
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        const turn = turns[providerCalls++];
+        return { outcome: "completed", summary: "completed", output: JSON.stringify(turn), structuredPayload: turn, error: null, retryable: false, durationMs: 1 };
+      }
+    };
+    const service = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: path.join(dir, "worktrees"),
+      chatBudget: { maxIterations: 6, maxToolCalls: 4 },
+      actionExecutor: {
+        resumeGoal: (runId) => {
+          resumeCalls += 1;
+          const current = database.getGoalRun(runId);
+          database.updateGoalRun({ id: runId, status: "waiting_provider", currentPhase: current.currentPhase, stepCount: current.stepCount, nextRetryAt: null });
+          database.updateTaskStatus(current.taskId, current.currentPhase);
+        }
+      }
+    });
+
+    const response = await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Tente você resolver o ambiente bloqueado desta Goal."
+    });
+
+    const recoveryEvents = database.listEventsForTask(task.id).filter((event) => event.type === "goal.environment_recovery_command");
+    expect(providerCalls).toBe(4);
+    expect(fs.readFileSync(path.join(worktree, "recovery-proof.txt"), "utf8")).toBe("x");
+    expect(recoveryEvents).toHaveLength(1);
+    expect(recoveryEvents[0].metadata).toMatchObject({ runId: run.id, phase: "testing", command: "npm run repair", status: "completed" });
+    expect(resumeCalls).toBe(1);
+    expect(database.listGoalRunsForTask(task.id)).toHaveLength(1);
+    expect(database.getGoalRun(run.id).status).toBe("waiting_provider");
+    expect(response.explanation).toContain("Goal existente foi retomada");
+    expect(response.actions.some((action) => action.type === "resume_goal")).toBe(false);
+  });
+
   it("answers a blocked-task question from refreshed project state evidence", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-state-"));
     const database = createDatabase(path.join(dir, "maestro.db"));

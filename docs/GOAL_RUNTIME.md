@@ -129,6 +129,14 @@ packages, browser binaries, test tooling and recoverable permissions inside the 
 then the deterministic checks run again. Validation runner failures are waiting states, not terminal
 Goal blocks.
 
+When a user asks Full Access Chat to repair an environment for a blocked/waiting Goal, Chat can run
+one direct diagnostic or setup command in that Goal's existing isolated worktree. It cannot target
+the registered project root, use shell chaining/redirection, or run a long-lived server through this
+recovery tool. Results are durably recorded as `goal.environment_recovery_command` events and passed
+into the next Goal step alongside the existing checkpoint. Identical commands are not repeated in
+one chat turn unless a different recovery command succeeded in between. Resume actions are withheld
+until at least one recovery command succeeds, after which Chat can continue the same Goal in place.
+
 ## Routing
 
 Providers advertise capabilities. The registry selects a ready provider using this preference order:

@@ -5,6 +5,7 @@ export const CHAT_AGENT_TOOLS = [
   "project_state",
   "read_memory",
   "run_command",
+  "goal_workspace_command",
   "governed_action"
 ] as const;
 

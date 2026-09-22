@@ -75,7 +75,7 @@ describe("chat agent loop", () => {
   });
 
   it("supports the complete Maestro tool surface in one bounded investigation", async () => {
-    const toolNames = ["inspect_project", "project_state", "read_memory", "run_command", "governed_action"] as const;
+    const toolNames = ["inspect_project", "project_state", "read_memory", "run_command", "goal_workspace_command", "governed_action"] as const;
     const executed: string[] = [];
     const result = await runChatAgentLoop({
       userMessage: "investigue e execute o próximo passo governado",
@@ -83,7 +83,7 @@ describe("chat agent loop", () => {
       providerId: "fake",
       model: null,
       effort: null,
-      budget: { maxIterations: 7, maxToolCalls: 5 },
+      budget: { maxIterations: 7, maxToolCalls: 6 },
       signal: new AbortController().signal,
       invoke: async ({ iteration }) => iteration <= toolNames.length
         ? { output: JSON.stringify({ type: "tool_call", name: toolNames[iteration - 1], arguments: {} }) }
@@ -96,7 +96,7 @@ describe("chat agent loop", () => {
 
     expect(executed).toEqual(toolNames);
     expect(result.toolsUsed).toEqual(toolNames);
-    expect(result.iterations).toBe(6);
+    expect(result.iterations).toBe(7);
     expect(result.stopReason).toBe("model_finished");
   });
 

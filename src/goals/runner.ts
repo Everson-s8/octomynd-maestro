@@ -1561,11 +1561,23 @@ function wasProviderSelectedAfterItsLatestFailure(
 }
 
 function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: number): string | null {
-  const event = database.listEventsForTask(taskId, 500)
-    .filter((item) => item.type === "goal.human_guidance" && Number(item.metadata?.runId) === runId)
+  const events = database.listEventsForTask(taskId, 500)
+    .filter((item) => Number(item.metadata?.runId) === runId);
+  const guidance = events
+    .filter((item) => item.type === "goal.human_guidance")
     .at(-1);
-  if (!event?.text) return null;
-  return `User guidance for this Goal:\n${redactSensitiveText(event.text).slice(0, 5000)}`;
+  const recoveries = events
+    .filter((item) => item.type === "goal.environment_recovery_command")
+    .slice(-5);
+  const parts = [
+    guidance?.text
+      ? `User guidance for this Goal:\n${redactSensitiveText(guidance.text).slice(0, 5000)}`
+      : "",
+    recoveries.length > 0
+      ? `Environment recovery evidence from Chat (newest last):\n${recoveries.map((event) => redactSensitiveText(event.text).slice(0, 2500)).join("\n\n")}`
+      : ""
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
 function isRecoverableProviderFailure(category: string, detail = ""): category is GoalWaitReason {

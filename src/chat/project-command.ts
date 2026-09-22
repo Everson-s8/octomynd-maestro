@@ -11,7 +11,7 @@ const SAFE_GIT_COMMANDS = new Set(["status", "diff", "log", "branch", "show"]);
 const SAFE_GH_COMMANDS = new Set(["pr", "run", "issue"]);
 const BLOCKED_SHELLS = new Set(["cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "bash", "sh", "zsh", "fish"]);
 const COMMAND_NAME = /^[a-z][a-z0-9._-]*$/i;
-const DIRECT_EXECUTABLES = "npm|pnpm|yarn|bun|npx|git|gh|node|python|python3|ruby|go|cargo|vite|next|webpack";
+const DIRECT_EXECUTABLES = "npm|pnpm|yarn|bun|npx|uv|git|gh|node|python|python3|py|ruby|go|cargo|vite|next|webpack";
 
 export type ChatCommandEvidence = {
   requested: string;
@@ -119,7 +119,13 @@ export function planChatCommand(message: string, accessMode: ChatAccessMode = "s
   };
 }
 
-export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: string, accessMode: ChatAccessMode, signal?: AbortSignal): Promise<ChatCommandEvidence> {
+export async function executeChatCommand(
+  plan: ChatCommandPlan,
+  projectRoot: string,
+  accessMode: ChatAccessMode,
+  signal?: AbortSignal,
+  timeoutMs = COMMAND_TIMEOUT_MS
+): Promise<ChatCommandEvidence> {
   if (plan.blockedReason) return blockedEvidence(plan);
   if (accessMode === "read_only") {
     return blockedEvidence(plan, "Chat is read-only; switch to Standard or Full Access before running a command.");
@@ -167,8 +173,8 @@ export async function executeChatCommand(plan: ChatCommandPlan, projectRoot: str
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
     const timeout = setTimeout(() => {
       child.kill();
-      finish("failed", null, `Command timed out after ${COMMAND_TIMEOUT_MS} ms.`);
-    }, COMMAND_TIMEOUT_MS);
+      finish("failed", null, `Command timed out after ${timeoutMs} ms.`);
+    }, timeoutMs);
     const abort = () => {
       child.kill();
       clearTimeout(timeout);
@@ -219,6 +225,9 @@ function validateCommand(executable: string, args: string[], strict: boolean): s
     return "Inline code evaluation is not allowed from chat; use a project script instead.";
   }
   if (!strict) return null;
+  if (executable === "uv" && !(args[0] === "--version" || (args[0] === "python" && ["list", "find"].includes(args[1])))) {
+    return "Managed Python environment changes require Approval or Full Access.";
+  }
   if (executable === "npm" || executable === "pnpm" || executable === "yarn" || executable === "bun") {
     const script = args[0] === "run" ? args[1] : args[0];
     if (args[0] === "install" || args[0] === "i" || args[0] === "add") return "Dependency installation requires Approval or Full Access.";
