@@ -50,6 +50,7 @@ export type TaskPreparationResult =
   | { ok: false; errors: string[] };
 
 const SUCCESSFUL_TASK_STATES = new Set(["awaiting_human", "ready_to_merge", "done"]);
+const RECOVERY_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 240_000, 300_000] as const;
 
 export class BacklogAutopilot {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -158,8 +159,19 @@ export class BacklogAutopilot {
         return this.snapshot();
       }
 
+      let recoveryBackoffTaskId: number | null = null;
       for (const task of queued) {
         if (task.status === "waiting_provider" && !taskIdsWithActiveGoal.has(task.id)) {
+          const recoveryEvents = this.database.listEventsForTask(task.id)
+            .filter((event) => event.type === "backlog.task_waiting_recovery");
+          const lastRecovery = recoveryEvents.at(-1);
+          const nextRetryAt = typeof lastRecovery?.metadata.nextRetryAt === "string"
+            ? Date.parse(lastRecovery.metadata.nextRetryAt)
+            : Number.NaN;
+          if (Number.isFinite(nextRetryAt) && nextRetryAt > Date.now()) {
+            recoveryBackoffTaskId = task.id;
+            continue;
+          }
           this.database.updateTaskStatus(task.id, "queued");
           this.database.addEvent({
             source: "maestro",
@@ -248,7 +260,9 @@ export class BacklogAutopilot {
         return this.snapshot();
       }
 
-      this.lastAction = queued.length === 0 ? "queue_empty" : "no_independent_task_available";
+      this.lastAction = recoveryBackoffTaskId !== null
+        ? `backing_off_task_${recoveryBackoffTaskId}`
+        : queued.length === 0 ? "queue_empty" : "no_independent_task_available";
       return this.snapshot();
     } finally {
       this.tickRunning = false;
@@ -386,13 +400,17 @@ export class BacklogAutopilot {
   }
 
   private waitForRecovery(task: TaskRecord, reason: string, details: string[] = []): void {
+    const attempts = this.database.listEventsForTask(task.id)
+      .filter((event) => event.type === "backlog.task_waiting_recovery").length + 1;
+    const retryDelayMs = RECOVERY_RETRY_BACKOFF_MS[Math.min(attempts - 1, RECOVERY_RETRY_BACKOFF_MS.length - 1)];
+    const nextRetryAt = new Date(Date.now() + retryDelayMs).toISOString();
     this.database.updateTaskStatus(task.id, "waiting_provider");
     this.database.addEvent({
       source: "maestro",
       type: "backlog.task_waiting_recovery",
       text: `Task #${task.id} remains queued for automatic recovery (${reason}).`,
       taskId: task.id,
-      metadata: { reason, details, projectKey: task.projectKey }
+      metadata: { reason, details, projectKey: task.projectKey, attempts, retryDelayMs, nextRetryAt }
     });
     this.lastAction = `waiting_recovery_task_${task.id}_${reason}`;
   }

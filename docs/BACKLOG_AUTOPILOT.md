@@ -24,6 +24,9 @@ runtime capacity is available. It automates task pickup, not approval or deliver
   project is marked `blocked`; it is never silently deleted.
 - Preparation failures are recoverable queue states with a sanitized audit event; `blocked` is kept
   for missing projects, explicit terminal decisions, duplicates and proven unsafe conditions.
+- A recoverable preparation/start failure records its attempt and next retry time. The autopilot
+  backs off from 30 seconds to at most 5 minutes rather than repeating the same setup on every poll;
+  independent tasks remain eligible during that wait.
 - Every automatic start or block emits an event.
 - Merge, deploy, learning activation, and human review gates are unchanged.
 
