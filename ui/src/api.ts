@@ -31,6 +31,7 @@ export type DashboardTask = {
   branchName: string | null;
   worktreePrepared: boolean;
   parentTaskId: number | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };

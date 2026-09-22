@@ -36,6 +36,7 @@ export function TaskDetail({
   const [reviewing, setReviewing] = useState(false);
   const [startingGoal, setStartingGoal] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState<"cancel" | "delete" | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState<"cancel" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviews, setReviews] = useState<TaskReview[]>([]);
   const [followUpText, setFollowUpText] = useState("");
@@ -132,8 +133,12 @@ export function TaskDetail({
   }
 
   async function handleCancel() {
-    if (!window.confirm(translate("Cancel task #{id}? The agent will be interrupted.", { id: taskId }))) return;
+    setConfirmingAction("cancel");
+  }
+
+  async function confirmCancel() {
     setLifecycleBusy("cancel");
+    setConfirmingAction(null);
     setError(null);
     try {
       await cancelTask(taskId);
@@ -146,8 +151,12 @@ export function TaskDetail({
   }
 
   async function handleDelete() {
-    if (!window.confirm(translate("Permanently delete task #{id}? This action cannot be undone.", { id: taskId }))) return;
+    setConfirmingAction("delete");
+  }
+
+  async function confirmDelete() {
     setLifecycleBusy("delete");
+    setConfirmingAction(null);
     setError(null);
     try {
       await deleteTask(taskId);
@@ -161,7 +170,8 @@ export function TaskDetail({
 
   const canPrepare = task.status === "queued" && !task.worktreePrepared;
   const canCancel = !["done", "failed", "rejected", "cancelled"].includes(task.status);
-  const canDelete = !task.worktreePrepared && ["queued", "cancelled"].includes(task.status);
+  const canDelete = !["planning", "implementing", "testing", "reviewing", "waiting_quota", "waiting_provider", "waiting_dependency"].includes(task.status)
+    && (!goal || !["running", "waiting_provider"].includes(goal.status));
   const canResumeGoal = Boolean(goal && ["blocked", "failed"].includes(goal.status));
 
   return (
@@ -396,16 +406,32 @@ export function TaskDetail({
             <span>{translate("Task controls")}</span>
             <strong>{translate("Cancel or delete")}</strong>
           </div>
-          <p>{translate("Cancel interrupts execution and preserves history. Deletion is allowed only without a worktree and goal history.")}</p>
+          <p>{translate("Cancel interrupts execution and preserves history. Removing a task permanently deletes only an unused draft; historical tasks are archived from the active queue.")}</p>
           <div className="task-danger-actions">
             <button disabled={!canCancel || lifecycleBusy !== null} onClick={() => void handleCancel()}>
               {lifecycleBusy === "cancel" ? translate("Cancelling…") : translate("Cancel task")}
             </button>
             <button disabled={!canDelete || lifecycleBusy !== null} onClick={() => void handleDelete()}>
-              {lifecycleBusy === "delete" ? translate("Deleting…") : translate("Delete task")}
+              {lifecycleBusy === "delete" ? translate("Removing…") : translate("Remove task")}
             </button>
           </div>
         </div>
+        {confirmingAction ? (
+          <div className="modal-overlay active" role="presentation">
+            <div className="chat-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="task-action-confirm-title">
+              <h3 id="task-action-confirm-title">{confirmingAction === "cancel" ? translate("Cancel this task?") : translate("Remove this task?")}</h3>
+              <p>{confirmingAction === "cancel"
+                ? translate("The active execution will stop and its history will be preserved.")
+                : translate("Unused drafts are deleted. Tasks with history are archived so their evidence remains available.")}</p>
+              <div className="modal-actions">
+                <button type="button" className="btn-ghost" onClick={() => setConfirmingAction(null)}>{translate("Keep task")}</button>
+                <button type="button" className="btn-new" onClick={() => void (confirmingAction === "cancel" ? confirmCancel() : confirmDelete())}>
+                  {confirmingAction === "cancel" ? translate("Cancel task") : translate("Remove task")}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </aside>
     </div>
   );

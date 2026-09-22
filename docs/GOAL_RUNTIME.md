@@ -137,6 +137,11 @@ Providers advertise capabilities. The registry selects a ready provider using th
 | research | Claude, Codex |
 | conversation | Claude, Codex |
 
+The order is only a default for providers explicitly connected by the user. A Goal can persist a
+provider preference for its next phase, including a user-requested reroute from Chat; that provider
+is tried first when it is connected and capable, while the configured fallback policy remains
+available. Disconnected or never-connected providers are never eligible.
+
 If a provider fails, the runner excludes it for that phase and tries the next ready provider. A
 review that returns `changes_requested` sends the goal back to implementation automatically. If
 the available providers report a retryable quota or authentication condition, the task becomes
@@ -162,8 +167,10 @@ timeouts or quota failures from being selected repeatedly.
 ## Current providers
 
 - **Codex**: real non-interactive CLI adapter for planning, coding, testing, review, and research.
-  Coding/testing use `workspace-write`; planning/review use `read-only`. Output is constrained by a
-  JSON schema and artifacts are stored under `.maestro/runs/`.
+  Coding/testing use `workspace-write` with `--approve-for-me`, so the agent can operate
+  autonomously inside the prepared worktree without an interactive permission prompt; planning and
+  review use `read-only`. Output is constrained by a JSON schema and artifacts are stored under
+  `.maestro/runs/`.
 - **Claude**: real CLI adapter for planning, coding, testing, review, and research. Planning/review
   use `plan` with read-only tools. Coding uses `acceptEdits` without shell access. Testing adds only
   allowlisted test and read-only Git commands. Commit, push, destructive Git cleanup, network

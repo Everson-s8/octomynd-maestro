@@ -5,7 +5,7 @@ import os from "node:os";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { OperationalChatService } from "../src/chat/service.js";
-import { parseTaskCreationIntent } from "../src/chat/service.js";
+import { parseProjectCreationIntent, parseTaskCreationIntent } from "../src/chat/service.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { createTelegramBot } from "../src/telegram/bot.js";
 import { MaestroConfig } from "../src/config.js";
@@ -704,6 +704,83 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
+    expect(parseTaskCreationIntent("Crie essa task: Task #6 waiting for provider @myfinance")).toBeNull();
+  });
+
+  it("offers an explicit provider switch for an existing Goal instead of creating another task", async () => {
+    const task = database.createTask("Implement the financial app", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "blocked", currentPhase: "implementing", stepCount: 3, lastError: "provider permission denied" });
+    const switched: Array<{ runId: number; providerId: string }> = [];
+    const codex = chatProvider("codex", {
+      outcome: "completed",
+      summary: "ready",
+      output: "ready",
+      error: null,
+      retryable: false
+    }, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex]),
+      actionExecutor: {
+        switchGoalProvider: (runId, providerId) => switched.push({ runId, providerId })
+      }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Troque o provider desta task para codex e continue do checkpoint."
+    });
+    const action = response.actions.find((item) => item.type === "switch_goal_provider");
+    expect(action).toBeDefined();
+    expect(response.actions).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "create_task" })]));
+
+    const result = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      action: action!
+    });
+    expect(result.success).toBe(true);
+    expect(switched).toEqual([{ runId: run.id, providerId: "codex" }]);
+  });
+
+  it("parses explicit local and remote project creation without treating task requests as projects", () => {
+    expect(parseProjectCreationIntent("Crie um projeto chamado finance em C:\\Users\\evers\\projects\\finance"))
+      .toMatchObject({ key: "finance", path: "C:\\Users\\evers\\projects\\finance" });
+    expect(parseProjectCreationIntent("Clone https://github.com/example/finance.git como finance branch develop"))
+      .toMatchObject({ key: "finance", remoteUrl: "https://github.com/example/finance.git", defaultBranch: "develop" });
+    expect(parseProjectCreationIntent("Crie uma task para o projeto finance"))
+      .toBeNull();
+  });
+
+  it("creates and registers a project requested explicitly from chat", async () => {
+    const projectPath = path.join(tmpDir, "new-project");
+    fs.mkdirSync(projectPath);
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: `Crie um projeto chamado finance em ${projectPath}`
+    });
+
+    const action = response.actions.find((item) => item.type === "create_project");
+    expect(action).toBeDefined();
+    const result = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      action: action!
+    });
+
+    expect(result.success).toBe(true);
+    expect(database.findProjectByKey("finance")?.path).toBe(projectPath);
+    expect(database.listOperationalChatMemories("finance").some((memory) => memory.text.includes("finance"))).toBe(true);
   });
 
   it("creates an explicitly requested task directly in Full Access", async () => {

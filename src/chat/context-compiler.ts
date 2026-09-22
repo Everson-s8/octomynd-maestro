@@ -28,6 +28,8 @@ const HISTORY_MESSAGE = /^(?:sim,?\s+)?(?:consigo|posso)\s+(?:recuperar|conversa
 const GENERIC_STATUS = /^nenhuma\s+task\s+parada/i;
 const GENERIC_FOLLOWUP = /^mensagem\s+de\s+(?:acompanhamento|follow[- ]?up)\b/i;
 const SYNTHESIS_MARKERS = /\b(?:objetivo|escopo|problema|sistema|implementar|funcionalidade|requisito|gest[aã]o|d[ií]vida|plano|vers[aã]o)\b/i;
+const INCIDENT_MARKERS = /\b(?:waiting for provider|aguardando provider|permission denied|permiss[aã]o negada|no output produced|sem saida|provider failed|provider falhou|task blocked|task bloqueada|goal blocked|goal bloqueado|erro|falha|failed|blocked|travou|parou)\b/i;
+const IMPLEMENTATION_MARKERS = /\b(?:implement|corrig|consert|resolver|ajust|adicion|remov|refator|constru|criar|crie|melhor|fix|repair|change|modify|build|develop|desenvolv)\w*\b/i;
 
 export function compileOperationalChatContext(
   messages: OperationalChatMessageRecord[],
@@ -76,6 +78,20 @@ export function isContextualTaskFollowUp(text: string): boolean {
   const asksForTask = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
   const refersToContext = /\b(?:contexto|isso|acima|anterior|mensagem|mandei|enviado|descrito|descrevi|novamente|com\s+base|a\s+partir)\b/i.test(text);
   return asksForTask && refersToContext;
+}
+
+/**
+ * Operational failures are evidence for recovery, not implementation
+ * objectives. Keeping this distinction deterministic prevents a message such
+ * as "Task #6 waiting for provider" from becoming a new task when the user
+ * asks the chat to reuse the conversation context.
+ */
+export function isOperationalIncidentMessage(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!INCIDENT_MARKERS.test(normalized)) return false;
+  if (IMPLEMENTATION_MARKERS.test(normalized)) return false;
+  return /^(?:task|tarefa|goal|objetivo)\b/i.test(normalized)
+    || /\b(?:provider|provedor|permission|permiss[aã]o|erro|falha|blocked|bloquead|waiting|aguardando|output|saida)\b/i.test(normalized);
 }
 
 function compileWorkingMemory(
@@ -156,7 +172,8 @@ function isUsefulTaskContext(text: string): boolean {
   return !META_MESSAGE.test(normalized)
     && !HISTORY_MESSAGE.test(normalized)
     && !GENERIC_STATUS.test(normalized)
-    && !GENERIC_FOLLOWUP.test(normalized);
+    && !GENERIC_FOLLOWUP.test(normalized)
+    && !isOperationalIncidentMessage(normalized);
 }
 
 function formatLines(items: string[]): string {

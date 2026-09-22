@@ -151,10 +151,15 @@ runtime restart. The `Use only this provider` action pauses every other connecte
 disables fallback for the selected one; it is intended for temporary quota conservation.
 
 Provider connections are explicit: a CLI being installed on the machine does not activate it.
-Only providers the user connects are registered for routing, and disconnecting one removes it from
-the runtime and all persisted routes. The dashboard shows the installed Maestro version and, in a
-packaged build, reports update download progress and offers the restart that applies a downloaded
-release.
+Only providers the user connects are eligible for routing; disconnecting one removes it from the
+active route immediately and leaves no phantom provider in the UI, while preserving its adapter so
+the user can reconnect it later. The dashboard shows the installed Maestro version and, in a
+packaged build, reports update availability/download progress and offers the restart that applies a
+downloaded release.
+
+From the general Chat, Standard or Full Access can register a local repository or clone a remote
+repository when the user explicitly asks to create a project. Maestro stores a compact decision
+memory in the new project so the conversation can continue there without duplicating the task.
 
 Routing remains fail-closed: a required, paused, unhealthy, or unavailable provider does not
 silently fall through to another provider. With automatic fallback enabled, the configured order is
@@ -363,7 +368,9 @@ surface.
 The task detail panel supports two governed actions:
 
 - **Cancel task** interrupts an active Codex or Claude subprocess and preserves execution history.
-- **Delete task** is limited to tasks without a worktree or goal history.
+- **Remove task** deletes disposable queued/cancelled drafts. A task with worktree or Goal history
+  is archived instead: it disappears from active lists while its evidence remains available for
+  audit and recovery.
 
 Pull requests are reconciled with GitHub while the dashboard is active. A PR merged outside the
 dashboard automatically marks its task as completed and leaves the human review queue.
