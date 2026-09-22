@@ -281,6 +281,9 @@ describe("chat agent loop integration", () => {
       message: "Redirecione o Goal para priorizar os testes e continue a execução."
     });
 
+    // The governed guide_goal action is enough to continue the persistent Goal;
+    // the chat must not spend another provider loop just writing a summary.
+    expect(providerCalls).toBe(0);
     expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
     expect(database.listEventsForTask(task.id).find((event) => event.type === "goal.human_guidance")).toMatchObject({
       taskId: task.id,
@@ -289,7 +292,7 @@ describe("chat agent loop integration", () => {
     expect(database.getGoalRun(run.id).status).toBe("running");
   });
 
-  it("applies an explicit redirection to the active Goal before asking the provider", async () => {
+  it("applies an explicit redirection to the active Goal without a redundant provider turn", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-guidance-core-"));
     const database = createDatabase(path.join(dir, "maestro.db"));
     resources.push({ database, dir });
@@ -325,10 +328,10 @@ describe("chat agent loop integration", () => {
       message: "Foque nos testes da implementação atual e continue o Goal."
     });
 
-    expect(providerCalls).toBe(1);
+    expect(providerCalls).toBe(0);
     expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
     expect(database.listEventsForTask(task.id).some((event) => event.type === "goal.human_guidance")).toBe(true);
-    expect(response.explanation).toContain("nova direção");
+    expect(response.explanation).toContain("Orientação registrada");
     expect(response.actions.some((action) => action.type === "guide_goal")).toBe(false);
   });
 

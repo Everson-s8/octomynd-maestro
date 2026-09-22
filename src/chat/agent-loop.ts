@@ -255,8 +255,8 @@ function budgetResult(
 
 function normalizeBudget(value: ChatAgentBudget): ChatAgentBudget {
   return {
-    maxIterations: Math.max(1, Math.min(32, Math.floor(value.maxIterations))),
-    maxToolCalls: Math.max(0, Math.min(64, Math.floor(value.maxToolCalls)))
+    maxIterations: Math.max(1, Math.min(128, Math.floor(value.maxIterations))),
+    maxToolCalls: Math.max(0, Math.min(256, Math.floor(value.maxToolCalls)))
   };
 }
 

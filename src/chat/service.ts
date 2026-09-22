@@ -365,7 +365,11 @@ export class OperationalChatService {
     }
 
     const conversationHistory = compiledContext.recentMessages;
-    const routingResult = automaticTaskSummary || automaticRecoverySummary
+    // A successful governed recovery already has durable evidence and the
+    // Goal continues in the background. Do not spend another provider turn
+    // composing an explanation after guide_goal, or it can hit the chat loop
+    // budget and make a recovered Goal look like a chat failure.
+    const routingResult = automaticTaskSummary || automaticRecoverySummary || automaticGoalGuidanceSummary
       ? { explanation: "", providerId: "deterministic_engine" as const, model: null }
       : await this.synthesizeExplanation(
         request.message,
@@ -2144,7 +2148,7 @@ export class OperationalChatService {
         'or {"type":"final","response":"..."}.',
         "A final answer is allowed only when you have enough evidence. Never claim a command or task happened without a tool result.",
         "Task creation is a transformation, not a transcription. When the user asks to create a task, study the complete conversation and compiled memory, identify the actual project objective, and use governed_action with action=create_task only after turning it into a standalone implementation brief. Never use the latest meta instruction (for example, 'create a task from this') as the task objective.",
-        "When the user gives a new direction about a Goal that is already running, waiting, blocked or failed, do not create a second task and do not treat the message as a mere question. Use the matching guide_goal governed action, preserving the user's instruction as guidance for the existing Goal. If the user explicitly names another connected provider, use switch_goal_provider instead of creating a task. A blocked or waiting Goal may be reopened from its current checkpoint by that action.",
+        "When the user gives a new direction about a Goal that is already running, waiting, blocked or failed, do not create a second task and do not treat the message as a mere question. Use the matching guide_goal governed action, preserving the user's instruction as guidance for the existing Goal. If the user explicitly names another connected provider, use switch_goal_provider instead of creating a task. A blocked or waiting Goal may be reopened from its current checkpoint by that action. Once guide_goal or another governed recovery action succeeds, the Goal continues in the background; do not spend chat turns trying to implement the Goal yourself.",
         "For create_task, arguments MUST include: title (a concise imperative title), taskText (the concise objective kept as the task's auditable source text), and specification (a standalone implementation brief). The specification MUST contain these headings, in the user's language when practical: Context/Contexto, Objective/Objetivo, Scope/Escopo, Acceptance criteria/Critérios de aceitação, Validation/Validação, and Constraints/Restrições. Acceptance criteria must be observable; validation must name checks to run. Do not invent files, architecture, or product rules: preserve ambiguity as an explicit constraint or open question.",
         "For tasks involving data, mocks, fixtures, seed data, persistence, migration, startup, or user-visible state, the brief MUST distinguish the current state from the desired state and define evidence for both an already-used state and a clean/empty state when applicable. Include runtime verification, not only typecheck/build claims.",
         "For UI or visual tasks, the brief MUST include the user flow, visual intent, hierarchy, required states, responsive/accessibility expectations, and how the rendered result will be checked. Do not turn a vague style adjective into an unrelated redesign.",
@@ -2664,8 +2668,8 @@ function normalizeChatBudget(value?: Partial<ChatAgentBudget>): ChatAgentBudget 
   const envIterations = Number(process.env.MAESTRO_CHAT_MAX_ITERATIONS);
   const envTools = Number(process.env.MAESTRO_CHAT_MAX_TOOL_CALLS);
   return {
-    maxIterations: clampBudget(value?.maxIterations ?? (Number.isFinite(envIterations) ? envIterations : 10), 1, 32),
-    maxToolCalls: clampBudget(value?.maxToolCalls ?? (Number.isFinite(envTools) ? envTools : 14), 0, 64)
+    maxIterations: clampBudget(value?.maxIterations ?? (Number.isFinite(envIterations) ? envIterations : 32), 1, 128),
+    maxToolCalls: clampBudget(value?.maxToolCalls ?? (Number.isFinite(envTools) ? envTools : 64), 0, 256)
   };
 }
 
