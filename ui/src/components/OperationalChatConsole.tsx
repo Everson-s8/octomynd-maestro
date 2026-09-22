@@ -310,7 +310,7 @@ export function OperationalChatConsole({
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedProjectKey || historyLoading) return;
+    if (!inputText.trim() || !selectedProjectKey) return;
 
     const userText = inputText.trim();
     setInputText("");
@@ -618,9 +618,8 @@ export function OperationalChatConsole({
               shouldFollowLatestRef.current = distanceFromBottom <= 48;
             }}
           >
-            {historyLoading ? (
-              <div className="chat-loading-history"><span className="chat-spinner" /> {translate("Loading conversation…")}</div>
-            ) : messages.length === 0 ? (
+            {historyLoading ? <div className="chat-loading-history"><span className="chat-spinner" /> {translate("Loading conversation…")}</div> : null}
+            {messages.length === 0 && !historyLoading ? (
               <div className="chat-empty-state">
                 <div className="chat-empty-icon"><Icon name="chat" /></div>
                 <h2>{translate("New conversation")}</h2>
@@ -718,10 +717,9 @@ export function OperationalChatConsole({
                   e.currentTarget.form?.requestSubmit();
                 }
               }}
-              disabled={historyLoading}
               aria-label={translate("Message Maestro")}
             />
-            <button type="submit" disabled={historyLoading || !inputText.trim()} title={translate("Send message")} aria-label={translate("Send message")}>
+            <button type="submit" disabled={!inputText.trim()} title={translate("Send message")} aria-label={translate("Send message")}>
               <Icon name="send" />
             </button>
           </form>
