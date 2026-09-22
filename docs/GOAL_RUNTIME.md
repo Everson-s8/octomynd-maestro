@@ -14,9 +14,11 @@ planning
        -> changes_requested -> implementing
 ```
 
-Any phase can enter `waiting_provider` when both local providers are unavailable, unauthenticated,
-or out of quota. The coordinator persists the run and retries it automatically without creating a
-new goal or losing the completed steps.
+Any phase can enter `waiting_provider` when providers, the local execution environment, or the
+validation toolchain need recovery. The coordinator persists the run and retries it automatically
+without creating a new goal or losing the completed steps. `blocked` is reserved for an explicit
+terminal decision, a missing worktree/infrastructure boundary, an unsafe delivery condition, or a
+proven execution loop that has exhausted recovery paths.
 
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
@@ -121,8 +123,11 @@ failure is handed to a provider.
 
 Diff and secret checks are cheap fail-closed gates. When either fails, expensive
 typecheck, test and build commands do not run. A clean validation advances directly
-to review without spending a testing-provider call. A failed validation permits one
-testing provider to repair the worktree, then the deterministic checks run again.
+to review without spending a testing-provider call. A failed validation hands the compact failure
+to a writable testing provider. That provider may repair project-local dependencies, Python
+packages, browser binaries, test tooling and recoverable permissions inside the prepared worktree,
+then the deterministic checks run again. Validation runner failures are waiting states, not terminal
+Goal blocks.
 
 ## Routing
 
@@ -144,9 +149,11 @@ available. Disconnected or never-connected providers are never eligible.
 
 If a provider fails, the runner excludes it for that phase and tries the next ready provider. A
 review that returns `changes_requested` sends the goal back to implementation automatically. If
-the available providers report a retryable quota or authentication condition, the task becomes
-`waiting_provider`, the goal persists its typed wait reason and `nextRetryAt`, and the same run is
-resumed later.
+the available providers report a retryable quota, authentication, permission or environment
+condition, the task becomes `waiting_provider`, the goal persists its typed wait reason and
+`nextRetryAt`, and the same run is resumed later. The last provider is eligible again on a later
+environment/permission recovery attempt; a provider failure must not silently route to a provider
+that is disconnected or has never been connected.
 Retryable provider failures are recorded as attempts but do not consume the goal's semantic step
 budget. When a waiting run resumes, the last failed provider is temporarily excluded so an
 available fallback is tried first. If no alternative exists, the original provider remains eligible
@@ -172,10 +179,12 @@ timeouts or quota failures from being selected repeatedly.
   review use `read-only`. Output is constrained by a JSON schema and artifacts are stored under
   `.maestro/runs/`.
 - **Claude**: real CLI adapter for planning, coding, testing, review, and research. Planning/review
-  use `plan` with read-only tools. Coding uses `acceptEdits` without shell access. Testing adds only
-  allowlisted test and read-only Git commands. Commit, push, destructive Git cleanup, network
+  use `plan` with read-only tools. Coding uses `acceptEdits` without shell access. Testing uses
+  `acceptEdits` with allowlisted project test/build commands, dependency installation and browser
+  setup commands plus read-only Git commands. Commit, push, destructive Git cleanup, network
   download tools, cloud CLIs, package publication, PR merge, and release commands are explicitly
-  denied. Authentication, subscription quota, and timeout failures are classified as retryable.
+  denied. Authentication, subscription quota, permission, environment and timeout failures are
+  classified as retryable.
 - **Antigravity**: headless CLI adapter for planning, coding, testing, research, and improvement
   review. Goal execution prepares its autonomous command permission rules before starting, because
   a headless process cannot answer an interactive permission prompt. The prepared task worktree
@@ -243,8 +252,11 @@ service can still enforce the limits of the user's plan.
 - Workers are instructed not to commit, push, merge, deploy, modify credentials, or leave the worktree.
 - Every goal has a maximum step budget.
 - Every provider has an inactivity limit and output budget; total runtime limits are optional.
-- Repeated failures and repeated no-progress phases stop before another provider cycle is spent.
-- Missing providers, blockers, failures, and budget exhaustion become explicit durable states.
+- Repeated failures and repeated no-progress phases remain safety signals, but recoverable testing
+  environment/permission failures are retried or paused with a checkpoint before they can become
+  terminal.
+- Missing providers, explicit blockers, failures, and budget exhaustion become explicit durable
+  states; normal provider/toolchain recovery is represented as `waiting_provider`.
 - Goal artifacts, database, logs, environment files, and credentials remain ignored by Git.
 - Completion means all phases succeeded; a planning or implementation response alone cannot finish a goal.
 - Workers never publish directly. After review succeeds, the deterministic delivery layer scans for
@@ -294,8 +306,9 @@ mutation scope, dependency IDs and serial/parallel policy. A plan without explic
 normalized to a fail-closed serial chain for backward compatibility.
 
 Dependencies must point backward inside the same Feature Plan and the graph must be acyclic. A Task
-starts only after every dependency is delivered and validated. Failure, cancellation or rejection of
-an ancestor blocks its descendants. Independent Tasks may run in parallel in the same project only
+starts only after every dependency is delivered and validated. A failed ancestor with a preserved
+Goal/worktree is kept in `waiting_dependency` while the autopilot resumes that Goal in place;
+explicit cancellation or rejection blocks its descendants. Independent Tasks may run in parallel in the same project only
 when both contracts opt into parallel execution and their mutation scopes are disjoint.
 
 Dependent Tasks receive a deterministic Git baseline assembled from the exact delivered commits of

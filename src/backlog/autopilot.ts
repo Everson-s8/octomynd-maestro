@@ -29,6 +29,8 @@ export type GoalStarter = {
   /** Retry a hard-blocked goal (budget_exhausted). Optional — the autopilot
    *  only auto-recovers when the starter provides it (real GoalCoordinator does). */
   retry?: (taskId: number) => GoalRunRecord;
+  /** Resume a preserved blocked/failed dependency in place. */
+  recover?: (taskId: number) => GoalRunRecord;
 };
 
 export type TaskPreparer = (
@@ -117,8 +119,11 @@ export class BacklogAutopilot {
       const activeTasks = goals
         .filter((goal) => goal.status === "running" || goal.status === "waiting_provider")
         .map((goal) => this.database.getTask(goal.taskId));
+      const taskIdsWithActiveGoal = new Set(goals.map((goal) => goal.taskId));
       const queued = tasks
-        .filter((task) => task.status === "queued" || task.status === "waiting_dependency")
+        .filter((task) => task.status === "queued"
+          || task.status === "waiting_dependency"
+          || (task.status === "waiting_provider" && !taskIdsWithActiveGoal.has(task.id)))
         .sort((left, right) => left.id - right.id);
 
       // F1: adopt orphaned 'planning' tasks. A task that was prepared manually
@@ -126,7 +131,6 @@ export class BacklogAutopilot {
       // autopilot queue forever with no goal run — the exact "parked in
       // planejando forever" report. If no active goal run exists for it, start
       // one now instead of waiting for a human to press "Iniciar goal".
-      const taskIdsWithActiveGoal = new Set(goals.map((goal) => goal.taskId));
       const orphanedPlanning = tasks.filter(
         (task) =>
           task.status === "planning" &&
@@ -155,6 +159,16 @@ export class BacklogAutopilot {
       }
 
       for (const task of queued) {
+        if (task.status === "waiting_provider" && !taskIdsWithActiveGoal.has(task.id)) {
+          this.database.updateTaskStatus(task.id, "queued");
+          this.database.addEvent({
+            source: "maestro",
+            type: "backlog.task_recovery_retry",
+            text: `Retrying recoverable queue state for task #${task.id}.`,
+            taskId: task.id,
+            metadata: { previousStatus: "waiting_provider" }
+          });
+        }
         const revalidation = revalidateQueuedTask(task, tasks);
         if (!revalidation.applicable) {
           await this.blockTask(task, revalidation.reason);
@@ -166,6 +180,30 @@ export class BacklogAutopilot {
           continue;
         }
         if (readiness.state === "waiting") {
+          const dependencyId = dependencyIdFromReadinessReason(readiness.reason);
+          if (dependencyId !== null && this.goals.recover) {
+            const dependency = this.database.getTask(dependencyId);
+            if (["blocked", "failed"].includes(dependency.status)) {
+              try {
+                const recovered = this.goals.recover(dependencyId);
+                this.database.addEvent({
+                  source: "maestro",
+                  type: "backlog.dependency_recovery_requested",
+                  text: `Autopilot resumed dependency task #${dependencyId} for task #${task.id}.`,
+                  taskId: task.id,
+                  metadata: {
+                    dependencyTaskId: dependencyId,
+                    dependencyRunId: recovered.id,
+                    dependencyStatus: dependency.status
+                  }
+                });
+                this.lastAction = `recovering_dependency_${dependencyId}`;
+              } catch {
+                // Keep the dependent task waiting. A later tick can retry
+                // after a provider, worktree, or environment becomes ready.
+              }
+            }
+          }
           this.waitForDependency(task, readiness.reason);
           continue;
         }
@@ -189,14 +227,14 @@ export class BacklogAutopilot {
         }
         if (!prepared.ok) {
           if (this.database.getTask(task.id).status !== "queued") continue;
-          await this.blockTask(task, "preparation_failed", prepared.errors);
+          this.waitForRecovery(task, "preparation_failed", prepared.errors);
           continue;
         }
         let run: GoalRunRecord;
         try {
           run = this.goals.start(task.id);
         } catch {
-          await this.blockTask(this.database.getTask(task.id), "goal_start_failed");
+          this.waitForRecovery(this.database.getTask(task.id), "goal_start_failed");
           continue;
         }
         this.database.addEvent({
@@ -347,6 +385,18 @@ export class BacklogAutopilot {
     this.lastAction = `waiting_task_${task.id}_${reason}`;
   }
 
+  private waitForRecovery(task: TaskRecord, reason: string, details: string[] = []): void {
+    this.database.updateTaskStatus(task.id, "waiting_provider");
+    this.database.addEvent({
+      source: "maestro",
+      type: "backlog.task_waiting_recovery",
+      text: `Task #${task.id} remains queued for automatic recovery (${reason}).`,
+      taskId: task.id,
+      metadata: { reason, details, projectKey: task.projectKey }
+    });
+    this.lastAction = `waiting_recovery_task_${task.id}_${reason}`;
+  }
+
   private async runScheduledTick(): Promise<void> {
     try {
       await this.tick();
@@ -385,6 +435,11 @@ export function revalidateQueuedTask(
   return duplicate
     ? { applicable: false, reason: `already_resolved_by_task_${duplicate.id}` }
     : { applicable: true };
+}
+
+function dependencyIdFromReadinessReason(reason: string): number | null {
+  const match = /^dependency_task_(\d+)_/.exec(reason);
+  return match ? Number(match[1]) : null;
 }
 
 function normalizeDemand(value: string): string {

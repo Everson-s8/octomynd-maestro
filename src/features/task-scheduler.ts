@@ -7,7 +7,11 @@ export type FeatureTaskReadiness =
   | { state: "blocked"; reason: string; featurePlan: FeaturePlanDetails };
 
 const SATISFIED_DEPENDENCY_STATES = new Set(["awaiting_human", "ready_to_merge", "done"]);
-const FAILED_DEPENDENCY_STATES = new Set(["blocked", "failed", "cancelled", "rejected"]);
+// A blocked/failed dependency may still have a preserved worktree and
+// checkpoint. Keep dependents waiting while the autopilot asks the Goal
+// runtime to recover it. Explicit cancellation/rejection remains terminal
+// because it represents user intent.
+const FAILED_DEPENDENCY_STATES = new Set(["cancelled", "rejected"]);
 
 export function evaluateFeatureTaskReadiness(
   database: MaestroDatabase,
