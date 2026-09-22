@@ -119,6 +119,89 @@ describe("chat agent loop integration", () => {
     expect(response.evidence.summaryText).toContain("Task creation");
   });
 
+  it("does not persist a task-creation meta instruction after an operational incident", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-agent-meta-task-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Task from context" });
+    const objective = "Simplificar a interface do projeto, organizar a navegação principal e deixar o fluxo de edição previsível para o usuário.";
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "apto",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: objective
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "apto",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: "A Task #6 foi interrompida e está blocked por permission denied; a execução precisa ser recuperada."
+    });
+
+    let call = 0;
+    const provider: AgentProvider = {
+      id: "antigravity",
+      label: "Antigravity",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        call += 1;
+        const turn = call === 1
+          ? {
+            type: "tool_call",
+            name: "governed_action",
+            arguments: {
+              action: "create_task",
+              title: "Criar tarefa conforme alinhamos",
+              taskText: "Crie a tarefa conforme alinhamos o chat para esse projeto.",
+              specification: [
+                "## Context", "O projeto precisa de uma interface previsível.",
+                "## Objective", "Melhorar a interface.",
+                "## Scope", "Organizar a navegação e o fluxo de edição.",
+                "## Acceptance criteria", "O usuário consegue editar sem se perder.",
+                "## Validation", "Executar os testes e revisar o fluxo.",
+                "## Constraints", "Não alterar regras fora da interface."
+              ].join("\n")
+            }
+          }
+          : { type: "final", response: "Compilei o objetivo da conversa e criei a task sem reutilizar o relato operacional." };
+        return {
+          outcome: "completed",
+          summary: "completed",
+          output: JSON.stringify(turn),
+          structuredPayload: turn,
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    };
+    const service = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: dir,
+      chatBudget: { maxIterations: 4, maxToolCalls: 3 }
+    });
+
+    const response = await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Crie a tarefa conforme alinhamos o chat para esse projeto."
+    });
+
+    const task = database.listTasksByProject("apto", 10)[0];
+    expect(task?.text).toBe(objective);
+    expect(task?.text).not.toContain("conforme alinhamos");
+    expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
+    expect(response.evidence.summaryText).toContain("Task creation");
+  });
+
   it("cancels an in-flight provider turn through the activity controller", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-cancel-"));
     const database = createDatabase(path.join(dir, "maestro.db"));

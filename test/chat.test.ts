@@ -704,7 +704,21 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
+    const repeatedActionResult = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      action: createAction!
+    });
+    expect(repeatedActionResult.success).toBe(true);
+    expect(repeatedActionResult.resultSummary).toContain("already");
+    expect(database.listTasks(20)).toHaveLength(1);
     expect(parseTaskCreationIntent("Crie essa task: Task #6 waiting for provider @myfinance")).toBeNull();
+    const prior = [
+      { senderRole: "user" as const, messageText: "Melhorar a interface do projeto para deixar o fluxo de edição mais simples e previsível para o usuário." },
+      { senderRole: "orchestrator" as const, messageText: "A Task #6 foi interrompida e está blocked por permission denied; uma nova task poderá ser criada depois." }
+    ];
+    expect(parseTaskCreationIntent("Crie a tarefa conforme alinhamos o chat para esse projeto.", prior)?.text)
+      .toContain("Melhorar a interface do projeto");
   });
 
   it("offers an explicit provider switch for an existing Goal instead of creating another task", async () => {

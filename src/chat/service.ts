@@ -47,6 +47,7 @@ import {
   compileOperationalChatContext,
   isContextualTaskFollowUp,
   isOperationalIncidentMessage,
+  isTaskMetaRequest,
   resolveTaskContext,
   type CompiledChatContext
 } from "./context-compiler.js";
@@ -237,7 +238,11 @@ export class OperationalChatService {
       }
       evidence.summaryText = `${evidence.summaryText}\nCommand execution:\n${commandEvidence.command} => ${commandEvidence.status}`;
     }
-    const taskIntent = useAgentLoop ? null : parseTaskCreationIntent(request.message, priorConversation);
+    // Parse the task boundary before selecting the conversational provider as
+    // well. The provider still compiles the brief, but it must receive a
+    // canonical objective when the user says "create the task from what we
+    // discussed"; otherwise an agent can persist that meta instruction.
+    const taskIntent = parseTaskCreationIntent(request.message, priorConversation);
     let actions = this.identifyGovernedActions(evidence, taskIntent, request.message, accessMode, locale, {
       providerId: selectedProviderId,
       model: selectedModel
@@ -503,6 +508,20 @@ export class OperationalChatService {
           ? `A ação '${request.action.id}' não é mais aplicável ao estado atual do projeto.`
           : `Action '${request.action.id}' is no longer applicable to the current project state.`
       };
+    }
+
+    if (action.type === "create_task") {
+      const priorExecution = this.findCompletedChatAction(thread.id, projectKey, action.id);
+      if (priorExecution) {
+        return {
+          success: true,
+          actionTaken: action.label,
+          resultSummary: locale === "pt-BR"
+            ? `Esta ação já foi executada nesta conversa. ${priorExecution}`
+            : `This action was already executed in this conversation. ${priorExecution}`,
+          updatedEvidence: evidence
+        };
+      }
     }
 
     const origin = {
@@ -1161,6 +1180,31 @@ export class OperationalChatService {
     return project;
   }
 
+  /**
+   * Governed action buttons can be retried after a network timeout. Read the
+   * thread receipt before creating a second task, keeping the mutation
+   * idempotent without making ordinary CLI task creation artificially unique.
+   */
+  private findCompletedChatAction(threadId: number, projectKey: string, actionId: string): string | null {
+    const messages = this.database.listOperationalChatMessages(projectKey, undefined, threadId);
+    for (const message of messages.slice().reverse()) {
+      if (message.senderRole !== "system" || !message.actionTaken) continue;
+      try {
+        const receipt = JSON.parse(message.actionTaken) as {
+          action?: { id?: string };
+          success?: boolean;
+          resultSummary?: string;
+        };
+        if (receipt.success === true && receipt.action?.id === actionId) {
+          return receipt.resultSummary?.trim() || message.messageText;
+        }
+      } catch {
+        // Legacy system messages may contain non-JSON action text.
+      }
+    }
+    return null;
+  }
+
   private filterActionsByAccessMode(actions: GovernedChatAction[], accessMode: ChatAccessMode): GovernedChatAction[] {
     if (accessMode === "read_only") return [];
     if (accessMode === "full") return actions;
@@ -1557,7 +1601,7 @@ export class OperationalChatService {
           specification: taskIntent.specification
         });
         actions.push({
-          id: "create_task",
+          id: `create_task_${stableTaskActionKey(targetProjectKey, taskIntent.text)}`,
           type: "create_task",
           label: chatText(locale, "Create task", "Criar task"),
           description: intake.specification,
@@ -2263,13 +2307,26 @@ export class OperationalChatService {
         const response = await this.executeAction({ projectKey: input.projectKey, threadId: input.threadId, surface: "dashboard", accessMode: input.accessMode, action });
         return { toolResult: { ok: response.success, content: response.resultSummary, mutationCommitted: response.success }, actions: input.actions, automaticTaskSummary: response.resultSummary };
       }
-      const taskText = typeof args.taskText === "string" ? args.taskText.trim() : "";
+      if (input.evidence.summaryText.includes("\nTask creation:")) {
+        return fail("A task was already created during this turn. Do not create another task; report the committed task evidence.");
+      }
+      const requestedTaskText = typeof args.taskText === "string" ? args.taskText.trim() : "";
+      const canonicalAction = input.actions.find((item) => item.type === "create_task");
+      const canonicalTaskText = typeof canonicalAction?.payload?.text === "string"
+        ? canonicalAction.payload.text.trim()
+        : "";
+      const useCanonicalTask = isTaskMetaRequest(requestedTaskText) && canonicalTaskText.length >= 20;
+      const taskText = useCanonicalTask ? canonicalTaskText : requestedTaskText;
       if (taskText.length < 20) return fail("The task brief is missing or too vague; derive it from the complete conversation before trying again.");
       if (isOperationalIncidentMessage(taskText)) {
         return fail("This is an operational failure or recovery message, not an implementation objective. Guide or resume the existing Goal instead of creating another task.");
       }
-      const title = typeof args.title === "string" ? args.title.trim() : "";
-      const specification = typeof args.specification === "string" ? args.specification.trim() : "";
+      const title = useCanonicalTask && typeof canonicalAction?.payload?.title === "string"
+        ? canonicalAction.payload.title.trim()
+        : typeof args.title === "string" ? args.title.trim() : "";
+      const specification = useCanonicalTask && typeof canonicalAction?.payload?.specification === "string"
+        ? canonicalAction.payload.specification.trim()
+        : typeof args.specification === "string" ? args.specification.trim() : "";
       if (title.length < 4 || specification.length < 120 || !hasRequiredTaskSections(specification)) {
         return fail("The task brief is incomplete. Return title, taskText, and a standalone specification with Context, Objective, Scope, Acceptance criteria, Validation, and Constraints before creating the task.");
       }
@@ -2277,7 +2334,7 @@ export class OperationalChatService {
       const targetProjectKey = typeof args.projectKey === "string" ? args.projectKey.trim().toLowerCase() : input.projectKey === GLOBAL_CHAT_PROJECT_KEY ? this.database.getDefaultProject()?.key : input.projectKey;
       if (!targetProjectKey) return fail("No registered project is available for the task.");
       const action: GovernedChatAction = {
-        id: `agent_create_task_${input.threadId}`,
+        id: `create_task_${stableTaskActionKey(targetProjectKey, taskText)}`,
         type: "create_task",
         label: chatText(input.locale, "Create task", "Criar task"),
         description: intake.specification,
@@ -2285,18 +2342,26 @@ export class OperationalChatService {
         payload: { text: taskText, title: intake.title, specification: intake.specification, projectKey: targetProjectKey, providerId: input.providerId, model: input.model }
       };
       if (input.accessMode !== "full") return { toolResult: { ok: true, content: "Task prepared and waiting for explicit user approval.", pendingAction: action }, actions: [...input.actions, action], automaticTaskSummary: "" };
-      const task = this.commands.createTask({ channel: "dashboard", userId: null, username: null }, { text: taskText, title: intake.title, specification: intake.specification, projectKey: targetProjectKey });
-      const sizingNotice = await this.persistTaskSizing(task, action.payload);
-      await this.actionExecutor?.taskCreated?.(task.id);
-      const summary = [
-        chatText(input.locale, `Task #${task.id} created for @${targetProjectKey} and added to the queue.`, `Task #${task.id} criada para @${targetProjectKey} e enviada para a fila.`),
-        sizingNotice
-      ].filter(Boolean).join(" ");
-      input.evidence.summaryText = `${input.evidence.summaryText}\nTask creation: ${summary}`;
-      const refreshed = await this.gatherEvidenceContext(targetProjectKey, "task created", false);
-      Object.assign(input.evidence, refreshed);
-      input.evidence.summaryText = `${refreshed.summaryText}\nTask creation: ${summary}`;
-      return { toolResult: { ok: true, content: summary, mutationCommitted: true }, actions: input.actions, automaticTaskSummary: summary };
+      const response = await this.executeAction({
+        projectKey: input.projectKey,
+        threadId: input.threadId,
+        surface: "dashboard",
+        accessMode: input.accessMode,
+        uiLocale: input.locale,
+        action,
+        userId: null,
+        username: null
+      });
+      if (response.updatedEvidence) Object.assign(input.evidence, response.updatedEvidence);
+      const summary = response.resultSummary;
+      if (response.success) {
+        input.evidence.summaryText = `${input.evidence.summaryText}\nTask creation: ${summary}`;
+      }
+      return {
+        toolResult: { ok: response.success, content: summary, mutationCommitted: response.success },
+        actions: response.success ? input.actions.filter((item) => item.type !== "create_task") : input.actions,
+        automaticTaskSummary: response.success ? summary : ""
+      };
     }
     return fail("Unsupported tool.");
   }
@@ -2646,6 +2711,16 @@ function chatText(locale: ChatLocale, english: string, portuguese: string): stri
   return locale === "pt-BR" ? portuguese : english;
 }
 
+function stableTaskActionKey(projectKey: string, text: string): string {
+  let hash = 2_166_136_261;
+  const value = `${projectKey.trim().toLowerCase()}\u0000${text.replace(/\s+/g, " ").trim().toLowerCase()}`;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 function hasRequiredTaskSections(specification: string): boolean {
   const normalized = specification.toLocaleLowerCase();
   return [
@@ -2754,7 +2829,7 @@ export function parseTaskCreationIntent(
     if (context) return { text: context.messageText.trim() };
   }
 
-  const explicit = /^(?:eu\s+)?(?:quero\s+)?(?:crie|criar|cadastrar|cadastre|abrir|abra|faca|faça)\b[\s\S]*?\btask\b/i.exec(text);
+  const explicit = /^(?:eu\s+)?(?:quero\s+)?(?:crie|criar|cadastrar|cadastre|abrir|abra|faca|faça|prepare|preparar)\b[\s\S]*?\b(?:task|tarefa)\b/i.exec(text);
   if (explicit) {
     let taskText = text.slice(explicit[0].length).trim();
     const framingSeparator = taskText.indexOf(":");
@@ -2767,9 +2842,9 @@ export function parseTaskCreationIntent(
   // "analise isso e crie uma task para o Maestro rodar". Preserve the full
   // request as the task objective so the worker receives the requirements,
   // not only the short phrase after "task".
-  const embedded = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
-  const negated = /^(?:não|nao)\s+(?:(?:quero|preciso)\s+)?(?:que\s+)?(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\b/i.test(text)
-    || /^(?:não|nao)\b[^.!?]{0,80}\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
+  const embedded = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça|prepare|preparar)\s+(?:uma\s+)?(?:task|tarefa)\b/i.test(text);
+  const negated = /^(?:não|nao)\s+(?:(?:quero|preciso)\s+)?(?:que\s+)?(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça|prepare|preparar)\b/i.test(text)
+    || /^(?:não|nao)\b[^.!?]{0,80}\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça|prepare|preparar)\s+(?:uma\s+)?(?:task|tarefa)\b/i.test(text);
   if (embedded && !negated && !/\?\s*$/.test(text) && !/^(?:como|how|o que|what)\b/i.test(text)) {
     return text.length >= 4 && !isOperationalIncidentMessage(text) ? { text } : null;
   }
