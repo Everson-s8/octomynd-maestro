@@ -13,6 +13,7 @@ import {
 import { AgentDock } from "../components/AgentDock";
 import { ProviderManager } from "../components/ProviderManager";
 import { translate } from "../i18n";
+import { ActionModal } from "../components/ActionModal";
 
 export interface ProvidersPageProps {
   data: DashboardData;
@@ -26,6 +27,7 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
   const [refreshError, setRefreshError] = useState("");
   const [antigravityPermissions, setAntigravityPermissions] = useState<AntigravityPermissionStatus | null>(null);
   const [permissionsBusy, setPermissionsBusy] = useState(false);
+  const [confirmingPermissions, setConfirmingPermissions] = useState(false);
 
   const refreshPolicy = useCallback(async () => {
     try {
@@ -92,10 +94,11 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
   }, [onRefresh, refreshPolicy]);
 
   const handleConfigureAntigravityPermissions = useCallback(async () => {
-    const accepted = window.confirm(
-      translate("Allow Antigravity to run common development commands (git, node, npm, npx, and project managers) without asking for confirmation at every step?")
-    );
-    if (!accepted) return;
+    setConfirmingPermissions(true);
+  }, []);
+
+  const confirmConfigureAntigravityPermissions = useCallback(async () => {
+    setConfirmingPermissions(false);
     setPermissionsBusy(true);
     setRefreshError("");
     try {
@@ -144,6 +147,17 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
         <div className="routing-divider" aria-hidden="true" />
         <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
       </div>
+      {confirmingPermissions ? (
+        <ActionModal
+          title={translate("Allow Antigravity execution?")}
+          description={translate("Maestro will configure common development commands to run inside the prepared project worktree without interactive prompts.")}
+          cancelLabel={translate("Cancel")}
+          confirmLabel={translate("Allow execution")}
+          busy={permissionsBusy}
+          onCancel={() => setConfirmingPermissions(false)}
+          onConfirm={() => void confirmConfigureAntigravityPermissions()}
+        />
+      ) : null}
     </div>
   );
 }

@@ -5,19 +5,28 @@ import { statusProgress, taskStatusLabel, formatRelative } from "../helpers";
 import { StatusBadge } from "./StatusBadge";
 import { Icon } from "./Icon";
 import { translate } from "../i18n";
+import { ActionModal } from "./ActionModal";
 
-export function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) {
+export function TaskCard({ task, onOpen, onChanged }: { task: DashboardTask; onOpen: () => void; onChanged?: () => Promise<unknown> }) {
   const [cancelling, setCancelling] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const cancellable = !["done", "failed", "rejected", "cancelled"].includes(task.status);
 
   async function handleCancel(event: React.MouseEvent) {
     event.stopPropagation();
-    if (!window.confirm(`${translate("Cancel task")} #${task.id}? ${translate("Any current execution will be interrupted.")}`)) return;
+    setConfirming(true);
+  }
+
+  async function confirmCancel() {
     setCancelling(true);
+    setConfirming(false);
+    setError(null);
     try {
       await cancelTask(task.id);
+      await onChanged?.();
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : `${translate("Unable to cancel task")} #${task.id}.`);
+      setError(error instanceof Error ? error.message : `${translate("Unable to cancel task")} #${task.id}.`);
     } finally {
       setCancelling(false);
     }
@@ -75,10 +84,22 @@ export function TaskCard({ task, onOpen }: { task: DashboardTask; onOpen: () => 
           <Icon name="arrow" />
         </button>
       </div>
+      {error ? <p className="detail-error">{error}</p> : null}
+      {confirming ? (
+        <ActionModal
+          title={translate("Cancel this task?")}
+          description={translate("The active execution will stop and its history will be preserved.")}
+          cancelLabel={translate("Keep task")}
+          confirmLabel={translate("Cancel task")}
+          busy={cancelling}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => void confirmCancel()}
+        />
+      ) : null}
     </article>
   );
 }
 
-export function TaskRow({ task, onOpen }: { task: DashboardTask; onOpen: () => void }) {
-  return <TaskCard task={task} onOpen={onOpen} />;
+export function TaskRow({ task, onOpen, onChanged }: { task: DashboardTask; onOpen: () => void; onChanged?: () => Promise<unknown> }) {
+  return <TaskCard task={task} onOpen={onOpen} onChanged={onChanged} />;
 }

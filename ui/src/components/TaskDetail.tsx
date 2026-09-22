@@ -170,7 +170,7 @@ export function TaskDetail({
 
   const canPrepare = task.status === "queued" && !task.worktreePrepared;
   const canCancel = !["done", "failed", "rejected", "cancelled"].includes(task.status);
-  const canDelete = !["planning", "implementing", "testing", "reviewing", "waiting_quota", "waiting_provider", "waiting_dependency"].includes(task.status)
+  const canDelete = !["planning", "implementing", "testing", "reviewing"].includes(task.status)
     && (!goal || !["running", "waiting_provider"].includes(goal.status));
   const canResumeGoal = Boolean(goal && ["blocked", "failed"].includes(goal.status));
 

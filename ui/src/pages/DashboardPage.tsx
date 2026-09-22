@@ -108,7 +108,7 @@ export function DashboardPage({ data, activeTasks, onOpenTask, onRefresh }: Dash
           {activeTasks.length === 0 ? (
             <EmptyState icon="spark" title={translate("Everything is fine")} text={translate("No active task right now.")} />
           ) : (
-            activeTasks.slice(0, 8).map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
+            activeTasks.slice(0, 8).map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} onChanged={onRefresh} />)
           )}
         </div>
       </section>

@@ -4,6 +4,7 @@ import { formatWorkGraphDuration, isWorkGraphCancellable } from "../workGraphs";
 import { EmptyState } from "./EmptyState";
 import { SectionHeader } from "./SectionHeader";
 import { translate, translateCount } from "../i18n";
+import { ActionModal } from "./ActionModal";
 
 export function WorkGraphBoard({
   workGraphs,
@@ -13,12 +14,17 @@ export function WorkGraphBoard({
   onChanged: () => Promise<unknown>;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const active = workGraphs.filter((graph) => !["completed", "cancelled"].includes(graph.status));
 
   async function handleCancel(graph: DashboardWorkGraph) {
-    if (!window.confirm(`${translate("Cancel Work Graph #{id}? Artifacts and history will be preserved.", { id: graph.id })}`)) return;
+    setConfirmingId(graph.id);
+  }
+
+  async function confirmCancel(graph: DashboardWorkGraph) {
     setBusyId(graph.id);
+    setConfirmingId(null);
     setError(null);
     try {
       await cancelWorkGraph(graph.id, translate("Cancelled from the dashboard."));
@@ -104,6 +110,17 @@ export function WorkGraphBoard({
                   <small>{translate("History preserved")}</small>
                 )}
               </footer>
+              {confirmingId === graph.id ? (
+                <ActionModal
+                  title={translate("Cancel this Work Graph?")}
+                  description={translate("Artifacts and history will be preserved.")}
+                  cancelLabel={translate("Keep graph")}
+                  confirmLabel={translate("Cancel graph")}
+                  busy={busyId === graph.id}
+                  onCancel={() => setConfirmingId(null)}
+                  onConfirm={() => void confirmCancel(graph)}
+                />
+              ) : null}
             </article>
           ))
         )}

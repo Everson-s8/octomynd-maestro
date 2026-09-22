@@ -65,7 +65,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
           {activeTasks.length === 0 ? (
             <EmptyState icon="spark" title={translate("No task in progress")} text={translate("Queued tasks will start automatically.")} />
           ) : (
-            activeTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
+            activeTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} onChanged={onRefresh} />)
           )}
         </div>
       </section>
@@ -76,7 +76,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
           {queuedTasks.length === 0 ? (
             <EmptyState icon="queue" title={translate("Empty queue")} text={translate("Add new requests to put the agents to work.")} />
           ) : (
-            queuedTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />)
+            queuedTasks.map((task) => <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} onChanged={onRefresh} />)
           )}
         </div>
       </section>
@@ -86,7 +86,7 @@ export function BacklogPage({ data, onOpenTask, onRefresh, onCreateTask }: Backl
         <SectionHeader eyebrow={translate("History")} title={translate("Completed or closed tasks")} meta={`${completedTasks.length} ${translate("finished")}`} />
           <div className="task-list">
             {completedTasks.slice(0, 10).map((task) => (
-              <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} />
+              <TaskCard task={task} key={task.id} onOpen={() => onOpenTask(task.id)} onChanged={onRefresh} />
             ))}
           </div>
         </section>
