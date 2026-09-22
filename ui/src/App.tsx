@@ -76,8 +76,13 @@ export default function App() {
     </div> : null}
     {data ? <div className="maestro-runtime-badge" role="status">
       <span>{translate("Maestro")} v{data.daemon.version}</span>
+      {updateStatus?.event === "checking" ? (
+        <span>{translate("Checking for updates…")}</span>
+      ) : updateStatus?.event === "up_to_date" ? (
+        <span>{translate("You're up to date.")}</span>
+      ) : null}
       {updateStatus?.event === "downloading" || updateStatus?.event === "progress" ? (
-        <span>{translate("Update available")} {updateStatus.version ? `v${updateStatus.version}` : ""} · {updateStatus.percent ?? 0}%</span>
+        <span>{translate("Downloading update")} {updateStatus.version ? `v${updateStatus.version}` : ""} · {updateStatus.percent ?? 0}%</span>
       ) : updateStatus?.event === "ready" ? (
         <button type="button" onClick={() => void installDesktopUpdate()}>
           {translate("Restart to update")} {updateStatus.version ? `v${updateStatus.version}` : ""}
