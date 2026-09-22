@@ -197,10 +197,12 @@ timeouts or quota failures from being selected repeatedly.
   denied. Authentication, subscription quota, permission, environment and timeout failures are
   classified as retryable.
 - **Antigravity**: headless CLI adapter for planning, coding, testing, research, and improvement
-  review. Goal execution prepares its autonomous command permission rules before starting, because
-  a headless process cannot answer an interactive permission prompt. The prepared task worktree
-  remains the execution boundary, and permission-denied failures remain retryable so another
-  connected provider can take over.
+  review. It never edits the user's global Antigravity settings. Writable Goal steps can bypass
+  interactive per-tool prompts only when the Task has a durable `task.workspace_access_approved`
+  event created by explicit task intake or Full Access chat task creation. The approval is passed to that CLI invocation only,
+  together with Antigravity's sandbox and the prepared task worktree; planning/review stay read-only.
+  Without task-scoped approval, permission-denied failures remain retryable so another connected
+  provider can take over.
 
 Codex and Claude share the same process runtime for bounded output, stdin, timeout, cancellation,
 and Windows-hidden subprocess execution. Provider adapters only define CLI arguments, phase policy,

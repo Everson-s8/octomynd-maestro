@@ -31,10 +31,6 @@ import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import { prepareCliSpawn, resolveCustomCliExecutable } from "../agents/custom-cli.js";
 import { CustomCliProvider } from "../agents/custom-cli.js";
 import {
-  configureAntigravityAutonomousPermissions,
-  getAntigravityPermissionStatus
-} from "../agents/antigravity-permissions.js";
-import {
   PROVIDER_PRESETS,
   addCustomProvider,
   configFromPreset,
@@ -304,42 +300,6 @@ async function routeRequest(
     }
     const state = await testAgentConnection(command, args);
     sendJson(response, state.ok ? 200 : 422, { ...state, models: [] });
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/providers/antigravity/permissions") {
-    try {
-      sendJson(response, 200, getAntigravityPermissionStatus());
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "antigravity_permissions_read_failed",
-        details: error instanceof Error ? error.message : "Unable to read Antigravity permissions."
-      });
-    }
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/providers/antigravity/permissions") {
-    const body = await readJsonBody(request);
-    if (body.confirmed !== true) {
-      sendJson(response, 400, { error: "explicit_confirmation_required" });
-      return;
-    }
-    try {
-      const status = configureAntigravityAutonomousPermissions();
-      options.database.addEvent({
-        source: "dashboard",
-        type: "provider.antigravity_permissions_configured",
-        text: "Antigravity development command permissions configured by the user.",
-        metadata: { rulesAdded: status.requiredRules.length - status.missingRules.length }
-      });
-      sendJson(response, 200, status);
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "antigravity_permissions_write_failed",
-        details: error instanceof Error ? error.message : "Unable to configure Antigravity permissions."
-      });
-    }
     return;
   }
 
@@ -1489,7 +1449,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/work-intake/preview") {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, 512 * 1024);
     const objective = typeof body.objective === "string" ? body.objective.trim() : "";
     if (!objective) {
       sendJson(response, 400, { error: "objective_is_required" });
@@ -1512,7 +1472,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/work-intake") {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, 512 * 1024);
     const objective = typeof body.objective === "string" ? body.objective.trim() : "";
     if (!objective) {
       sendJson(response, 400, { error: "objective_is_required" });
@@ -1526,7 +1486,8 @@ async function routeRequest(
         coordination: body.coordination as WorkIntakeCommandInput["coordination"],
         costEstimate: body.costEstimate as WorkIntakeCommandInput["costEstimate"],
         explicitOverride: body.explicitOverride as WorkIntakeCommandInput["explicitOverride"],
-        intakeId: typeof body.intakeId === "string" ? body.intakeId.trim() : undefined
+        intakeId: typeof body.intakeId === "string" ? body.intakeId.trim() : undefined,
+        workspaceWriteApproved: body.workspaceWriteApproved === true
       });
       const statusCode = result.status === "created" ? 201 : 200;
       sendJson(response, statusCode, result);
@@ -2140,14 +2101,14 @@ function chatErrorStatus(error: unknown): number {
   return 500;
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 64 * 1024) {
-      throw new Error("Request body exceeds 64 KB.");
+    if (size > maxBytes) {
+      throw new Error(`Request body exceeds ${Math.ceil(maxBytes / 1024)} KB.`);
     }
     chunks.push(buffer);
   }

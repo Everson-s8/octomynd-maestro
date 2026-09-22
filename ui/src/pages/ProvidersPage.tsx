@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DashboardData,
-  configureAntigravityPermissions,
-  fetchAntigravityPermissionStatus,
   fetchProviderPolicy,
-  AntigravityPermissionStatus,
   ProviderPolicySnapshot,
   ProviderRescanEntry,
   refreshProviders,
@@ -13,7 +10,6 @@ import {
 import { AgentDock } from "../components/AgentDock";
 import { ProviderManager } from "../components/ProviderManager";
 import { translate } from "../i18n";
-import { ActionModal } from "../components/ActionModal";
 
 export interface ProvidersPageProps {
   data: DashboardData;
@@ -25,9 +21,6 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
   const [scanning, setScanning] = useState(false);
   const [scanSummary, setScanSummary] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState("");
-  const [antigravityPermissions, setAntigravityPermissions] = useState<AntigravityPermissionStatus | null>(null);
-  const [permissionsBusy, setPermissionsBusy] = useState(false);
-  const [confirmingPermissions, setConfirmingPermissions] = useState(false);
 
   const refreshPolicy = useCallback(async () => {
     try {
@@ -40,16 +33,6 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
   useEffect(() => {
     void refreshPolicy();
   }, [refreshPolicy]);
-
-  const antigravityInstalled = useMemo(
-    () => data.agents.some((agent) => agent.id === "antigravity" && agent.state !== "offline"),
-    [data.agents]
-  );
-
-  useEffect(() => {
-    if (!antigravityInstalled) return;
-    void fetchAntigravityPermissionStatus().then(setAntigravityPermissions).catch(() => undefined);
-  }, [antigravityInstalled]);
 
   const ready = useMemo(
     () => data.agents.filter((agent) => agent.id !== "telegram" && (agent.state === "ready" || agent.state === "working")),
@@ -93,24 +76,6 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
     }
   }, [onRefresh, refreshPolicy]);
 
-  const handleConfigureAntigravityPermissions = useCallback(async () => {
-    setConfirmingPermissions(true);
-  }, []);
-
-  const confirmConfigureAntigravityPermissions = useCallback(async () => {
-    setConfirmingPermissions(false);
-    setPermissionsBusy(true);
-    setRefreshError("");
-    try {
-      setAntigravityPermissions(await configureAntigravityPermissions());
-      setScanSummary(translate("Antigravity is configured to run development tasks without interruptions."));
-    } catch (error) {
-      setRefreshError(error instanceof Error ? error.message : translate("Unable to configure Antigravity permissions."));
-    } finally {
-      setPermissionsBusy(false);
-    }
-  }, []);
-
   return (
     <div className="providers-page">
       <div className="top">
@@ -120,11 +85,6 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
         </div>
         <div className="top-actions">
           <span className="provider-summary">{translate("{installed} CLI(s) detected · {ready} ready for use", { installed: installed.length, ready: ready.length })}</span>
-          {antigravityInstalled && !antigravityPermissions?.configured ? (
-            <button type="button" className="btn-ghost" onClick={() => void handleConfigureAntigravityPermissions()} disabled={permissionsBusy}>
-              {permissionsBusy ? translate("Configuring…") : translate("Allow Antigravity execution")}
-            </button>
-          ) : null}
           <button type="button" className="btn-ghost" onClick={() => void handleRescan()} disabled={scanning}>
             {scanning ? translate("Rescanning…") : translate("Refresh providers")}
           </button>
@@ -147,17 +107,6 @@ export function ProvidersPage({ data, onRefresh }: ProvidersPageProps) {
         <div className="routing-divider" aria-hidden="true" />
         <AgentDock agents={data.agents} policy={policy} onPolicyChanged={refreshPolicy} />
       </div>
-      {confirmingPermissions ? (
-        <ActionModal
-          title={translate("Allow Antigravity execution?")}
-          description={translate("Maestro will configure common development commands to run inside the prepared project worktree without interactive prompts.")}
-          cancelLabel={translate("Cancel")}
-          confirmLabel={translate("Allow execution")}
-          busy={permissionsBusy}
-          onCancel={() => setConfirmingPermissions(false)}
-          onConfirm={() => void confirmConfigureAntigravityPermissions()}
-        />
-      ) : null}
     </div>
   );
 }

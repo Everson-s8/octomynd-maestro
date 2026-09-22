@@ -76,6 +76,7 @@ export type CreateTaskInput = {
   projectKey?: string | null;
   title?: string | null;
   specification?: string | null;
+  workspaceWriteApproved?: boolean;
 };
 
 export type CreateFollowUpTaskInput = {
@@ -91,6 +92,7 @@ export type WorkIntakeCommandInput = {
   costEstimate?: Partial<WorkIntakeCostEstimate>;
   explicitOverride?: WorkIntakeClassification | null;
   intakeId?: string;
+  workspaceWriteApproved?: boolean;
 };
 
 export type WorkIntakeCommandResult = {
@@ -494,6 +496,7 @@ export class ApplicationCommands {
       specification: input.specification ?? undefined
     });
     const task = this.database.createTask(text, origin.channel, project.key, null, intake.title, intake.specification);
+    this.recordWorkspaceWriteApproval(origin, task.id, input.workspaceWriteApproved);
 
     this.database.addEvent({
       source: origin.channel,
@@ -621,6 +624,7 @@ export class ApplicationCommands {
         ? this.database.getFeaturePlanDetails(existingSubmission.featurePlanId)
         : undefined;
       if (task || featurePlan) {
+        if (task) this.recordWorkspaceWriteApproval(origin, task.id, input.workspaceWriteApproved);
         const decision = classifyWorkIntake({ ...input, id: intakeId, projectKey: project.key });
         return {
           status: "already_created",
@@ -653,6 +657,7 @@ export class ApplicationCommands {
 
     if (decision.classification === "direct_task") {
       const task = this.database.createTask(input.objective, origin.channel, project.key);
+      this.recordWorkspaceWriteApproval(origin, task.id, input.workspaceWriteApproved);
       this.database.recordWorkIntakeSubmission(intakeId, { taskId: task.id });
       this.database.addEvent({
         source: origin.channel,
@@ -679,6 +684,7 @@ export class ApplicationCommands {
     }
 
     const task = this.database.createTask(input.objective, origin.channel, project.key);
+    this.recordWorkspaceWriteApproval(origin, task.id, input.workspaceWriteApproved);
     this.database.addEvent({
       source: origin.channel,
       type: "task.created",
@@ -723,6 +729,20 @@ export class ApplicationCommands {
       decision,
       explanation
     };
+  }
+
+  private recordWorkspaceWriteApproval(origin: CommandOrigin, taskId: number, approved?: boolean): void {
+    if (!approved) return;
+    if (this.database.listEventsForTask(taskId).some((event) => event.type === "task.workspace_access_approved")) return;
+    this.database.addEvent({
+      source: origin.channel,
+      type: "task.workspace_access_approved",
+      text: "User approved autonomous commands and project-local dependency changes inside this task's isolated worktree.",
+      userId: origin.userId ?? null,
+      username: origin.username ?? null,
+      taskId,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
   }
 
   listWorkGraphs(limit = 30): WorkGraphView[] {

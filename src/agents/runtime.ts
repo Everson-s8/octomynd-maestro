@@ -35,7 +35,6 @@ export function createAgentRegistry(config: MaestroConfig, database: MaestroData
     providers.push(new AntigravityProvider({
       model: config.runtime.antigravityModel,
       effort: config.runtime.antigravityEffort ?? "medium",
-      autoConfigurePermissions: true,
       executionLimits: {
         ...providerLimits,
         inactivityTimeoutMs: config.runtime.antigravityInactivityTimeoutMs

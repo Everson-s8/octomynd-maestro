@@ -37,3 +37,12 @@ trigger an independent final review.
 | Multiple independent deliverables or review gates | `feature_plan` |
 
 The regression suite in `test/work-intake.test.ts` protects these boundaries.
+
+The dashboard composer accepts long-form objectives (up to 80,000 characters)
+so a detailed user brief is not silently cut off at the input field. For local
+autonomous execution, the user can explicitly approve command execution and
+project-local install/change/removal inside the task's isolated worktree. That
+approval is recorded against the Task; it is never translated into a global
+provider permission change. Full Access chat task creation records the same
+task-scoped approval. A retry of the same intake updates the existing task's
+approval instead of creating a duplicate.

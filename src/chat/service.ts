@@ -632,7 +632,8 @@ export class OperationalChatService {
             text,
             projectKey: targetProjectKey,
             title: typeof action.payload?.title === "string" ? action.payload.title : undefined,
-            specification: typeof action.payload?.specification === "string" ? action.payload.specification : undefined
+            specification: typeof action.payload?.specification === "string" ? action.payload.specification : undefined,
+            workspaceWriteApproved: accessMode === "full"
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -663,7 +664,11 @@ export class OperationalChatService {
           if (text.length < 4 || !targetProjectKey) {
             throw new Error(chatText(locale, "A project and a code-change request are required.", "Um projeto e um pedido de alteração são necessários."));
           }
-          const task = this.commands.createTask(origin, { text, projectKey: targetProjectKey });
+          const task = this.commands.createTask(origin, {
+            text,
+            projectKey: targetProjectKey,
+            workspaceWriteApproved: accessMode === "full"
+          });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
           resultSummary = [chatText(

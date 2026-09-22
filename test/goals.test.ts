@@ -542,6 +542,35 @@ describe("goal runner", () => {
       .toBe("repeated_failure");
   });
 
+  it("passes a persisted task-workspace approval to writable Goal agents", async () => {
+    const projectDir = path.join(tempDir, "approved-project");
+    const worktreeDir = path.join(tempDir, "approved-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "approved", path: projectDir });
+    const task = database.createTask("repair the project test environment", "dashboard", "approved");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    database.addEvent({
+      source: "dashboard",
+      type: "task.workspace_access_approved",
+      text: "User approved autonomous work inside the task worktree.",
+      taskId: task.id,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
+    let approved: boolean | undefined;
+    const provider = new FakeProvider("codex", ["planning"], (request) => {
+      approved = request.workspaceWriteApproved;
+      return completed("plan complete");
+    });
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1
+    });
+
+    expect(approved).toBe(true);
+  });
+
   it("keeps a permission failure recoverable when no alternate provider is connected", async () => {
     const projectDir = path.join(tempDir, "permission-recovery-project");
     const worktreeDir = path.join(tempDir, "permission-recovery-worktree");

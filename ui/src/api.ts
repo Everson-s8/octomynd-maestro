@@ -521,31 +521,6 @@ export interface ProviderConnectionResult {
   models?: string[];
 }
 
-export type AntigravityPermissionStatus = {
-  configured: boolean;
-  settingsPath: string;
-  requiredRules: string[];
-  missingRules: string[];
-};
-
-export async function fetchAntigravityPermissionStatus(): Promise<AntigravityPermissionStatus> {
-  const response = await fetch("/api/providers/antigravity/permissions", { cache: "no-store" });
-  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to read Antigravity permissions.");
-  return payload;
-}
-
-export async function configureAntigravityPermissions(): Promise<AntigravityPermissionStatus> {
-  const response = await fetch("/api/providers/antigravity/permissions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ confirmed: true })
-  });
-  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to configure Antigravity permissions.");
-  return payload;
-}
-
 /** Probe whether a provider CLI or endpoint is reachable without persisting it. */
 export async function testProviderConnection(input: {
   command?: string;
@@ -1084,6 +1059,7 @@ export type WorkIntakePreviewResult = {
 
 export type SubmitWorkIntakeInput = PreviewWorkIntakeInput & {
   intakeId?: string;
+  workspaceWriteApproved?: boolean;
 };
 
 export type SubmitWorkIntakeResult = {

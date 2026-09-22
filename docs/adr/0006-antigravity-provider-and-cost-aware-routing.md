@@ -34,4 +34,7 @@ writer rule prevent concurrent mutation of the same Task.
 - Antigravity model and effort can be configured without hard-coding model names.
 - Authentication health is probed through `agy models`, not inferred from binary
   presence alone.
+- Maestro must not write broad command rules into global Antigravity settings. A user's explicit
+  task-workspace approval is passed to a writable CLI invocation only, inside the isolated
+  worktree/sandbox; unapproved work does not receive the permission bypass.
 - Provider fan-out does not mean speculative duplicate implementations.

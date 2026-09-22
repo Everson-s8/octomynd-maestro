@@ -748,6 +748,10 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 .hint-box span{font-size:12px;color:var(--muted);line-height:1.6}
 .hint-box code{font-family:'IBM Plex Mono';font-size:11px;color:var(--coral);background:rgba(232,150,122,.1);
   padding:1px 6px;border-radius:4px}
+.workspace-approval-option{display:flex;gap:10px;align-items:flex-start;margin:0 0 16px;padding:12px 14px;
+  border:1px solid var(--line-soft);border-radius:var(--r-sm);background:rgba(196,98,45,.06);
+  color:var(--ivory-dim);font-size:12px;line-height:1.6;cursor:pointer}
+.workspace-approval-option input{margin:2px 0 0;accent-color:var(--rust);flex:none}
 
 
 /* ============ WIZARD: CONECTAR PROVIDER ============ */
