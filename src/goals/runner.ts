@@ -624,7 +624,11 @@ export async function runTaskGoal(
         continue;
       }
 
-      let routed = await registry.acquire(CAPABILITIES[phase], excluded);
+      let routed = await registry.acquire(
+        CAPABILITIES[phase],
+        excluded,
+        database.getGoalRun(run.id).preferredProviderId
+      );
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
         const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
@@ -970,7 +974,11 @@ export async function runTaskGoal(
           durationMs: result.durationMs
         });
         excluded.add(routed.provider.id);
-        const fallback = await registry.route(CAPABILITIES[phase], excluded);
+        const fallback = await registry.route(
+          CAPABILITIES[phase],
+          excluded,
+          database.getGoalRun(run.id).preferredProviderId
+        );
         database.addEvent({
           source: "maestro",
           type: fallback ? "goal.no_progress_fallback" : "goal.no_progress_wait",
@@ -1064,7 +1072,11 @@ export async function runTaskGoal(
         }
         if (isRecoverableProviderFailure(failureCategory, result.summary || result.error || "")) {
           excluded.add(routed.provider.id);
-          const fallback = await registry.route(CAPABILITIES[phase], excluded);
+          const fallback = await registry.route(
+            CAPABILITIES[phase],
+            excluded,
+            database.getGoalRun(run.id).preferredProviderId
+          );
           const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
           database.addEvent({
             source: "maestro",
@@ -1105,7 +1117,11 @@ export async function runTaskGoal(
         // those failures and blocked the goal before trying Claude/Codex in
         // the last phase, even though a fallback was available.
         excluded.add(routed.provider.id);
-        const fallback = await registry.route(CAPABILITIES[phase], excluded);
+        const fallback = await registry.route(
+          CAPABILITIES[phase],
+          excluded,
+          database.getGoalRun(run.id).preferredProviderId
+        );
         if (fallback) {
           const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
           database.addEvent({

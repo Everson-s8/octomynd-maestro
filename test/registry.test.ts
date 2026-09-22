@@ -142,7 +142,7 @@ describe("agent registry leases", () => {
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
 
-  it("routes only connected providers and removes a disconnected provider from the runtime", async () => {
+  it("routes only connected providers and disconnects built-ins without losing reconnectability", async () => {
     const registry = new AgentRegistry(
       [provider("claude", ["coding"]), provider("codex", ["coding"])],
       undefined,
@@ -160,9 +160,21 @@ describe("agent registry leases", () => {
     expect(claude?.provider.id).toBe("claude");
     claude?.release();
 
-    registry.unregisterProvider("claude");
+    registry.disconnectProvider("claude");
     expect(registry.list().map((item) => item.id)).toEqual(["codex"]);
     expect(registry.policySnapshot().controls.some((item) => item.providerId === "claude")).toBe(false);
+
+    registry.connectProvider("claude");
+    expect(registry.list().map((item) => item.id)).toEqual(["claude", "codex"]);
+  });
+
+  it("honors a connected provider preference before falling back", async () => {
+    const registry = new AgentRegistry([
+      provider("claude", ["coding"]),
+      provider("codex", ["coding"])
+    ]);
+
+    expect((await registry.acquire("coding", new Set(), "codex"))?.provider.id).toBe("codex");
   });
 
   it("resolves model and effort preferences hierarchically per capability", async () => {

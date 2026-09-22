@@ -128,7 +128,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot" | "list"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "connectProvider" | "startHealthProbing" | "healthProber" | "refresh"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "disconnectProvider" | "connectProvider" | "startHealthProbing" | "healthProber" | "refresh"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -192,6 +192,9 @@ export function createDashboardServer(options: DashboardServerOptions) {
           retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
           resumeGoal: (runId) => {
             options.goalCoordinator!.resumeExistingRun(runId);
+          },
+          switchGoalProvider: (runId, providerId) => {
+            options.goalCoordinator!.switchProvider(runId, providerId);
           },
           cancelTask: (taskId) => { options.goalCoordinator!.cancel(taskId); },
           rerunReview: () => { /* reviews are re-attempted by goal runner when task status moves to reviewing */ }
@@ -667,11 +670,24 @@ async function routeRequest(
   const deleteProviderMatch = url.pathname.match(/^\/api\/providers\/([a-zA-Z0-9._-]+)$/);
   if (request.method === "DELETE" && deleteProviderMatch) {
     const id = deleteProviderMatch[1];
-    let unregistered = false;
-    if (options.agentRegistry?.unregisterProvider) {
+    let removed = false;
+    const preset = PROVIDER_PRESETS.find((item) => item.id === id || runtimeProviderIdForPreset(item) === id);
+    const isBuiltIn = Boolean(preset?.builtIn);
+    if (isBuiltIn && options.agentRegistry?.disconnectProvider) {
+      try {
+        options.agentRegistry.disconnectProvider((runtimeProviderIdForPreset(preset) ?? id) as AgentProviderId);
+        removed = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "provider_removal_failed";
+        if (!message.includes("is not registered")) {
+          sendJson(response, 409, { error: "provider_is_in_use", detail: message });
+          return;
+        }
+      }
+    } else if (options.agentRegistry?.unregisterProvider) {
       try {
         options.agentRegistry.unregisterProvider(id as AgentProviderId);
-        unregistered = true;
+        removed = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "provider_removal_failed";
         if (!message.includes("is not registered")) {
@@ -681,7 +697,7 @@ async function routeRequest(
       }
     }
     const result = removeCustomProvider(id, process.cwd());
-    const removed = result.removed || unregistered;
+    removed = result.removed || removed;
     options.database.addEvent({
       source: "maestro",
       type: removed ? "provider.removed" : "provider.remove_ignored",
@@ -1898,19 +1914,32 @@ async function routeRequest(
   const deleteTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)$/);
   if (request.method === "DELETE" && deleteTaskMatch) {
     const taskId = Number(deleteTaskMatch[1]);
-    if (options.goalCoordinator?.isActive(taskId)) {
+    const activeGoal = options.database.listGoalRuns(500).find((run) => (
+      run.taskId === taskId && ["running", "waiting_provider"].includes(run.status)
+    ));
+    if (options.goalCoordinator?.isActive(taskId) || activeGoal) {
       sendJson(response, 409, { error: "task_delete_failed", details: "Cancel the active task before deleting it." });
       return;
     }
     try {
-      const task = options.database.deleteTask(taskId);
+      const existing = options.database.getTask(taskId);
+      let task = existing;
+      let operation: "deleted" | "archived" = "deleted";
+      try {
+        task = options.database.deleteTask(taskId);
+      } catch {
+        // Historical/terminal tasks are removed from the active UI without
+        // destroying their Goal, review, worktree and event evidence.
+        task = options.database.archiveTask(taskId);
+        operation = "archived";
+      }
       options.database.addEvent({
         source: "dashboard",
-        type: "task.deleted",
-        text: `Task #${task.id} deleted.`,
-        metadata: { deletedTaskId: task.id, projectKey: task.projectKey }
+        type: operation === "deleted" ? "task.deleted" : "task.archived",
+        text: operation === "deleted" ? `Task #${task.id} deleted.` : `Task #${task.id} archived from the active queue.`,
+        metadata: { deletedTaskId: task.id, archivedTaskId: operation === "archived" ? task.id : null, projectKey: existing.projectKey }
       });
-      sendJson(response, 200, { task });
+      sendJson(response, 200, { task, operation });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown deletion error";
       sendJson(response, /not found/i.test(message) ? 404 : 409, {

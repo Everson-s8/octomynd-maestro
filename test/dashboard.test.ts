@@ -332,6 +332,15 @@ describe("dashboard", () => {
       expect((await deleteResponse.json()).removed).toBe(true);
       expect(registry.list()).toEqual([]);
       expect(database.listConnectedProviderIds()).toEqual([]);
+
+      const reconnectResponse = await fetch(`http://127.0.0.1:${port}/api/providers/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ presetId: "codex" })
+      });
+      expect(reconnectResponse.status).toBe(200);
+      expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
+      expect(database.listConnectedProviderIds()).toEqual(["codex"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(
         (error) => error ? reject(error) : resolve()
@@ -805,6 +814,21 @@ describe("dashboard", () => {
       });
       expect(deleteResponse.status).toBe(200);
       expect(() => database.getTask(disposable.task.id)).toThrow("not found");
+
+      const historicalResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", text: "task histórica para arquivar" })
+      });
+      const historical = await historicalResponse.json() as { task: { id: number } };
+      const historicalRun = database.createGoalRun(historical.task.id);
+      database.updateGoalRun({ id: historicalRun.id, status: "completed", currentPhase: "reviewing", stepCount: 1 });
+      database.updateTaskStatus(historical.task.id, "done");
+      const archiveResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${historical.task.id}`, { method: "DELETE" });
+      expect(archiveResponse.status).toBe(200);
+      expect((await archiveResponse.json()).operation).toBe("archived");
+      expect(database.getTask(historical.task.id).archivedAt).toBeTruthy();
+      expect(database.listTasks(100).some((task) => task.id === historical.task.id)).toBe(false);
 
       const queuedStartResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
         method: "POST",

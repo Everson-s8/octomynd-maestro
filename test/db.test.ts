@@ -134,6 +134,22 @@ describe("database", () => {
     expect(() => database.deleteTask(protectedTask.id)).toThrow("execution history");
   });
 
+  it("persists a preferred provider for an existing Goal run", () => {
+    database.registerProject({ key: "pref", path: tempDir });
+    const task = database.createTask("continue with the preferred provider", "dashboard", "pref");
+    const run = database.createGoalRun(task.id);
+    const updated = database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "implementing",
+      stepCount: 1,
+      preferredProviderId: "codex"
+    });
+
+    expect(updated.preferredProviderId).toBe("codex");
+    expect(database.getGoalRun(run.id).preferredProviderId).toBe("codex");
+  });
+
   it("rolls back every write in withTransaction when a later step throws", () => {
     const task = database.createTask("atomic transitions");
     database.updateTaskStatus(task.id, "implementing");

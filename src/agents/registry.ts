@@ -141,6 +141,28 @@ export class AgentRegistry {
     return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
   }
 
+  /**
+   * Disconnect a provider without destroying its runtime adapter.
+   *
+   * Built-in providers are part of the immutable runtime catalog. Removing
+   * them from `providers` made a later explicit reconnect impossible because
+   * `connectProvider` could no longer find the adapter. A disconnect only
+   * removes the user's active connection and policy; the adapter stays dormant
+   * and can be activated again without restarting Maestro.
+   */
+  disconnectProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
+    if ((this.activeLeases.get(providerId) ?? 0) > 0) {
+      throw new Error(`Provider ${providerId} has active work and cannot be disconnected.`);
+    }
+    if (!this.providers.has(providerId)) {
+      throw new Error(`Provider ${providerId} is not registered.`);
+    }
+    this.cooldowns.delete(providerId);
+    this.connectedProviderIds.delete(providerId);
+    this.healthProber?.removeProvider(providerId);
+    return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
+  }
+
   /** Activate a provider that is already installed in the runtime registry. */
   connectProvider(providerId: AgentProviderId): void {
     const provider = this.providers.get(providerId);
@@ -166,9 +188,10 @@ export class AgentRegistry {
 
   async route(
     capability: AgentCapability,
-    excluded: ReadonlySet<AgentProviderId> = new Set()
+    excluded: ReadonlySet<AgentProviderId> = new Set(),
+    preferredProviderId?: AgentProviderId | null
   ): Promise<RoutedAgent | null> {
-    for (const providerId of this.providerOrder(capability)) {
+    for (const providerId of this.prioritizedProviderOrder(capability, preferredProviderId)) {
       if (excluded.has(providerId)) continue;
       if (this.activeCooldown(providerId)) continue;
       const provider = this.providers.get(providerId);
@@ -185,9 +208,10 @@ export class AgentRegistry {
 
   async acquire(
     capability: AgentCapability,
-    excluded: ReadonlySet<AgentProviderId> = new Set()
+    excluded: ReadonlySet<AgentProviderId> = new Set(),
+    preferredProviderId?: AgentProviderId | null
   ): Promise<AgentLease | null> {
-    for (const providerId of this.providerOrder(capability)) {
+    for (const providerId of this.prioritizedProviderOrder(capability, preferredProviderId)) {
       if (excluded.has(providerId)) continue;
       if (this.activeCooldown(providerId)) continue;
       const provider = this.providers.get(providerId);
@@ -441,6 +465,15 @@ export class AgentRegistry {
   private providerOrder(capability: AgentCapability): AgentProviderId[] {
     return resolveProviderOrder(capability, this.policySnapshot(), [...this.providers.keys()])
       .filter((providerId) => this.connectedProviderIds.has(providerId));
+  }
+
+  private prioritizedProviderOrder(
+    capability: AgentCapability,
+    preferredProviderId?: AgentProviderId | null
+  ): AgentProviderId[] {
+    const order = this.providerOrder(capability);
+    if (!preferredProviderId || !order.includes(preferredProviderId)) return order;
+    return [preferredProviderId, ...order.filter((providerId) => providerId !== preferredProviderId)];
   }
 
   private activeCooldown(providerId: AgentProviderId): ProviderCooldown | null {
