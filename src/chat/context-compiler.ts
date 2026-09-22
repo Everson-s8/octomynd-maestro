@@ -95,7 +95,14 @@ export function isTaskMetaRequest(text: string): boolean {
  * asks the chat to reuse the conversation context.
  */
 export function isOperationalIncidentMessage(text: string): boolean {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  // Provider reports are frequently rendered as Markdown (for example
+  // `A **Task #7** ... **blocked**`). Strip presentation marks before
+  // classifying them; otherwise the implementation verb in the remediation
+  // section can make the whole incident look like a product brief.
+  const normalized = text
+    .replace(/[\*_`#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!INCIDENT_MARKERS.test(normalized)) return false;
   // Incident reports may quote a remediation suggestion later in the text.
   // The operational prefix still determines their role in task-context

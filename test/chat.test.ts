@@ -719,6 +719,14 @@ describe("Unified Operational Chat (Task #52)", () => {
     ];
     expect(parseTaskCreationIntent("Crie a tarefa conforme alinhamos o chat para esse projeto.", prior)?.text)
       .toContain("Melhorar a interface do projeto");
+
+    const formattedIncident = [
+      { senderRole: "user" as const, messageText: "Melhorar a interface do projeto para deixar o fluxo de edição mais simples e previsível para o usuário." },
+      { senderRole: "orchestrator" as const, messageText: "A **Task #7** foi interrompida e está com status **blocked** por permission denied. ### 3. Como Proceder - Para implementar as melhorias, escolha outro provider." }
+    ];
+    expect(parseTaskCreationIntent("Crie a tarefa conforme alinhamos o chat para esse projeto.", formattedIncident)?.text)
+      .toContain("Melhorar a interface do projeto");
+    expect(parseTaskCreationIntent("Crie essa task: A **Task #7** foi interrompida e está com status **blocked** por permission denied. ### 3. Como Proceder - Para implementar as melhorias, escolha outro provider.")).toBeNull();
   });
 
   it("offers an explicit provider switch for an existing Goal instead of creating another task", async () => {
@@ -761,6 +769,47 @@ describe("Unified Operational Chat (Task #52)", () => {
     });
     expect(result.success).toBe(true);
     expect(switched).toEqual([{ runId: run.id, providerId: "codex" }]);
+  });
+
+  it("recognizes Gemini and reencaminhamento language when switching a Goal provider", async () => {
+    const task = database.createTask("Implement the financial app", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "blocked", currentPhase: "implementing", stepCount: 3, lastError: "provider unavailable" });
+    const antigravity = chatProvider("antigravity", {
+      outcome: "completed",
+      summary: "ready",
+      output: "ready",
+      error: null,
+      retryable: false
+    }, { capabilities: ["coding", "conversation"] });
+    const switched: Array<{ runId: number; providerId: string }> = [];
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([antigravity]),
+      actionExecutor: {
+        switchGoalProvider: (runId, providerId) => switched.push({ runId, providerId })
+      }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Reencaminhe a execução desta task para Gemini e continue do checkpoint."
+    });
+    const action = response.actions.find((item) => item.type === "switch_goal_provider");
+    expect(action).toMatchObject({ type: "switch_goal_provider", targetId: run.id });
+
+    const result = await chatService.executeAction({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "full",
+      action: action!
+    });
+    expect(result.success).toBe(true);
+    expect(switched).toEqual([{ runId: run.id, providerId: "antigravity" }]);
   });
 
   it("parses explicit local and remote project creation without treating task requests as projects", () => {

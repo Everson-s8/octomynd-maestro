@@ -2301,7 +2301,26 @@ export class OperationalChatService {
     if (name === "governed_action") {
       const actionType = typeof args.action === "string" ? args.action : typeof args.type === "string" ? args.type : "";
       if (actionType !== "create_task") {
-        const action = input.actions.find((item) => item.id === args.actionId || item.type === actionType);
+        const requestedActionId = typeof args.actionId === "string" ? args.actionId : "";
+        const requestedTargetId = args.targetId ?? args.taskId ?? args.runId;
+        const requestedProviderId = typeof args.providerId === "string" ? args.providerId : "";
+        const candidates = input.actions.filter((item) => item.type === actionType);
+        const matchingCandidates = candidates.filter((item) => {
+          const targetMatches = requestedTargetId === undefined || requestedTargetId === null
+            ? true
+            : String(item.targetId) === String(requestedTargetId)
+              || String(item.payload?.taskId ?? "") === String(requestedTargetId)
+              || String(item.payload?.runId ?? "") === String(requestedTargetId);
+          const providerMatches = !requestedProviderId || String(item.payload?.providerId ?? "") === requestedProviderId;
+          return targetMatches && providerMatches;
+        });
+        const action = requestedActionId
+          ? input.actions.find((item) => item.id === requestedActionId)
+          : candidates.length === 1
+          ? candidates[0]
+          : matchingCandidates.length === 1
+          ? matchingCandidates[0]
+          : undefined;
         if (!action) return fail("That governed action is not currently available for this project state.");
         if (input.accessMode !== "full") return { toolResult: { ok: false, content: "The action is pending explicit user approval.", pendingAction: action }, actions: input.actions, automaticTaskSummary: "" };
         const response = await this.executeAction({ projectKey: input.projectKey, threadId: input.threadId, surface: "dashboard", accessMode: input.accessMode, action });
@@ -2916,13 +2935,16 @@ function resolveRequestedGoalProvider(
   phase: string
 ): AgentProviderId | null {
   const normalized = input.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (!/\b(?:troca|troque|muda|mude|usar|use|redirecion|passa|passe|switch|change|use|route)\w*\b/.test(normalized)) return null;
+  if (!/\b(?:troca|troque|muda|mude|usar|use|redirecion|reencaminh|encaminh|passa|passe|alterna|alter|switch|change|route)\w*\b/.test(normalized)) return null;
   const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
   const requested = providers.find((provider) => {
     if (!provider.capabilities.includes(capability as typeof provider.capabilities[number])) return false;
     const id = provider.id.toLowerCase();
     const label = provider.label.toLowerCase();
-    return normalized.includes(id) || normalized.includes(label);
+    const aliases = provider.id === "antigravity"
+      ? [id, label, "gemini", "gemini antigravity"]
+      : [id, label];
+    return aliases.some((alias) => alias.length > 0 && normalized.includes(alias));
   });
   return requested?.id ?? null;
 }
