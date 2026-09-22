@@ -72,7 +72,11 @@ describe("claude review", () => {
     expect(testingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
     expect(testingArgs.join(" ")).toContain("Bash(npm test*)");
     expect(testingArgs.join(" ")).toContain("Bash(npm install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(npm run start*)");
     expect(testingArgs.join(" ")).toContain("Bash(python -m pip install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(python -m venv*)");
+    expect(testingArgs.join(" ")).toContain("Bash(uv python install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(uv run*)");
     expect(testingArgs.join(" ")).toContain("Bash(npx playwright install*)");
     expect(testingArgs.join(" ")).not.toContain("--allowedTools Read,Glob,Grep,Edit,Write,Bash --disallowedTools");
     expect(testingArgs.join(" ")).toContain("Bash(curl*)");
