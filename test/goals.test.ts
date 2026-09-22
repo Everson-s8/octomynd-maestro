@@ -542,6 +542,34 @@ describe("goal runner", () => {
       .toBe("repeated_failure");
   });
 
+  it("keeps a permission failure recoverable when no alternate provider is connected", async () => {
+    const projectDir = path.join(tempDir, "permission-recovery-project");
+    const worktreeDir = path.join(tempDir, "permission-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "permission-recovery", path: projectDir });
+    const task = database.createTask("repair test permissions", "dashboard", "permission-recovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => ({
+      outcome: "failed" as const,
+      summary: "headless mode permission denied",
+      output: "",
+      error: "required command permission was auto-denied",
+      durationMs: 1,
+      retryable: false,
+      failureCategory: "permission_denied" as const
+    }));
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts")
+    });
+
+    expect(run.status).toBe("waiting_provider");
+    expect(run.waitReason).toBe("permission_denied");
+    expect(database.getTask(task.id).status).toBe("waiting_provider");
+    expect(database.listEvents().some((event) => event.type === "goal.circuit_breaker")).toBe(false);
+  });
+
   it("pauses repeated no-progress implementation for provider handoff while preserving the worktree", async () => {
     const projectDir = path.join(tempDir, "progress-project");
     const worktreeDir = path.join(tempDir, "progress-worktree");

@@ -34,7 +34,7 @@ export function buildAgentGoalPrompt(
     implementing: "Fully implement the task in the workspace. Preserve scope.",
     testing: request.workerContext?.mode === "read_only"
       ? "Run the relevant tests and report failures. Do not edit files."
-      : "Run the relevant tests. Fix only failures caused by the task and validate again.",
+      : "Run the relevant tests and make the workspace verifiable. If execution is blocked by missing project dependencies, Python packages, browser binaries, test tooling, or a recoverable permission/configuration issue, repair that project-local environment within the worktree, then validate again. Do not stop after reporting permission denied. Never install credentials, modify global system state, commit, push, or leave the workspace.",
     reviewing: buildReviewPhaseInstruction(outputFormat.reviewingVerdict)
   }[request.phase];
 
@@ -49,6 +49,9 @@ export function buildAgentGoalPrompt(
     `Original user request: ${request.task.text}`,
     ...(request.task.specification ? ["Task specification:", request.task.specification] : []),
     "Execution contract: inspect the current repository and runtime state before editing. If the task mentions mocks, fixtures, seed data, persistence, migration, startup, or user-visible state, validate both a clean state and an already-used state when applicable; do not treat a passing build as proof that the requested state transition works.",
+    ...(request.phase === "testing" && request.workerContext?.mode !== "read_only"
+      ? ["Testing recovery authority: you may install or repair dependencies and test/browser tooling required by this project using its documented package manifests/scripts. Keep all changes inside the prepared worktree, record what was repaired, and continue until validation is complete or a concrete external blocker is proven."]
+      : []),
     `Phase: ${request.phase}`,
     phaseInstruction,
     ...formatFeatureTaskContract(request.featureTaskContract),

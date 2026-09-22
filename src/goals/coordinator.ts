@@ -268,6 +268,15 @@ export class GoalCoordinator {
     return this.retryTask(taskId);
   }
 
+  /** Resume the latest preserved run for a dependency in place. */
+  recover(taskId: number): GoalRunRecord {
+    const run = this.database.listGoalRunsForTask(taskId).reverse().find((candidate) => (
+      ["blocked", "failed", "waiting_provider"].includes(candidate.status)
+    ));
+    if (!run) throw new Error(`Task #${taskId} has no Goal run to recover.`);
+    return this.resumeExistingRun(run.id);
+  }
+
   /**
    * Retry a goal that was hard-blocked by the circuit breaker (budget_exhausted /
    * phase_budget_exhausted), preserving the already-prepared worktree so the

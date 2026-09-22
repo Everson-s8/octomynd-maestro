@@ -428,7 +428,18 @@ export async function runTaskGoal(
             error: message,
             durationMs: 0
           });
-          return finishRun(database, currentRun, "blocked", phase, stepCount, message, task.id);
+          // The validation runner is infrastructure around the Goal, not a
+          // user-level verdict. A transient runner/toolchain error must remain
+          // recoverable so the next provider step can repair the environment.
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            `Deterministic validation could not start: ${message}`,
+            task.id,
+            { reason: "environment_error", retryAfterMs: 30_000 }
+          );
         }
         stepCount += 1;
         const validationStatus: Exclude<GoalStepStatus, "running"> = validation.status === "passed"
@@ -1160,6 +1171,28 @@ export async function runTaskGoal(
             }
           );
         }
+        const failureDetail = result.summary || result.error || "Provider failure.";
+        const failureCategory = result.failureCategory
+          ?? classifyFailure(failureDetail, result.failureCategory === "timeout");
+        // Environment and permission failures are repairable execution
+        // states, especially during testing. Preserve the checkpoint and
+        // retry instead of converting the same recoverable incident into a
+        // terminal blocked Goal after the circuit breaker sees it twice.
+        if (isRecoverableProviderFailure(failureCategory, failureDetail)) {
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            failureDetail,
+            task.id,
+            {
+              reason: failureCategory,
+              retryAfterMs: result.retryAfterMs ?? 30_000,
+              provider: routed.provider.id
+            }
+          );
+        }
         if (circuitDecision) {
           return finishCircuitBreak(
             database,
@@ -1489,7 +1522,7 @@ function initialExcludedProviders(
     .filter(isAgentProviderId);
   const excluded = new Set(failed);
   if (
-    (run.waitReason === "quota" || run.waitReason === "capacity")
+    (run.waitReason === "quota" || run.waitReason === "capacity" || run.waitReason === "environment_error" || run.waitReason === "permission_denied")
     && isAgentProviderId(run.lastProvider)
   ) {
     excluded.delete(run.lastProvider);
