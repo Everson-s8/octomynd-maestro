@@ -150,6 +150,12 @@ and optional strict provider requirements in SQLite. Changes apply to the next l
 runtime restart. The `Use only this provider` action pauses every other connected provider and
 disables fallback for the selected one; it is intended for temporary quota conservation.
 
+Provider connections are explicit: a CLI being installed on the machine does not activate it.
+Only providers the user connects are registered for routing, and disconnecting one removes it from
+the runtime and all persisted routes. The dashboard shows the installed Maestro version and, in a
+packaged build, reports update download progress and offers the restart that applies a downloaded
+release.
+
 Routing remains fail-closed: a required, paused, unhealthy, or unavailable provider does not
 silently fall through to another provider. With automatic fallback enabled, the configured order is
 used before the built-in defaults.
@@ -180,8 +186,9 @@ To pull the latest `main` and restart the runtime on the new code:
 
 `apply-update` requires a clean worktree, fast-forwards `main` from `origin`,
 then stops and relaunches the runtime on the updated code — it is the standard
-way to bring a locally-running Maestro up to date after a merge (Maestro does
-not self-update; the operator or their environment automation triggers it).
+way to bring a locally-running development runtime up to date after a merge.
+Packaged desktop builds use `electron-updater` and preserve the per-user data
+directory while downloading and applying published releases.
 
 The controller only considers startup complete once
 `http://127.0.0.1:4787/api/dashboard` responds. Logs and PID live under

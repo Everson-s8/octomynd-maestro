@@ -55,5 +55,11 @@ export function createAgentRegistry(config: MaestroConfig, database: MaestroData
     }
   }
 
-  return new AgentRegistry(providers, undefined, Date.now, database);
+  const connectedProviderIds = new Set([
+    ...database.listConnectedProviderIds(),
+    // Custom providers are persisted in the user-owned provider config. Their
+    // presence there is already an explicit connection decision.
+    ...customProviders.map((provider) => provider.id)
+  ]);
+  return new AgentRegistry(providers, undefined, Date.now, database, connectedProviderIds);
 }

@@ -169,6 +169,11 @@ timeouts or quota failures from being selected repeatedly.
   allowlisted test and read-only Git commands. Commit, push, destructive Git cleanup, network
   download tools, cloud CLIs, package publication, PR merge, and release commands are explicitly
   denied. Authentication, subscription quota, and timeout failures are classified as retryable.
+- **Antigravity**: headless CLI adapter for planning, coding, testing, research, and improvement
+  review. Goal execution prepares its autonomous command permission rules before starting, because
+  a headless process cannot answer an interactive permission prompt. The prepared task worktree
+  remains the execution boundary, and permission-denied failures remain retryable so another
+  connected provider can take over.
 
 Codex and Claude share the same process runtime for bounded output, stdin, timeout, cancellation,
 and Windows-hidden subprocess execution. Provider adapters only define CLI arguments, phase policy,

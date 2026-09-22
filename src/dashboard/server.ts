@@ -128,7 +128,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot" | "list"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "startHealthProbing" | "healthProber" | "refresh"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "connectProvider" | "startHealthProbing" | "healthProber" | "refresh"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -425,6 +425,45 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/providers/connect") {
+    const body = await readJsonBody(request);
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
+    const runtimeId = runtimeProviderIdForPreset(preset);
+    if (!preset?.builtIn || !runtimeId) {
+      sendJson(response, 400, { error: "built_in_provider_is_required" });
+      return;
+    }
+    if (!options.agentRegistry?.connectProvider) {
+      sendJson(response, 503, { error: "provider_runtime_unavailable" });
+      return;
+    }
+    try {
+      options.agentRegistry.connectProvider(runtimeId);
+      const existing = options.agentRegistry.policySnapshot?.().controls.find((item) => item.providerId === runtimeId);
+      options.agentRegistry.updateProviderControl?.({
+        providerId: runtimeId,
+        mode: "enabled",
+        fallbackEnabled: existing?.fallbackEnabled ?? true,
+        model: existing?.model ?? null,
+        effort: existing?.effort ?? null
+      });
+      options.database.addEvent({
+        source: "maestro",
+        type: "provider.connected",
+        text: `Built-in provider ${runtimeId} connected.`,
+        metadata: { providerId: runtimeId, presetId }
+      });
+      sendJson(response, 200, { connected: true, providerId: runtimeId });
+    } catch (error) {
+      sendJson(response, 409, {
+        error: "provider_connection_failed",
+        detail: error instanceof Error ? error.message : "Provider connection failed."
+      });
+    }
+    return;
+  }
+
   // F4: single source of truth for provider status. One row per provider with
   // runtime health (background prober cache), user intent (control mode) and
   // quota credentials — every screen (Providers, Analytics, Chat, Overview)
@@ -628,9 +667,11 @@ async function routeRequest(
   const deleteProviderMatch = url.pathname.match(/^\/api\/providers\/([a-zA-Z0-9._-]+)$/);
   if (request.method === "DELETE" && deleteProviderMatch) {
     const id = deleteProviderMatch[1];
+    let unregistered = false;
     if (options.agentRegistry?.unregisterProvider) {
       try {
         options.agentRegistry.unregisterProvider(id as AgentProviderId);
+        unregistered = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "provider_removal_failed";
         if (!message.includes("is not registered")) {
@@ -640,13 +681,14 @@ async function routeRequest(
       }
     }
     const result = removeCustomProvider(id, process.cwd());
+    const removed = result.removed || unregistered;
     options.database.addEvent({
       source: "maestro",
-      type: result.removed ? "provider.removed" : "provider.remove_ignored",
-      text: result.removed ? `Custom provider ${id} removed.` : `Custom provider ${id} not found.`,
-      metadata: { providerId: id, removed: result.removed }
+      type: removed ? "provider.removed" : "provider.remove_ignored",
+      text: removed ? `Provider ${id} removed.` : `Provider ${id} not found.`,
+      metadata: { providerId: id, removed }
     });
-    sendJson(response, result.removed ? 200 : 404, { removed: result.removed, providers: result.providers });
+    sendJson(response, removed ? 200 : 404, { removed, providers: result.providers });
     return;
   }
 
@@ -2348,4 +2390,11 @@ function probeExecutable(command: string, args: string[]): Promise<boolean> {
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
   });
+}
+
+function runtimeProviderIdForPreset(preset: ProviderPreset | undefined): AgentProviderId | null {
+  if (!preset?.builtIn) return null;
+  return preset.id === "gemini" || preset.id === "gemini-antigravity"
+    ? "antigravity"
+    : preset.id as AgentProviderId;
 }

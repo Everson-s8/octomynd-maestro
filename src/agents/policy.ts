@@ -37,6 +37,9 @@ export type CapabilityRoutingUpdate = Pick<CapabilityRoutingPolicy, "capability"
 
 export interface ProviderPolicyStore {
   getProviderPolicySnapshot(): ProviderPolicySnapshot;
+  listConnectedProviderIds?(): AgentProviderId[];
+  markProviderConnected?(providerId: AgentProviderId): void;
+  removeProviderConnection?(providerId: AgentProviderId): void;
   updateProviderControl(input: ProviderControlUpdate): ProviderControl;
   updateProviderControls(inputs: ProviderControlUpdate[]): ProviderControl[];
   updateCapabilityRouting(input: CapabilityRoutingUpdate): CapabilityRoutingPolicy;

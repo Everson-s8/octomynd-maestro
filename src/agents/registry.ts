@@ -78,12 +78,18 @@ export class AgentRegistry {
       antigravity: 1
     },
     private readonly now: () => number = Date.now,
-    private readonly policyStore?: ProviderPolicyStore
+    private readonly policyStore?: ProviderPolicyStore,
+    connectedProviderIds?: Iterable<AgentProviderId>
   ) {
+    this.connectedProviderIds = connectedProviderIds
+      ? new Set(connectedProviderIds)
+      : new Set(providers.map((provider) => provider.id));
     for (const provider of providers) {
-      this.registerProvider(provider);
+      this.registerProvider(provider, 1, false);
     }
   }
+
+  private readonly connectedProviderIds: Set<AgentProviderId>;
 
   /** Start the background health prober (call once from the runtime boot). */
   startHealthProbing(intervalMs = 20_000): void {
@@ -95,11 +101,15 @@ export class AgentRegistry {
     this.healthProber.start();
   }
 
-  registerProvider(provider: AgentProvider, limit = 1): void {
+  registerProvider(provider: AgentProvider, limit = 1, connect = true): void {
     if (this.providers.has(provider.id)) {
       throw new Error(`Duplicate agent provider: ${provider.id}`);
     }
     this.providers.set(provider.id, provider);
+    if (connect) {
+      this.connectedProviderIds.add(provider.id);
+      this.policyStore?.markProviderConnected?.(provider.id);
+    }
     this.providerLimits[provider.id] = Math.max(1, limit);
     this.healthProber?.setProvider(provider.id, provider);
   }
@@ -125,13 +135,23 @@ export class AgentRegistry {
       throw new Error(`Provider ${providerId} is not registered.`);
     }
     this.cooldowns.delete(providerId);
+    this.connectedProviderIds.delete(providerId);
     delete this.providerLimits[providerId];
     this.healthProber?.removeProvider(providerId);
     return this.policyStore?.removeProvider(providerId) ?? defaultProviderPolicySnapshot();
   }
 
+  /** Activate a provider that is already installed in the runtime registry. */
+  connectProvider(providerId: AgentProviderId): void {
+    const provider = this.providers.get(providerId);
+    if (!provider) throw new Error(`Provider ${providerId} is not registered.`);
+    this.connectedProviderIds.add(providerId);
+    this.policyStore?.markProviderConnected?.(providerId);
+    this.healthProber?.setProvider(providerId, provider);
+  }
+
   list(): AgentProvider[] {
-    return [...this.providers.values()];
+    return [...this.providers.values()].filter((provider) => this.connectedProviderIds.has(provider.id));
   }
 
   /**
@@ -213,7 +233,7 @@ export class AgentRegistry {
   ): Promise<AgentLease | null> {
     const provider = this.providers.get(providerId);
     const control = this.policySnapshot().controls.find((item) => item.providerId === providerId);
-    if (!provider || !provider.capabilities.has(capability) || control?.mode === "paused" || control?.mode === "disabled") {
+    if (!provider || !this.connectedProviderIds.has(providerId) || !provider.capabilities.has(capability) || control?.mode === "paused" || control?.mode === "disabled") {
       return null;
     }
     const limit = Math.max(1, this.providerLimits[providerId] ?? 1);
@@ -419,7 +439,8 @@ export class AgentRegistry {
   }
 
   private providerOrder(capability: AgentCapability): AgentProviderId[] {
-    return resolveProviderOrder(capability, this.policySnapshot(), [...this.providers.keys()]);
+    return resolveProviderOrder(capability, this.policySnapshot(), [...this.providers.keys()])
+      .filter((providerId) => this.connectedProviderIds.has(providerId));
   }
 
   private activeCooldown(providerId: AgentProviderId): ProviderCooldown | null {

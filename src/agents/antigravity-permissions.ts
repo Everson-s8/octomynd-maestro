@@ -5,10 +5,12 @@ import path from "node:path";
 /**
  * Antigravity allows workspace file reads/writes by default, but headless
  * command execution falls back to "ask". There is no TTY in a Maestro goal,
- * so the ask is soft-denied. Keep this list deliberately focused on common
- * development toolchains instead of granting command(*).
+ * so the ask is soft-denied. Goal execution already runs inside the prepared
+ * task worktree; allow the provider to use that workspace without an
+ * interactive prompt while preserving the provider's own deny rules.
  */
 export const ANTIGRAVITY_AUTONOMOUS_COMMAND_RULES = [
+  "command(*)",
   "command(git)",
   "command(npm)",
   "command(node)",

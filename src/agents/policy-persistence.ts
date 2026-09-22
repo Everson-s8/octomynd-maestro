@@ -29,6 +29,11 @@ type CapabilityRoutingRow = {
 
 export function migrateProviderPolicyPersistence(db: Database.Database) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_connections (
+      provider_id TEXT PRIMARY KEY,
+      connected_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS provider_controls (
       provider_id TEXT PRIMARY KEY,
       mode TEXT NOT NULL DEFAULT 'enabled' CHECK(mode IN ('enabled', 'paused', 'disabled')),
@@ -46,6 +51,18 @@ export function migrateProviderPolicyPersistence(db: Database.Database) {
       preferred_effort TEXT,
       updated_at TEXT NOT NULL
     );
+  `);
+
+  // Before explicit connection state existed, a built-in provider became
+  // visible only after the user changed its control row. Preserve those
+  // intentional connections during upgrade, while keeping providers that
+  // were merely compiled into the runtime (and disabled/removed providers)
+  // out of the new active set.
+  db.exec(`
+    INSERT OR IGNORE INTO provider_connections (provider_id, connected_at)
+    SELECT provider_id, updated_at
+    FROM provider_controls
+    WHERE mode IN ('enabled', 'paused');
   `);
 
   try {
@@ -134,6 +151,23 @@ export function createProviderPolicyPersistence(db: Database.Database) {
   return {
     getProviderPolicySnapshot,
 
+    listConnectedProviderIds(): AgentProviderId[] {
+      return (db.prepare("SELECT provider_id FROM provider_connections ORDER BY provider_id").all() as Array<{ provider_id: AgentProviderId }>)
+        .map((row) => row.provider_id);
+    },
+
+    markProviderConnected(providerId: AgentProviderId): void {
+      db.prepare(`
+        INSERT INTO provider_connections (provider_id, connected_at)
+        VALUES (?, ?)
+        ON CONFLICT(provider_id) DO NOTHING
+      `).run(providerId, new Date().toISOString());
+    },
+
+    removeProviderConnection(providerId: AgentProviderId): void {
+      db.prepare("DELETE FROM provider_connections WHERE provider_id = ?").run(providerId);
+    },
+
     updateProviderControl,
 
     updateProviderControls(inputs: ProviderControlUpdate[]): ProviderControl[] {
@@ -174,6 +208,7 @@ export function createProviderPolicyPersistence(db: Database.Database) {
 
     removeProvider(providerId: AgentProviderId): ProviderPolicySnapshot {
       return db.transaction(() => {
+        db.prepare("DELETE FROM provider_connections WHERE provider_id = ?").run(providerId);
         db.prepare("DELETE FROM provider_controls WHERE provider_id = ?").run(providerId);
         const rows = db.prepare("SELECT * FROM provider_capability_routing").all() as CapabilityRoutingRow[];
         const now = new Date().toISOString();

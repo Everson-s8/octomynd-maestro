@@ -3,6 +3,7 @@ import {
   AgentCapability,
   AgentProviderId,
   cancelProviderAuth,
+  connectBuiltInProvider,
   deleteProvider,
   fetchProviderAuth,
   fetchProviderPresets,
@@ -293,12 +294,9 @@ export function ProviderManager({
         setRegistered(providers);
         setNotice(translate("{provider} disconnected. Dependent routes and fallbacks were repaired.", { provider: detailProvider.label }));
       } else {
-        const control = policy?.controls.find((item) => item.providerId === detailProvider.providerId);
-        await updateProviderControl(detailProvider.providerId, {
-          mode: "disabled",
-          fallbackEnabled: control?.fallbackEnabled ?? false
-        });
-        setNotice(translate("{provider} was paused and removed from routing.", { provider: detailProvider.label }));
+        const providers = await deleteProvider(detailProvider.providerId);
+        setRegistered(providers);
+        setNotice(translate("{provider} disconnected and removed from the runtime.", { provider: detailProvider.label }));
         await load();
       }
       onChanged?.();
@@ -441,10 +439,7 @@ export function ProviderManager({
   const confirmAccountLogin = async () => {
     const preset = wizardPreset;
     if (!preset) return;
-    // Built-in providers (e.g. gemini/antigravity) can't be re-registered, but
-    // "I already logged in" should also activate the provider when it was paused/
-    // disabled, re-enable it so it shows up on the screen again. Otherwise the
-    // message would say "pronto" but the card would stay hidden (inconsistent).
+    // Built-ins are activated only after this explicit connection flow succeeds.
     if (preset.builtIn) {
       setWizardBusy(true);
       setError("");
@@ -455,16 +450,8 @@ export function ProviderManager({
           presetId: preset.id
         });
         if (!testResult.ok) throw new Error(testResult.detail || translate("CLI not found or not authenticated."));
-        // Re-activate the built-in provider (it may have been paused/disabled).
-        const control = policy?.controls.find((item) => item.providerId === preset.id || item.providerId === "antigravity");
-        const targetId = preset.id === "gemini" || preset.id === "gemini-antigravity" ? "antigravity" : preset.id;
-        if (control?.mode !== "enabled") {
-          await updateProviderControl(targetId as AgentProviderId, {
-            mode: "enabled",
-            fallbackEnabled: control?.fallbackEnabled ?? false
-          });
-        }
-        setNotice(translate("{provider} enabled. Use the priority panel to define the order.", { provider: preset.label }));
+        await connectBuiltInProvider(preset.id);
+        setNotice(translate("{provider} connected and enabled.", { provider: preset.label }));
         await load();
         onChanged?.();
         onPolicyChanged?.();
@@ -770,7 +757,7 @@ export function ProviderManager({
                   <div className="row">
                     <button type="button" className="btn-ghost" onClick={() => setDangerConfirm(false)}>{translate("Cancel")}</button>
                     <button type="button" className="btn-danger" onClick={() => void removeProvider()} disabled={detailBusy}>
-                      {detailBusy ? translate("Removing…") : detailProvider.registeredProvider ? translate("Remove connection") : translate("Pause provider")}
+                      {detailBusy ? translate("Removing…") : translate("Remove connection")}
                     </button>
                   </div>
                 </div>

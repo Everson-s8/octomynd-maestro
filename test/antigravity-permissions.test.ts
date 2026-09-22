@@ -16,10 +16,10 @@ afterEach(() => {
 });
 
 describe("Antigravity autonomous permissions", () => {
-  it("allows bounded arguments for common development commands without command(*)", () => {
+  it("allows autonomous goal commands inside the prepared workspace", () => {
+    expect(ANTIGRAVITY_AUTONOMOUS_COMMAND_RULES).toContain("command(*)");
     expect(ANTIGRAVITY_AUTONOMOUS_COMMAND_RULES).toContain("command(npm .*)");
     expect(ANTIGRAVITY_AUTONOMOUS_COMMAND_RULES).toContain("command(git .*)");
-    expect(ANTIGRAVITY_AUTONOMOUS_COMMAND_RULES).not.toContain("command(*)");
   });
 
   it("uses the documented per-user settings location", () => {
