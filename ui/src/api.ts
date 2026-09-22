@@ -1509,13 +1509,18 @@ export type OperationalChatActionResult = {
   updatedEvidence?: any;
 };
 
-async function fetchChatRequest(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 30_000): Promise<Response> {
+async function fetchChatRequest(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 30_000,
+  timeoutMessage = "Chat request timed out. The conversation is still safe; try again."
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (error) {
-    if (controller.signal.aborted) throw new Error("Chat request timed out. The conversation is still safe; try again.");
+    if (controller.signal.aborted) throw new Error(timeoutMessage);
     throw error;
   } finally {
     window.clearTimeout(timeout);
@@ -1558,11 +1563,11 @@ export async function selectChatAccessMode(
   threadId: number,
   accessMode: ChatAccessMode
 ): Promise<OperationalChatThread> {
-  const response = await fetch(`/api/chat/threads/${threadId}/access`, {
+  const response = await fetchChatRequest(`/api/chat/threads/${threadId}/access`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectKey, accessMode })
-  });
+  }, 15_000, "Changing chat access took too long. The chat remains usable; try selecting Full Access again.");
   const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
   if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Unable to change chat access.");
   return payload.thread;
@@ -1634,11 +1639,11 @@ export async function sendChatMessage(projectKey = GLOBAL_CHAT_PROJECT_KEY, mess
 }
 
 export async function executeChatAction(projectKey = GLOBAL_CHAT_PROJECT_KEY, action: GovernedChatAction, threadId?: number, accessMode: ChatAccessMode = "standard", uiLocale: ChatLocale = "en"): Promise<OperationalChatActionResult> {
-  const response = await fetch("/api/chat/action", {
+  const response = await fetchChatRequest("/api/chat/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectKey, threadId, action, accessMode, uiLocale, surface: "dashboard" })
-  });
+  }, 120_000, "The task action took too long to answer. Maestro may still be finishing it; check the conversation before retrying.");
   const payload = await response.json() as OperationalChatActionResult & { error?: string; details?: string };
   if (!response.ok || payload.success === undefined) {
     throw new Error(payload.details || payload.error || "Unable to execute the governed action.");
