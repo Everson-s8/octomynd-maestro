@@ -717,6 +717,9 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 .route-preview .txt span{font-family:'IBM Plex Mono';font-size:11px;color:var(--muted)}
 
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:6px;padding-top:18px;border-top:1px solid var(--line-soft)}
+.chat-confirmation-modal{max-width:720px}
+.chat-confirmation-details{margin:20px 28px 0;max-height:320px;overflow:auto;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--ink);color:var(--ivory-dim);font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-confirmation-modal .modal-actions{margin:20px 28px 28px}
 
 .path-input{display:flex;align-items:center;gap:10px;background:var(--ink);border:1px solid var(--line);border-radius:var(--r-sm);padding:0 6px 0 14px}
 .path-input svg{width:15px;height:15px;stroke:var(--faint);fill:none;stroke-width:1.6;flex-shrink:0}
@@ -2310,6 +2313,10 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   letter-spacing: .4px;
 }
 .chat-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 12px 20px 0;
   padding: 10px 12px;
   border: 1px solid rgb(177 80 60 / 40%);
@@ -2318,6 +2325,8 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   color: #e59b8b;
   font-size: 12px;
 }
+.chat-error button { flex: 0 0 auto; padding: 6px 10px; border: 1px solid rgb(229 155 139 / 45%); border-radius: 999px; background: transparent; color: #e59b8b; cursor: pointer; font: inherit; font-size: 11px; }
+.chat-error button:hover { border-color: #e59b8b; }
 .chat-body {
   display: flex;
   flex: 1;

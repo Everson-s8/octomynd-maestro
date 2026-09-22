@@ -19,7 +19,8 @@ import {
   fetchChatActivity,
   fetchChatActivityEvents,
   selectChatProvider,
-  sendChatMessage
+  sendChatMessage,
+  selectChatAccessMode
 } from "../api";
 import { openExternalUrl } from "../external-links";
 import { formatRelative } from "../helpers";
@@ -48,6 +49,7 @@ export function OperationalChatConsole({
   const [chatActivity, setChatActivity] = useState<OperationalChatActivity>(idleChatActivity());
   const [activityEvents, setActivityEvents] = useState<OperationalChatActivityEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
   const [threadBusy, setThreadBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [actionExecuting, setActionExecuting] = useState<string | null>(null);
@@ -57,9 +59,12 @@ export function OperationalChatConsole({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const deleteConfirmTimer = useRef<number | null>(null);
+  const threadsRequestRef = useRef(0);
+  const historyRequestRef = useRef(0);
   const shouldFollowLatestRef = useRef(true);
   const pendingScrollToLatestRef = useRef(false);
 
@@ -76,9 +81,11 @@ export function OperationalChatConsole({
 
   const loadThreads = useCallback(async (projectKey: string) => {
     if (!projectKey) return;
+    const requestId = ++threadsRequestRef.current;
     try {
       setError(null);
       const nextThreads = await fetchChatThreads(projectKey);
+      if (requestId !== threadsRequestRef.current) return;
       setThreads(nextThreads);
       setSelectedThreadId((current) => nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0]?.id ?? null);
       const selected = nextThreads[0];
@@ -93,14 +100,18 @@ export function OperationalChatConsole({
         setActivityEvents([]);
       }
     } catch (err) {
+      if (requestId !== threadsRequestRef.current) return;
       setError(err instanceof Error ? err.message : translate("Unable to load conversations."));
     }
   }, []);
 
   useEffect(() => {
     if (selectedProjectKey) {
+      ++historyRequestRef.current;
       setSelectedThreadId(null);
       setMessages([]);
+      setHistoryLoading(false);
+      setHistoryError(false);
       setChatActivity(idleChatActivity());
       setActivityEvents([]);
       void loadThreads(selectedProjectKey);
@@ -108,14 +119,20 @@ export function OperationalChatConsole({
   }, [selectedProjectKey, loadThreads]);
 
   const loadHistory = useCallback(async (projectKey: string, threadId: number) => {
+    const requestId = ++historyRequestRef.current;
     try {
       setHistoryLoading(true);
+      setHistoryError(false);
       setError(null);
-      setMessages(await fetchChatMessages(projectKey, 100, threadId));
+      const nextMessages = await fetchChatMessages(projectKey, 100, threadId);
+      if (requestId !== historyRequestRef.current) return;
+      setMessages(nextMessages);
     } catch (err) {
+      if (requestId !== historyRequestRef.current) return;
+      setHistoryError(true);
       setError(err instanceof Error ? err.message : translate("Unable to load chat history."));
     } finally {
-      setHistoryLoading(false);
+      if (requestId === historyRequestRef.current) setHistoryLoading(false);
     }
   }, []);
 
@@ -373,12 +390,31 @@ export function OperationalChatConsole({
 
   const handleAccessModeSelection = (nextMode: ChatAccessMode) => {
     if (nextMode === "full" && accessMode !== "full") {
-      const accepted = window.confirm(
-        translate("Full Access lets Maestro execute project commands without asking each time. It does not grant Windows administrator rights, and you can switch back at any time. Continue?")
-      );
-      if (!accepted) return;
+      setPendingConfirmation({ type: "full_access" });
+      return;
     }
     setAccessMode(nextMode);
+  };
+
+  const confirmAccessMode = async () => {
+    if (pendingConfirmation?.type !== "full_access") return;
+    setPendingConfirmation(null);
+    if (!selectedThreadId) {
+      setAccessMode("full");
+      return;
+    }
+
+    setThreadBusy(true);
+    setError(null);
+    try {
+      const thread = await selectChatAccessMode(selectedProjectKey, selectedThreadId, "full");
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+      setAccessMode(thread.accessMode);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translate("Unable to change chat access."));
+    } finally {
+      setThreadBusy(false);
+    }
   };
 
   const handleModelSelection = async (model: string) => {
@@ -413,25 +449,8 @@ export function OperationalChatConsole({
     }
   };
 
-  const handleAction = async (action: GovernedChatAction) => {
+  const runAction = async (action: GovernedChatAction) => {
     if (!selectedProjectKey || actionExecuting) return;
-
-    const requiresConfirmation = [
-      "create_task",
-      "cancel_task",
-      "cancel_feature_plan",
-      "resume_goal",
-      "guide_goal",
-      "unblock_provider",
-      "code_change_worktree",
-      "code_change_task"
-    ].includes(action.type);
-    if (requiresConfirmation) {
-      const confirmed = window.confirm(
-        `${action.label}\n\n${action.description}\n\n${translate("Do you really want to run this action?")}`
-      );
-      if (!confirmed) return;
-    }
 
     setActionExecuting(action.id);
     setError(null);
@@ -445,12 +464,34 @@ export function OperationalChatConsole({
         openExternalUrl(action.payload.url, true);
       }
       await loadHistory(selectedProjectKey, selectedThreadId);
+      if (!actionResult.success) {
+        setError(actionResult.resultSummary || translate("The action could not be completed."));
+      }
       if (onChanged) onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : translate("Unable to execute the governed action."));
     } finally {
       setActionExecuting(null);
     }
+  };
+
+  const handleAction = (action: GovernedChatAction) => {
+    if (!selectedProjectKey || actionExecuting) return;
+    const requiresConfirmation = [
+      "create_task",
+      "cancel_task",
+      "cancel_feature_plan",
+      "resume_goal",
+      "guide_goal",
+      "unblock_provider",
+      "code_change_worktree",
+      "code_change_task"
+    ].includes(action.type);
+    if (requiresConfirmation) {
+      setPendingConfirmation({ type: "action", action });
+      return;
+    }
+    void runAction(action);
   };
 
   return (
@@ -560,7 +601,12 @@ export function OperationalChatConsole({
             </span>
           </header>
 
-          {error ? <div className="chat-error" role="alert">{error}</div> : null}
+          {error ? (
+            <div className="chat-error" role="alert">
+              <span>{error}</span>
+              {historyError && selectedThreadId !== null ? <button type="button" onClick={() => void loadHistory(selectedProjectKey, selectedThreadId)}>{translate("Try again")}</button> : null}
+            </div>
+          ) : null}
 
           <div
             className="chat-body"
@@ -681,9 +727,65 @@ export function OperationalChatConsole({
           </form>
         </div>
       </div>
+
+      {pendingConfirmation ? (
+        <div
+          className="modal-overlay active"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !actionExecuting && !threadBusy) setPendingConfirmation(null);
+          }}
+        >
+          <div className="modal chat-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="chat-confirmation-title">
+            <button type="button" className="modal-close" onClick={() => setPendingConfirmation(null)} disabled={Boolean(actionExecuting) || threadBusy} aria-label={translate("Close")}>
+              <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+            <div className="modal-head">
+              <div className="modal-eyebrow">{translate("Confirmation required")}</div>
+              <h3 id="chat-confirmation-title">
+                {pendingConfirmation.type === "action" ? pendingConfirmation.action.label : translate("Enable Full Access?")}
+              </h3>
+              <p>
+                {pendingConfirmation.type === "action"
+                  ? translate("Review the implementation brief before Maestro executes this action.")
+                  : translate("Full Access lets Maestro execute governed project commands without asking each time. It does not grant Windows administrator rights.")}
+              </p>
+            </div>
+            {pendingConfirmation.type === "action" ? (
+              <div className="chat-confirmation-details" aria-label={translate("Action details")}>
+                {pendingConfirmation.action.description}
+              </div>
+            ) : null}
+            <div className="modal-actions">
+              <button type="button" className="btn-ghost" onClick={() => setPendingConfirmation(null)} disabled={Boolean(actionExecuting) || threadBusy}>
+                {translate("Cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn-new"
+                disabled={Boolean(actionExecuting) || threadBusy}
+                onClick={() => {
+                  if (pendingConfirmation.type === "full_access") void confirmAccessMode();
+                  else {
+                    const action = pendingConfirmation.action;
+                    setPendingConfirmation(null);
+                    void runAction(action);
+                  }
+                }}
+              >
+                {pendingConfirmation.type === "action" ? translate("Confirm action") : translate("Enable Full Access")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
+
+type PendingConfirmation =
+  | { type: "full_access" }
+  | { type: "action"; action: GovernedChatAction };
 
 function idleChatActivity(): OperationalChatActivity {
   return { requestId: null, active: false, startedAt: null, phase: "idle", iteration: 0, maxIterations: 10, toolCalls: 0, maxToolCalls: 14, toolName: null, detail: null };

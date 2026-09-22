@@ -1509,10 +1509,23 @@ export type OperationalChatActionResult = {
   updatedEvidence?: any;
 };
 
+async function fetchChatRequest(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 30_000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Chat request timed out. The conversation is still safe; try again.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export async function fetchChatThreads(projectKey = GLOBAL_CHAT_PROJECT_KEY): Promise<OperationalChatThread[]> {
-  const response = await fetch(`/api/chat/threads?projectKey=${encodeURIComponent(projectKey)}`, { cache: "no-store" });
-  const payload = await response.json() as { threads?: OperationalChatThread[]; error?: string };
-  if (!response.ok || !payload.threads) throw new Error(payload.error || "Unable to load conversations.");
+  const response = await fetchChatRequest(`/api/chat/threads?projectKey=${encodeURIComponent(projectKey)}`, { cache: "no-store" });
+  const payload = await response.json() as { threads?: OperationalChatThread[]; error?: string; details?: string };
+  if (!response.ok || !payload.threads) throw new Error(payload.details || payload.error || "Unable to load conversations.");
   return payload.threads;
 }
 
@@ -1540,6 +1553,21 @@ export async function selectChatProvider(
   return payload.thread;
 }
 
+export async function selectChatAccessMode(
+  projectKey: string,
+  threadId: number,
+  accessMode: ChatAccessMode
+): Promise<OperationalChatThread> {
+  const response = await fetch(`/api/chat/threads/${threadId}/access`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectKey, accessMode })
+  });
+  const payload = await response.json() as { thread?: OperationalChatThread; error?: string; details?: string };
+  if (!response.ok || !payload.thread) throw new Error(payload.details || payload.error || "Unable to change chat access.");
+  return payload.thread;
+}
+
 export async function createChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, title = "Nova conversa", accessMode: ChatAccessMode = "standard"): Promise<OperationalChatThread> {
   const response = await fetch("/api/chat/threads", {
     method: "POST",
@@ -1559,10 +1587,10 @@ export async function deleteChatThread(projectKey = GLOBAL_CHAT_PROJECT_KEY, thr
 
 export async function fetchChatMessages(projectKey = GLOBAL_CHAT_PROJECT_KEY, limit = 50, threadId?: number): Promise<OperationalChatMessage[]> {
   const threadQuery = threadId ? `&threadId=${threadId}` : "";
-  const response = await fetch(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}${threadQuery}`, { cache: "no-store" });
-  const payload = await response.json() as { messages?: OperationalChatMessage[]; error?: string };
+  const response = await fetchChatRequest(`/api/chat/messages?projectKey=${encodeURIComponent(projectKey)}&limit=${limit}${threadQuery}`, { cache: "no-store" });
+  const payload = await response.json() as { messages?: OperationalChatMessage[]; error?: string; details?: string };
   if (!response.ok || !payload.messages) {
-    throw new Error(payload.error || "Unable to load chat history.");
+    throw new Error(payload.details || payload.error || "Unable to load chat history.");
   }
   return payload.messages;
 }

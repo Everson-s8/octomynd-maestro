@@ -1278,6 +1278,13 @@ export class OperationalChatService {
     return this.database.updateOperationalChatThreadSelection(thread.id, normalizedProviderId, normalizedModel, normalizedEffort);
   }
 
+  selectThreadAccessMode(projectKey: string, threadId: number, accessMode: ChatAccessMode) {
+    const normalizedKey = normalizeChatProjectKey(projectKey);
+    this.resolveChatProject(normalizedKey);
+    const thread = this.resolveThread(normalizedKey, threadId);
+    return this.database.updateOperationalChatThreadAccessMode(thread.id, normalizeAccessMode(accessMode));
+  }
+
   deleteThread(projectKey: string, threadId: number): boolean {
     const normalizedKey = normalizeChatProjectKey(projectKey);
     this.resolveChatProject(normalizedKey);
