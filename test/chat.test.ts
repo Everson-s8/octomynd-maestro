@@ -91,6 +91,17 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(response.explanation).toContain("RepuFin");
   });
 
+  it("persists Full Access on the selected conversation", () => {
+    const chatService = new OperationalChatService({ database, worktreesRoot: tmpDir });
+    const thread = chatService.createThread("maestro", "Access test", "standard");
+
+    const updated = chatService.selectThreadAccessMode("maestro", thread.id, "full");
+
+    expect(updated.id).toBe(thread.id);
+    expect(updated.accessMode).toBe("full");
+    expect(chatService.listThreads("maestro").find((item) => item.id === thread.id)?.accessMode).toBe("full");
+  });
+
   it("injects the selected conversation Skill into the provider prompt", async () => {
     let seen: Parameters<AgentProvider["execute"]>[0] | undefined;
     const provider = chatProvider("codex", {

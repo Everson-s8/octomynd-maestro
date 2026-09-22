@@ -1680,6 +1680,19 @@ async function routeRequest(
 
   const deleteChatThreadMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)$/);
   const selectChatProviderMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)\/provider$/);
+  const selectChatAccessMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)\/access$/);
+  if (request.method === "PUT" && selectChatAccessMatch) {
+    const body = await readJsonBody(request);
+    const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
+    const accessMode = typeof body.accessMode === "string" ? body.accessMode as ChatAccessMode : undefined;
+    try {
+      const thread = chatService.selectThreadAccessMode(projectKey, Number(selectChatAccessMatch[1]), accessMode ?? "standard");
+      sendJson(response, 200, { thread });
+    } catch (error) {
+      sendJson(response, 409, { error: "chat_access_selection_failed", details: error instanceof Error ? error.message : "unknown" });
+    }
+    return;
+  }
   if (request.method === "PUT" && selectChatProviderMatch) {
     const body = await readJsonBody(request);
     const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim().toLowerCase() : GLOBAL_CHAT_PROJECT_KEY;
