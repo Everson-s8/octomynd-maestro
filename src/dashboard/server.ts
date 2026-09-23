@@ -1583,7 +1583,11 @@ async function routeRequest(
     }
 
     try {
-      const task = commands.createTask({ channel: "dashboard" }, { text, projectKey });
+      const task = commands.createTask({ channel: "dashboard" }, {
+        text,
+        projectKey,
+        workspaceWriteApproved: body.workspaceWriteApproved === true
+      });
       void options.backlogAutopilot?.tick?.().catch((error) => {
         options.database.addEvent({
           source: "maestro",
@@ -1610,7 +1614,7 @@ async function routeRequest(
     try {
       const task = commands.createFollowUpTask(
         { channel: "dashboard" },
-        { parentTaskId: Number(followUpTaskMatch[1]), text }
+        { parentTaskId: Number(followUpTaskMatch[1]), text, workspaceWriteApproved: true }
       );
       void options.backlogAutopilot?.tick?.().catch((error) => {
         options.database.addEvent({

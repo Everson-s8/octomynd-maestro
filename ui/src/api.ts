@@ -1097,7 +1097,7 @@ export async function submitWorkIntake(input: SubmitWorkIntakeInput): Promise<Su
   return response.json();
 }
 
-export async function createTask(input: { projectKey: string; text: string }) {
+export async function createTask(input: { projectKey: string; text: string; workspaceWriteApproved?: boolean }) {
   const response = await fetch("/api/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
