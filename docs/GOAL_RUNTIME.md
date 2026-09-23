@@ -116,8 +116,10 @@ run.
 ## Deterministic validation
 
 The testing phase first calls one deep Maestro module with an allowlisted command
-catalog: `git diff --check`, changed-file secret scan, backend/UI typecheck, Vitest
-and the UI build. Commands run without a shell and cannot be supplied by a model.
+catalog selected from the worktree layout. TypeScript worktrees run `git diff --check`,
+changed-file secret scan, backend/UI typecheck, Vitest and the UI build. Python worktrees
+run the same diff/secret gates, Python compile checks and pytest when test files exist.
+Commands run without a shell and cannot be supplied by a model.
 Raw sanitized output is retained as an artifact while only a compact actionable
 failure is handed to a provider.
 
