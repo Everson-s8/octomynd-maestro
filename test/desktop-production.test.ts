@@ -40,7 +40,7 @@ describe("desktop production runtime logic", () => {
 
   it("packages the updater entry without broad desktop source globs", () => {
     const builderConfig = parse(fs.readFileSync(path.resolve(process.cwd(), "electron-builder.yml"), "utf8")) as {
-      files: string[];
+      files: Array<string | { from: string; to: string }>;
     };
 
     expect(builderConfig.files).toContain("src/desktop/auto-updater.cjs");
@@ -49,6 +49,10 @@ describe("desktop production runtime logic", () => {
     expect(builderConfig.files).toContain("!**/*.map");
     expect(builderConfig.files).toContain("!**/*.ts");
     expect(builderConfig.files).toContain("!test/**");
+    expect(builderConfig.files).toContainEqual({
+      from: "src/desktop/production.cjs",
+      to: "dist/desktop/production.cjs"
+    });
     expect(() => require("../src/desktop/auto-updater.cjs")).not.toThrow();
   });
 

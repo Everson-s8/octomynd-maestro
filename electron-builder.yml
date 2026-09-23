@@ -29,6 +29,10 @@ asar: false
 # included automatically from package.json "dependencies".
 files:
   - "dist/**/*"
+  # The compiled CLI's desktop launcher imports this helper relative to
+  # dist/desktop/launcher.js; preserve the same path in packaged resources.
+  - from: "src/desktop/production.cjs"
+    to: "dist/desktop/production.cjs"
   - "ui/dist/**/*"
   # Built-in skills are immutable, read-only runtime assets. User-generated
   # skill versions continue to live under the per-user data directory.
