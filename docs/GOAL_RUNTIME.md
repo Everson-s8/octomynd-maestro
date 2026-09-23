@@ -198,8 +198,10 @@ timeouts or quota failures from being selected repeatedly.
   classified as retryable.
 - **Antigravity**: headless CLI adapter for planning, coding, testing, research, and improvement
   review. It never edits the user's global Antigravity settings. Writable Goal steps can bypass
-  interactive per-tool prompts only when the Task has a durable `task.workspace_access_approved`
-  event created by explicit task intake or Full Access chat task creation. The approval is passed to that CLI invocation only,
+  interactive per-tool prompts when the user creates/confirms a Task through a work-intake flow,
+  an explicit Telegram/CLI task command, or Full Access chat task creation; the durable
+  `task.workspace_access_approved` event is scoped to that Task's isolated worktree. Dashboard
+  intake exposes the same scope as a checked-by-default, user-editable option. The approval is passed to that CLI invocation only,
   together with Antigravity's sandbox and the prepared task worktree; planning/review stay read-only.
   Without task-scoped approval, permission-denied failures remain retryable so another connected
   provider can take over.

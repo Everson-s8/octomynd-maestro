@@ -376,7 +376,8 @@ export function createTelegramBot(
     try {
       const result = commands.submitWorkIntake(telegramOrigin(ctx), {
         projectKey: taskInput.projectKey,
-        objective: taskInput.text
+        objective: taskInput.text,
+        workspaceWriteApproved: true
       });
       if (result.status === "needs_clarification") {
         await ctx.reply([
@@ -391,7 +392,8 @@ export function createTelegramBot(
           `Feature Plan #${result.featurePlan.plan.id} created.`,
           `Explanation: ${result.explanation}`,
           `Project: ${result.featurePlan.plan.projectKey}`,
-          `Status: ${result.featurePlan.plan.status}`
+          `Status: ${result.featurePlan.plan.status}`,
+          "Workspace access: agents may run commands and change project files or dependencies only inside each task's isolated worktree."
         ].join("\n"));
         return;
       }
@@ -400,7 +402,8 @@ export function createTelegramBot(
           `Task #${result.task.id} created.`,
           `Explanation: ${result.explanation}`,
           `Project: ${result.task.projectKey}`,
-          `Status: ${result.task.status}`
+          `Status: ${result.task.status}`,
+          "Workspace access: agents may run commands and change project files or dependencies only inside this task's isolated worktree."
         ].join("\n"));
         return;
       }
@@ -448,7 +451,8 @@ export function createTelegramBot(
       const result = commands.submitWorkIntake(telegramOrigin(ctx), {
         projectKey: taskInput.projectKey,
         objective: taskInput.text,
-        explicitOverride: "direct_task"
+        explicitOverride: "direct_task",
+        workspaceWriteApproved: true
       });
 
       if (result.task) {
@@ -458,7 +462,8 @@ export function createTelegramBot(
             `Explanation: ${result.explanation}`,
             `Project: ${result.task.projectKey}`,
             `Status: ${result.task.status}`,
-            `Request: ${result.task.text}`
+            `Request: ${result.task.text}`,
+            "Workspace access: agents may run commands and change project files or dependencies only inside this task's isolated worktree."
           ].join("\n")
         );
       } else {
@@ -483,13 +488,15 @@ export function createTelegramBot(
     try {
       const task = commands.createFollowUpTask(telegramOrigin(ctx), {
         parentTaskId: Number(match[1]),
-        text: match[2].trim()
+        text: match[2].trim(),
+        workspaceWriteApproved: true
       });
       await ctx.reply([
         `Task #${task.id} created as a follow-up to Task #${match[1]}.`,
         `Project: ${task.projectKey}`,
         `Status: ${task.status}`,
-        `Request: ${task.text}`
+        `Request: ${task.text}`,
+        "Workspace access: agents may run commands and change project files or dependencies only inside this task's isolated worktree."
       ].join("\n"));
     } catch (error) {
       await ctx.reply(["Follow-up task was not created.", ...commandErrorDetails(error)].join("\n"));
@@ -508,7 +515,8 @@ export function createTelegramBot(
       const result = commands.submitWorkIntake(telegramOrigin(ctx), {
         objective: taskInput.text,
         projectKey: taskInput.projectKey,
-        explicitOverride: "feature_plan"
+        explicitOverride: "feature_plan",
+        workspaceWriteApproved: true
       });
 
       if (result.featurePlan) {
@@ -517,7 +525,8 @@ export function createTelegramBot(
             `Feature Plan #${result.featurePlan.plan.id} created.`,
             `Explanation: ${result.explanation}`,
             `Project: ${result.featurePlan.plan.projectKey}`,
-            `Status: ${result.featurePlan.plan.status}`
+            `Status: ${result.featurePlan.plan.status}`,
+            "Workspace access: agents may run commands and change project files or dependencies only inside each task's isolated worktree."
           ].join("\n")
         );
       } else {

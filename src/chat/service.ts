@@ -344,7 +344,8 @@ export class OperationalChatService {
             text: taskIntent.text,
             projectKey: targetProjectKey,
             title: typeof createTaskAction?.payload?.title === "string" ? createTaskAction.payload.title : taskIntent.title,
-            specification: typeof createTaskAction?.payload?.specification === "string" ? createTaskAction.payload.specification : taskIntent.specification
+            specification: typeof createTaskAction?.payload?.specification === "string" ? createTaskAction.payload.specification : taskIntent.specification,
+            workspaceWriteApproved: true
           }
         );
         const sizingNotice = await this.persistTaskSizing(task, createTaskAction.payload);

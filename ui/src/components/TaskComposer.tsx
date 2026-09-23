@@ -20,14 +20,14 @@ export function TaskComposer({
   const [error, setError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [workspaceWriteApproved, setWorkspaceWriteApproved] = useState(false);
+  const [workspaceWriteApproved, setWorkspaceWriteApproved] = useState(true);
 
   useEffect(() => {
     if (open && !projectKey && projects.length > 0) setProjectKey(projects[0].key);
   }, [open, projectKey, projects]);
 
   useEffect(() => {
-    if (!open) setWorkspaceWriteApproved(false);
+    if (!open) setWorkspaceWriteApproved(true);
   }, [open]);
 
   useEffect(() => {
@@ -85,7 +85,7 @@ export function TaskComposer({
       setText("");
       setPreview(null);
       setOverride("automatic");
-      setWorkspaceWriteApproved(false);
+      setWorkspaceWriteApproved(true);
       await onCreated();
       onClose();
     } catch (requestError) {
