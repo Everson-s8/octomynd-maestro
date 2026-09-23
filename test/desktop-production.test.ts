@@ -20,6 +20,7 @@ const production = require("../src/desktop/production.cjs") as typeof import("..
 };
 const updater = require("../src/desktop/auto-updater.cjs") as {
   initAutoUpdate: (options: Record<string, unknown>) => unknown;
+  retryAutoUpdate: (instance: { checkForUpdates?: () => Promise<unknown> } | null) => Promise<boolean>;
 };
 
 describe("desktop production runtime logic", () => {
@@ -82,6 +83,50 @@ describe("desktop production runtime logic", () => {
     expect(errors).toContainEqual(["[maestro] automatic update failed:", "GitHub release feed unavailable"]);
     expect(sent).toContainEqual({ event: "error", message: "GitHub release feed unavailable" });
     expect(listeners.has("error")).toBe(true);
+  });
+
+  it("reports update discovery, download progress, and ready-to-restart states", async () => {
+    const listeners = new Map<string, (payload?: unknown) => void>();
+    const sent: unknown[] = [];
+    const fakeUpdater = {
+      autoDownload: false,
+      autoInstallOnAppQuit: false,
+      disableWebInstaller: false,
+      on(event: string, listener: (payload?: unknown) => void) {
+        listeners.set(event, listener);
+        return this;
+      },
+      checkForUpdates: async () => ({ version: "0.4.0" })
+    };
+
+    updater.initAutoUpdate({
+      updater: fakeUpdater,
+      logger: { error: () => undefined },
+      mainWindow: {
+        webContents: {
+          send: (_channel: string, payload: unknown) => sent.push(payload)
+        }
+      }
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(fakeUpdater.autoDownload).toBe(true);
+    expect(fakeUpdater.autoInstallOnAppQuit).toBe(true);
+    listeners.get("update-available")?.({ version: "0.4.0" });
+    listeners.get("download-progress")?.({ percent: 42.7 });
+    listeners.get("update-downloaded")?.({ version: "0.4.0" });
+
+    expect(sent).toContainEqual({ event: "downloading", version: "0.4.0" });
+    expect(sent).toContainEqual({ event: "progress", percent: 43 });
+    expect(sent).toContainEqual({ event: "ready", version: "0.4.0" });
+  });
+
+  it("retries update discovery through the desktop bridge contract", async () => {
+    const checkForUpdates = async () => ({ version: "0.4.0" });
+    await expect(updater.retryAutoUpdate(null)).resolves.toBe(false);
+    await expect(updater.retryAutoUpdate({ checkForUpdates })).resolves.toBe(true);
+    await expect(updater.retryAutoUpdate({ checkForUpdates: async () => { throw new Error("offline"); } }))
+      .rejects.toThrow("offline");
   });
 
   it("resolves packaged backend and UI paths from the app root", () => {

@@ -82,4 +82,9 @@ function reportUpdateFailure(error, { mainWindow = null, logger = console, notif
   }
 }
 
-module.exports = { initAutoUpdate, reportUpdateFailure };
+function retryAutoUpdate(updater) {
+  if (!updater || typeof updater.checkForUpdates !== "function") return Promise.resolve(false);
+  return Promise.resolve().then(() => updater.checkForUpdates()).then(() => true);
+}
+
+module.exports = { initAutoUpdate, reportUpdateFailure, retryAutoUpdate };

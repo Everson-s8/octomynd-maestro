@@ -2,7 +2,8 @@
  * Clean, reproducible build of the packaged Maestro desktop artifacts.
  *
  * Runs with the app's own Node/npm — no bespoke toolchain. It:
- *   1. wipes previous build outputs (dist/, release/) for a from-scratch build
+ *   1. wipes previous compiled backend output (dist/) for a from-scratch build
+ *      while preserving older versioned installers in release/
  *   2. builds the React UI (ui/dist)
  *   3. compiles the TypeScript backend to plain ESM JS (dist/) so the packaged
  *      app needs no tsx/node/npm on the target machine to launch. Git and
@@ -37,7 +38,6 @@ function clean(target) {
 }
 
 clean("dist");
-clean("release");
 run("Building UI (vite)", npmCmd, ["run", "build:ui"]);
 run("Compiling backend (tsc)", npmCmd, ["run", "build:backend"]);
 

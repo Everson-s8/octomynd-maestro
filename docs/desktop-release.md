@@ -81,7 +81,9 @@ npm run release:win
 
 Output: `release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, and
 `release/latest.yml`, where `<version>` comes from `package.json`. The artifact
-names are deterministic and versioned for sharing. Verify the complete update
+names are deterministic and versioned for sharing. Existing installers in
+`release/` are preserved; the current `latest.yml` is regenerated for the new
+build. Verify the complete update
 set before publishing:
 
 ```powershell
@@ -165,6 +167,9 @@ the installer, `latest.yml`, and the blockmap to the repository's Releases page
 is what makes an update visible to installed users. The dashboard displays the
 current version, download progress, and a restart action after the update is
 ready. Keep development/HG artifacts out of that production channel.
+
+If update discovery or download fails, the dashboard provides a retry action
+and a link to the official GitHub Releases page for manual installation.
 
 ### v0.4.0 client update acceptance
 
