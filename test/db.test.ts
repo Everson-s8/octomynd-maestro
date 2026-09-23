@@ -134,6 +134,43 @@ describe("database", () => {
     expect(() => database.deleteTask(protectedTask.id)).toThrow("execution history");
   });
 
+  it("retrieves the latest typed event for one user without leaking another user's state", () => {
+    database.addEvent({ source: "telegram", type: "telegram.chat_project_selected", text: "alpha", userId: "1", metadata: { projectKey: "alpha" } });
+    database.addEvent({ source: "telegram", type: "telegram.chat_project_selected", text: "beta", userId: "2", metadata: { projectKey: "beta" } });
+    database.addEvent({ source: "telegram", type: "telegram.chat_project_selected", text: "gamma", userId: "1", metadata: { projectKey: "gamma" } });
+
+    expect(database.findLatestEventByTypeAndUser("telegram.chat_project_selected", "1")?.metadata.projectKey).toBe("gamma");
+    expect(database.findLatestEventByTypeAndUser("telegram.chat_project_selected", "2")?.metadata.projectKey).toBe("beta");
+    expect(database.findLatestEventByTypeAndUser("telegram.chat_project_selected", "missing")).toBeNull();
+  });
+
+  it("keeps task approval lookup durable beyond the recent event listing window", () => {
+    const task = database.createTask("durable workspace consent");
+    database.addEvent({ source: "dashboard", type: "task.workspace_access_approved", text: "approved", taskId: task.id });
+    for (let index = 0; index < 510; index += 1) {
+      database.addEvent({ source: "maestro", type: "goal.progress", text: `progress ${index}`, taskId: task.id });
+    }
+
+    expect(database.listEventsForTask(task.id).some((event) => event.type === "task.workspace_access_approved")).toBe(false);
+    expect(database.hasEventForTask(task.id, "task.workspace_access_approved")).toBe(true);
+  });
+
+  it("persists a preferred provider for an existing Goal run", () => {
+    database.registerProject({ key: "pref", path: tempDir });
+    const task = database.createTask("continue with the preferred provider", "dashboard", "pref");
+    const run = database.createGoalRun(task.id);
+    const updated = database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "implementing",
+      stepCount: 1,
+      preferredProviderId: "codex"
+    });
+
+    expect(updated.preferredProviderId).toBe("codex");
+    expect(database.getGoalRun(run.id).preferredProviderId).toBe("codex");
+  });
+
   it("rolls back every write in withTransaction when a later step throws", () => {
     const task = database.createTask("atomic transitions");
     database.updateTaskStatus(task.id, "implementing");

@@ -7,7 +7,11 @@ export type FeatureTaskReadiness =
   | { state: "blocked"; reason: string; featurePlan: FeaturePlanDetails };
 
 const SATISFIED_DEPENDENCY_STATES = new Set(["awaiting_human", "ready_to_merge", "done"]);
-const FAILED_DEPENDENCY_STATES = new Set(["blocked", "failed", "cancelled", "rejected"]);
+// A blocked/failed dependency may still have a preserved worktree and
+// checkpoint. Keep dependents waiting while the autopilot asks the Goal
+// runtime to recover it. Explicit cancellation/rejection remains terminal
+// because it represents user intent.
+const FAILED_DEPENDENCY_STATES = new Set(["cancelled", "rejected"]);
 
 export function evaluateFeatureTaskReadiness(
   database: MaestroDatabase,
@@ -70,6 +74,14 @@ export function evaluateFeatureTaskReadiness(
   const node = requirePlanTask(featurePlan, task.id);
   for (const dependencyId of transitiveDependencyIds(featurePlan.tasks, task.id)) {
     const dependency = database.getTask(dependencyId);
+    const latestDependencyRun = database.listGoalRunsForTask(dependency.id).at(-1);
+    if (latestDependencyRun?.failureCategory === "loop") {
+      return {
+        state: "blocked",
+        reason: `dependency_goal_loop_${dependency.id}`,
+        featurePlan
+      };
+    }
     if (FAILED_DEPENDENCY_STATES.has(dependency.status)) {
       return {
         state: "blocked",

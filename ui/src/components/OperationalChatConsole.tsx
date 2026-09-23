@@ -463,6 +463,13 @@ export function OperationalChatConsole({
       if (actionResult.success && action.type === "open_project_browser" && typeof action.payload?.url === "string" && isLocalProjectUrl(action.payload.url)) {
         openExternalUrl(action.payload.url, true);
       }
+      if (actionResult.success && action.type === "create_project" && typeof action.payload?.key === "string") {
+        const newProjectKey = action.payload.key.toLowerCase();
+        setSelectedProjectKey(newProjectKey);
+        setSelectedThreadId(null);
+        setMessages([]);
+        await loadThreads(newProjectKey);
+      }
       await loadHistory(selectedProjectKey, selectedThreadId);
       if (!actionResult.success) {
         setError(actionResult.resultSummary || translate("The action could not be completed."));
@@ -479,11 +486,13 @@ export function OperationalChatConsole({
     if (!selectedProjectKey || actionExecuting) return;
     const requiresConfirmation = [
       "create_task",
+      "create_project",
       "cancel_task",
       "cancel_feature_plan",
       "resume_goal",
       "guide_goal",
       "unblock_provider",
+      "switch_goal_provider",
       "code_change_worktree",
       "code_change_task"
     ].includes(action.type);

@@ -428,7 +428,18 @@ export async function runTaskGoal(
             error: message,
             durationMs: 0
           });
-          return finishRun(database, currentRun, "blocked", phase, stepCount, message, task.id);
+          // The validation runner is infrastructure around the Goal, not a
+          // user-level verdict. A transient runner/toolchain error must remain
+          // recoverable so the next provider step can repair the environment.
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            `Deterministic validation could not start: ${message}`,
+            task.id,
+            { reason: "environment_error", retryAfterMs: 30_000 }
+          );
         }
         stepCount += 1;
         const validationStatus: Exclude<GoalStepStatus, "running"> = validation.status === "passed"
@@ -624,7 +635,11 @@ export async function runTaskGoal(
         continue;
       }
 
-      let routed = await registry.acquire(CAPABILITIES[phase], excluded);
+      let routed = await registry.acquire(
+        CAPABILITIES[phase],
+        excluded,
+        database.getGoalRun(run.id).preferredProviderId
+      );
       if (!routed) {
         const error = `No ready provider for ${CAPABILITIES[phase]}.`;
         const availability = await registry.nextAvailability(CAPABILITIES[phase], excluded);
@@ -744,7 +759,8 @@ export async function runTaskGoal(
           signal: options.signal,
           model: routed.model,
           effort: routed.effort,
-          acceptanceCriteria: dna?.acceptanceCriteria
+          acceptanceCriteria: dna?.acceptanceCriteria,
+          workspaceWriteApproved: database.hasEventForTask(task.id, "task.workspace_access_approved")
         });
       } catch (error) {
         result = {
@@ -970,7 +986,11 @@ export async function runTaskGoal(
           durationMs: result.durationMs
         });
         excluded.add(routed.provider.id);
-        const fallback = await registry.route(CAPABILITIES[phase], excluded);
+        const fallback = await registry.route(
+          CAPABILITIES[phase],
+          excluded,
+          database.getGoalRun(run.id).preferredProviderId
+        );
         database.addEvent({
           source: "maestro",
           type: fallback ? "goal.no_progress_fallback" : "goal.no_progress_wait",
@@ -1064,7 +1084,11 @@ export async function runTaskGoal(
         }
         if (isRecoverableProviderFailure(failureCategory, result.summary || result.error || "")) {
           excluded.add(routed.provider.id);
-          const fallback = await registry.route(CAPABILITIES[phase], excluded);
+          const fallback = await registry.route(
+            CAPABILITIES[phase],
+            excluded,
+            database.getGoalRun(run.id).preferredProviderId
+          );
           const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
           database.addEvent({
             source: "maestro",
@@ -1105,7 +1129,11 @@ export async function runTaskGoal(
         // those failures and blocked the goal before trying Claude/Codex in
         // the last phase, even though a fallback was available.
         excluded.add(routed.provider.id);
-        const fallback = await registry.route(CAPABILITIES[phase], excluded);
+        const fallback = await registry.route(
+          CAPABILITIES[phase],
+          excluded,
+          database.getGoalRun(run.id).preferredProviderId
+        );
         if (fallback) {
           const resumeCheckpoint = database.getLatestGoalCheckpoint(run.id);
           database.addEvent({
@@ -1141,6 +1169,28 @@ export async function runTaskGoal(
               reason: availability.reason,
               retryAfterMs: availability.retryAfterMs,
               provider: availability.provider ?? undefined
+            }
+          );
+        }
+        const failureDetail = result.summary || result.error || "Provider failure.";
+        const failureCategory = result.failureCategory
+          ?? classifyFailure(failureDetail, result.failureCategory === "timeout");
+        // Environment and permission failures are repairable execution
+        // states, especially during testing. Preserve the checkpoint and
+        // retry instead of converting the same recoverable incident into a
+        // terminal blocked Goal after the circuit breaker sees it twice.
+        if (isRecoverableProviderFailure(failureCategory, failureDetail)) {
+          return pauseRun(
+            database,
+            currentRun,
+            phase,
+            stepCount,
+            failureDetail,
+            task.id,
+            {
+              reason: failureCategory,
+              retryAfterMs: result.retryAfterMs ?? 30_000,
+              provider: routed.provider.id
             }
           );
         }
@@ -1468,25 +1518,67 @@ function initialExcludedProviders(
 ): Set<AgentProviderId> {
   if (run.status !== "waiting_provider") return new Set();
   const failed = database.listGoalSteps(run.id)
-    .filter((step) => step.phase === phase && step.status === "failed")
+    .filter((step) => step.phase === phase && (step.status === "failed" || step.status === "blocked"))
     .map((step) => step.provider)
     .filter(isAgentProviderId);
   const excluded = new Set(failed);
-  if (
-    (run.waitReason === "quota" || run.waitReason === "capacity")
-    && isAgentProviderId(run.lastProvider)
-  ) {
-    excluded.delete(run.lastProvider);
+  const preferredProviderId = isAgentProviderId(run.preferredProviderId)
+    ? run.preferredProviderId
+    : null;
+  if (preferredProviderId && wasProviderSelectedAfterItsLatestFailure(database, run, phase, preferredProviderId)) {
+    // A user-selected provider gets one explicit retry even if it failed
+    // earlier in this phase. The next failure is newer than the selection,
+    // so subsequent automatic resumes will not keep retrying it forever.
+    excluded.delete(preferredProviderId);
+  }
+  if (isAgentProviderId(run.lastProvider)) {
+    const lastProviderHasFailedThisPhase = failed.includes(run.lastProvider);
+    const transientProviderWait = run.waitReason === "quota" || run.waitReason === "capacity";
+    if (!lastProviderHasFailedThisPhase || transientProviderWait) excluded.delete(run.lastProvider);
   }
   return excluded;
 }
 
-function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: number): string | null {
-  const event = database.listEventsForTask(taskId, 500)
-    .filter((item) => item.type === "goal.human_guidance" && Number(item.metadata?.runId) === runId)
+function wasProviderSelectedAfterItsLatestFailure(
+  database: MaestroDatabase,
+  run: GoalRunRecord,
+  phase: GoalPhase,
+  providerId: AgentProviderId
+): boolean {
+  const events = database.listEventsForTask(run.taskId, 500)
+    .filter((event) => Number(event.metadata?.runId) === run.id && event.metadata?.phase === phase);
+  const latestSelection = events
+    .filter((event) => event.type === "goal.provider_selected" && event.metadata?.providerId === providerId)
     .at(-1);
-  if (!event?.text) return null;
-  return `User guidance for this Goal:\n${redactSensitiveText(event.text).slice(0, 5000)}`;
+  if (!latestSelection) return false;
+
+  const latestFailure = events
+    .filter((event) => (
+      (event.type === "goal.step_failed" || event.type === "goal.step_blocked")
+      && event.source === providerId
+    ))
+    .at(-1);
+  return !latestFailure || latestSelection.id > latestFailure.id;
+}
+
+function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: number): string | null {
+  const events = database.listEventsForTask(taskId, 500)
+    .filter((item) => Number(item.metadata?.runId) === runId);
+  const guidance = events
+    .filter((item) => item.type === "goal.human_guidance")
+    .at(-1);
+  const recoveries = events
+    .filter((item) => item.type === "goal.environment_recovery_command")
+    .slice(-5);
+  const parts = [
+    guidance?.text
+      ? `User guidance for this Goal:\n${redactSensitiveText(guidance.text).slice(0, 5000)}`
+      : "",
+    recoveries.length > 0
+      ? `Environment recovery evidence from Chat (newest last):\n${recoveries.map((event) => redactSensitiveText(event.text).slice(0, 2500)).join("\n\n")}`
+      : ""
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
 function isRecoverableProviderFailure(category: string, detail = ""): category is GoalWaitReason {

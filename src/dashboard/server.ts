@@ -31,10 +31,6 @@ import type { ProviderControlUpdate, ProviderMode } from "../agents/policy.js";
 import { prepareCliSpawn, resolveCustomCliExecutable } from "../agents/custom-cli.js";
 import { CustomCliProvider } from "../agents/custom-cli.js";
 import {
-  configureAntigravityAutonomousPermissions,
-  getAntigravityPermissionStatus
-} from "../agents/antigravity-permissions.js";
-import {
   PROVIDER_PRESETS,
   addCustomProvider,
   configFromPreset,
@@ -128,7 +124,7 @@ export type DashboardServerOptions = {
   environmentDoctor?: Pick<EnvironmentDoctor, "inspectProject">;
   agentRegistry?: Pick<AgentRegistry, "snapshot" | "list"> & Partial<Pick<
     AgentRegistry,
-    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "startHealthProbing" | "healthProber" | "refresh"
+    "route" | "acquire" | "policySnapshot" | "updateProviderControl" | "updateProviderControls" | "updateCapabilityRouting" | "getAvailableModels" | "registerProvider" | "replaceProvider" | "unregisterProvider" | "disconnectProvider" | "connectProvider" | "startHealthProbing" | "healthProber" | "refresh"
   >>;
   workGraphRuntime?: WorkGraphRuntimeCommands;
   skillLifecycle?: SkillLifecycleRuntime;
@@ -192,6 +188,9 @@ export function createDashboardServer(options: DashboardServerOptions) {
           retryTask: (taskId) => { options.goalCoordinator!.start(taskId); },
           resumeGoal: (runId) => {
             options.goalCoordinator!.resumeExistingRun(runId);
+          },
+          switchGoalProvider: (runId, providerId) => {
+            options.goalCoordinator!.switchProvider(runId, providerId);
           },
           cancelTask: (taskId) => { options.goalCoordinator!.cancel(taskId); },
           rerunReview: () => { /* reviews are re-attempted by goal runner when task status moves to reviewing */ }
@@ -304,42 +303,6 @@ async function routeRequest(
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/providers/antigravity/permissions") {
-    try {
-      sendJson(response, 200, getAntigravityPermissionStatus());
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "antigravity_permissions_read_failed",
-        details: error instanceof Error ? error.message : "Unable to read Antigravity permissions."
-      });
-    }
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/providers/antigravity/permissions") {
-    const body = await readJsonBody(request);
-    if (body.confirmed !== true) {
-      sendJson(response, 400, { error: "explicit_confirmation_required" });
-      return;
-    }
-    try {
-      const status = configureAntigravityAutonomousPermissions();
-      options.database.addEvent({
-        source: "dashboard",
-        type: "provider.antigravity_permissions_configured",
-        text: "Antigravity development command permissions configured by the user.",
-        metadata: { rulesAdded: status.requiredRules.length - status.missingRules.length }
-      });
-      sendJson(response, 200, status);
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "antigravity_permissions_write_failed",
-        details: error instanceof Error ? error.message : "Unable to configure Antigravity permissions."
-      });
-    }
-    return;
-  }
-
   if (request.method === "POST" && url.pathname === "/api/providers/discover-models") {
     const body = await readJsonBody(request);
     const endpointUrl = typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : "";
@@ -422,6 +385,45 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/api/providers/registered") {
     sendJson(response, 200, { providers: readCustomProviders(process.cwd()) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/providers/connect") {
+    const body = await readJsonBody(request);
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    const preset = PROVIDER_PRESETS.find((item) => item.id === presetId);
+    const runtimeId = runtimeProviderIdForPreset(preset);
+    if (!preset?.builtIn || !runtimeId) {
+      sendJson(response, 400, { error: "built_in_provider_is_required" });
+      return;
+    }
+    if (!options.agentRegistry?.connectProvider) {
+      sendJson(response, 503, { error: "provider_runtime_unavailable" });
+      return;
+    }
+    try {
+      options.agentRegistry.connectProvider(runtimeId);
+      const existing = options.agentRegistry.policySnapshot?.().controls.find((item) => item.providerId === runtimeId);
+      options.agentRegistry.updateProviderControl?.({
+        providerId: runtimeId,
+        mode: "enabled",
+        fallbackEnabled: existing?.fallbackEnabled ?? true,
+        model: existing?.model ?? null,
+        effort: existing?.effort ?? null
+      });
+      options.database.addEvent({
+        source: "maestro",
+        type: "provider.connected",
+        text: `Built-in provider ${runtimeId} connected.`,
+        metadata: { providerId: runtimeId, presetId }
+      });
+      sendJson(response, 200, { connected: true, providerId: runtimeId });
+    } catch (error) {
+      sendJson(response, 409, {
+        error: "provider_connection_failed",
+        detail: error instanceof Error ? error.message : "Provider connection failed."
+      });
+    }
     return;
   }
 
@@ -628,9 +630,24 @@ async function routeRequest(
   const deleteProviderMatch = url.pathname.match(/^\/api\/providers\/([a-zA-Z0-9._-]+)$/);
   if (request.method === "DELETE" && deleteProviderMatch) {
     const id = deleteProviderMatch[1];
-    if (options.agentRegistry?.unregisterProvider) {
+    let removed = false;
+    const preset = PROVIDER_PRESETS.find((item) => item.id === id || runtimeProviderIdForPreset(item) === id);
+    const isBuiltIn = Boolean(preset?.builtIn);
+    if (isBuiltIn && options.agentRegistry?.disconnectProvider) {
+      try {
+        options.agentRegistry.disconnectProvider((runtimeProviderIdForPreset(preset) ?? id) as AgentProviderId);
+        removed = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "provider_removal_failed";
+        if (!message.includes("is not registered")) {
+          sendJson(response, 409, { error: "provider_is_in_use", detail: message });
+          return;
+        }
+      }
+    } else if (options.agentRegistry?.unregisterProvider) {
       try {
         options.agentRegistry.unregisterProvider(id as AgentProviderId);
+        removed = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "provider_removal_failed";
         if (!message.includes("is not registered")) {
@@ -640,13 +657,14 @@ async function routeRequest(
       }
     }
     const result = removeCustomProvider(id, process.cwd());
+    removed = result.removed || removed;
     options.database.addEvent({
       source: "maestro",
-      type: result.removed ? "provider.removed" : "provider.remove_ignored",
-      text: result.removed ? `Custom provider ${id} removed.` : `Custom provider ${id} not found.`,
-      metadata: { providerId: id, removed: result.removed }
+      type: removed ? "provider.removed" : "provider.remove_ignored",
+      text: removed ? `Provider ${id} removed.` : `Provider ${id} not found.`,
+      metadata: { providerId: id, removed }
     });
-    sendJson(response, result.removed ? 200 : 404, { removed: result.removed, providers: result.providers });
+    sendJson(response, removed ? 200 : 404, { removed, providers: result.providers });
     return;
   }
 
@@ -1431,7 +1449,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/work-intake/preview") {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, 512 * 1024);
     const objective = typeof body.objective === "string" ? body.objective.trim() : "";
     if (!objective) {
       sendJson(response, 400, { error: "objective_is_required" });
@@ -1454,7 +1472,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/work-intake") {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, 512 * 1024);
     const objective = typeof body.objective === "string" ? body.objective.trim() : "";
     if (!objective) {
       sendJson(response, 400, { error: "objective_is_required" });
@@ -1468,7 +1486,8 @@ async function routeRequest(
         coordination: body.coordination as WorkIntakeCommandInput["coordination"],
         costEstimate: body.costEstimate as WorkIntakeCommandInput["costEstimate"],
         explicitOverride: body.explicitOverride as WorkIntakeCommandInput["explicitOverride"],
-        intakeId: typeof body.intakeId === "string" ? body.intakeId.trim() : undefined
+        intakeId: typeof body.intakeId === "string" ? body.intakeId.trim() : undefined,
+        workspaceWriteApproved: body.workspaceWriteApproved === true
       });
       const statusCode = result.status === "created" ? 201 : 200;
       sendJson(response, statusCode, result);
@@ -1856,19 +1875,32 @@ async function routeRequest(
   const deleteTaskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)$/);
   if (request.method === "DELETE" && deleteTaskMatch) {
     const taskId = Number(deleteTaskMatch[1]);
-    if (options.goalCoordinator?.isActive(taskId)) {
+    const activeGoal = options.database.listGoalRuns(500).find((run) => (
+      run.taskId === taskId && ["running", "waiting_provider"].includes(run.status)
+    ));
+    if (options.goalCoordinator?.isActive(taskId) || activeGoal) {
       sendJson(response, 409, { error: "task_delete_failed", details: "Cancel the active task before deleting it." });
       return;
     }
     try {
-      const task = options.database.deleteTask(taskId);
+      const existing = options.database.getTask(taskId);
+      let task = existing;
+      let operation: "deleted" | "archived" = "deleted";
+      try {
+        task = options.database.deleteTask(taskId);
+      } catch {
+        // Historical/terminal tasks are removed from the active UI without
+        // destroying their Goal, review, worktree and event evidence.
+        task = options.database.archiveTask(taskId);
+        operation = "archived";
+      }
       options.database.addEvent({
         source: "dashboard",
-        type: "task.deleted",
-        text: `Task #${task.id} deleted.`,
-        metadata: { deletedTaskId: task.id, projectKey: task.projectKey }
+        type: operation === "deleted" ? "task.deleted" : "task.archived",
+        text: operation === "deleted" ? `Task #${task.id} deleted.` : `Task #${task.id} archived from the active queue.`,
+        metadata: { deletedTaskId: task.id, archivedTaskId: operation === "archived" ? task.id : null, projectKey: existing.projectKey }
       });
-      sendJson(response, 200, { task });
+      sendJson(response, 200, { task, operation });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown deletion error";
       sendJson(response, /not found/i.test(message) ? 404 : 409, {
@@ -2069,14 +2101,14 @@ function chatErrorStatus(error: unknown): number {
   return 500;
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 64 * 1024) {
-      throw new Error("Request body exceeds 64 KB.");
+    if (size > maxBytes) {
+      throw new Error(`Request body exceeds ${Math.ceil(maxBytes / 1024)} KB.`);
     }
     chunks.push(buffer);
   }
@@ -2348,4 +2380,11 @@ function probeExecutable(command: string, args: string[]): Promise<boolean> {
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
   });
+}
+
+function runtimeProviderIdForPreset(preset: ProviderPreset | undefined): AgentProviderId | null {
+  if (!preset?.builtIn) return null;
+  return preset.id === "gemini" || preset.id === "gemini-antigravity"
+    ? "antigravity"
+    : preset.id as AgentProviderId;
 }

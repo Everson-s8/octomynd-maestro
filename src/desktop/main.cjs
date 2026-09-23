@@ -39,6 +39,7 @@ const EXPECTED_HEALTH = {
 };
 
 let backendProcess = null;
+let desktopUpdater = null;
 
 function isExternalHttpUrl(value, localOrigin) {
   try {
@@ -77,6 +78,11 @@ function configureExternalLinkHandling(window, localOrigin) {
 }
 
 ipcMain.handle("maestro:open-external", (_event, value) => openExternalUrl(value));
+ipcMain.handle("maestro:install-update", () => {
+  if (!desktopUpdater || typeof desktopUpdater.quitAndInstall !== "function") return false;
+  desktopUpdater.quitAndInstall(false, true);
+  return true;
+});
 
 async function waitForHealth(host, port, expected) {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
@@ -231,7 +237,7 @@ async function bootstrap() {
   if (app.isPackaged) {
     try {
       const { initAutoUpdate } = require("./auto-updater.cjs");
-      initAutoUpdate({ mainWindow: BrowserWindow.getAllWindows()[0] ?? null });
+      desktopUpdater = initAutoUpdate({ mainWindow: BrowserWindow.getAllWindows()[0] ?? null });
     } catch (updateError) {
       const detail = updateError?.message ?? String(updateError);
       console.error("[maestro] automatic update initialization failed:", detail);

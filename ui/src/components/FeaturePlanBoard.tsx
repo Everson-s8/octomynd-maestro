@@ -11,6 +11,7 @@ import { featureStatusLabels } from "../helpers";
 import { EmptyState } from "./EmptyState";
 import { SectionHeader } from "./SectionHeader";
 import { translate } from "../i18n";
+import { ActionModal } from "./ActionModal";
 
 export function FeaturePlanBoard({
   featurePlans,
@@ -22,17 +23,28 @@ export function FeaturePlanBoard({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{ type: "cancel" | "pause" | "retry"; plan: DashboardFeaturePlan } | null>(null);
+  const [actionReason, setActionReason] = useState("");
   const visiblePlans = featurePlans.filter((plan) => showHistory || plan.lifecycleStatus === "active");
   const sortedPlans = [...visiblePlans].sort(
     (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
   );
 
   async function handleCancel(plan: DashboardFeaturePlan) {
-    if (!window.confirm(translate("Cancel Feature Plan #{id} before integration? The history will be preserved.", { id: plan.id }))) return;
+    setActionReason(translate("Cancelled from the dashboard."));
+    setPendingAction({ type: "cancel", plan });
+  }
+
+  async function handlePendingAction() {
+    if (!pendingAction) return;
+    const { type, plan } = pendingAction;
     setBusyId(plan.id);
+    setPendingAction(null);
     setError(null);
     try {
-      await cancelFeaturePlan(plan.id, translate("Cancelled from the dashboard."));
+      if (type === "cancel") await cancelFeaturePlan(plan.id, actionReason.trim() || translate("Cancelled from the dashboard."));
+      if (type === "pause") await pauseFeaturePlan(plan.id, actionReason.trim() || translate("Manual pause by operator"));
+      if (type === "retry") await retryFeaturePlan(plan.id, actionReason.trim() || translate("Manual retry by operator"));
       await onChanged();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : translate("Unable to cancel the Feature Plan."));
@@ -42,18 +54,8 @@ export function FeaturePlanBoard({
   }
 
   async function handlePause(plan: DashboardFeaturePlan) {
-    const reason = window.prompt(translate("Pause reason for Feature Plan #{id}:", { id: plan.id }), translate("Manual pause by operator"));
-    if (reason === null) return;
-    setBusyId(plan.id);
-    setError(null);
-    try {
-      await pauseFeaturePlan(plan.id, reason);
-      await onChanged();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : translate("Unable to pause the Feature Plan."));
-    } finally {
-      setBusyId(null);
-    }
+    setActionReason(translate("Manual pause by operator"));
+    setPendingAction({ type: "pause", plan });
   }
 
   async function handleResume(plan: DashboardFeaturePlan) {
@@ -70,21 +72,8 @@ export function FeaturePlanBoard({
   }
 
   async function handleRetry(plan: DashboardFeaturePlan) {
-    const reason = window.prompt(
-      translate("Retry reason for Feature Plan #{id}:", { id: plan.id }),
-      translate("Manual retry by operator")
-    );
-    if (reason === null) return;
-    setBusyId(plan.id);
-    setError(null);
-    try {
-      await retryFeaturePlan(plan.id, reason);
-      await onChanged();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : translate("Unable to retry the Feature Plan."));
-    } finally {
-      setBusyId(null);
-    }
+    setActionReason(translate("Manual retry by operator"));
+    setPendingAction({ type: "retry", plan });
   }
 
   async function handlePriority(plan: DashboardFeaturePlan, delta: number) {
@@ -250,6 +239,26 @@ export function FeaturePlanBoard({
           ))
         )}
       </div>
+      {pendingAction ? (
+        <ActionModal
+          title={pendingAction.type === "cancel"
+            ? translate("Cancel Feature Plan #{id}?", { id: pendingAction.plan.id })
+            : pendingAction.type === "pause"
+            ? translate("Pause Feature Plan #{id}?", { id: pendingAction.plan.id })
+            : translate("Retry Feature Plan #{id}?", { id: pendingAction.plan.id })}
+          description={translate("The action is recorded with the plan history.")}
+          cancelLabel={translate("Keep plan")}
+          confirmLabel={pendingAction.type === "cancel" ? translate("Cancel plan") : pendingAction.type === "pause" ? translate("Pause") : translate("Retry")}
+          busy={busyId === pendingAction.plan.id}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={() => void handlePendingAction()}
+        >
+          <label className="mfield">
+            <span>{translate("Reason")}</span>
+            <textarea value={actionReason} onChange={(event) => setActionReason(event.target.value)} rows={3} />
+          </label>
+        </ActionModal>
+      ) : null}
     </section>
   );
 }

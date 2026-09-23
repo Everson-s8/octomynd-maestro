@@ -52,6 +52,31 @@ describe("backlog autopilot", () => {
     expect(database.getTask(sameProject.id).status).toBe("queued");
   });
 
+  it("backs off repeated preparation recovery instead of retrying every poll", async () => {
+    const task = database.createTask("waiting for a recoverable workspace", "dashboard", "alpha");
+    let prepareCalls = 0;
+    const autopilot = new BacklogAutopilot(
+      database,
+      { start: () => { throw new Error("goal must not start before preparation succeeds"); } },
+      { enabled: true, worktreesRoot: tempDir, pollIntervalMs: 1_000 },
+      () => {
+        prepareCalls += 1;
+        return { ok: false, errors: ["project runtime unavailable"] };
+      }
+    );
+
+    await autopilot.tick();
+    const recoveryEvent = database.listEventsForTask(task.id).find((event) => event.type === "backlog.task_waiting_recovery");
+    expect(recoveryEvent?.metadata).toMatchObject({ attempts: 1, retryDelayMs: 30_000 });
+    expect(Date.parse(String(recoveryEvent?.metadata.nextRetryAt))).toBeGreaterThan(Date.now());
+
+    await autopilot.tick();
+
+    expect(prepareCalls).toBe(1);
+    expect(database.listEventsForTask(task.id).filter((event) => event.type === "backlog.task_waiting_recovery")).toHaveLength(1);
+    expect(autopilot.snapshot().lastAction).toBe(`backing_off_task_${task.id}`);
+  });
+
   it("blocks an exact duplicate for human review and starts the next task", async () => {
     const resolved = database.createTask("Improve Telegram status", "dashboard", "alpha");
     database.updateTaskStatus(resolved.id, "done");

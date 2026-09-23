@@ -6,6 +6,7 @@ import { Icon } from "./Icon";
 import { SectionHeader } from "./SectionHeader";
 import { FeatureStatusPill } from "./StatusBadge";
 import { translate } from "../i18n";
+import { ActionModal } from "./ActionModal";
 
 export function FeatureBoard({
   features,
@@ -15,6 +16,7 @@ export function FeatureBoard({
   onChanged: () => Promise<unknown>;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmingFeature, setConfirmingFeature] = useState<DashboardFeature | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sortedFeatures = [...features].sort((left, right) => {
     const statusDelta = featureStatusOrder.indexOf(left.status) - featureStatusOrder.indexOf(right.status);
@@ -40,16 +42,12 @@ export function FeatureBoard({
   );
 
   async function handleCancel(feature: DashboardFeature) {
-    if (
-      !window.confirm(
-        translate(
-          "Cancel Feature #{id} ({name}) before merge? The history and consolidated PR are preserved for audit.",
-          { id: feature.id, name: feature.name }
-        )
-      )
-    )
-      return;
+    setConfirmingFeature(feature);
+  }
+
+  async function confirmCancel(feature: DashboardFeature) {
     setBusyId(feature.id);
+    setConfirmingFeature(null);
     setError(null);
     try {
       await cancelFeature(feature.id, translate("Cancelled from the dashboard."));
@@ -127,6 +125,17 @@ export function FeatureBoard({
           ))
         )}
       </div>
+      {confirmingFeature ? (
+        <ActionModal
+          title={translate("Cancel Feature #{id}?", { id: confirmingFeature.id })}
+          description={translate("The history and consolidated PR are preserved for audit.")}
+          cancelLabel={translate("Keep Feature")}
+          confirmLabel={translate("Cancel")}
+          busy={busyId === confirmingFeature.id}
+          onCancel={() => setConfirmingFeature(null)}
+          onConfirm={() => void confirmCancel(confirmingFeature)}
+        />
+      ) : null}
     </section>
   );
 }

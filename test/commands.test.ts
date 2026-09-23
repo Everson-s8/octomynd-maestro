@@ -72,6 +72,26 @@ describe("ApplicationCommands.createTask", () => {
     expect(event?.username).toBe("operador");
   });
 
+  it("records autonomous workspace approval only when explicitly requested", () => {
+    const approvedTask = commands.createTask(
+      { channel: "dashboard", userId: "42" },
+      { text: "Install Python tooling in this task", projectKey: "boo", workspaceWriteApproved: true }
+    );
+    const approval = database.listEventsForTask(approvedTask.id).find((event) => event.type === "task.workspace_access_approved");
+    expect(approval).toMatchObject({
+      source: "dashboard",
+      userId: "42",
+      taskId: approvedTask.id,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
+
+    const unapprovedTask = commands.createTask(
+      { channel: "dashboard" },
+      { text: "Review task without elevated approval", projectKey: "boo" }
+    );
+    expect(database.listEventsForTask(unapprovedTask.id).some((event) => event.type === "task.workspace_access_approved")).toBe(false);
+  });
+
   it("throws a typed validation error for blank text", () => {
     expect(() => commands.createTask({ channel: "dashboard" }, { text: "   ", projectKey: "boo" })).toThrowError(
       ApplicationCommandError
@@ -419,6 +439,35 @@ describe("ApplicationCommands Work Intake integration", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0].id).toBe(res.task!.id);
     expect(database.listFeaturePlansByProject("boo")).toHaveLength(0);
+  });
+
+  it("persists explicit work-intake workspace consent for the created task", () => {
+    const res = commands.submitWorkIntake(
+      { channel: "dashboard", userId: "42" },
+      {
+        projectKey: "boo",
+        objective: "Set up Python tests and repair local test dependencies",
+        workspaceWriteApproved: true
+      }
+    );
+
+    expect(res.task).toBeDefined();
+    expect(database.listEventsForTask(res.task!.id)).toContainEqual(expect.objectContaining({
+      type: "task.workspace_access_approved",
+      source: "dashboard",
+      userId: "42",
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    }));
+
+    commands.submitWorkIntake(
+      { channel: "dashboard", userId: "42" },
+      {
+        projectKey: "boo",
+        objective: "Set up Python tests and repair local test dependencies",
+        workspaceWriteApproved: true
+      }
+    );
+    expect(database.listEventsForTask(res.task!.id).filter((event) => event.type === "task.workspace_access_approved")).toHaveLength(1);
   });
 
   it("creates a low-confidence direct task for ambiguous requests in automatic mode (F2)", () => {

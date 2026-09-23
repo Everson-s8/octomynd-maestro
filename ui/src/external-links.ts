@@ -7,8 +7,14 @@ export type DesktopUpdateStatus = {
 
 type DesktopBridge = {
   openExternal?: (url: string) => Promise<unknown>;
+  installUpdate?: () => Promise<unknown>;
   onUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => (() => void) | void;
 };
+
+export function installDesktopUpdate(): Promise<unknown> {
+  const bridge = (window as DesktopWindow).maestroDesktop;
+  return bridge?.installUpdate?.() ?? Promise.resolve(false);
+}
 
 type DesktopWindow = Window & {
   maestroDesktop?: DesktopBridge;

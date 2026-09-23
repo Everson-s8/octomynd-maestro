@@ -20,10 +20,15 @@ export function TaskComposer({
   const [error, setError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [workspaceWriteApproved, setWorkspaceWriteApproved] = useState(false);
 
   useEffect(() => {
     if (open && !projectKey && projects.length > 0) setProjectKey(projects[0].key);
   }, [open, projectKey, projects]);
+
+  useEffect(() => {
+    if (!open) setWorkspaceWriteApproved(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +70,8 @@ export function TaskComposer({
       const result = await submitWorkIntake({
         projectKey,
         objective: text,
-        explicitOverride: override === "automatic" ? null : override
+        explicitOverride: override === "automatic" ? null : override,
+        workspaceWriteApproved
       });
       if (result.status === "needs_clarification" || result.createdType === "none") {
         // Only reachable with an explicit "Needs clarification" override
@@ -79,6 +85,7 @@ export function TaskComposer({
       setText("");
       setPreview(null);
       setOverride("automatic");
+      setWorkspaceWriteApproved(false);
       await onCreated();
       onClose();
     } catch (requestError) {
@@ -158,7 +165,7 @@ export function TaskComposer({
               }}
               placeholder={translate("Example: review the voice integration and propose latency tests")}
               minLength={4}
-              maxLength={2000}
+              maxLength={80000}
               required
             />
           </div>
@@ -205,6 +212,17 @@ export function TaskComposer({
             <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z" /></svg>
             <span>{translate("The Maestro classifies and isolates each request in the governed queue.")}</span>
           </div>
+
+          <label className="workspace-approval-option">
+            <input
+              type="checkbox"
+              checked={workspaceWriteApproved}
+              onChange={(event) => setWorkspaceWriteApproved(event.target.checked)}
+            />
+            <span>
+              {translate("Authorize autonomous work in this task's isolated workspace, including running commands and installing, changing, or removing project-local files and dependencies.")}
+            </span>
+          </label>
 
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={submitting}>

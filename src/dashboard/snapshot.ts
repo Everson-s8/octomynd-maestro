@@ -8,6 +8,7 @@ import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import { SkillCurator } from "../skills/curator.js";
+import { MAESTRO_VERSION } from "../version.js";
 
 import { buildGoalObservability } from "../goals/observability.js";
 
@@ -94,6 +95,7 @@ export function buildDashboardSnapshot(
     generatedAt: new Date().toISOString(),
     daemon: {
       name: config.projectName,
+      version: MAESTRO_VERSION,
       state: "online" as const,
       access: config.telegram.allowedUserId ? "restricted" : "unrestricted",
       dashboardHost: config.dashboard.host

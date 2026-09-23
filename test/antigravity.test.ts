@@ -55,6 +55,21 @@ describe("Antigravity provider", () => {
     expect(codingArgs).not.toContain("--disable-slash-commands");
   });
 
+  it("grants autonomous tool execution only for explicitly approved writable task worktrees", () => {
+    const unapproved = buildAntigravityArgs(request("implementing", "coding"));
+    const approvedRequest = request("implementing", "coding");
+    approvedRequest.workspaceWriteApproved = true;
+    const approved = buildAntigravityArgs(approvedRequest);
+    const planningRequest = request("planning", "planning");
+    planningRequest.workspaceWriteApproved = true;
+    const planning = buildAntigravityArgs(planningRequest);
+
+    expect(unapproved).not.toContain("--dangerously-skip-permissions");
+    expect(approved).toContain("--dangerously-skip-permissions");
+    expect(approved).toContain("--sandbox");
+    expect(planning).not.toContain("--dangerously-skip-permissions");
+  });
+
   it("omits --effort when the model id already encodes the effort in its suffix", () => {
     const coding = request("implementing", "coding");
     // gemini-3.7-flash-high already pins the reasoning effort.

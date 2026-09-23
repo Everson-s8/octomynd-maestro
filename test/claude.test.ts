@@ -71,6 +71,13 @@ describe("claude review", () => {
     expect(codingArgs.join(" ")).toContain("Bash(git push*)");
     expect(testingArgs.join(" ")).toContain("Read,Glob,Grep,Edit,Write,Bash");
     expect(testingArgs.join(" ")).toContain("Bash(npm test*)");
+    expect(testingArgs.join(" ")).toContain("Bash(npm install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(npm run start*)");
+    expect(testingArgs.join(" ")).toContain("Bash(python -m pip install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(python -m venv*)");
+    expect(testingArgs.join(" ")).toContain("Bash(uv python install*)");
+    expect(testingArgs.join(" ")).toContain("Bash(uv run*)");
+    expect(testingArgs.join(" ")).toContain("Bash(npx playwright install*)");
     expect(testingArgs.join(" ")).not.toContain("--allowedTools Read,Glob,Grep,Edit,Write,Bash --disallowedTools");
     expect(testingArgs.join(" ")).toContain("Bash(curl*)");
     expect(reviewingArgs).toContain("plan");
@@ -78,6 +85,7 @@ describe("claude review", () => {
     expect(reviewingArgs.join(" ")).toContain("Bash(git show*)");
     expect(reviewingArgs.join(" ")).not.toContain("Edit");
     expect(buildClaudeGoalPrompt(coding)).toContain("Never commit, push, merge, deploy");
+    expect(buildClaudeGoalPrompt(testing)).toContain("repair dependencies and test/browser tooling");
     coding.skillContext = {
       available: [],
       loaded: [{

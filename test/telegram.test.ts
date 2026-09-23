@@ -24,7 +24,8 @@ import {
   parseTaskText,
   parseReviewTargetText,
   formatManualReviewMessage,
-  formatManualReviewStatusMessage
+  formatManualReviewStatusMessage,
+  createTelegramBot
 } from "../src/telegram/bot.js";
 import { parseProjectTaskInput } from "../src/orchestrator.js";
 import {
@@ -167,10 +168,20 @@ describe("telegram helpers", () => {
     expect(parseStatusProjectKey("/status")).toBeNull();
   });
 
-  it("requires an explicit project for operational chat commands", () => {
+  it("supports general chat, persistent project selection, and governed chat actions", () => {
     expect(parseChatText("/chat @maestro por que a task esta parada?")).toEqual({
       projectKey: "maestro",
       message: "por que a task esta parada?"
+    });
+    expect(parseChatText("/chat @maestro")).toEqual({ projectKey: "maestro", message: "" });
+    expect(parseChatText("/chat geral")).toEqual({ projectKey: "__maestro__", message: "" });
+    expect(parseChatText("/chat @general me ajude a criar um projeto")).toEqual({
+      projectKey: "__maestro__",
+      message: "me ajude a criar um projeto"
+    });
+    expect(parseChatText("/chat o que aconteceu com a task?")).toEqual({
+      projectKey: null,
+      message: "o que aconteceu com a task?"
     });
     expect(parseChatText("/chat por que a task esta parada?")).toEqual({
       projectKey: null,
@@ -188,9 +199,74 @@ describe("telegram helpers", () => {
     });
     expect(parseChatActionText("/chat_action retry_task_12")).toEqual({
       projectKey: null,
-      actionId: null,
+      actionId: "retry_task_12",
       confirmed: false
     });
+    expect(parseChatActionText("/chat_action general create_project_demo confirm")).toEqual({
+      projectKey: "__maestro__",
+      actionId: "create_project_demo",
+      confirmed: true
+    });
+  });
+
+  it("routes normal Telegram messages through general chat and restores project context after bot restart", async () => {
+    const database = createDatabase(":memory:");
+    try {
+      database.registerProject({ key: "boo", path: process.cwd() });
+      const calls: Array<{ projectKey: string; message: string }> = [];
+      const replies: string[] = [];
+      const chatService = {
+        ask: async (request: { projectKey: string; message: string }) => {
+          calls.push({ projectKey: request.projectKey, message: request.message });
+          return { explanation: "Maestro reply.", actions: [] };
+        }
+      };
+      const config = {
+        ...telegramConfig(),
+        telegram: { botToken: "test-token", allowedUserId: null }
+      };
+      const bot = createTelegramBot(config, database, { chatService: chatService as any });
+      bot.botInfo = { id: 999, is_bot: true, first_name: "Maestro", username: "maestro_test_bot" } as any;
+      bot.api.config.use(async (previous, method, payload, signal) => {
+        if (method === "sendMessage") {
+          replies.push(String((payload as { text?: unknown }).text ?? ""));
+          return {
+            ok: true,
+            result: {
+              message_id: 1,
+              date: 1,
+              chat: { id: 123, type: "private" },
+              text: "ok"
+            }
+          } as any;
+        }
+        return previous(method, payload, signal);
+      });
+
+      await bot.handleUpdate(telegramTextUpdate(1, "hello Maestro"));
+      await bot.handleUpdate(telegramTextUpdate(2, "/chat @boo"));
+      expect(database.findLatestEventByTypeAndUser("telegram.chat_project_selected", "123")?.metadata.projectKey).toBe("boo");
+      const restartedBot = createTelegramBot(config, database, { chatService: chatService as any });
+      restartedBot.botInfo = { id: 999, is_bot: true, first_name: "Maestro", username: "maestro_test_bot" } as any;
+      restartedBot.api.config.use(async (previous, method, payload, signal) => {
+        if (method === "sendMessage") {
+          replies.push(String((payload as { text?: unknown }).text ?? ""));
+          return { ok: true, result: { message_id: 2, date: 1, chat: { id: 123, type: "private" }, text: "ok" } } as any;
+        }
+        return previous(method, payload, signal);
+      });
+      await restartedBot.handleUpdate(telegramTextUpdate(3, "continue the project discussion"));
+
+      expect(calls).toEqual([
+        { projectKey: "__maestro__", message: "hello Maestro" },
+        { projectKey: "boo", message: "continue the project discussion" }
+      ]);
+      expect(replies).toContain("Project chat @boo selected. Your next messages will use this project's context.");
+      expect(database.findLatestEventByTypeAndUser("telegram.chat_project_selected", "123")?.metadata.projectKey).toBe("boo");
+      expect(database.getLastEvent()?.type).toBe("command.chat_message");
+    } finally {
+      database.close();
+    }
   });
 
   it("parses Feature operation commands", () => {
@@ -528,6 +604,21 @@ function telegramConfig(): MaestroConfig {
     },
     telegram: { botToken: "bot-token", allowedUserId: "private-chat-id" }
   };
+}
+
+function telegramTextUpdate(updateId: number, text: string) {
+  const command = text.match(/^\/\S+/)?.[0];
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1,
+      chat: { id: 123, type: "private" as const },
+      from: { id: 123, is_bot: false, first_name: "Tester" },
+      ...(command ? { entities: [{ type: "bot_command", offset: 0, length: command.length }] } : {}),
+      text
+    }
+  } as any;
 }
 
 function reviewItem(taskId: number, runId: number): ReviewQueueItem {

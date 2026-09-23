@@ -748,6 +748,10 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
 .hint-box span{font-size:12px;color:var(--muted);line-height:1.6}
 .hint-box code{font-family:'IBM Plex Mono';font-size:11px;color:var(--coral);background:rgba(232,150,122,.1);
   padding:1px 6px;border-radius:4px}
+.workspace-approval-option{display:flex;gap:10px;align-items:flex-start;margin:0 0 16px;padding:12px 14px;
+  border:1px solid var(--line-soft);border-radius:var(--r-sm);background:rgba(196,98,45,.06);
+  color:var(--ivory-dim);font-size:12px;line-height:1.6;cursor:pointer}
+.workspace-approval-option input{margin:2px 0 0;accent-color:var(--rust);flex:none}
 
 
 /* ============ WIZARD: CONECTAR PROVIDER ============ */
@@ -2538,4 +2542,45 @@ button.prov-card{display:block;width:100%;text-align:left;font:inherit;color:inh
   .first-run-progress span { flex: 1; width: auto; }
   .first-run-actions { align-items: stretch; flex-direction: column; }
   .first-run-actions button { width: 100%; }
+}
+:root {
+  --maestro-update-bg: rgba(31, 122, 133, 0.18);
+}
+
+.maestro-runtime-badge {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 36px));
+  padding: 8px 12px;
+  border: 1px solid rgba(232, 150, 122, 0.28);
+  border-radius: 999px;
+  background: rgba(18, 15, 13, 0.94);
+  color: var(--text-2, #c7b9a9);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  font: 11px/1.2 var(--mono, monospace);
+  letter-spacing: .04em;
+}
+
+.maestro-runtime-badge button {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #c4622d;
+  color: #fff4e8;
+  cursor: pointer;
+  font: inherit;
+}
+
+@media (max-width: 700px) {
+  .maestro-runtime-badge {
+    right: 10px;
+    bottom: 10px;
+    flex-wrap: wrap;
+    border-radius: 14px;
+  }
 }

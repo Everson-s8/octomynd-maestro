@@ -33,7 +33,6 @@ import type {
   ImprovementReviewExecutionResult
 } from "../improvements/reviewer.js";
 import { redactSensitiveText } from "../security/redaction.js";
-import { configureAntigravityAutonomousPermissions } from "./antigravity-permissions.js";
 
 const ANTIGRAVITY_CAPABILITIES = new Set<AgentCapability>([
   "planning",
@@ -57,8 +56,6 @@ export type AntigravityProviderOptions = {
   executionLimits?: number | Partial<ProviderExecutionLimits>;
   executablePath?: string;
   healthProbe?: boolean;
-  /** Prepare bounded command allow-rules before headless execution. */
-  autoConfigurePermissions?: boolean;
 };
 
 export class AntigravityProvider implements AgentProvider {
@@ -71,7 +68,6 @@ export class AntigravityProvider implements AgentProvider {
   private readonly effort: "low" | "medium" | "high";
   private readonly executablePath?: string;
   private readonly healthProbe: boolean;
-  private readonly autoConfigurePermissions: boolean;
   private cachedHealth: AgentHealth | null = null;
   private healthExpiresAt = 0;
   private cachedModels: string[] | null = null;
@@ -87,7 +83,6 @@ export class AntigravityProvider implements AgentProvider {
     this.effort = options.effort ?? "medium";
     this.executablePath = options.executablePath;
     this.healthProbe = options.healthProbe ?? true;
-    this.autoConfigurePermissions = options.autoConfigurePermissions ?? false;
   }
 
   async models(): Promise<string[]> {
@@ -203,15 +198,6 @@ export class AntigravityProvider implements AgentProvider {
         ? "Antigravity CLI not found."
         : `Workspace does not exist: ${cwd}`;
       return failure(detail);
-    }
-
-    if (this.autoConfigurePermissions) {
-      try {
-        configureAntigravityAutonomousPermissions();
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        return failure(`Unable to prepare Antigravity permissions: ${detail}`, "permission_denied");
-      }
     }
 
     const processResult = await runAgentProcess({
@@ -366,14 +352,6 @@ export class AntigravityProvider implements AgentProvider {
         : `Workspace does not exist: ${request.workspacePath}`;
       return improvementFailure(error, false);
     }
-    if (this.autoConfigurePermissions) {
-      try {
-        configureAntigravityAutonomousPermissions();
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        return improvementFailure(`Unable to prepare Antigravity permissions: ${detail}`, false);
-      }
-    }
     const processResult = await runAgentProcess({
       command: executable,
       args: [
@@ -524,6 +502,10 @@ export function buildAntigravityArgs(
     "--print-timeout",
     `${Math.ceil(printTimeoutMs / 1_000)}s`
   ];
+  // This bypass is scoped to this invocation and only enabled when the Task
+  // records explicit workspace approval. The provider sandbox and worktree
+  // remain mandatory; never mutate the user's global Antigravity settings.
+  if (writable && request.workspaceWriteApproved) args.push("--dangerously-skip-permissions");
   if (!carriesEffort) {
     args.push("--effort", effort);
   }

@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { AgentProvider } from "../src/agents/types.js";
+import { createAgentRegistry } from "../src/agents/runtime.js";
 import { MaestroConfig } from "../src/config.js";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { createDashboardServer, DashboardServerOptions } from "../src/dashboard/server.js";
@@ -65,6 +66,12 @@ afterEach(() => {
 });
 
 describe("dashboard", () => {
+  it("starts with no built-in providers until the user connects one", () => {
+    const registry = createAgentRegistry(config, database);
+
+    expect(registry.list()).toEqual([]);
+  });
+
   it("rejects cross-origin mutations while preserving dashboard and CLI requests", async () => {
     const server = createDashboardServer({ config, database, staticRoot: tempDir });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -285,6 +292,55 @@ describe("dashboard", () => {
         body: JSON.stringify({ command: "   " })
       });
       expect(blankResponse.status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(
+        (error) => error ? reject(error) : resolve()
+      ));
+    }
+  });
+
+  it("connects a built-in provider explicitly and removes it completely", async () => {
+    const registry = new AgentRegistry(
+      [successfulGoalProvider],
+      undefined,
+      Date.now,
+      database,
+      new Set()
+    );
+    const server = createDashboardServer({
+      config,
+      database,
+      staticRoot: tempDir,
+      runtimeMode: "full",
+      agentRegistry: registry
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const connectResponse = await fetch(`http://127.0.0.1:${port}/api/providers/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ presetId: "codex" })
+      });
+      expect(connectResponse.status).toBe(200);
+      expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
+      expect(database.listConnectedProviderIds()).toEqual(["codex"]);
+
+      const deleteResponse = await fetch(`http://127.0.0.1:${port}/api/providers/codex`, { method: "DELETE" });
+      expect(deleteResponse.status).toBe(200);
+      expect((await deleteResponse.json()).removed).toBe(true);
+      expect(registry.list()).toEqual([]);
+      expect(database.listConnectedProviderIds()).toEqual([]);
+
+      const reconnectResponse = await fetch(`http://127.0.0.1:${port}/api/providers/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ presetId: "codex" })
+      });
+      expect(reconnectResponse.status).toBe(200);
+      expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
+      expect(database.listConnectedProviderIds()).toEqual(["codex"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(
         (error) => error ? reject(error) : resolve()
@@ -758,6 +814,21 @@ describe("dashboard", () => {
       });
       expect(deleteResponse.status).toBe(200);
       expect(() => database.getTask(disposable.task.id)).toThrow("not found");
+
+      const historicalResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey: "boo", text: "task histórica para arquivar" })
+      });
+      const historical = await historicalResponse.json() as { task: { id: number } };
+      const historicalRun = database.createGoalRun(historical.task.id);
+      database.updateGoalRun({ id: historicalRun.id, status: "completed", currentPhase: "reviewing", stepCount: 1 });
+      database.updateTaskStatus(historical.task.id, "done");
+      const archiveResponse = await fetch(`http://127.0.0.1:${port}/api/tasks/${historical.task.id}`, { method: "DELETE" });
+      expect(archiveResponse.status).toBe(200);
+      expect((await archiveResponse.json()).operation).toBe("archived");
+      expect(database.getTask(historical.task.id).archivedAt).toBeTruthy();
+      expect(database.listTasks(100).some((task) => task.id === historical.task.id)).toBe(false);
 
       const queuedStartResponse = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
         method: "POST",

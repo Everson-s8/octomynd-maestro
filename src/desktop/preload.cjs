@@ -4,12 +4,20 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+let latestUpdateStatus = null;
+const updateListeners = new Set();
+ipcRenderer.on("maestro:update-status", (_event, status) => {
+  latestUpdateStatus = status;
+  for (const listener of updateListeners) listener(status);
+});
+
 contextBridge.exposeInMainWorld("maestroDesktop", {
   openExternal: (url) => ipcRenderer.invoke("maestro:open-external", url),
+  installUpdate: () => ipcRenderer.invoke("maestro:install-update"),
   onUpdateStatus: (callback) => {
     if (typeof callback !== "function") return () => {};
-    const listener = (_event, status) => callback(status);
-    ipcRenderer.on("maestro:update-status", listener);
-    return () => ipcRenderer.removeListener("maestro:update-status", listener);
+    updateListeners.add(callback);
+    if (latestUpdateStatus) callback(latestUpdateStatus);
+    return () => updateListeners.delete(callback);
   }
 });

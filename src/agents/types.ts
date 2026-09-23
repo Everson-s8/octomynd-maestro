@@ -77,6 +77,8 @@ export type AgentExecutionRequest = {
   effort?: AgentReasoningEffort | null;
   /** Semantic acceptance criteria extracted during task sizing, when available. */
   acceptanceCriteria?: string[];
+  /** Explicit, task-scoped approval to let a headless provider run tools in its sandboxed worktree. */
+  workspaceWriteApproved?: boolean;
 };
 
 export type NormalizedResult = {

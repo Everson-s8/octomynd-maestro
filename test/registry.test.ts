@@ -142,6 +142,41 @@ describe("agent registry leases", () => {
     expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
   });
 
+  it("routes only connected providers and disconnects built-ins without losing reconnectability", async () => {
+    const registry = new AgentRegistry(
+      [provider("claude", ["coding"]), provider("codex", ["coding"])],
+      undefined,
+      Date.now,
+      undefined,
+      new Set(["codex"])
+    );
+
+    expect(registry.list().map((item) => item.id)).toEqual(["codex"]);
+    expect((await registry.acquire("coding"))?.provider.id).toBe("codex");
+
+    registry.connectProvider("claude");
+    expect(registry.list().map((item) => item.id)).toEqual(["claude", "codex"]);
+    const claude = await registry.acquire("coding");
+    expect(claude?.provider.id).toBe("claude");
+    claude?.release();
+
+    registry.disconnectProvider("claude");
+    expect(registry.list().map((item) => item.id)).toEqual(["codex"]);
+    expect(registry.policySnapshot().controls.some((item) => item.providerId === "claude")).toBe(false);
+
+    registry.connectProvider("claude");
+    expect(registry.list().map((item) => item.id)).toEqual(["claude", "codex"]);
+  });
+
+  it("honors a connected provider preference before falling back", async () => {
+    const registry = new AgentRegistry([
+      provider("claude", ["coding"]),
+      provider("codex", ["coding"])
+    ]);
+
+    expect((await registry.acquire("coding", new Set(), "codex"))?.provider.id).toBe("codex");
+  });
+
   it("resolves model and effort preferences hierarchically per capability", async () => {
     const policy = policyStore();
     const codex = provider("codex", ["coding"], "codex-default", ["gpt-4o", "o3-mini"]);

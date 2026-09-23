@@ -5,6 +5,7 @@ export const CHAT_AGENT_TOOLS = [
   "project_state",
   "read_memory",
   "run_command",
+  "goal_workspace_command",
   "governed_action"
 ] as const;
 
@@ -255,8 +256,8 @@ function budgetResult(
 
 function normalizeBudget(value: ChatAgentBudget): ChatAgentBudget {
   return {
-    maxIterations: Math.max(1, Math.min(32, Math.floor(value.maxIterations))),
-    maxToolCalls: Math.max(0, Math.min(64, Math.floor(value.maxToolCalls)))
+    maxIterations: Math.max(1, Math.min(128, Math.floor(value.maxIterations))),
+    maxToolCalls: Math.max(0, Math.min(256, Math.floor(value.maxToolCalls)))
   };
 }
 

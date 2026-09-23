@@ -285,6 +285,9 @@ const portuguese: Record<string, string> = {
 // strings introduced by secondary screens and controls without duplicating the
 // canonical English copy throughout the components.
 const portugueseSupplement: Record<string, string> = {
+  "Checking for updates…": "Verificando atualizações…",
+  "You're up to date.": "Maestro está atualizado.",
+  "Downloading update": "Baixando atualização",
   "What should we set in motion?": "O que colocamos em movimento?",
   "Request": "Demanda",
   "Request:": "Pedido:",
@@ -293,6 +296,7 @@ const portugueseSupplement: Record<string, string> = {
   "Direct task": "Tarefa direta",
   "Feature plan": "Plano de funcionalidade",
   "The Maestro classifies and isolates each request in the governed queue.": "O Maestro classifica e isola cada demanda na fila governada.",
+  "Authorize autonomous work in this task's isolated workspace, including running commands and installing, changing, or removing project-local files and dependencies.": "Autorizo o trabalho autônomo no workspace isolado desta task, incluindo executar comandos e instalar, alterar ou remover arquivos e dependências locais do projeto.",
   "Creating…": "Criando…",
   "Create request": "Criar demanda",
   "Worktree": "Worktree",

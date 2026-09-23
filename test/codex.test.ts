@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodexProvider,
   codexReasoningEffort,
+  codexPermissionArgs,
   buildCodexGoalPrompt,
   codexSandboxForCapability,
   codexSandboxForRequest,
@@ -25,6 +26,11 @@ describe("codex provider", () => {
     expect(codexSandboxForCapability("reviewing")).toBe("read-only");
     expect(codexSandboxForCapability("coding")).toBe("workspace-write");
     expect(codexSandboxForCapability("testing")).toBe("workspace-write");
+  });
+
+  it("auto-approves commands only for the isolated writable Goal sandbox", () => {
+    expect(codexPermissionArgs("workspace-write")).toEqual(["--approve-for-me"]);
+    expect(codexPermissionArgs("read-only")).toEqual([]);
   });
 
   it("forces read-only sandbox for a read-only Work Graph tester", () => {

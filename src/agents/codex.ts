@@ -200,6 +200,7 @@ export class CodexProvider implements AgentProvider {
         outputPath,
         "--sandbox",
         sandbox,
+        ...codexPermissionArgs(sandbox),
         "--cd",
         cwd,
         "-"
@@ -434,6 +435,11 @@ export function codexSandboxForCapability(capability: AgentExecutionRequest["cap
 
 export function codexSandboxForRequest(request: AgentExecutionRequest): "read-only" | "workspace-write" {
   return filesystemAccessForExecution(request) === "workspace_write" ? "workspace-write" : "read-only";
+}
+
+/** Auto-approve tools only inside Maestro's isolated writable worktree. */
+export function codexPermissionArgs(sandbox: "read-only" | "workspace-write"): string[] {
+  return sandbox === "workspace-write" ? ["--approve-for-me"] : [];
 }
 
 export function buildCodexImprovementReviewArgs(

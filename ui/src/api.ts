@@ -31,6 +31,7 @@ export type DashboardTask = {
   branchName: string | null;
   worktreePrepared: boolean;
   parentTaskId: number | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -341,6 +342,7 @@ export type DashboardData = {
   generatedAt: string;
   daemon: {
     name: string;
+    version: string;
     state: "online";
     access: "restricted" | "unrestricted";
     dashboardHost: string;
@@ -519,31 +521,6 @@ export interface ProviderConnectionResult {
   models?: string[];
 }
 
-export type AntigravityPermissionStatus = {
-  configured: boolean;
-  settingsPath: string;
-  requiredRules: string[];
-  missingRules: string[];
-};
-
-export async function fetchAntigravityPermissionStatus(): Promise<AntigravityPermissionStatus> {
-  const response = await fetch("/api/providers/antigravity/permissions", { cache: "no-store" });
-  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to read Antigravity permissions.");
-  return payload;
-}
-
-export async function configureAntigravityPermissions(): Promise<AntigravityPermissionStatus> {
-  const response = await fetch("/api/providers/antigravity/permissions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ confirmed: true })
-  });
-  const payload = await response.json() as AntigravityPermissionStatus & { error?: string; details?: string };
-  if (!response.ok) throw new Error(payload.details || payload.error || "Unable to configure Antigravity permissions.");
-  return payload;
-}
-
 /** Probe whether a provider CLI or endpoint is reachable without persisting it. */
 export async function testProviderConnection(input: {
   command?: string;
@@ -695,6 +672,19 @@ export async function deleteProvider(providerId: string): Promise<RegisteredCust
   const payload = await response.json() as { removed?: boolean; providers?: RegisteredCustomProvider[]; error?: string };
   if (!response.ok) throw new Error(payload.error || "Unable to remove the provider.");
   return payload.providers ?? [];
+}
+
+export async function connectBuiltInProvider(presetId: string): Promise<{ connected: boolean; providerId: string }> {
+  const response = await fetch("/api/providers/connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presetId })
+  });
+  const payload = await response.json() as { connected?: boolean; providerId?: string; error?: string; detail?: string };
+  if (!response.ok || !payload.connected || !payload.providerId) {
+    throw new Error(payload.detail || payload.error || "Unable to connect the provider.");
+  }
+  return { connected: true, providerId: payload.providerId };
 }
 
 export async function discoverProviderModels(input: {
@@ -1069,6 +1059,7 @@ export type WorkIntakePreviewResult = {
 
 export type SubmitWorkIntakeInput = PreviewWorkIntakeInput & {
   intakeId?: string;
+  workspaceWriteApproved?: boolean;
 };
 
 export type SubmitWorkIntakeResult = {

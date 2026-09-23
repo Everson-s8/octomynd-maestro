@@ -151,11 +151,13 @@ export type ChatEvidenceContext = {
 };
 
 export type GovernedChatActionType =
+  | "create_project"
   | "create_task"
   | "start_goal"
   | "unblock_provider"
   | "retry_task"
   | "resume_goal"
+  | "switch_goal_provider"
   | "guide_goal"
   | "rerun_review"
   | "resume_feature_plan"
@@ -275,6 +277,7 @@ export type OperationalChatActionRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  workspaceWriteApproved?: boolean;
   uiLocale?: ChatLocale | null;
   /** @deprecated Use uiLocale. */
   locale?: ChatLocale | null;
@@ -292,6 +295,7 @@ export type ChatActionExecutor = {
   startGoal?(taskId: number): void | Promise<void>;
   retryTask?(taskId: number): void;
   resumeGoal?(runId: number): void;
+  switchGoalProvider?(runId: number, providerId: AgentProviderId): void;
   cancelTask?(taskId: number): void;
   rerunReview?(taskId: number): void;
 };

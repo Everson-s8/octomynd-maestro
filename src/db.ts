@@ -151,6 +151,7 @@ export type TaskRecord = {
   headCommitSha?: string | null;
   mergedCommitSha?: string | null;
   parentTaskId?: number | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -288,6 +289,8 @@ export type GoalRunRecord = {
   waitReason?: GoalWaitReason | null;
   nextRetryAt?: string | null;
   lastProvider?: string | null;
+  /** User-selected provider preference for the next Goal step. */
+  preferredProviderId?: string | null;
   /** Explicit validation state for the current implementation generation. */
   validationPassed?: boolean | null;
   /** First step id excluded from the current resumable phase budget window. */
@@ -850,12 +853,13 @@ export function createDatabase(databasePath: string) {
     UPDATE tasks SET status = @status, updated_at = @now WHERE id = @id
   `);
   const deleteTaskStatement = db.prepare("DELETE FROM tasks WHERE id = ?");
+  const archiveTaskStatement = db.prepare("UPDATE tasks SET archived_at = @now, updated_at = @now WHERE id = @id");
   const createGoalRunStatement = db.prepare(`
     INSERT INTO goal_runs (
       task_id, status, current_phase, step_count, max_steps, last_error,
-      wait_reason, next_retry_at, last_provider, failure_category, validation_passed, phase_budget_start_step_id, created_at, updated_at, finished_at
+      wait_reason, next_retry_at, last_provider, preferred_provider_id, failure_category, validation_passed, phase_budget_start_step_id, created_at, updated_at, finished_at
     )
-    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, NULL, NULL, NULL, @now, @now, NULL)
+    VALUES (@taskId, 'running', 'planning', 0, @maxSteps, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, @now, @now, NULL)
   `);
   const updateGoalRunStatement = db.prepare(`
     UPDATE goal_runs
@@ -867,6 +871,7 @@ export function createDatabase(databasePath: string) {
         wait_reason = @waitReason,
         next_retry_at = @nextRetryAt,
         last_provider = @lastProvider,
+        preferred_provider_id = @preferredProviderId,
         failure_category = @failureCategory,
         validation_passed = @validationPassed,
         phase_budget_start_step_id = @phaseBudgetStartStepId,
@@ -1353,23 +1358,30 @@ export function createDatabase(databasePath: string) {
       return task;
     },
 
+    /** Hide a task from active queues while preserving its complete audit trail. */
+    archiveTask(id: number): TaskRecord {
+      this.getTask(id);
+      archiveTaskStatement.run({ id, now: new Date().toISOString() });
+      return this.getTask(id);
+    },
+
     listTasks(limit = 10): TaskRecord[] {
       const rows = db
-        .prepare(taskSelectSql("ORDER BY tasks.id DESC LIMIT ?"))
+        .prepare(taskSelectSql("WHERE tasks.archived_at IS NULL ORDER BY tasks.id DESC LIMIT ?"))
         .all(limit) as TaskRow[];
       return rows.map(mapTask);
     },
 
     listTasksByProject(projectKey: string, limit = 10): TaskRecord[] {
       const rows = db
-        .prepare(taskSelectSql("WHERE projects.key = ? ORDER BY tasks.id DESC LIMIT ?"))
+        .prepare(taskSelectSql("WHERE tasks.archived_at IS NULL AND projects.key = ? ORDER BY tasks.id DESC LIMIT ?"))
         .all(projectKey, limit) as TaskRow[];
       return rows.map(mapTask);
     },
 
     countTasksByStatus(): Record<string, number> {
       const rows = db
-        .prepare("SELECT status, COUNT(*) as count FROM tasks GROUP BY status")
+        .prepare("SELECT status, COUNT(*) as count FROM tasks WHERE archived_at IS NULL GROUP BY status")
         .all() as Array<{ status: string; count: number }>;
       return Object.fromEntries(rows.map((row) => [row.status, row.count]));
     },
@@ -1456,10 +1468,21 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    hasEventForTask(taskId: number, type: string): boolean {
+      return Boolean(db.prepare("SELECT 1 FROM events WHERE task_id = ? AND type = ? LIMIT 1").get(taskId, type));
+    },
+
     findLatestEventByType(type: string): EventRecord | null {
       const row = db
         .prepare("SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1")
         .get(type) as EventRow | undefined;
+      return row ? mapEvent(row) : null;
+    },
+
+    findLatestEventByTypeAndUser(type: string, userId: string): EventRecord | null {
+      const row = db
+        .prepare("SELECT * FROM events WHERE type = ? AND user_id = ? ORDER BY id DESC LIMIT 1")
+        .get(type, userId) as EventRow | undefined;
       return row ? mapEvent(row) : null;
     },
 
@@ -1817,6 +1840,7 @@ export function createDatabase(databasePath: string) {
       waitReason?: GoalWaitReason | null;
       nextRetryAt?: string | null;
       lastProvider?: string | null;
+      preferredProviderId?: string | null;
       validationPassed?: boolean | null;
       phaseBudgetStartStepId?: number | null;
     }): GoalRunRecord {
@@ -1834,6 +1858,9 @@ export function createDatabase(databasePath: string) {
         waitReason: waiting ? input.waitReason ?? existing.waitReason : null,
         nextRetryAt: waiting ? input.nextRetryAt ?? existing.nextRetryAt : null,
         lastProvider: input.lastProvider ?? existing.lastProvider,
+        preferredProviderId: input.preferredProviderId === undefined
+          ? existing.preferredProviderId ?? null
+          : input.preferredProviderId,
         now,
         validationPassed: validationPassed === null ? null : validationPassed ? 1 : 0,
         phaseBudgetStartStepId: input.phaseBudgetStartStepId === undefined
@@ -3291,6 +3318,7 @@ function migrate(db: Database.Database) {
       head_commit_sha TEXT,
       merged_commit_sha TEXT,
       parent_task_id INTEGER,
+      archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -3380,6 +3408,7 @@ function migrate(db: Database.Database) {
       step_count INTEGER NOT NULL DEFAULT 0,
       max_steps INTEGER NOT NULL DEFAULT 12,
       last_error TEXT,
+      preferred_provider_id TEXT,
       commit_sha TEXT,
       pull_request_url TEXT,
       validation_passed INTEGER,
@@ -3695,11 +3724,13 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, "projects", "sync_state", "TEXT NOT NULL DEFAULT 'unknown'");
   addColumnIfMissing(db, "projects", "last_fetch_at", "TEXT");
   addColumnIfMissing(db, "tasks", "parent_task_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+  addColumnIfMissing(db, "tasks", "archived_at", "TEXT");
   addColumnIfMissing(db, "goal_runs", "commit_sha", "TEXT");
   addColumnIfMissing(db, "goal_runs", "pull_request_url", "TEXT");
   addColumnIfMissing(db, "goal_runs", "wait_reason", "TEXT");
   addColumnIfMissing(db, "goal_runs", "next_retry_at", "TEXT");
   addColumnIfMissing(db, "goal_runs", "last_provider", "TEXT");
+  addColumnIfMissing(db, "goal_runs", "preferred_provider_id", "TEXT");
   addColumnIfMissing(db, "goal_runs", "failure_category", "TEXT");
   addColumnIfMissing(db, "goal_runs", "validation_passed", "INTEGER");
   addColumnIfMissing(db, "goal_runs", "phase_budget_start_step_id", "INTEGER");
@@ -3775,6 +3806,7 @@ type TaskRow = {
   head_commit_sha: string | null;
   merged_commit_sha: string | null;
   parent_task_id: number | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -3846,6 +3878,7 @@ type GoalRunRow = {
   wait_reason: GoalWaitReason | null;
   next_retry_at: string | null;
   last_provider: string | null;
+  preferred_provider_id: string | null;
   validation_passed: number | null;
   phase_budget_start_step_id: number | null;
   commit_sha: string | null;
@@ -4444,6 +4477,7 @@ function mapTask(row: TaskRow): TaskRecord {
     headCommitSha: row.head_commit_sha ?? null,
     mergedCommitSha: row.merged_commit_sha ?? null,
     parentTaskId: row.parent_task_id,
+    archivedAt: row.archived_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -4531,6 +4565,7 @@ function mapGoalRun(row: GoalRunRow): GoalRunRecord {
     waitReason: row.wait_reason,
     nextRetryAt: row.next_retry_at,
     lastProvider: row.last_provider,
+    preferredProviderId: row.preferred_provider_id,
     validationPassed: row.validation_passed === null ? null : Boolean(row.validation_passed),
     phaseBudgetStartStepId: row.phase_budget_start_step_id,
     commitSha: row.commit_sha,

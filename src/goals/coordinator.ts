@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { AgentRegistry } from "../agents/registry.js";
+import type { AgentProviderId } from "../agents/types.js";
 import { GoalRunRecord, MaestroDatabase, TaskStatus } from "../db.js";
 import { runTaskGoal } from "./runner.js";
 import type { GoalRunnerOptions } from "./runner.js";
@@ -146,6 +147,54 @@ export class GoalCoordinator {
     return run;
   }
 
+  /**
+   * Persist a human-selected provider preference for the current Goal. The
+   * runner still falls back when that provider is unavailable, but the next
+   * eligible step starts with the provider the user selected. Terminal
+   * recovery is resumed from the existing checkpoint instead of creating a
+   * second task or a new planning run.
+   */
+  switchProvider(runId: number, providerId: AgentProviderId): GoalRunRecord {
+    const run = this.database.getGoalRun(runId);
+    if (["completed", "cancelled"].includes(run.status)) {
+      throw new Error(`Goal #${runId} is already ${run.status}.`);
+    }
+    const provider = this.registry.list().find((item) => item.id === providerId);
+    if (!provider) throw new Error(`Provider ${providerId} is not connected.`);
+    const capability = goalCapabilityForPhase(run.currentPhase);
+    if (!provider.capabilities.has(capability)) {
+      throw new Error(`Provider ${providerId} cannot execute the ${run.currentPhase} phase.`);
+    }
+
+    const updated = this.database.updateGoalRun({
+      id: run.id,
+      status: run.status,
+      currentPhase: run.currentPhase,
+      stepCount: run.stepCount,
+      maxSteps: run.maxSteps,
+      lastError: run.lastError,
+      failureCategory: run.failureCategory,
+      waitReason: run.waitReason,
+      nextRetryAt: run.nextRetryAt,
+      lastProvider: run.lastProvider,
+      preferredProviderId: providerId,
+      validationPassed: run.validationPassed,
+      phaseBudgetStartStepId: run.phaseBudgetStartStepId
+    });
+    this.database.addEvent({
+      source: "human",
+      type: "goal.provider_selected",
+      text: `Provider ${providerId} selected for Goal #${runId}.`,
+      taskId: run.taskId,
+      metadata: { runId, providerId, phase: run.currentPhase, resumed: ["blocked", "failed", "waiting_provider"].includes(run.status) }
+    });
+
+    if (["blocked", "failed", "waiting_provider"].includes(run.status)) {
+      return this.resumeExistingRun(runId);
+    }
+    return updated;
+  }
+
   resume(runId: number): GoalRunRecord {
     const run = this.database.getGoalRun(runId);
     if (run.status !== "waiting_provider") {
@@ -217,6 +266,18 @@ export class GoalCoordinator {
   /** Alias used by the backlog autopilot to resume a budget-blocked goal. */
   retry(taskId: number): GoalRunRecord {
     return this.retryTask(taskId);
+  }
+
+  /** Resume the latest preserved run for a dependency in place. */
+  recover(taskId: number): GoalRunRecord {
+    const run = this.database.listGoalRunsForTask(taskId).reverse().find((candidate) => (
+      ["blocked", "failed", "waiting_provider"].includes(candidate.status)
+    ));
+    if (!run) throw new Error(`Task #${taskId} has no Goal run to recover.`);
+    if (run.failureCategory === "loop") {
+      throw new Error(`Goal #${run.id} reached a proven execution loop and requires human review.`);
+    }
+    return this.resumeExistingRun(run.id);
   }
 
   /**
@@ -691,6 +752,13 @@ export class GoalCoordinator {
     }, delayMs);
     this.retryTimers.set(run.id, timer);
   }
+}
+
+function goalCapabilityForPhase(phase: GoalRunRecord["currentPhase"]): "planning" | "coding" | "testing" | "reviewing" {
+  if (phase === "planning") return "planning";
+  if (phase === "implementing") return "coding";
+  if (phase === "testing") return "testing";
+  return "reviewing";
 }
 
 function latestGoalStepId(database: MaestroDatabase, runId: number): number | null {

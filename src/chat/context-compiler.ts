@@ -23,11 +23,13 @@ export type CompiledChatContext = {
 
 type ContextMessage = Pick<OperationalChatMessageRecord, "senderRole" | "messageText"> & Partial<Pick<OperationalChatMessageRecord, "id">>;
 
-const META_MESSAGE = /^(?:eu\s+)?(?:quero|preciso|pode|por favor)?\s*(?:crie|criar|abra|abrir)\s+(?:uma\s+)?task\b/i;
+const META_MESSAGE = /^(?:eu\s+)?(?:quero|preciso|pode|por favor)?\s*(?:crie|criar|abra|abrir)\s+(?:uma\s+)?(?:task|tarefa)\b/i;
 const HISTORY_MESSAGE = /^(?:sim,?\s+)?(?:consigo|posso)\s+(?:recuperar|conversar)\s+(?:o\s+)?hist[oó]rico/i;
 const GENERIC_STATUS = /^nenhuma\s+task\s+parada/i;
 const GENERIC_FOLLOWUP = /^mensagem\s+de\s+(?:acompanhamento|follow[- ]?up)\b/i;
 const SYNTHESIS_MARKERS = /\b(?:objetivo|escopo|problema|sistema|implementar|funcionalidade|requisito|gest[aã]o|d[ií]vida|plano|vers[aã]o)\b/i;
+const INCIDENT_MARKERS = /\b(?:waiting for provider|aguardando provider|permission denied|permiss[aã]o negada|no output produced|sem saida|provider failed|provider falhou|task blocked|task bloqueada|goal blocked|goal bloqueado|erro|falha|failed|blocked|travou|parou)\b/i;
+const IMPLEMENTATION_MARKERS = /\b(?:implement|corrig|consert|resolver|ajust|adicion|remov|refator|constru|criar|crie|melhor|fix|repair|change|modify|build|develop|desenvolv)\w*\b/i;
 
 export function compileOperationalChatContext(
   messages: OperationalChatMessageRecord[],
@@ -73,9 +75,44 @@ export function resolveTaskContext(
 }
 
 export function isContextualTaskFollowUp(text: string): boolean {
-  const asksForTask = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça)\s+(?:uma\s+)?task\b/i.test(text);
-  const refersToContext = /\b(?:contexto|isso|acima|anterior|mensagem|mandei|enviado|descrito|descrevi|novamente|com\s+base|a\s+partir)\b/i.test(text);
+  const asksForTask = /\b(?:crie|criar|cadastrar|cadastre|abra|abrir|faca|faça|prepare|preparar)\s+(?:(?:uma|um|a|o)\s+)?(?:task|tarefa)\b/i.test(text);
+  const refersToContext = /\b(?:contexto|isso|acima|anterior|mensagem|mandei|enviado|descrito|descrevi|novamente|com\s+base|a\s+partir|conforme\s+(?:alinhamos|combinamos)|como\s+(?:alinhamos|combinamos)|conversa|chat|projeto)\b/i.test(text);
   return asksForTask && refersToContext;
+}
+
+/** True when the text is an instruction to reuse context, not a task objective. */
+export function isTaskMetaRequest(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return isContextualTaskFollowUp(normalized)
+    || /\b(?:conforme\s+(?:alinhamos|combinamos)|como\s+(?:alinhamos|combinamos)|a\s+partir\s+disso|com\s+base\s+(?:nessa|nesta|na)\s+(?:conversa|mensagem)|o\s+que\s+foi\s+descrito)\b/i.test(normalized)
+    || /\b(?:crie|criar|abra|abrir|prepare|preparar)\s+(?:a|uma|um|o)\s+(?:task|tarefa)\b[^.!?]{0,120}\b(?:conforme|como|a\s+partir|com\s+base|alinhamos|combinamos|conversa|chat|descrito)\b/i.test(normalized);
+}
+
+/**
+ * Operational failures are evidence for recovery, not implementation
+ * objectives. Keeping this distinction deterministic prevents a message such
+ * as "Task #6 waiting for provider" from becoming a new task when the user
+ * asks the chat to reuse the conversation context.
+ */
+export function isOperationalIncidentMessage(text: string): boolean {
+  // Provider reports are frequently rendered as Markdown (for example
+  // `A **Task #7** ... **blocked**`). Strip presentation marks before
+  // classifying them; otherwise the implementation verb in the remediation
+  // section can make the whole incident look like a product brief.
+  const normalized = text
+    .replace(/[\*_`#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!INCIDENT_MARKERS.test(normalized)) return false;
+  // Incident reports may quote a remediation suggestion later in the text.
+  // The operational prefix still determines their role in task-context
+  // selection; otherwise a support report can outrank the real product brief.
+  if (/^(?:a\s+)?(?:task|tarefa|goal|objetivo|provider|provedor)\b[^.!?]{0,160}\b(?:waiting|aguardando|blocked|bloquead|permission|permiss[aã]o|falha|erro|failed|parou|interrompid)/i.test(normalized)) {
+    return true;
+  }
+  if (IMPLEMENTATION_MARKERS.test(normalized)) return false;
+  return /^(?:task|tarefa|goal|objetivo)\b/i.test(normalized)
+    || /\b(?:provider|provedor|permission|permiss[aã]o|erro|falha|blocked|bloquead|waiting|aguardando|output|saida)\b/i.test(normalized);
 }
 
 function compileWorkingMemory(
@@ -156,7 +193,8 @@ function isUsefulTaskContext(text: string): boolean {
   return !META_MESSAGE.test(normalized)
     && !HISTORY_MESSAGE.test(normalized)
     && !GENERIC_STATUS.test(normalized)
-    && !GENERIC_FOLLOWUP.test(normalized);
+    && !GENERIC_FOLLOWUP.test(normalized)
+    && !isOperationalIncidentMessage(normalized);
 }
 
 function formatLines(items: string[]): string {

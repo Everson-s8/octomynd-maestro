@@ -158,9 +158,10 @@ Installing a newer `Maestro-Setup-<version>-x64.exe` replaces the app in place.
 User data under `%APPDATA%\Maestro` (config, credentials, database) is preserved
 across versions, so providers and projects survive updates. The packaged app
 already checks the configured GitHub Releases channel for updates; publishing
-the installer to the repository's Releases page is what makes an update visible
-to installed users. Keep development/HG artifacts out of that production
-channel.
+the installer, `latest.yml`, and the blockmap to the repository's Releases page
+is what makes an update visible to installed users. The dashboard displays the
+current version, download progress, and a restart action after the update is
+ready. Keep development/HG artifacts out of that production channel.
 
 ## Clean-machine validation checklist
 

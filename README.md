@@ -150,6 +150,19 @@ and optional strict provider requirements in SQLite. Changes apply to the next l
 runtime restart. The `Use only this provider` action pauses every other connected provider and
 disables fallback for the selected one; it is intended for temporary quota conservation.
 
+Provider connections are explicit: a CLI being installed on the machine does not activate it.
+Only providers the user connects are eligible for routing; disconnecting one removes it from the
+active route immediately and leaves no phantom provider in the UI, while preserving its adapter so
+the user can reconnect it later. When upgrading an older database, stale inferred connection rows
+are discarded and the user must reconnect the providers they want to use. The dashboard shows the
+installed Maestro version and, in a
+packaged build, reports update availability/download progress and offers the restart that applies a
+downloaded release.
+
+From the general Chat, Standard or Full Access can register a local repository or clone a remote
+repository when the user explicitly asks to create a project. Maestro stores a compact decision
+memory in the new project so the conversation can continue there without duplicating the task.
+
 Routing remains fail-closed: a required, paused, unhealthy, or unavailable provider does not
 silently fall through to another provider. With automatic fallback enabled, the configured order is
 used before the built-in defaults.
@@ -180,8 +193,9 @@ To pull the latest `main` and restart the runtime on the new code:
 
 `apply-update` requires a clean worktree, fast-forwards `main` from `origin`,
 then stops and relaunches the runtime on the updated code — it is the standard
-way to bring a locally-running Maestro up to date after a merge (Maestro does
-not self-update; the operator or their environment automation triggers it).
+way to bring a locally-running development runtime up to date after a merge.
+Packaged desktop builds use `electron-updater` and preserve the per-user data
+directory while downloading and applying published releases.
 
 The controller only considers startup complete once
 `http://127.0.0.1:4787/api/dashboard` responds. Logs and PID live under
@@ -318,6 +332,19 @@ The contract, routing, and limits are documented in `docs/GOAL_RUNTIME.md`.
 
 ## Telegram Commands
 
+Telegram also provides the same governed operational chat used by the Dashboard. Send ordinary
+text to use the general Maestro context; use `/chat @<key>` to select a project context for the
+conversation. The selection is saved per Telegram user and restored after a bot restart. Use
+`/chat geral` to return to the general context, or `/chat @<key> <message>` to switch and send a
+message in one step. The general chat can propose governed actions such as registering a project;
+after creating one, continue in that project's context. High-impact actions require an explicit
+confirmation, and task confirmation authorizes agent commands and project-local changes only inside
+that task's isolated worktree.
+
+- `/chat [message]` uses the general context unless a project context is already selected.
+- `/chat @<key> [message]` selects project context and optionally sends a message.
+- `/chat_action [@<key>] <action-id> [confirm]` executes a proposed chat action.
+
 - `/start` shows the bot introduction.
 - `/help` shows available commands.
 - `/status` shows daemon status, active goals, and agents currently working.
@@ -343,7 +370,7 @@ baseline branch. Exact duplicates of delivered/completed work are marked `blocke
 rather than silently discarded. Configure it with `MAESTRO_AUTOPILOT_ENABLED`,
 `MAESTRO_AUTOPILOT_POLL_MS`, and `MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
 
-- Any plain text message is saved as feedback.
+- Any plain text message is routed through the operational chat in the selected context.
 
 Final goal notifications are proactive: completed goals with a draft PR send a concise review
 request. The notification excludes local worktree paths, credentials, and private Telegram
@@ -356,7 +383,9 @@ surface.
 The task detail panel supports two governed actions:
 
 - **Cancel task** interrupts an active Codex or Claude subprocess and preserves execution history.
-- **Delete task** is limited to tasks without a worktree or goal history.
+- **Remove task** deletes disposable queued/cancelled drafts. A task with worktree or Goal history
+  is archived instead: it disappears from active lists while its evidence remains available for
+  audit and recovery.
 
 Pull requests are reconciled with GitHub while the dashboard is active. A PR merged outside the
 dashboard automatically marks its task as completed and leaves the human review queue.

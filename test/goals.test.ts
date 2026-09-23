@@ -542,6 +542,134 @@ describe("goal runner", () => {
       .toBe("repeated_failure");
   });
 
+  it("passes a persisted task-workspace approval to writable Goal agents", async () => {
+    const projectDir = path.join(tempDir, "approved-project");
+    const worktreeDir = path.join(tempDir, "approved-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "approved", path: projectDir });
+    const task = database.createTask("repair the project test environment", "dashboard", "approved");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    database.addEvent({
+      source: "dashboard",
+      type: "task.workspace_access_approved",
+      text: "User approved autonomous work inside the task worktree.",
+      taskId: task.id,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
+    let approved: boolean | undefined;
+    const provider = new FakeProvider("codex", ["planning"], (request) => {
+      approved = request.workspaceWriteApproved;
+      return completed("plan complete");
+    });
+
+    await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 1
+    });
+
+    expect(approved).toBe(true);
+  });
+
+  it("keeps a permission failure recoverable when no alternate provider is connected", async () => {
+    const projectDir = path.join(tempDir, "permission-recovery-project");
+    const worktreeDir = path.join(tempDir, "permission-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "permission-recovery", path: projectDir });
+    const task = database.createTask("repair test permissions", "dashboard", "permission-recovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    const provider = new FakeProvider("codex", ["planning"], () => ({
+      outcome: "failed" as const,
+      summary: "headless mode permission denied",
+      output: "",
+      error: "required command permission was auto-denied",
+      durationMs: 1,
+      retryable: false,
+      failureCategory: "permission_denied" as const
+    }));
+
+    const run = await runTaskGoal(database, new AgentRegistry([provider]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts")
+    });
+
+    expect(run.status).toBe("waiting_provider");
+    expect(run.waitReason).toBe("permission_denied");
+    expect(database.getTask(task.id).status).toBe("waiting_provider");
+    expect(database.listEvents().some((event) => event.type === "goal.circuit_breaker")).toBe(false);
+  });
+
+  it("honors an explicit provider switch after that provider previously failed in the phase", async () => {
+    const projectDir = path.join(tempDir, "manual-provider-recovery-project");
+    const worktreeDir = path.join(tempDir, "manual-provider-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "manual-provider-recovery", path: projectDir });
+    const task = database.createTask("resume implementation with selected provider", "dashboard", "manual-provider-recovery");
+    database.updateTaskWorktree({ id: task.id, status: "waiting_provider", branchName: "task", worktreePath: worktreeDir });
+
+    const run = database.createGoalRun(task.id, 10);
+    database.updateGoalRun({
+      id: run.id,
+      status: "waiting_provider",
+      currentPhase: "implementing",
+      stepCount: 1,
+      waitReason: "permission_denied",
+      lastProvider: "antigravity",
+      lastError: "Provider permission denied."
+    });
+    const previousAttempt = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({
+      id: previousAttempt.id,
+      status: "failed",
+      summary: "Command permission denied.",
+      error: "permission denied",
+      durationMs: 1
+    });
+    database.addEvent({
+      source: "codex",
+      type: "goal.step_failed",
+      text: "Command permission denied.",
+      taskId: task.id,
+      metadata: { runId: run.id, stepId: previousAttempt.id, phase: "implementing", failureCategory: "permission_denied" }
+    });
+
+    let attempts = 0;
+    const codex = new FakeProvider("codex", ["coding"], () => {
+      attempts += 1;
+      return {
+        outcome: "failed",
+        summary: "Permission still denied.",
+        output: "",
+        error: "permission denied",
+        durationMs: 1,
+        retryable: false,
+        failureCategory: "permission_denied"
+      };
+    });
+    const coordinator = new GoalCoordinator(
+      database,
+      new AgentRegistry([codex]),
+      path.join(tempDir, "artifacts")
+    );
+
+    coordinator.switchProvider(run.id, "codex");
+    await waitFor(() => attempts === 1 && !coordinator.isActive(task.id));
+
+    // The selected retry failed again. An automatic recovery pass must not
+    // spend tokens repeating it; the user can still explicitly select it again.
+    coordinator.resumeExistingRun(run.id);
+    await waitFor(() => !coordinator.isActive(task.id));
+
+    expect(attempts).toBe(1);
+    expect(database.listEvents().some((event) => (
+      event.type === "goal.provider_selected"
+      && event.metadata.runId === run.id
+      && event.metadata.providerId === "codex"
+    ))).toBe(true);
+    await coordinator.shutdown();
+  });
+
   it("pauses repeated no-progress implementation for provider handoff while preserving the worktree", async () => {
     const projectDir = path.join(tempDir, "progress-project");
     const worktreeDir = path.join(tempDir, "progress-worktree");

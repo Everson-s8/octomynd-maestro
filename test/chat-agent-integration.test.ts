@@ -119,6 +119,89 @@ describe("chat agent loop integration", () => {
     expect(response.evidence.summaryText).toContain("Task creation");
   });
 
+  it("does not persist a task-creation meta instruction after an operational incident", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-agent-meta-task-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Task from context" });
+    const objective = "Simplificar a interface do projeto, organizar a navegação principal e deixar o fluxo de edição previsível para o usuário.";
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "apto",
+      surface: "dashboard",
+      senderRole: "user",
+      messageText: objective
+    });
+    database.saveOperationalChatMessage({
+      threadId: thread.id,
+      projectKey: "apto",
+      surface: "dashboard",
+      senderRole: "orchestrator",
+      messageText: "A Task #6 foi interrompida e está blocked por permission denied; a execução precisa ser recuperada."
+    });
+
+    let call = 0;
+    const provider: AgentProvider = {
+      id: "antigravity",
+      label: "Antigravity",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        call += 1;
+        const turn = call === 1
+          ? {
+            type: "tool_call",
+            name: "governed_action",
+            arguments: {
+              action: "create_task",
+              title: "Criar tarefa conforme alinhamos",
+              taskText: "Crie a tarefa conforme alinhamos o chat para esse projeto.",
+              specification: [
+                "## Context", "O projeto precisa de uma interface previsível.",
+                "## Objective", "Melhorar a interface.",
+                "## Scope", "Organizar a navegação e o fluxo de edição.",
+                "## Acceptance criteria", "O usuário consegue editar sem se perder.",
+                "## Validation", "Executar os testes e revisar o fluxo.",
+                "## Constraints", "Não alterar regras fora da interface."
+              ].join("\n")
+            }
+          }
+          : { type: "final", response: "Compilei o objetivo da conversa e criei a task sem reutilizar o relato operacional." };
+        return {
+          outcome: "completed",
+          summary: "completed",
+          output: JSON.stringify(turn),
+          structuredPayload: turn,
+          error: null,
+          retryable: false,
+          durationMs: 1
+        };
+      }
+    };
+    const service = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: dir,
+      chatBudget: { maxIterations: 4, maxToolCalls: 3 }
+    });
+
+    const response = await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Crie a tarefa conforme alinhamos o chat para esse projeto."
+    });
+
+    const task = database.listTasksByProject("apto", 10)[0];
+    expect(task?.text).toBe(objective);
+    expect(task?.text).not.toContain("conforme alinhamos");
+    expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
+    expect(response.evidence.summaryText).toContain("Task creation");
+  });
+
   it("cancels an in-flight provider turn through the activity controller", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-cancel-"));
     const database = createDatabase(path.join(dir, "maestro.db"));
@@ -198,6 +281,9 @@ describe("chat agent loop integration", () => {
       message: "Redirecione o Goal para priorizar os testes e continue a execução."
     });
 
+    // The governed guide_goal action is enough to continue the persistent Goal;
+    // the chat must not spend another provider loop just writing a summary.
+    expect(providerCalls).toBe(0);
     expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
     expect(database.listEventsForTask(task.id).find((event) => event.type === "goal.human_guidance")).toMatchObject({
       taskId: task.id,
@@ -206,7 +292,7 @@ describe("chat agent loop integration", () => {
     expect(database.getGoalRun(run.id).status).toBe("running");
   });
 
-  it("applies an explicit redirection to the active Goal before asking the provider", async () => {
+  it("applies an explicit redirection to the active Goal without a redundant provider turn", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-guidance-core-"));
     const database = createDatabase(path.join(dir, "maestro.db"));
     resources.push({ database, dir });
@@ -242,10 +328,10 @@ describe("chat agent loop integration", () => {
       message: "Foque nos testes da implementação atual e continue o Goal."
     });
 
-    expect(providerCalls).toBe(1);
+    expect(providerCalls).toBe(0);
     expect(database.listTasksByProject("apto", 10)).toHaveLength(1);
     expect(database.listEventsForTask(task.id).some((event) => event.type === "goal.human_guidance")).toBe(true);
-    expect(response.explanation).toContain("nova direção");
+    expect(response.explanation).toContain("Orientação registrada");
     expect(response.actions.some((action) => action.type === "guide_goal")).toBe(false);
   });
 
@@ -297,6 +383,87 @@ describe("chat agent loop integration", () => {
     expect(database.listGoalRunsForTask(task.id)).toHaveLength(1);
     expect(database.getGoalRun(run.id).status).toBe("waiting_provider");
     expect(database.getTask(task.id).status).toBe("implementing");
+  });
+
+  it("repairs a blocked Goal environment inside its worktree, records evidence and then resumes that Goal", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-chat-goal-environment-"));
+    const database = createDatabase(path.join(dir, "maestro.db"));
+    resources.push({ database, dir });
+    database.registerProject({ key: "apto", name: "Apto Gerenciamento", path: dir, defaultBranch: "main" });
+    const worktree = path.join(dir, "worktrees", "task-python-env");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, "package.json"), JSON.stringify({
+      name: "goal-env-recovery-test",
+      version: "1.0.0",
+      scripts: { repair: "node -e \"require('fs').appendFileSync('recovery-proof.txt','x')\"" }
+    }), "utf8");
+    const task = new ApplicationCommands(database).createTask(
+      { channel: "dashboard", userId: null, username: null },
+      { projectKey: "apto", text: "Prepare the local test environment and continue implementation." }
+    );
+    database.updateTaskWorktree({ id: task.id, status: "blocked", branchName: "maestro/task-python-env", worktreePath: worktree });
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({
+      id: run.id,
+      status: "blocked",
+      currentPhase: "testing",
+      stepCount: 4,
+      lastError: "Python test environment is missing.",
+      failureCategory: "environment_error"
+    });
+    const thread = database.createOperationalChatThread({ projectKey: "apto", title: "Recover Goal test environment" });
+    const turns = [
+      { type: "tool_call", name: "goal_workspace_command", arguments: { runId: run.id, command: "npm run repair" } },
+      { type: "tool_call", name: "goal_workspace_command", arguments: { runId: run.id, command: "npm run repair" } },
+      { type: "tool_call", name: "governed_action", arguments: { action: "resume_goal", targetId: run.id } },
+      { type: "final", response: "O ambiente foi reparado no worktree, o comando duplicado foi evitado e a Goal existente foi retomada." }
+    ];
+    let providerCalls = 0;
+    let resumeCalls = 0;
+    const provider: AgentProvider = {
+      id: "codex",
+      label: "Codex",
+      capabilities: new Set(["conversation"]),
+      health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+      execute: async () => {
+        const turn = turns[providerCalls++];
+        return { outcome: "completed", summary: "completed", output: JSON.stringify(turn), structuredPayload: turn, error: null, retryable: false, durationMs: 1 };
+      }
+    };
+    const service = new OperationalChatService({
+      database,
+      agentRegistry: new AgentRegistry([provider]),
+      worktreesRoot: path.join(dir, "worktrees"),
+      chatBudget: { maxIterations: 6, maxToolCalls: 4 },
+      actionExecutor: {
+        resumeGoal: (runId) => {
+          resumeCalls += 1;
+          const current = database.getGoalRun(runId);
+          database.updateGoalRun({ id: runId, status: "waiting_provider", currentPhase: current.currentPhase, stepCount: current.stepCount, nextRetryAt: null });
+          database.updateTaskStatus(current.taskId, current.currentPhase);
+        }
+      }
+    });
+
+    const response = await service.ask({
+      projectKey: "apto",
+      threadId: thread.id,
+      surface: "dashboard",
+      accessMode: "full",
+      uiLocale: "pt-BR",
+      message: "Tente você resolver o ambiente bloqueado desta Goal."
+    });
+
+    const recoveryEvents = database.listEventsForTask(task.id).filter((event) => event.type === "goal.environment_recovery_command");
+    expect(providerCalls).toBe(4);
+    expect(fs.readFileSync(path.join(worktree, "recovery-proof.txt"), "utf8")).toBe("x");
+    expect(recoveryEvents).toHaveLength(1);
+    expect(recoveryEvents[0].metadata).toMatchObject({ runId: run.id, phase: "testing", command: "npm run repair", status: "completed" });
+    expect(resumeCalls).toBe(1);
+    expect(database.listGoalRunsForTask(task.id)).toHaveLength(1);
+    expect(database.getGoalRun(run.id).status).toBe("waiting_provider");
+    expect(response.explanation).toContain("Goal existente foi retomada");
+    expect(response.actions.some((action) => action.type === "resume_goal")).toBe(false);
   });
 
   it("answers a blocked-task question from refreshed project state evidence", async () => {
