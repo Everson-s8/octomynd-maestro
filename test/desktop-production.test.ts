@@ -44,6 +44,7 @@ describe("desktop production runtime logic", () => {
     };
 
     expect(builderConfig.files).toContain("src/desktop/auto-updater.cjs");
+    expect(builderConfig.files).toContain("src/desktop/production.cjs");
     expect(builderConfig.files).toContain("skills/**/*");
     expect(builderConfig.files).not.toContain("src/desktop/**/*");
     expect(builderConfig.files).toContain("!**/*.map");
