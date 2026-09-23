@@ -196,6 +196,28 @@ is what makes an update visible to installed users. The dashboard displays the
 current version, download progress, and a restart action after the update is
 ready. Keep development/HG artifacts out of that production channel.
 
+### v0.4.0 client update acceptance
+
+When the next stable build is ready, publish v0.4.0 only after its CI and
+release-artifact checks pass. Validate the real production update path from an
+existing v0.3.9 installation (not by manually running the new installer):
+
+- [ ] The installed app reports v0.3.9 and discovers v0.4.0 from the production
+      GitHub Releases feed.
+- [ ] The app clearly indicates that an update is available and exposes the
+      expected download action/state.
+- [ ] Download progress is visible and reaches the ready-to-restart state.
+- [ ] Choosing restart closes and relaunches Maestro at v0.4.0 without asking
+      the user to download or run the installer manually.
+- [ ] Existing projects, provider connections, chat history, and settings are
+      still present after the update.
+- [ ] If update discovery or installation fails, the app remains usable and
+      presents a recoverable error with a retry/manual-install path.
+
+Record the tested source version, target version, artifact URLs, and outcome in
+the release notes or validation record. Do not call the update flow verified
+based only on a successful installer build or a manual installation.
+
 ## Clean-machine validation checklist
 
 Run on a machine **without** Node/npm/tsx installed. For the full project/task
