@@ -1,6 +1,6 @@
 {
   "name": "octomynd-maestro",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Chat-first local orchestrator for Octomynd AI workflows.",
   "author": "Octomynd Contributors",
   "type": "module",
