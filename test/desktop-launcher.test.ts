@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import { createRequire } from "node:module";
 import {
   resolveDesktopPaths,
+  resolveProductionHealthPath,
   parseDesktopCliOptions,
   isUiDistMissing,
   isUiDistStale,
@@ -46,6 +48,20 @@ describe("Desktop Launcher & Electron Entry", () => {
     expect(skipOpts.skipBuild).toBe(true);
     expect(skipOpts.port).toBe(5000);
     expect(skipOpts.host).toBe("localhost");
+  });
+
+  it("resolves the production helper from the packaged CLI layout", () => {
+    const appRoot = path.join(tmpDir, "resources", "app");
+    const helperPath = path.join(appRoot, "src", "desktop", "production.cjs");
+    fs.mkdirSync(path.dirname(helperPath), { recursive: true });
+    fs.copyFileSync(path.resolve(process.cwd(), "src", "desktop", "production.cjs"), helperPath);
+
+    const packagedLauncherPath = path.join(appRoot, "dist", "desktop", "launcher.js");
+    const packagedRequire = createRequire(packagedLauncherPath);
+    const resolvedPath = resolveProductionHealthPath(packagedRequire);
+
+    expect(resolvedPath).toBe(helperPath);
+    expect(packagedRequire(resolvedPath).checkHealth).toBeTypeOf("function");
   });
 
   it("correctly identifies missing ui/dist/index.html", () => {
