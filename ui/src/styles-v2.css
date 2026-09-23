@@ -632,6 +632,7 @@
 .providers-page{display:block}
 .providers-page>.desc{max-width:760px;margin:8px 0 26px;color:var(--muted);line-height:1.6}
 .provider-manager{min-width:0}
+.provider-manager>.add-provider{margin-top:24px}
 .provider-card-button{display:block;width:100%;color:inherit;text-align:left;cursor:pointer;font:inherit}
 .provider-card-button:hover{border-color:var(--rust-dim);background:var(--sepia-2)}
 .provider-card-button .model-badge{margin-left:auto;max-width:58%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px 'IBM Plex Mono';color:var(--muted)}

@@ -81,7 +81,9 @@ npm run release:win
 
 Output: `release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, and
 `release/latest.yml`, where `<version>` comes from `package.json`. The artifact
-names are deterministic and versioned for sharing. Verify the complete update
+names are deterministic and versioned for sharing. Existing installers in
+`release/` are preserved; the current `latest.yml` is regenerated for the new
+build. Verify the complete update
 set before publishing:
 
 ```powershell
@@ -166,18 +168,21 @@ is what makes an update visible to installed users. The dashboard displays the
 current version, download progress, and a restart action after the update is
 ready. Keep development/HG artifacts out of that production channel.
 
-### v0.4.0 client update acceptance
+If update discovery or download fails, the dashboard provides a retry action
+and a link to the official GitHub Releases page for manual installation.
 
-When the next stable build is ready, publish v0.4.0 only after its CI and
-release-artifact checks pass. Validate the real production update path from an
-existing v0.3.9 installation (not by manually running the new installer):
+### Desktop client update acceptance
 
-- [ ] The installed app reports v0.3.9 and discovers v0.4.0 from the production
+Before sharing a stable build, validate the real production update path from an
+existing installation (not by manually running the new installer). For the
+next release, the source is v0.4.0 and the target is the candidate version:
+
+- [ ] The installed app reports v0.4.0 and discovers the candidate from the production
       GitHub Releases feed.
 - [ ] The app clearly indicates that an update is available and exposes the
       expected download action/state.
 - [ ] Download progress is visible and reaches the ready-to-restart state.
-- [ ] Choosing restart closes and relaunches Maestro at v0.4.0 without asking
+- [ ] Choosing restart closes and relaunches Maestro at the candidate version without asking
       the user to download or run the installer manually.
 - [ ] Existing projects, provider connections, chat history, and settings are
       still present after the update.

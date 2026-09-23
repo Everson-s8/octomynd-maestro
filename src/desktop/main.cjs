@@ -29,6 +29,7 @@ const {
   checkHealth,
   formatHealthConflictMessage
 } = require("./production.cjs");
+const { retryAutoUpdate } = require("./auto-updater.cjs");
 
 const HOST = process.env.MAESTRO_DASHBOARD_HOST || "127.0.0.1";
 const PORT = process.env.MAESTRO_DASHBOARD_PORT || "4787";
@@ -83,6 +84,7 @@ ipcMain.handle("maestro:install-update", () => {
   desktopUpdater.quitAndInstall(false, true);
   return true;
 });
+ipcMain.handle("maestro:retry-update", () => retryAutoUpdate(desktopUpdater));
 
 async function waitForHealth(host, port, expected) {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;

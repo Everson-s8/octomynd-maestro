@@ -481,7 +481,9 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ivory, #f3ece1); letter
 .empty-state .icon { width: 34px; height: 34px; margin-bottom: 12px; color: var(--pink); }
 .empty-state strong { color: var(--ink); }.empty-state p { margin: 6px 0 0; font-size: .7rem; }
 .error-banner { display: flex; gap: 12px; align-items: center; max-width: 1540px; padding: 12px 14px; margin: 0 auto 18px; color: #7b1f27; background: #ffe7e9; border: 1px solid #ffc2c7; border-radius: 14px; font-size: .72rem; }
-.error-banner button { margin-left: auto; padding: 8px 11px; color: white; background: #7b1f27; border-radius: 9px; font-size: .62rem; }
+.error-banner button { padding: 8px 11px; color: white; background: #7b1f27; border-radius: 9px; font-size: .62rem; }
+.error-banner button:first-of-type { margin-left: auto; }
+.error-banner button:disabled { opacity: .65; cursor: wait; }
 .loading-screen { display: grid; place-items: center; align-content: center; min-height: 100vh; color: var(--muted); background: var(--paper); }
 .loading-screen span { margin-top: 16px; font-family: var(--mono); font-size: .65rem; letter-spacing: .13em; text-transform: uppercase; }
 .loading-screen i { width: 90px; height: 3px; margin-top: 15px; overflow: hidden; background: var(--paper-3); border-radius: 999px; }

@@ -5,11 +5,14 @@ import { ErrorBanner } from "./components/ErrorBanner";
 import { LoadingSpinner } from "./components/LoadingSpinner";
 import { TaskComposer } from "./components/TaskComposer";
 import { ProjectModal } from "./components/ProjectModal";
+import { DesktopUpdateBadge } from "./components/DesktopUpdateBadge";
 import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
 import { useI18n, translate } from "./i18n";
 import { resetOnboarding } from "./components/FirstRunOnboarding";
-import { DesktopUpdateStatus, installDesktopUpdate } from "./external-links";
+import { DesktopUpdateStatus, installDesktopUpdate, openExternalUrl, retryDesktopUpdate } from "./external-links";
+
+const RELEASES_URL = "https://github.com/Octomynd/octomynd-maestro/releases/latest";
 
 function getDesktopBridge() {
   return (window as Window & {
@@ -31,6 +34,7 @@ export default function App() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [retryingUpdate, setRetryingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
 
   const refresh = useCallback(async (activity = false) => {
@@ -66,29 +70,37 @@ export default function App() {
     resetOnboarding();
     window.location.reload();
   }, []);
+  const handleRetryUpdate = useCallback(async () => {
+    setRetryingUpdate(true);
+    setUpdateError(null);
+    try {
+      if (!(await retryDesktopUpdate())) setUpdateError(translate("Automatic update retry could not start."));
+    } catch (retryError) {
+      setUpdateError(retryError instanceof Error ? retryError.message : translate("Automatic update retry could not start."));
+    } finally {
+      setRetryingUpdate(false);
+    }
+  }, []);
+  const handleInstallUpdate = useCallback(async () => {
+    try {
+      if (!(await installDesktopUpdate())) setUpdateError(translate("The update is not ready to install."));
+    } catch (installError) {
+      setUpdateError(installError instanceof Error ? installError.message : translate("The update is not ready to install."));
+    }
+  }, []);
 
   if (!data && !error) return <LoadingSpinner />;
   return <RuntimeErrorBoundary><BrowserRouter>
     {error ? <ErrorBanner message={error} onRetry={() => void refresh(true)} /> : null}
     {updateError ? <div className="error-banner" role="alert">
       <span>{translate("Automatic updates are unavailable.")} {updateError}</span>
+      <button type="button" disabled={retryingUpdate} onClick={() => void handleRetryUpdate()}>
+        {retryingUpdate ? translate("Checking for updates…") : translate("Retry update")}
+      </button>
+      <button type="button" onClick={() => openExternalUrl(RELEASES_URL)}>{translate("Install manually")}</button>
       <button onClick={() => setUpdateError(null)}>{translate("Dismiss")}</button>
     </div> : null}
-    {data ? <div className="maestro-runtime-badge" role="status">
-      <span>{translate("Maestro")} v{data.daemon.version}</span>
-      {updateStatus?.event === "checking" ? (
-        <span>{translate("Checking for updates…")}</span>
-      ) : updateStatus?.event === "up_to_date" ? (
-        <span>{translate("You're up to date.")}</span>
-      ) : null}
-      {updateStatus?.event === "downloading" || updateStatus?.event === "progress" ? (
-        <span>{translate("Downloading update")} {updateStatus.version ? `v${updateStatus.version}` : ""} · {updateStatus.percent ?? 0}%</span>
-      ) : updateStatus?.event === "ready" ? (
-        <button type="button" onClick={() => void installDesktopUpdate()}>
-          {translate("Restart to update")} {updateStatus.version ? `v${updateStatus.version}` : ""}
-        </button>
-      ) : null}
-    </div> : null}
+    {data ? <DesktopUpdateBadge version={data.daemon.version} status={updateStatus} onInstall={() => void handleInstallUpdate()} /> : null}
     {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} onRestartOnboarding={handleRestartOnboarding} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
     <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
