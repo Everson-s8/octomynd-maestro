@@ -166,6 +166,9 @@ is what makes an update visible to installed users. The dashboard displays the
 current version, download progress, and a restart action after the update is
 ready. Keep development/HG artifacts out of that production channel.
 
+If update discovery or download fails, the dashboard provides a retry action
+and a link to the official GitHub Releases page for manual installation.
+
 ### v0.4.0 client update acceptance
 
 When the next stable build is ready, publish v0.4.0 only after its CI and

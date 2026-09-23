@@ -14,6 +14,7 @@ ipcRenderer.on("maestro:update-status", (_event, status) => {
 contextBridge.exposeInMainWorld("maestroDesktop", {
   openExternal: (url) => ipcRenderer.invoke("maestro:open-external", url),
   installUpdate: () => ipcRenderer.invoke("maestro:install-update"),
+  retryUpdate: () => ipcRenderer.invoke("maestro:retry-update"),
   onUpdateStatus: (callback) => {
     if (typeof callback !== "function") return () => {};
     updateListeners.add(callback);
