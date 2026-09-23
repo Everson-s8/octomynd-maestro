@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const productionHealth = require("./production.cjs") as {
+type ProductionHealthRuntime = {
   DEFAULT_HEALTH_SERVICE: string;
   checkHealth: (
     host: string,
@@ -12,6 +12,20 @@ const productionHealth = require("./production.cjs") as {
     expected?: { service?: string; runtimeMode?: string }
   ) => Promise<{ status: string }>;
 };
+
+/** Resolve the shared CJS helper in both source and packaged CLI layouts. */
+export function resolveProductionHealthPath(requireFromLauncher: NodeJS.Require): string {
+  for (const candidate of ["./production.cjs", "../../src/desktop/production.cjs"]) {
+    try {
+      return requireFromLauncher.resolve(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+    }
+  }
+  throw new Error("Desktop launcher could not locate its production runtime helper.");
+}
+
+const productionHealth = require(resolveProductionHealthPath(require)) as ProductionHealthRuntime;
 
 export interface DesktopPaths {
   rootPath: string;
