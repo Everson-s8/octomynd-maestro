@@ -92,6 +92,17 @@ describe("ApplicationCommands.createTask", () => {
     expect(database.listEventsForTask(unapprovedTask.id).some((event) => event.type === "task.workspace_access_approved")).toBe(false);
   });
 
+  it("records scoped autonomous workspace approval for an approved follow-up task", () => {
+    const parent = commands.createTask({ channel: "dashboard" }, { text: "parent task", projectKey: "boo" });
+    const followUp = commands.createFollowUpTask(
+      { channel: "telegram", userId: "42" },
+      { parentTaskId: parent.id, text: "install test dependencies", workspaceWriteApproved: true }
+    );
+
+    expect(database.listEventsForTask(followUp.id).find((event) => event.type === "task.workspace_access_approved"))
+      .toMatchObject({ taskId: followUp.id, metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" } });
+  });
+
   it("throws a typed validation error for blank text", () => {
     expect(() => commands.createTask({ channel: "dashboard" }, { text: "   ", projectKey: "boo" })).toThrowError(
       ApplicationCommandError

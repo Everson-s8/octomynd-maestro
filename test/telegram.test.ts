@@ -728,4 +728,44 @@ describe("telegram work intake integration", () => {
     database.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  it("grants explicit Telegram task creation approval only for that task's isolated worktree", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-tg-task-approval-"));
+    const projectDir = path.join(tempDir, "boo-project");
+    fs.mkdirSync(projectDir);
+    const database = createDatabase(path.join(tempDir, "maestro.db"));
+    try {
+      database.registerProject({ key: "boo", name: "Boo", path: projectDir, defaultBranch: "master" });
+      const replies: string[] = [];
+      const bot = createTelegramBot({
+        ...telegramConfig(),
+        telegram: { botToken: "test-token", allowedUserId: null }
+      }, database);
+      bot.botInfo = { id: 999, is_bot: true, first_name: "Maestro", username: "maestro_test_bot" } as any;
+      bot.api.config.use(async (previous, method, payload, signal) => {
+        if (method === "sendMessage") {
+          replies.push(String((payload as { text?: unknown }).text ?? ""));
+          return {
+            ok: true,
+            result: { message_id: 1, date: 1, chat: { id: 123, type: "private" }, text: "ok" }
+          } as any;
+        }
+        return previous(method, payload, signal);
+      });
+
+      await bot.handleUpdate(telegramTextUpdate(1, "/task @boo install Python test tooling"));
+
+      const task = database.listTasksByProject("boo", 10)[0];
+      expect(task).toBeDefined();
+      const approval = database.listEventsForTask(task.id).find((event) => event.type === "task.workspace_access_approved");
+      expect(approval?.metadata).toMatchObject({
+        scope: "task_worktree",
+        approval: "autonomous_workspace_execution"
+      });
+      expect(replies.join("\n")).toContain("only inside this task's isolated worktree");
+    } finally {
+      database.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

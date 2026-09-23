@@ -82,6 +82,7 @@ export type CreateTaskInput = {
 export type CreateFollowUpTaskInput = {
   parentTaskId: number;
   text: string;
+  workspaceWriteApproved?: boolean;
 };
 
 export type WorkIntakeCommandInput = {
@@ -529,6 +530,7 @@ export class ApplicationCommands {
 
     const intake = deriveTaskIntake(text);
     const task = this.database.createTask(text, origin.channel, parent.projectKey, parent.id, intake.title, intake.specification);
+    this.recordWorkspaceWriteApproval(origin, task.id, input.workspaceWriteApproved);
     this.database.addEvent({
       source: origin.channel,
       type: "task.follow_up_created",
@@ -987,7 +989,8 @@ export class ApplicationCommands {
             ] : [])
           ],
           explicitOverride: "feature_plan",
-          intakeId: `improvement:${decided.id}:activation`
+          intakeId: `improvement:${decided.id}:activation`,
+          workspaceWriteApproved: true
         });
 
         const task = intakeResult.task ?? (intakeResult.writeResult?.tasks?.[0] ? this.database.getTask(intakeResult.writeResult.tasks[0].taskId) : null);

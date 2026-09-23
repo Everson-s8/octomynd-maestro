@@ -14,6 +14,7 @@ export type ValidationCheckId =
   | "secret_scan"
   | "typecheck_backend"
   | "typecheck_ui"
+  | "python_compile"
   | "tests_focused"
   | "tests_full"
   | "build_ui";
@@ -122,6 +123,9 @@ function commandSpecs(workspacePath: string, request: ValidationRequest): Comman
   if (layout === "nested-app") {
     return nestedProjectCommandSpecs(workspacePath, request);
   }
+  if (layout === "python") {
+    return pythonProjectCommandSpecs(workspacePath, request);
+  }
 
   const typescriptBin = resolveRuntimeTool(workspacePath, "typescript", "bin/tsc");
   const vitestEntry = resolveRuntimeTool(workspacePath, "vitest", "vitest.mjs");
@@ -165,7 +169,7 @@ function commandSpecs(workspacePath: string, request: ValidationRequest): Comman
   ];
 }
 
-type ProjectLayout = "root" | "nested-app";
+type ProjectLayout = "root" | "nested-app" | "python";
 
 function detectProjectLayout(workspacePath: string): ProjectLayout {
   const hasNestedBackend = hasAnyPath(workspacePath, ["backend/package.json", "backend/tsconfig.json"]);
@@ -175,7 +179,126 @@ function detectProjectLayout(workspacePath: string): ProjectLayout {
     "frontend/vite.config.ts",
     "frontend/vite.config.js"
   ]);
-  return hasNestedBackend || hasNestedFrontend ? "nested-app" : "root";
+  if (hasNestedBackend || hasNestedFrontend) return "nested-app";
+
+  const hasTypeScriptManifest = hasAnyPath(workspacePath, [
+    "package.json",
+    "tsconfig.json",
+    "ui/tsconfig.json",
+    "vite.config.ts",
+    "vite.config.js"
+  ]);
+  const hasPythonManifest = hasAnyPath(workspacePath, [
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "requirements-test.txt",
+    "Pipfile",
+    "setup.py",
+    "setup.cfg",
+    "pytest.ini",
+    "tox.ini",
+    "environment.yml"
+  ]) || containsPythonSourceFile(workspacePath);
+  return hasPythonManifest && !hasTypeScriptManifest ? "python" : "root";
+}
+
+function pythonProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
+  const python = resolvePythonInvocation(workspacePath);
+  const focusedTests = request.mode === "focused"
+    ? validatedFocusedTests(request.focusedTests, "python")
+    : [];
+  const tests = focusedTests.length > 0 ? focusedTests : [];
+  const hasTests = tests.length > 0 || containsPythonTestFile(workspacePath);
+  const testId: "tests_focused" | "tests_full" = tests.length > 0 ? "tests_focused" : "tests_full";
+  const diffTarget = validatedBaseRef(request.baseRef);
+
+  return [
+    {
+      id: "diff_check",
+      command: "git",
+      args: ["-C", workspacePath, "diff", "--check", ...(diffTarget ? [diffTarget] : [])],
+      timeoutMs: 30_000
+    },
+    {
+      id: "python_compile",
+      command: python.command,
+      args: [
+        ...python.prefixArgs,
+        "-m", "compileall", "-q", "-x",
+        "(^|[\\\\/])(?:\\.git|\\.venv|venv|node_modules|dist|build)([\\\\/]|$)",
+        "."
+      ],
+      timeoutMs: 120_000
+    },
+    {
+      id: testId,
+      command: python.command,
+      args: [...python.prefixArgs, "-m", "pytest", "-q", ...tests],
+      timeoutMs: tests.length > 0 ? 120_000 : 300_000,
+      skipReason: hasTests ? undefined : "no Python test files found"
+    }
+  ];
+}
+
+function resolvePythonInvocation(workspacePath: string): { command: string; prefixArgs: string[] } {
+  const virtualEnvironmentPython = process.platform === "win32"
+    ? path.join(workspacePath, ".venv", "Scripts", "python.exe")
+    : path.join(workspacePath, ".venv", "bin", "python");
+  if (fs.existsSync(virtualEnvironmentPython)) {
+    return { command: virtualEnvironmentPython, prefixArgs: [] };
+  }
+  return process.platform === "win32"
+    ? { command: "py", prefixArgs: ["-3"] }
+    : { command: "python3", prefixArgs: [] };
+}
+
+function containsPythonTestFile(rootPath: string): boolean {
+  const ignored = new Set([".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__"]);
+  const stack = [rootPath];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignored.has(entry.name)) stack.push(entryPath);
+        continue;
+      }
+      if (/^(?:test_.*|.*_test)\.py$/i.test(entry.name)) return true;
+    }
+  }
+  return false;
+}
+
+function containsPythonSourceFile(rootPath: string): boolean {
+  const ignored = new Set([".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__"]);
+  const stack = [rootPath];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignored.has(entry.name)) stack.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".py")) return true;
+    }
+  }
+  return false;
 }
 
 function nestedProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
@@ -293,10 +416,15 @@ function resolveRuntimeTool(workspacePath: string, packageName: string, relative
   return path.join(workspacePath, "node_modules", packageName, ...relativePath.split("/"));
 }
 
-function validatedFocusedTests(values: string[] | undefined): string[] {
+function validatedFocusedTests(values: string[] | undefined, language: "typescript" | "python" = "typescript"): string[] {
   const tests = [...new Set(values ?? [])].map((value) => value.replaceAll("\\", "/"));
-  if (tests.some((value) => !ALLOWED_FOCUSED_TEST.test(value) || value.includes(".."))) {
-    throw new Error("Focused tests must be repository-relative test/*.test.ts paths.");
+  const allowed = language === "python"
+    ? /^(?:test|tests)\/[a-z0-9_.\/-]+\.py$/i
+    : ALLOWED_FOCUSED_TEST;
+  if (tests.some((value) => !allowed.test(value) || value.split("/").some((part) => part === ".." || part === "." || part === ""))) {
+    throw new Error(language === "python"
+      ? "Focused Python tests must be repository-relative test/ or tests/ *.py paths."
+      : "Focused tests must be repository-relative test/*.test.ts paths.");
   }
   return tests;
 }

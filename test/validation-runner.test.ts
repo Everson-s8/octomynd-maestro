@@ -75,6 +75,102 @@ describe("DeterministicValidationRunner", () => {
       .toContain("no test files found");
   });
 
+  it("selects Python compile and pytest checks for a Python worktree instead of Maestro's TypeScript catalog", async () => {
+    fs.writeFileSync(path.join(workspacePath, "pyproject.toml"), "[project]\nname = 'sample'\n", "utf8");
+    fs.mkdirSync(path.join(workspacePath, "tests"));
+    fs.writeFileSync(path.join(workspacePath, "tests", "test_sample.py"), "def test_sample(): pass\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot });
+
+    expect(report.status).toBe("passed");
+    expect(report.checks.map((check) => check.id)).toEqual([
+      "diff_check", "secret_scan", "python_compile", "tests_full"
+    ]);
+    expect(calls.some((call) => call.args.includes("compileall"))).toBe(true);
+    expect(calls.some((call) => call.args.includes("pytest"))).toBe(true);
+    expect(calls.every((call) => !call.args.includes("--noEmit"))).toBe(true);
+  });
+
+  it("recognizes a standalone Python worktree with no dependency manifest", async () => {
+    fs.writeFileSync(path.join(workspacePath, "app.py"), "print('ready')\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot });
+
+    expect(report.checks.map((check) => check.id)).toEqual([
+      "diff_check", "secret_scan", "python_compile", "tests_full"
+    ]);
+    expect(report.checks.find((check) => check.id === "tests_full")?.summary)
+      .toContain("no Python test files found");
+    expect(calls.some((call) => call.args.includes("compileall"))).toBe(true);
+  });
+
+  it("uses the worktree-local Python virtual environment when one is already prepared", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "pytest\n", "utf8");
+    const python = process.platform === "win32"
+      ? path.join(workspacePath, ".venv", "Scripts", "python.exe")
+      : path.join(workspacePath, ".venv", "bin", "python");
+    fs.mkdirSync(path.dirname(python), { recursive: true });
+    fs.writeFileSync(python, "", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    await runner.run({ workspacePath, artifactsRoot });
+
+    const pythonCalls = calls.filter((call) => call.command !== "git");
+    expect(pythonCalls.length).toBeGreaterThan(0);
+    expect(pythonCalls.every((call) => call.command === python)).toBe(true);
+    expect(pythonCalls.every((call) => !call.args.includes("-3"))).toBe(true);
+  });
+
+  it("reports a missing Python runtime as recoverable validation evidence, not a false pass", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "pytest\n", "utf8");
+    const runner = new DeterministicValidationRunner(async (request) => (
+      request.command === "git"
+        ? completedProcess("ok")
+        : completedProcess("Python runtime is unavailable", 9009)
+    ));
+
+    const report = await runner.run({ workspacePath, artifactsRoot });
+
+    expect(report.status).toBe("failed");
+    expect(report.compactFailure).toContain("python_compile");
+    expect(report.checks.find((check) => check.id === "python_compile")?.status).toBe("failed");
+  });
+
+  it("accepts safe Python focused-test paths and rejects traversal", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "pytest\n", "utf8");
+    fs.mkdirSync(path.join(workspacePath, "tests"));
+    fs.writeFileSync(path.join(workspacePath, "tests", "test_sample.py"), "def test_sample(): pass\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    await runner.run({ workspacePath, artifactsRoot, mode: "focused", focusedTests: ["tests/test_sample.py"] });
+    expect(calls.some((call) => call.args.includes("tests/test_sample.py"))).toBe(true);
+
+    await expect(runner.run({
+      workspacePath,
+      artifactsRoot,
+      mode: "focused",
+      focusedTests: ["tests/../outside.py"]
+    })).rejects.toThrow("repository-relative");
+  });
+
   it("returns compact actionable failures while retaining raw output", async () => {
     const runner = new DeterministicValidationRunner(async (request) => (
       request.args.includes("--noEmit")

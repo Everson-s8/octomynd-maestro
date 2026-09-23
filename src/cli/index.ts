@@ -245,8 +245,13 @@ function taskCreateCommand(argv: string[]): void {
 
   const database = createDatabase(envDbPath());
   try {
-    const task = new ApplicationCommands(database).createTask(cliOrigin(), { projectKey, text });
+    const task = new ApplicationCommands(database).createTask(cliOrigin(), {
+      projectKey,
+      text,
+      workspaceWriteApproved: true
+    });
     console.log(`[ok] Task #${task.id} created in @${task.projectKey}.`);
+    console.log("    Agent commands and project-local changes are authorized only inside this task's isolated worktree.");
     printTask(task);
   } finally {
     database.close();
@@ -676,10 +681,12 @@ async function followUpCommand(argv: string[]): Promise<void> {
   try {
     const task = new ApplicationCommands(database).createFollowUpTask(cliOrigin(), {
       parentTaskId,
-      text
+      text,
+      workspaceWriteApproved: true
     });
     console.log(`[ok] Task #${task.id} created as a follow-up to task #${parentTaskId}.`);
     console.log(`    Project : @${task.projectKey ?? "inbox"}`);
+    console.log("    Scope   : agent commands and project-local changes are limited to this task's isolated worktree.");
     console.log(`    Status  : ${task.status}`);
     console.log(`    Request : ${task.text}`);
   } catch (error) {
