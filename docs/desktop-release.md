@@ -90,36 +90,6 @@ npm run verify:release
 The initial build is unsigned; a production release pipeline should add a
 Windows code-signing certificate before public distribution.
 
-### Direct-download Windows signing
-
-The current NSIS `.exe` is unsigned. A polished direct-download release should
-Authenticode-sign both the installed `Maestro.exe` and the final installer,
-then publish the matching `.blockmap` and `latest.yml` generated for that same
-installer. Signing only the installer leaves Windows able to treat the app
-executable as an unknown publisher. The signing step must be integrated into
-the release pipeline before update metadata is finalized.
-
-For Octomynd to appear as the publisher, the project needs a code-signing
-certificate issued to the verified legal identity of its publisher. Open-source
-software can be signed; the license does not prevent this. Certificate
-eligibility, identity verification, and price depend on the certificate
-provider. A signed binary can still receive a SmartScreen reputation warning
-when its publisher or file hash is new, so no direct-download certificate can
-promise that every first-time user will see no warning.
-
-SignPath Foundation may be a free option for qualifying open-source projects,
-but its signing identity is SignPath Foundation (not Octomynd), and its release
-signing flow must use its approved trusted CI workflow. It is not a local
-SignTool/KSP command that can be enabled by adding credentials to a developer
-machine. Approval, eligibility, and the resulting SmartScreen experience need
-to be confirmed before choosing it for public releases. See the
-[SignPath Foundation terms](https://signpath.org/terms.html) and its
-[GitHub trusted-build requirements](https://docs.signpath.io/trusted-build-systems/github).
-
-The current project has not yet configured a verified Octomynd certificate or
-an approved SignPath workflow. Until one is in place, releases remain unsigned;
-GitHub hosting and SHA-256 checksums do not remove SmartScreen warnings.
-
 ### Free public distribution
 
 The unsigned beta can be distributed without a paid certificate through GitHub
