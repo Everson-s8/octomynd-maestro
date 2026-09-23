@@ -14,7 +14,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  // Close SQLite first: on Windows an open maestro.db makes rmSync fail with
+  // EBUSY, and the swallowed error left one temp folder behind per test.
+  try { database.close(); } catch { /* already closed */ }
+  fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 /** Creates and persists a real run row (with a project + task), returns its record. */
