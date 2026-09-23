@@ -198,9 +198,7 @@ export class CodexProvider implements AgentProvider {
         schemaPath,
         "--output-last-message",
         outputPath,
-        "--sandbox",
-        sandbox,
-        ...codexPermissionArgs(sandbox),
+        ...codexSandboxArgs(sandbox, codexSupportsApproveForMe(cliEntry)),
         "--cd",
         cwd,
         "-"
@@ -437,9 +435,47 @@ export function codexSandboxForRequest(request: AgentExecutionRequest): "read-on
   return filesystemAccessForExecution(request) === "workspace_write" ? "workspace-write" : "read-only";
 }
 
-/** Auto-approve tools only inside Maestro's isolated writable worktree. */
-export function codexPermissionArgs(sandbox: "read-only" | "workspace-write"): string[] {
-  return sandbox === "workspace-write" ? ["--approve-for-me"] : [];
+/**
+ * Sandbox and approval flags for a Goal step.
+ *
+ * `--approve-for-me` already runs in the workspace-write sandbox and routes
+ * approvals (including network access for installing dependencies) through
+ * automatic review. codex-cli 0.149 rejects it together with `--sandbox`
+ * ("the argument '--sandbox' cannot be used with '--approve-for-me'"), which
+ * made every writable Codex step exit 2 before reaching the model. CLIs that
+ * predate the flag (0.137 rejects it as unexpected) get the plain
+ * workspace-write sandbox with network enabled, so the testing phase can still
+ * install project dependencies instead of reporting "blocked".
+ */
+export function codexSandboxArgs(
+  sandbox: "read-only" | "workspace-write",
+  supportsApproveForMe: boolean
+): string[] {
+  if (sandbox === "read-only") return ["--sandbox", "read-only"];
+  return supportsApproveForMe
+    ? ["--approve-for-me"]
+    : ["--sandbox", "workspace-write", "--config", "sandbox_workspace_write.network_access=true"];
+}
+
+const approveForMeSupport = new Map<string, boolean>();
+
+/** Whether the resolved Codex CLI knows `--approve-for-me` (cached per entry). */
+export function codexSupportsApproveForMe(cliEntry: string): boolean {
+  const cached = approveForMeSupport.get(cliEntry);
+  if (cached !== undefined) return cached;
+  let supported = false;
+  try {
+    const help = spawnSync(process.execPath, [cliEntry, "exec", "--help"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 5_000
+    });
+    supported = `${help.stdout ?? ""}${help.stderr ?? ""}`.includes("--approve-for-me");
+  } catch {
+    supported = false;
+  }
+  approveForMeSupport.set(cliEntry, supported);
+  return supported;
 }
 
 export function buildCodexImprovementReviewArgs(
