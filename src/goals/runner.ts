@@ -414,7 +414,10 @@ export async function runTaskGoal(
           validation = await options.validationRunner.run({
             workspacePath: task.worktreePath,
             artifactsRoot: path.resolve(options.artifactsRoot),
-            signal: options.signal
+            signal: options.signal,
+            // Install the worktree's dependencies first: a missing pytest or
+            // package must not turn into a "blocked by dependencies" Goal.
+            prepareEnvironment: true
           });
         } catch (error) {
           const message = sanitizeForRunSummary(
