@@ -1796,7 +1796,17 @@ export class OperationalChatService {
       const requestedProviderId = userMessage
         ? resolveRequestedGoalProvider(userMessage, evidence.providers, goal.phase)
         : null;
-      if (requestedProviderId && ["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) {
+      // A stopped Goal offers every other ready, connected provider on its own:
+      // the switch used to appear only when the user typed "troca para <nome>",
+      // so a user facing a failing provider had no visible way out.
+      const stopped = ["waiting_provider", "blocked", "failed"].includes(goal.status);
+      const switchCandidates = requestedProviderId
+        ? [requestedProviderId]
+        : stopped
+          ? eligibleGoalProviders(evidence.providers, goal.phase).slice(0, 3)
+          : [];
+      for (const requestedProviderId of switchCandidates) {
+        if (!["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) break;
         actions.push({
           id: `switch_goal_provider_${goal.runId}_${requestedProviderId}`,
           type: "switch_goal_provider",
@@ -2991,6 +3001,19 @@ function isEnvironmentRecoveryRequest(input: string): boolean {
   const recoveryIntent = /\b(?:tente|tentar|resolv\w*|corrig\w*|consert\w*|repar\w*|configur\w*|instal\w*|rode|rodar|execute|executar|prepare|prepar\w*|fix|repair|install|setup|provision|recover)\b/.test(normalized);
   const environmentIssue = /\b(?:ambiente|environment|python|pip|venv|dependenc\w*|toolchain|permiss\w*|permission|runtime|bibliotecas|pacotes|pacote|testes?\s+(?:falh|blocked|bloquead))\b/.test(normalized);
   return recoveryIntent && environmentIssue;
+}
+
+/** Connected providers that are ready, enabled and able to run the Goal's phase. */
+function eligibleGoalProviders(
+  providers: ChatEvidenceContext["providers"],
+  phase: string
+): AgentProviderId[] {
+  const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
+  return providers
+    .filter((provider) => provider.state === "ready"
+      && provider.control.mode === "enabled"
+      && provider.capabilities.includes(capability as typeof provider.capabilities[number]))
+    .map((provider) => provider.id);
 }
 
 function resolveRequestedGoalProvider(
