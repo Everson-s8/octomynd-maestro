@@ -12,6 +12,7 @@ import type { EnvironmentDoctorReport } from "../environment/types.js";
 import type { AgentProviderSnapshot } from "../agents/registry.js";
 import type { FeatureCoordinator, ManualReviewResult, ManualReviewStatusResult } from "../features/coordinator.js";
 import { OperationalChatService } from "../chat/service.js";
+import { GLOBAL_CHAT_PROJECT_KEY } from "../chat/types.js";
 import { ProjectRepositoryService } from "../projects/repository-service.js";
 import { formatCurrencyUsd } from "../agents/economics.js";
 import type { SkillRuntime } from "../skills/runtime.js";
@@ -146,6 +147,63 @@ export function createTelegramBot(
     skillProjectKey: options.skillProjectKey,
     processManager: options.processManager
   });
+  const activeChatProjectByUser = new Map<string, string>();
+  const getSelectedChatProject = (userId: string) => {
+    const cached = activeChatProjectByUser.get(userId);
+    if (cached) return cached;
+    const selection = database.findLatestEventByTypeAndUser("telegram.chat_project_selected", userId);
+    const projectKey = typeof selection?.metadata.projectKey === "string"
+      ? selection.metadata.projectKey
+      : GLOBAL_CHAT_PROJECT_KEY;
+    activeChatProjectByUser.set(userId, projectKey);
+    return projectKey;
+  };
+  const selectChatProject = (ctx: Context, projectKey: string) => {
+    const userId = String(ctx.from?.id ?? "");
+    activeChatProjectByUser.set(userId, projectKey);
+    database.addEvent({
+      source: "telegram",
+      type: "telegram.chat_project_selected",
+      text: projectKey,
+      userId,
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey }
+    });
+  };
+
+  const sendChatReply = async (ctx: Context, projectKey: string, message: string) => {
+    const userId = String(ctx.from?.id ?? "");
+    database.addEvent({
+      source: "telegram",
+      type: "command.chat_message",
+      text: message,
+      userId,
+      username: ctx.from?.username ?? null,
+      metadata: { projectKey }
+    });
+
+    try {
+      const response = await chatService.ask({
+        projectKey,
+        surface: "telegram",
+        message,
+        userId,
+        username: ctx.from?.username ?? null
+      });
+      const replyLines = [response.explanation];
+      if (response.actions.length > 0) {
+        const projectArg = projectKey === GLOBAL_CHAT_PROJECT_KEY ? "" : `@${projectKey} `;
+        replyLines.push("", "Available actions:", ...response.actions.map((action) =>
+          `- /chat_action ${projectArg}${action.id} (${action.label})`
+        ));
+      }
+      await ctx.reply(replyLines.join("\n"));
+      return response;
+    } catch (error) {
+      await ctx.reply(`Chat could not complete this turn. Your message is preserved; retry it or choose another provider. Detail: ${error instanceof Error ? error.message : "Unknown error."}`);
+      return null;
+    }
+  };
 
   bot.use(async (ctx, next) => {
     if (isUserAllowed(ctx.from?.id, config.telegram.allowedUserId)) {
@@ -836,61 +894,33 @@ export function createTelegramBot(
 
   bot.command("chat", async (ctx) => {
     const { projectKey: inputProjectKey, message } = parseChatText(ctx.message?.text ?? "");
-    if (!message) {
-      await ctx.reply("Usage: /chat [@project] your message here");
-      return;
-    }
-
-    if (!inputProjectKey) {
-      await ctx.reply("Please provide the project: /chat @project your message");
-      return;
-    }
-
-    if (!database.findProjectByKey(inputProjectKey)) {
+    const userId = String(ctx.from?.id ?? "");
+    const selectedProject = inputProjectKey
+      ?? (message ? getSelectedChatProject(userId) : GLOBAL_CHAT_PROJECT_KEY);
+    if (selectedProject !== GLOBAL_CHAT_PROJECT_KEY && !database.findProjectByKey(selectedProject)) {
       await ctx.reply(`Project @${inputProjectKey} not found.`);
       return;
     }
-
-    database.addEvent({
-      source: "telegram",
-      type: "command.chat",
-      text: ctx.message?.text ?? "/chat",
-      userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null,
-      metadata: { projectKey: inputProjectKey, message }
-    });
-
-    try {
-      const response = await chatService.ask({
-        projectKey: inputProjectKey,
-        surface: "telegram",
-        message,
-        userId: String(ctx.from?.id ?? ""),
-        username: ctx.from?.username ?? null
-      });
-
-      const replyLines = [response.explanation];
-      if (response.actions.length > 0) {
-        replyLines.push("");
-        replyLines.push("Available governed actions:");
-        for (const action of response.actions) {
-          replyLines.push(`- /chat_action @${inputProjectKey} ${action.id} (${action.label})`);
-        }
-      }
-      await ctx.reply(replyLines.join("\n"));
-    } catch (error) {
-      await ctx.reply(`Operational chat error: ${error instanceof Error ? error.message : "Unknown error."}`);
+    selectChatProject(ctx, selectedProject);
+    if (!message) {
+      await ctx.reply(selectedProject === GLOBAL_CHAT_PROJECT_KEY
+        ? "General Maestro chat selected. Send a message normally or use /chat @project to switch project context."
+        : `Project chat @${selectedProject} selected. Your next messages will use this project's context.`);
+      return;
     }
+    await sendChatReply(ctx, selectedProject, message);
   });
 
   bot.command("chat_action", async (ctx) => {
-    const { projectKey, actionId, confirmed } = parseChatActionText(ctx.message?.text ?? "");
-    if (!projectKey || !actionId) {
-      await ctx.reply("Usage: /chat_action @project <action_id>");
+    const parsed = parseChatActionText(ctx.message?.text ?? "");
+    const projectKey = parsed.projectKey ?? getSelectedChatProject(String(ctx.from?.id ?? ""));
+    const { actionId, confirmed } = parsed;
+    if (!actionId) {
+      await ctx.reply("Usage: /chat_action [@project] <action_id> [confirm]");
       return;
     }
 
-    if (!database.findProjectByKey(projectKey)) {
+    if (projectKey !== GLOBAL_CHAT_PROJECT_KEY && !database.findProjectByKey(projectKey)) {
       await ctx.reply(`Project @${projectKey} not found.`);
       return;
     }
@@ -906,7 +936,11 @@ export function createTelegramBot(
 
     if (chatService.isHighImpactAction(action)) {
       if (!confirmed) {
-        await ctx.reply(`High-impact action: ${action.label}.\nTo confirm through Telegram, use: /chat_action @${projectKey} ${actionId} confirm`);
+        const projectArg = projectKey === GLOBAL_CHAT_PROJECT_KEY ? "" : `@${projectKey} `;
+        const workspaceNotice = ["create_task", "code_change_task"].includes(action.type)
+          ? " This also authorizes agents to run commands and install, change, or remove project files and dependencies only inside this task's isolated worktree."
+          : "";
+        await ctx.reply(`High-impact action: ${action.label}.${workspaceNotice}\nTo confirm through Telegram, use: /chat_action ${projectArg}${actionId} confirm`);
         return;
       }
     }
@@ -917,8 +951,12 @@ export function createTelegramBot(
         surface: "telegram",
         action,
         userId: String(ctx.from?.id ?? ""),
-        username: ctx.from?.username ?? null
+        username: ctx.from?.username ?? null,
+        workspaceWriteApproved: confirmed && ["create_task", "code_change_task"].includes(action.type)
       });
+      if (result.success && action.type === "create_project" && typeof action.payload?.key === "string") {
+        selectChatProject(ctx, action.payload.key.toLowerCase());
+      }
       await ctx.reply(result.resultSummary);
     } catch (error) {
       await ctx.reply(`Governed action failed: ${error instanceof Error ? error.message : "Unknown error."}`);
@@ -940,15 +978,8 @@ export function createTelegramBot(
       return;
     }
 
-    database.addEvent({
-      source: "telegram",
-      type: "feedback.received",
-      text,
-      userId: String(ctx.from?.id ?? ""),
-      username: ctx.from?.username ?? null
-    });
-
-    await ctx.reply("Feedback received and recorded. Use /chat @project message to talk with the orchestrator.");
+    const userId = String(ctx.from?.id ?? "");
+    await sendChatReply(ctx, getSelectedChatProject(userId), text);
   });
 
   return bot;
@@ -997,9 +1028,16 @@ export function parseQueueProjectKey(messageText: string): string | null {
 
 export function parseChatText(messageText: string): { projectKey: string | null; message: string } {
   const text = messageText.replace(/^\/chat(?:@\w+)?\s*/i, "").trim();
-  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(.+)$/s);
+  if (/^(?:@)?(?:general|geral)$/i.test(text)) {
+    return { projectKey: GLOBAL_CHAT_PROJECT_KEY, message: "" };
+  }
+  const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})(?:\s+([\s\S]+))?$/i);
   if (match) {
-    return { projectKey: match[1].toLowerCase(), message: match[2].trim() };
+    const key = match[1].toLowerCase();
+    return {
+      projectKey: key === "general" || key === "geral" ? GLOBAL_CHAT_PROJECT_KEY : key,
+      message: match[2]?.trim() ?? ""
+    };
   }
   return { projectKey: null, message: text };
 }
@@ -1007,8 +1045,18 @@ export function parseChatText(messageText: string): { projectKey: string | null;
 export function parseChatActionText(messageText: string): { projectKey: string | null; actionId: string | null; confirmed: boolean } {
   const text = messageText.replace(/^\/chat_action(?:@\w+)?\s*/i, "").trim();
   const match = text.match(/^@([a-z0-9][a-z0-9_-]{1,48})\s+(\S+)(?:\s+(confirm|yes))?$/i);
-  return match
-    ? { projectKey: match[1].toLowerCase(), actionId: match[2], confirmed: Boolean(match[3]) }
+  if (match) {
+    return {
+      projectKey: match[1].toLowerCase(),
+      actionId: match[2],
+      confirmed: Boolean(match[3])
+    };
+  }
+  const general = text.match(/^(?:general|geral)\s+(\S+)(?:\s+(confirm|yes))?$/i);
+  if (general) return { projectKey: GLOBAL_CHAT_PROJECT_KEY, actionId: general[1], confirmed: Boolean(general[2]) };
+  const bare = text.match(/^(\S+)(?:\s+(confirm|yes))?$/i);
+  return bare
+    ? { projectKey: null, actionId: bare[1], confirmed: Boolean(bare[2]) }
     : { projectKey: null, actionId: null, confirmed: false };
 }
 
@@ -1222,6 +1270,11 @@ function formatCostSummary(summary: ReturnType<MaestroDatabase["getCostSummary"]
 function formatHelp(): string {
   return [
     "Octomynd Maestro is online.",
+    "",
+    "Chat: send normal text for general Maestro chat; use /chat @project to select project context.",
+    "/chat [message] - general Maestro chat",
+    "/chat @project [message] - switch to project context and optionally send a message",
+    "/chat_action [@project] action-id [confirm] - run a proposed chat action",
     "",
     "Commands:",
     "/status - show overall status and working agents",

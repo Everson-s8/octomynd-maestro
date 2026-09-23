@@ -1468,10 +1468,21 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    hasEventForTask(taskId: number, type: string): boolean {
+      return Boolean(db.prepare("SELECT 1 FROM events WHERE task_id = ? AND type = ? LIMIT 1").get(taskId, type));
+    },
+
     findLatestEventByType(type: string): EventRecord | null {
       const row = db
         .prepare("SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1")
         .get(type) as EventRow | undefined;
+      return row ? mapEvent(row) : null;
+    },
+
+    findLatestEventByTypeAndUser(type: string, userId: string): EventRecord | null {
+      const row = db
+        .prepare("SELECT * FROM events WHERE type = ? AND user_id = ? ORDER BY id DESC LIMIT 1")
+        .get(type, userId) as EventRow | undefined;
       return row ? mapEvent(row) : null;
     },
 

@@ -277,6 +277,7 @@ export type OperationalChatActionRequest = {
   userId?: string | null;
   username?: string | null;
   accessMode?: ChatAccessMode | null;
+  workspaceWriteApproved?: boolean;
   uiLocale?: ChatLocale | null;
   /** @deprecated Use uiLocale. */
   locale?: ChatLocale | null;

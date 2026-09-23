@@ -332,6 +332,19 @@ The contract, routing, and limits are documented in `docs/GOAL_RUNTIME.md`.
 
 ## Telegram Commands
 
+Telegram also provides the same governed operational chat used by the Dashboard. Send ordinary
+text to use the general Maestro context; use `/chat @<key>` to select a project context for the
+conversation. The selection is saved per Telegram user and restored after a bot restart. Use
+`/chat geral` to return to the general context, or `/chat @<key> <message>` to switch and send a
+message in one step. The general chat can propose governed actions such as registering a project;
+after creating one, continue in that project's context. High-impact actions require an explicit
+confirmation, and task confirmation authorizes agent commands and project-local changes only inside
+that task's isolated worktree.
+
+- `/chat [message]` uses the general context unless a project context is already selected.
+- `/chat @<key> [message]` selects project context and optionally sends a message.
+- `/chat_action [@<key>] <action-id> [confirm]` executes a proposed chat action.
+
 - `/start` shows the bot introduction.
 - `/help` shows available commands.
 - `/status` shows daemon status, active goals, and agents currently working.
@@ -357,7 +370,7 @@ baseline branch. Exact duplicates of delivered/completed work are marked `blocke
 rather than silently discarded. Configure it with `MAESTRO_AUTOPILOT_ENABLED`,
 `MAESTRO_AUTOPILOT_POLL_MS`, and `MAESTRO_AUTOPILOT_MAX_CONCURRENT`.
 
-- Any plain text message is saved as feedback.
+- Any plain text message is routed through the operational chat in the selected context.
 
 Final goal notifications are proactive: completed goals with a draft PR send a concise review
 request. The notification excludes local worktree paths, credentials, and private Telegram

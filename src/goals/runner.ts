@@ -760,8 +760,7 @@ export async function runTaskGoal(
           model: routed.model,
           effort: routed.effort,
           acceptanceCriteria: dna?.acceptanceCriteria,
-          workspaceWriteApproved: database.listEventsForTask(task.id)
-            .some((event) => event.type === "task.workspace_access_approved")
+          workspaceWriteApproved: database.hasEventForTask(task.id, "task.workspace_access_approved")
         });
       } catch (error) {
         result = {

@@ -633,7 +633,7 @@ export class OperationalChatService {
             projectKey: targetProjectKey,
             title: typeof action.payload?.title === "string" ? action.payload.title : undefined,
             specification: typeof action.payload?.specification === "string" ? action.payload.specification : undefined,
-            workspaceWriteApproved: accessMode === "full"
+            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -667,7 +667,7 @@ export class OperationalChatService {
           const task = this.commands.createTask(origin, {
             text,
             projectKey: targetProjectKey,
-            workspaceWriteApproved: accessMode === "full"
+            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);

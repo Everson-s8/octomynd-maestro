@@ -733,7 +733,7 @@ export class ApplicationCommands {
 
   private recordWorkspaceWriteApproval(origin: CommandOrigin, taskId: number, approved?: boolean): void {
     if (!approved) return;
-    if (this.database.listEventsForTask(taskId).some((event) => event.type === "task.workspace_access_approved")) return;
+    if (this.database.hasEventForTask(taskId, "task.workspace_access_approved")) return;
     this.database.addEvent({
       source: origin.channel,
       type: "task.workspace_access_approved",
