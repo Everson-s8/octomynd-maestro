@@ -81,7 +81,9 @@ npm run release:win
 
 Output: `release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, and
 `release/latest.yml`, where `<version>` comes from `package.json`. The artifact
-names are deterministic and versioned for sharing. Verify the complete update
+names are deterministic and versioned for sharing. Existing installers in
+`release/` are preserved; the current `latest.yml` is regenerated for the new
+build. Verify the complete update
 set before publishing:
 
 ```powershell
