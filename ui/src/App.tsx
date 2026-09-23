@@ -5,6 +5,7 @@ import { ErrorBanner } from "./components/ErrorBanner";
 import { LoadingSpinner } from "./components/LoadingSpinner";
 import { TaskComposer } from "./components/TaskComposer";
 import { ProjectModal } from "./components/ProjectModal";
+import { DesktopUpdateBadge } from "./components/DesktopUpdateBadge";
 import { RuntimeErrorBoundary } from "./components/RuntimeErrorBoundary";
 import { MaestroV2 } from "./pages/MaestroV2";
 import { useI18n, translate } from "./i18n";
@@ -99,21 +100,7 @@ export default function App() {
       <button type="button" onClick={() => openExternalUrl(RELEASES_URL)}>{translate("Install manually")}</button>
       <button onClick={() => setUpdateError(null)}>{translate("Dismiss")}</button>
     </div> : null}
-    {data ? <div className="maestro-runtime-badge" role="status">
-      <span>{translate("Maestro")} v{data.daemon.version}</span>
-      {updateStatus?.event === "checking" ? (
-        <span>{translate("Checking for updates…")}</span>
-      ) : updateStatus?.event === "up_to_date" ? (
-        <span>{translate("You're up to date.")}</span>
-      ) : null}
-      {updateStatus?.event === "downloading" || updateStatus?.event === "progress" ? (
-        <span>{translate("Downloading update")} {updateStatus.version ? `v${updateStatus.version}` : ""} · {updateStatus.percent ?? 0}%</span>
-      ) : updateStatus?.event === "ready" ? (
-        <button type="button" onClick={() => void handleInstallUpdate()}>
-          {translate("Restart to update")} {updateStatus.version ? `v${updateStatus.version}` : ""}
-        </button>
-      ) : null}
-    </div> : null}
+    {data ? <DesktopUpdateBadge version={data.daemon.version} status={updateStatus} onInstall={() => void handleInstallUpdate()} /> : null}
     {data ? <MaestroV2 data={data} onRefresh={handleRefresh} onCreate={handleCreate} onRegisterProject={handleRegisterProject} onRestartOnboarding={handleRestartOnboarding} refreshing={refreshing} /> : null}
     <TaskComposer open={composerOpen} projects={data?.projects ?? []} onClose={() => setComposerOpen(false)} onCreated={async () => { setComposerOpen(false); await refresh(true); }} />
     <ProjectModal open={projectModalOpen} onClose={() => setProjectModalOpen(false)} onCreated={async () => { setProjectModalOpen(false); await refresh(true); }} />
