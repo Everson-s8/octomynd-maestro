@@ -18,23 +18,19 @@ review.
 | `python` | a Python manifest (`pyproject.toml`, `requirements*.txt`, `setup.*`, `pytest.ini`, `tox.ini`, `Pipfile`, `environment.yml`) or any `.py` file, **and** no root TypeScript manifest | `compileall`, then `pytest -q` (skipped when there are no `test_*.py` / `*_test.py`) |
 | `root` | everything else (Maestro itself and TypeScript roots) | backend typecheck, `ui/` typecheck, Vitest, Vite build with `ui/vite.config.ts` |
 
-Project manifests are also inventoried recursively, with bounded depth and directory
-count, independently of directory names. Environment preparation uses that inventory
-to find Node and Python projects at arbitrary paths; for example,
-`odd/place/service/package.json` and `modules/data-engine/runtime/pyproject.toml`
-are valid project locations. The inventory also records Rust, Go, Java, .NET, Ruby,
-PHP, Elixir, Dart, Swift, and container manifests as evidence, but automatic dependency
-provisioning and deterministic checks for those ecosystems are not implemented yet.
-Broad project-context requests also receive discovered manifest evidence and selected
-nested `README.md`, `AGENTS.md`, and `CONTEXT.md` files, subject to the chat's existing
-file-count and byte limits.
+Project manifests are inventoried independently of directory names. In Git repositories,
+discovery uses `git ls-files --cached --others --exclude-standard`, so ignored build output
+and generated package trees are not treated as project roots; non-Git folders use the same
+bounded filesystem scan. The inventory records Rust, Go, Java, .NET, Ruby, PHP, Elixir,
+Dart, Swift, and container manifests as evidence, but automatic provisioning and
+deterministic checks for those ecosystems are not implemented yet.
 
 **Tools.**
 - TypeScript tools (`tsc`, `vitest`, `vite`) are resolved from the worktree's
   `node_modules`, then from `MAESTRO_RUNTIME_ROOT`.
-- Python uses the worktree's `.venv` interpreter when it exists. Otherwise it
-  probes Python 3 installations, including the Windows `py` launcher, and
-  selects the first interpreter that successfully starts.
+- Python uses the selected project's `.venv` interpreter when it exists.
+  Otherwise it probes Python 3 installations, including the Windows `py`
+  launcher, and selects the first interpreter that successfully starts.
 
 **Infrastructure failures.** If the runner itself cannot start, the Goal is
 paused as `waiting_provider` (`environment_error`) and retried. It is not
@@ -44,13 +40,23 @@ blocked.
 
 The deterministic runner prepares dependencies before tests only when the Task
 has a persisted `task.workspace_access_approved` event. It creates a worktree
-`.venv`, installs supported Python manifests (`requirements*.txt`, `pyproject.toml`,
-`setup.py`, or `setup.cfg`), including conventional `dev`, `test`, `tests`, and
-`testing` extras from `[project.optional-dependencies]`. Node app directories use
-the package manager indicated by a supported lockfile (`npm ci`, frozen pnpm
+`.venv` for Python projects included in the validation plan, installs supported
+Python manifests (`requirements*.txt`, `pyproject.toml`, `setup.py`, or `setup.cfg`),
+including conventional `dev`, `test`, `tests`, and `testing` extras from
+`[project.optional-dependencies]`, and runs their checks from that same project
+directory and virtual environment. Node app directories selected by the current
+validation catalog use the package manager indicated by a supported lockfile
+(`npm ci`, frozen pnpm
 or bun install, immutable Yarn Berry install, or frozen Yarn Classic install);
 without a lockfile, npm installs without creating one.
-Workspace paths are read from the project's own npm/Yarn/pnpm manifests and
+Only the repository root, declared workspace roots, frontend/backend roots selected
+by the deterministic validation catalog, and a sole nested standalone Node project
+are prepared. The standalone Node profile runs declared standard `typecheck`,
+`lint`, `test`, and `build` scripts from that package; if none are declared, the
+check is explicitly skipped and project-led validation is required. Other discovered
+manifests (for example, example apps and test fixtures) are inventory evidence, not
+implicit install requests. Workspace paths
+are read from the project's own npm/Yarn/pnpm manifests and
 matched with standard glob syntax; directory names such as `packages/` are not
 assumed. Declared workspace members are installed through their root, not as
 isolated packages. A pnpm workspace without a lockfile uses

@@ -22,6 +22,12 @@ export type ValidationCheckId =
   | "tests_focused"
   | "tests_full"
   | "tests_python"
+  | `python_compile_${string}`
+  | `tests_python_${string}`
+  | "project_tests"
+  | "project_typecheck"
+  | "project_lint"
+  | "project_build"
   | "build_ui";
 
 export type ValidationCheckResult = {
@@ -62,6 +68,7 @@ type CommandSpec = {
   command: string;
   args: string[];
   timeoutMs: number;
+  cwd?: string;
   skipReason?: string;
 };
 
@@ -99,7 +106,8 @@ export class DeterministicValidationRunner {
           invocationRoot,
           invocationKey,
           request.signal,
-          projectDiscovery
+          projectDiscovery,
+          request
         ));
       }
       // Built after provisioning: a `.venv` created above must be the
@@ -152,7 +160,23 @@ function commandSpecs(
     return nestedProjectCommandSpecs(workspacePath, request, projectDiscovery);
   }
   if (layout === "python") {
-    return pythonProjectCommandSpecs(workspacePath, request);
+    const directories = pythonProjectDirs(workspacePath, projectDiscovery, request);
+    if (directories.length <= 1) {
+      const directory = directories[0] ?? ".";
+      return pythonProjectCommandSpecs(path.join(workspacePath, ...directory.split("/")), request);
+    }
+    const diffCheck = pythonProjectCommandSpecs(workspacePath, request)[0]!;
+    return [diffCheck, ...directories.flatMap((directory, index) => {
+      const projectPath = path.join(workspacePath, ...directory.split("/"));
+      const slug = safeProjectCheckSlug(directory, index);
+      return pythonProjectCommandSpecs(projectPath, request, {
+        compile: `python_compile_${slug}`,
+        tests: `tests_python_${slug}`
+      }).slice(1);
+    })];
+  }
+  if (layout === "standalone-node") {
+    return standaloneNodeCommandSpecs(workspacePath, projectDiscovery, request);
   }
 
   const typescriptBin = resolveRuntimeTool(workspacePath, "typescript", "bin/tsc");
@@ -197,7 +221,7 @@ function commandSpecs(
   ];
 }
 
-type ProjectLayout = "root" | "nested-app" | "python";
+type ProjectLayout = "root" | "nested-app" | "python" | "standalone-node";
 
 // Generated apps do not always use `frontend/` and `backend/`: `frontend-ts/`,
 // `web/`, `client/`, `server/` or `api/` were validated as a bare Python or
@@ -230,13 +254,23 @@ function hasPythonProject(
 
 function pythonProjectDirs(
   workspacePath: string,
-  projectDiscovery: ReturnType<typeof discoverProject>
+  projectDiscovery: ReturnType<typeof discoverProject>,
+  request: ValidationRequest
 ): string[] {
-  const directories = projectDiscovery.manifests
+  const discovered = [...new Set(projectDiscovery.manifests
     .filter((manifest) => manifest.ecosystem === "python")
-    .map((manifest) => manifest.directory);
-  if (directories.length === 0 && containsPythonSourceFile(workspacePath)) directories.push(".");
-  return [...new Set(directories)].sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
+    .map((manifest) => manifest.directory))];
+  if (discovered.length === 0 && containsPythonSourceFile(workspacePath)) discovered.push(".");
+  const selected = new Set<string>(discovered.filter((directory) => directory === "."));
+  const standalone = discovered.filter((directory) => directory !== ".");
+  if (standalone.length === 1) selected.add(standalone[0]!);
+  else if (standalone.length > 1) {
+    const changedFiles = listChangedFiles(workspacePath, validatedBaseRef(request.baseRef));
+    for (const directory of standalone) {
+      if (changedFiles.some((file) => file === directory || file.startsWith(`${directory}/`))) selected.add(directory);
+    }
+  }
+  return [...selected].sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
 }
 
 function detectProjectLayout(
@@ -254,10 +288,85 @@ function detectProjectLayout(
     "vite.config.ts",
     "vite.config.js"
   ]);
+  const standaloneNodeDirs = [...new Set(projectDiscovery.manifests
+    .filter((manifest) => manifest.ecosystem === "node" && manifest.name === "package.json")
+    .map((manifest) => manifest.directory))];
+  const hasRootPythonProject = projectDiscovery.manifests.some((manifest) => (
+    manifest.ecosystem === "python" && manifest.directory === "."
+  ));
+  if (!hasTypeScriptManifest && !hasRootPythonProject
+    && standaloneNodeDirs.length === 1 && standaloneNodeDirs[0] !== ".") {
+    return "standalone-node";
+  }
   return hasPythonProject(workspacePath, projectDiscovery) && !hasTypeScriptManifest ? "python" : "root";
 }
 
-function pythonProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
+function standaloneNodeCommandSpecs(
+  workspacePath: string,
+  projectDiscovery: ReturnType<typeof discoverProject>,
+  request: ValidationRequest
+): CommandSpec[] {
+  const projectDir = [...new Set(projectDiscovery.manifests
+    .filter((manifest) => manifest.ecosystem === "node" && manifest.name === "package.json")
+    .map((manifest) => manifest.directory))][0]!;
+  const projectPath = path.join(workspacePath, ...projectDir.split("/"));
+  let scripts: Record<string, unknown> = {};
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(projectPath, "package.json"), "utf8")) as { scripts?: unknown };
+    if (manifest.scripts && typeof manifest.scripts === "object") scripts = manifest.scripts as Record<string, unknown>;
+  } catch {
+    // The install/validation step will surface malformed manifests clearly.
+  }
+  const packageManager = detectNodePackageManager(projectPath) ?? detectNpmWithoutLockfile();
+  const candidates: Array<{ id: "project_typecheck" | "project_lint" | "project_tests" | "project_build"; script: string }> = [
+    { id: "project_typecheck", script: "typecheck" },
+    { id: "project_lint", script: "lint" },
+    { id: "project_tests", script: "test" },
+    { id: "project_build", script: "build" }
+  ];
+  const selected = candidates.filter(({ script }) => typeof scripts[script] === "string");
+  const plan: CommandSpec[] = selected.length > 0
+    ? selected.map(({ id, script }) => {
+      const invocation = packageManager?.kind === "npm" && packageManager.npmCli
+        ? { command: process.execPath, args: [packageManager.npmCli, "run", script] }
+        : packageManager && packageManager.kind !== "npm"
+          ? commandForManager(packageManager.kind, ["run", script])
+          : null;
+      return {
+        id,
+        command: invocation?.command ?? process.execPath,
+        args: invocation?.args ?? [],
+        cwd: projectPath,
+        timeoutMs: script === "build" ? 180_000 : 120_000,
+        skipReason: invocation ? undefined : "package manager CLI could not be resolved"
+      };
+    })
+    : [{
+      id: "project_tests",
+      command: process.execPath,
+      args: [],
+      cwd: projectPath,
+      timeoutMs: 120_000,
+      skipReason: "no standard typecheck, lint, test, or build script is declared; project-led validation is required"
+    }];
+  const pythonChecks = pythonProjectDirs(workspacePath, projectDiscovery, request).flatMap((directory, index) => {
+    const pythonPath = path.join(workspacePath, ...directory.split("/"));
+    const slug = safeProjectCheckSlug(directory, index);
+    const ids = { compile: `python_compile_${slug}` as const, tests: `tests_python_${slug}` as const };
+    return pythonProjectCommandSpecs(pythonPath, { ...request, mode: "full", focusedTests: [] }, ids).slice(1);
+  });
+  return [
+    { id: "diff_check", command: "git", args: ["-C", workspacePath, "diff", "--check"], timeoutMs: 30_000 },
+    ...plan,
+    ...pythonChecks
+  ];
+}
+
+function pythonProjectCommandSpecs(
+  workspacePath: string,
+  request: ValidationRequest,
+  ids: { compile?: CommandSpec["id"]; tests?: CommandSpec["id"] } = {}
+): CommandSpec[] {
   const python = resolvePythonInvocation(workspacePath);
   const focusedTests = request.mode === "focused"
     ? validatedFocusedTests(request.focusedTests, "python")
@@ -275,7 +384,7 @@ function pythonProjectCommandSpecs(workspacePath: string, request: ValidationReq
       timeoutMs: 30_000
     },
     {
-      id: "python_compile",
+      id: ids.compile ?? "python_compile",
       command: python.command,
       args: [
         ...python.prefixArgs,
@@ -283,12 +392,14 @@ function pythonProjectCommandSpecs(workspacePath: string, request: ValidationReq
         "(^|[\\\\/])(?:\\.git|\\.venv|venv|node_modules|dist|build)([\\\\/]|$)",
         "."
       ],
+      cwd: workspacePath,
       timeoutMs: 120_000
     },
     {
-      id: testId,
+      id: ids.tests ?? testId,
       command: python.command,
       args: [...python.prefixArgs, "-m", "pytest", "-q", ...tests],
+      cwd: workspacePath,
       timeoutMs: tests.length > 0 ? 120_000 : 300_000,
       skipReason: hasTests ? undefined : "no Python test files found"
     }
@@ -480,12 +591,22 @@ function nestedProjectCommandSpecs(
     },
     // A Python service next to the frontend (e.g. FastAPI + `frontend-ts/`)
     // was never compiled or tested in this layout.
-    ...(hasPythonProject(workspacePath, projectDiscovery)
-      ? pythonProjectCommandSpecs(workspacePath, { ...request, mode: "full", focusedTests: [] })
+    ...pythonProjectDirs(workspacePath, projectDiscovery, request).flatMap((directory, index) => {
+      const projectPath = path.join(workspacePath, ...directory.split("/"));
+      const slug = safeProjectCheckSlug(directory, index);
+      const ids = directory === "."
+        ? { tests: "tests_python" as const }
+        : { compile: `python_compile_${slug}` as const, tests: `tests_python_${slug}` as const };
+      return pythonProjectCommandSpecs(projectPath, { ...request, mode: "full", focusedTests: [] }, ids)
         .slice(1)
-        .map((spec): CommandSpec => (spec.id === "tests_full" ? { ...spec, id: "tests_python" } : spec))
-      : [])
+        .map((spec): CommandSpec => spec.id === "tests_full" ? { ...spec, id: "tests_python" } : spec);
+    })
   ];
+}
+
+function safeProjectCheckSlug(directory: string, index: number): string {
+  const readable = directory.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "").slice(-48) || "project";
+  return `${readable}_${index + 1}`;
 }
 
 function hasAnyPath(workspacePath: string, relativePaths: string[]): boolean {
@@ -584,7 +705,7 @@ async function runCommandCheck(
   const result = await executeProcess({
     command: spec.command,
     args: spec.args,
-    cwd: workspacePath,
+    cwd: spec.cwd ?? workspacePath,
     timeoutMs: spec.timeoutMs,
     maxOutputChars: RAW_OUTPUT_MAX_CHARS,
     signal,
@@ -682,7 +803,8 @@ async function prepareEnvironment(
   invocationRoot: string,
   invocationKey: string,
   signal: AbortSignal | undefined,
-  projectDiscovery: ReturnType<typeof discoverProject>
+  projectDiscovery: ReturnType<typeof discoverProject>,
+  validationRequest: ValidationRequest
 ): Promise<ValidationCheckResult> {
   const startedAt = Date.now();
   const log: string[] = [];
@@ -720,7 +842,7 @@ async function prepareEnvironment(
   };
 
   if (environmentsExcluded) {
-    for (const projectDir of pythonProjectDirs(workspacePath, projectDiscovery)) {
+    for (const projectDir of pythonProjectDirs(workspacePath, projectDiscovery, validationRequest)) {
       if (signal?.aborted) break;
       await preparePython(path.join(workspacePath, ...projectDir.split("/")), run, log, failures);
     }
@@ -856,14 +978,28 @@ function pythonTestExtras(pyprojectPath: string): string[] {
     .filter((name) => /^(?:dev|test|tests|testing)(?:[-_][A-Za-z0-9_-]+)?$/i.test(name));
 }
 
-/** Every discovered Node manifest, regardless of directory name or nesting. */
+/**
+ * Prepare only Node roots which the deterministic catalog can validate:
+ * the repository root, declared workspace roots, and selected frontend/backend
+ * apps. A lone nested package remains supported as an imported standalone
+ * project; arbitrary example and fixture manifests are evidence, not install targets.
+ */
 function nodeAppDirs(workspacePath: string, projectDiscovery: ReturnType<typeof discoverProject>): string[] {
-  return projectDiscovery.manifests
+  const packageDirs = [...new Set(projectDiscovery.manifests
     .filter((manifest) => manifest.ecosystem === "node"
-      && (manifest.name === "package.json" || manifest.name === "pnpm-workspace.yaml"))
-    .map((manifest) => manifest.directory)
-    .filter((directory, index, directories) => directories.indexOf(directory) === index)
-    .sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
+      && manifest.name === "package.json")
+    .map((manifest) => manifest.directory))];
+  const candidates = new Set<string>();
+  if (packageDirs.includes(".")) candidates.add(".");
+  if (fs.existsSync(path.join(workspacePath, "pnpm-workspace.yaml"))) candidates.add(".");
+  for (const selected of [
+    findAppDir(workspacePath, BACKEND_DIR, "backend"),
+    findAppDir(workspacePath, FRONTEND_DIR, "frontend")
+  ]) {
+    if (selected && packageDirs.includes(selected)) candidates.add(selected);
+  }
+  if (packageDirs.length === 1 && !packageDirs.includes(".")) candidates.add(packageDirs[0]!);
+  return [...candidates].sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
 }
 
 function isPnpmWorkspaceRoot(workspacePath: string): boolean {

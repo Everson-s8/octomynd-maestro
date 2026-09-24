@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,5 +55,48 @@ describe("discoverProject", () => {
     expect(discovery.truncated).toBe(true);
     expect(discovery.warnings.join(" ")).toContain("maximum depth of 1");
     expect(discovery.manifests).toEqual([]);
+  });
+
+  it("uses Git's visible-file inventory and excludes ignored builds and fixtures", () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-project-discovery-git-"));
+    const git = (args: string[]) => {
+      const result = spawnSync("git", ["-C", tempDir!, ...args], { encoding: "utf8", windowsHide: true });
+      if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    };
+    git(["init", "-b", "main"]);
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), "release/\n", "utf8");
+    fs.writeFileSync(path.join(tempDir, "package.json"), "{}\n", "utf8");
+    fs.mkdirSync(path.join(tempDir, "examples", "demo"), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, "examples", "demo", "package.json"), "{}\n", "utf8");
+    fs.mkdirSync(path.join(tempDir, "release", "win-unpacked", "resources", "app"), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, "release", "win-unpacked", "resources", "app", "package.json"), "{}\n", "utf8");
+    git(["add", ".gitignore", "package.json", "examples"]);
+
+    const discovery = discoverProject(tempDir);
+
+    expect(discovery.manifests.map((manifest) => manifest.path)).toEqual([
+      "examples/demo/package.json",
+      "package.json"
+    ]);
+    expect(discovery.files).not.toContain("release/win-unpacked/resources/app/package.json");
+  });
+
+  it("scopes Git inventory to a nested project root", () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-project-discovery-nested-git-"));
+    const git = (cwd: string, args: string[]) => {
+      const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true });
+      if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    };
+    git(tempDir, ["init", "-b", "main"]);
+    fs.writeFileSync(path.join(tempDir, "package.json"), "{}\n", "utf8");
+    const projectRoot = path.join(tempDir, "nested", "service");
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "pyproject.toml"), "[project]\nname = 'service'\n", "utf8");
+    git(tempDir, ["add", "."]);
+
+    const discovery = discoverProject(projectRoot);
+
+    expect(discovery.manifests.map((manifest) => manifest.path)).toEqual(["pyproject.toml"]);
+    expect(discovery.files).not.toContain("package.json");
   });
 });

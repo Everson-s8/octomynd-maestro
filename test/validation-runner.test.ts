@@ -494,7 +494,8 @@ describe("DeterministicValidationRunner environment preparation", () => {
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(path.join(appDir, "package.json"), JSON.stringify({
       name: "desktop-shell",
-      dependencies: { example: "1.0.0" }
+      dependencies: { example: "1.0.0" },
+      scripts: { test: "vitest run", build: "vite build" }
     }), "utf8");
     fs.writeFileSync(path.join(appDir, "package-lock.json"), "{}\n", "utf8");
     const calls: AgentProcessRequest[] = [];
@@ -514,6 +515,8 @@ describe("DeterministicValidationRunner environment preparation", () => {
 
     expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
     expect(calls.find((call) => call.args.includes("ci"))?.cwd).toBe(appDir);
+    expect(calls.some((call) => call.args.includes("run") && call.args.includes("test") && call.cwd === appDir)).toBe(true);
+    expect(calls.some((call) => call.args.includes("run") && call.args.includes("build") && call.cwd === appDir)).toBe(true);
   });
 
   it("prepares a Python project at an arbitrary nested path using its own manifests", async () => {
@@ -539,6 +542,75 @@ describe("DeterministicValidationRunner environment preparation", () => {
     expect(calls.some((call) => call.args.join(" ").endsWith("-m venv .venv") && call.cwd === projectDir)).toBe(true);
     expect(calls.some((call) => call.command === nestedPython && call.args.includes("-r")
       && call.args.includes("requirements-quality.txt") && call.cwd === projectDir)).toBe(true);
+  });
+
+  it("runs nested Python checks with the same project-local venv that preparation created", async () => {
+    const frontendDir = path.join(workspacePath, "site", "client");
+    const pythonDir = path.join(workspacePath, "services", "api");
+    fs.mkdirSync(frontendDir, { recursive: true });
+    fs.mkdirSync(path.join(pythonDir, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(frontendDir, "package.json"), "{\"name\":\"client\"}\n", "utf8");
+    fs.writeFileSync(path.join(frontendDir, "package-lock.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(pythonDir, "pyproject.toml"), "[project]\nname = 'api'\n", "utf8");
+    fs.writeFileSync(path.join(pythonDir, "tests", "test_api.py"), "def test_api(): pass\n", "utf8");
+    const nestedPython = process.platform === "win32"
+      ? path.join(pythonDir, ".venv", "Scripts", "python.exe")
+      : path.join(pythonDir, ".venv", "bin", "python");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      if (request.args.includes("venv")) {
+        fs.mkdirSync(path.dirname(nestedPython), { recursive: true });
+        fs.writeFileSync(nestedPython, "", "utf8");
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    const pytest = calls.find((call) => call.args.includes("pytest"));
+    const compile = calls.find((call) => call.args.includes("compileall"));
+    expect(report.checks.some((check) => check.id === "tests_full" || check.id.startsWith("tests_python"))).toBe(true);
+    expect(pytest?.command).toBe(nestedPython);
+    expect(pytest?.cwd).toBe(pythonDir);
+    expect(compile?.command).toBe(nestedPython);
+    expect(compile?.cwd).toBe(pythonDir);
+  });
+
+  it("does not install discovered example packages or ignored packaged builds", async () => {
+    fs.writeFileSync(path.join(workspacePath, ".gitignore"), "release/\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "root-app",
+      dependencies: { rootDependency: "1.0.0" }
+    }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "package-lock.json"), "{}\n", "utf8");
+    const exampleDir = path.join(workspacePath, "examples", "with-redux");
+    fs.mkdirSync(exampleDir, { recursive: true });
+    fs.writeFileSync(path.join(exampleDir, "package.json"), JSON.stringify({
+      name: "broken-example",
+      dependencies: { deliberatelyMissing: "1.0.0" }
+    }), "utf8");
+    const ignoredBuild = path.join(workspacePath, "release", "win-unpacked", "resources", "app");
+    fs.mkdirSync(ignoredBuild, { recursive: true });
+    fs.writeFileSync(path.join(ignoredBuild, "package.json"), "{}\n", "utf8");
+    const installCwds: string[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("ci") || request.args.includes("install")) {
+        installCwds.push(request.cwd);
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
+      if (request.args.includes("ls")) {
+        return completedProcess(JSON.stringify({ dependencies: { rootDependency: { version: "1.0.0" } } }));
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(installCwds).toEqual([workspacePath]);
+    expect(fs.existsSync(path.join(exampleDir, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(ignoredBuild, "node_modules"))).toBe(false);
   });
 
   it("caches Yarn Plug'n'Play installs without requiring node_modules", async () => {
