@@ -38,8 +38,13 @@ has a persisted `task.workspace_access_approved` event. It creates a worktree
 `testing` extras from `[project.optional-dependencies]`. Node app directories use
 the package manager indicated by a supported lockfile (`npm ci`, frozen
 pnpm/yarn/bun install); without a lockfile, npm installs without creating one.
-Successful dependency installs are cached against their manifests; failed or
-partial installs are retried instead of being mistaken for a prepared environment.
+Declared npm/Yarn/pnpm workspace members are installed through their root, not
+as isolated packages. Successful dependency installs are cached against the
+relevant root and member manifests outside the worktree, including Yarn PnP
+layouts; failed or partial installs are retried instead of being mistaken for
+a prepared environment. npm verification rejects missing required direct
+dependencies but tolerates peer/extraneous warnings when declared dependencies
+are present.
 
 The user's explicit Create Task action records approval for autonomous commands
 and dependency changes inside that Task's isolated worktree; no second approval
@@ -56,7 +61,12 @@ system. Package lifecycle scripts and test commands execute as the Maestro user'
 account and can have effects outside the worktree. Maestro removes secret-shaped
 environment variables before starting installers and project validation
 commands; this limits credential exposure but is not an operating-system
-sandbox. The Task approval text states this boundary. For Codex, see
+sandbox. Credential variables used by private registries are also removed, so
+registries that rely only on environment tokens may need existing
+user-level/package-manager credential configuration. This prevents arbitrary
+lifecycle scripts from inheriting those tokens. The Task approval text states
+that scripts run as the user and may affect host resources. For the local API
+trust boundary, see [Goal Runtime](GOAL_RUNTIME.md#safety-boundaries). For Codex, see
 [Providers](PROVIDERS.md#codex-execution-flags).
 
 ## Known gaps
@@ -67,3 +77,6 @@ sandbox. The Task approval text states this boundary. For Codex, see
   the provider having a browser available.
 - Browser setup and Python managers beyond the supported requirements/setup
   manifests still require provider-led recovery.
+- Python test groups declared through PEP 735 `[dependency-groups]` or Poetry
+  group tables are not provisioned automatically yet; conventional
+  `[project.optional-dependencies]` extras and `requirements*.txt` are supported.

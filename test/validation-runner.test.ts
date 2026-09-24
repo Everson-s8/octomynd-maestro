@@ -315,6 +315,9 @@ describe("DeterministicValidationRunner environment preparation", () => {
     const calls: AgentProcessRequest[] = [];
     const runner = new DeterministicValidationRunner(async (request) => {
       calls.push(request);
+      if (request.args.includes("ci") || request.args.includes("install")) {
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
       return completedProcess("ok");
     });
 
@@ -325,6 +328,89 @@ describe("DeterministicValidationRunner environment preparation", () => {
         ? call.args[0] === "install" && call.args.includes("--frozen-lockfile")
         : call.args.some((arg) => arg.includes("pnpm install --frozen-lockfile"))
     ))).toBe(true);
+  });
+
+  it("installs declared npm workspace members once from the root lockfile", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "monorepo",
+      private: true,
+      workspaces: ["packages/*"],
+      scripts: { test: "echo test" }
+    }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "package-lock.json"), "{}\n", "utf8");
+    const webDir = path.join(workspacePath, "packages", "web");
+    fs.mkdirSync(webDir, { recursive: true });
+    fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({
+      name: "web",
+      dependencies: { "shared-ui": "workspace:*" }
+    }), "utf8");
+    const installCwds: string[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("ci")) {
+        installCwds.push(request.cwd);
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(installCwds).toEqual([workspacePath]);
+
+    fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({
+      name: "web",
+      dependencies: { "shared-ui": "workspace:*", react: "19.0.0" }
+    }), "utf8");
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    expect(installCwds).toEqual([workspacePath, workspacePath]);
+  });
+
+  it("installs pnpm workspace protocol dependencies from the pnpm workspace root", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({ name: "pnpm-monorepo", private: true }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "pnpm-workspace.yaml"), "packages:\n  - 'web'\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    const webDir = path.join(workspacePath, "web");
+    fs.mkdirSync(webDir);
+    fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({
+      name: "web",
+      dependencies: { "shared-ui": "workspace:*" }
+    }), "utf8");
+    const installCwds: string[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("install") || request.args.some((arg) => /pnpm install/.test(arg))) {
+        installCwds.push(request.cwd);
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(installCwds).toEqual([workspacePath]);
+  });
+
+  it("caches Yarn Plug'n'Play installs without requiring node_modules", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "pnp-app",
+      dependencies: { "some-package": "1.0.0" }
+    }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "yarn.lock"), "__metadata:\n  version: 8\n", "utf8");
+    let installs = 0;
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.some((arg) => /yarn install/.test(arg)) || request.args.includes("install")) {
+        installs += 1;
+        fs.writeFileSync(path.join(workspacePath, ".pnp.cjs"), "// generated PnP loader\n", "utf8");
+      }
+      return completedProcess("ok");
+    });
+
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(installs).toBe(1);
+    expect(second.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
   });
 
   it("prefers requirement files and keeps .venv/node_modules out of commits", async () => {
@@ -379,6 +465,9 @@ describe("DeterministicValidationRunner environment preparation", () => {
     const calls: AgentProcessRequest[] = [];
     const runner = new DeterministicValidationRunner(async (request) => {
       calls.push(request);
+      if (request.args.includes("ci") || request.args.includes("install")) {
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
       return completedProcess("ok");
     });
 
@@ -463,7 +552,10 @@ describe("DeterministicValidationRunner environment preparation", () => {
         fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
         return completedProcess("install reported success");
       }
-      if (request.args.includes("ls")) return completedProcess("missing: vite", 1);
+      if (request.args.includes("ls")) return completedProcess(JSON.stringify({
+        dependencies: { vite: { missing: true, problems: ["missing: vite"] } },
+        problems: ["missing: vite"]
+      }), 1);
       return completedProcess("ok");
     });
 
@@ -473,6 +565,32 @@ describe("DeterministicValidationRunner environment preparation", () => {
     expect(first.checks.find((check) => check.id === "prepare_environment")?.status).toBe("failed");
     expect(second.checks.find((check) => check.id === "prepare_environment")?.status).toBe("failed");
     expect(installAttempts).toBe(2);
+  });
+
+  it("accepts a complete npm install when npm ls reports only peer-dependency problems", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "peer-app",
+      dependencies: { vite: "1.0.0" }
+    }), "utf8");
+    let installs = 0;
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("ci") || request.args.includes("install")) {
+        installs += 1;
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
+      if (request.args.includes("ls")) return completedProcess(JSON.stringify({
+        dependencies: { vite: { version: "1.0.0" } },
+        problems: ["peer dep missing: optional-adapter"]
+      }), 1);
+      return completedProcess("ok");
+    });
+
+    const first = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(first.checks.find((check) => check.id === "prepare_environment")).toMatchObject({ status: "passed" });
+    expect(second.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
+    expect(installs).toBe(1);
   });
 });
 

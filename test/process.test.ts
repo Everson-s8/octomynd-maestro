@@ -140,12 +140,18 @@ describe("agent process runtime", () => {
       OPENAI_API_KEY: "secret",
       TELEGRAM_BOT_TOKEN: "secret",
       DATABASE_PASSWORD: "secret",
+      GITHUB_PAT: "secret",
+      DATABASE_URL: "postgres://localhost/test",
+      DB_URL: "postgres://user:secret@localhost/db",
+      NPM_CONFIG__AUTH: "secret",
+      NODE_AUTH_TOKEN: "secret",
       SAFE_SETTING: "yes"
     });
 
     expect(restricted).toEqual({
       PATH: "C:/tools",
       APPDATA: "C:/user/appdata",
+      DATABASE_URL: "postgres://localhost/test",
       SAFE_SETTING: "yes"
     });
   });

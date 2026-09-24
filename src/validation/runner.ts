@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { buildRestrictedAgentEnvironment, runAgentProcess } from "../agents/process.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import {
@@ -650,7 +651,8 @@ const PYTHON_REQUIREMENT_FILES = ["requirements.txt", "requirements-dev.txt", "r
 const PYTHON_DEPS_MARKER = ".maestro-deps.sha256";
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
-type PreparationStep = { label: string; command: string; args: string[]; cwd: string; timeoutMs: number };
+type PreparationStep = { label: string; command: string; args: string[]; cwd: string; timeoutMs: number; allowNonZeroExit?: boolean };
+type PreparationResult = { passed: boolean; output: string; exitCode: number | null; timedOut: boolean; aborted: boolean };
 
 /**
  * Make the worktree runnable before the checks:
@@ -676,7 +678,7 @@ async function prepareEnvironment(
     failures.push("could not guarantee generated environments stay out of commits; skipped dependency installation");
   }
 
-  const run = async (step: PreparationStep): Promise<boolean> => {
+  const run = async (step: PreparationStep): Promise<PreparationResult> => {
     actions.push(step.label);
     const result = await executeProcess({
       command: step.command,
@@ -692,13 +694,13 @@ async function prepareEnvironment(
     const output = redactSensitiveText([result.stdout, result.stderr].filter(Boolean).join("\n").trim());
     log.push(`$ ${step.label}\n${output}`);
     const passed = result.exitCode === 0 && !result.timedOut && !result.aborted;
-    if (!passed) {
+    if (!passed && !step.allowNonZeroExit) {
       failures.push(compactCommandFailure(
         output,
         `${step.label}: ${result.timedOut ? "timed out" : result.aborted ? "cancelled" : `exit ${result.exitCode ?? "unknown"}`}`
       ));
     }
-    return passed;
+    return { passed, output, exitCode: result.exitCode, timedOut: result.timedOut, aborted: result.aborted };
   };
 
   if (environmentsExcluded) {
@@ -707,7 +709,18 @@ async function prepareEnvironment(
     }
     for (const appDir of nodeAppDirs(workspacePath)) {
       if (signal?.aborted) break;
-      await prepareNode(workspacePath, appDir, run, log, failures);
+      if (isWorkspaceMember(workspacePath, appDir)) {
+        log.push(`Node workspace member ${appDir} is installed through its workspace root`);
+        continue;
+      }
+      await prepareNode(
+        workspacePath,
+        appDir,
+        path.dirname(path.dirname(invocationRoot)),
+        run,
+        log,
+        failures
+      );
     }
   }
 
@@ -728,7 +741,7 @@ async function prepareEnvironment(
 
 async function preparePython(
   workspacePath: string,
-  run: (step: PreparationStep) => Promise<boolean>,
+  run: (step: PreparationStep) => Promise<PreparationResult>,
   log: string[],
   failures: string[]
 ): Promise<void> {
@@ -747,14 +760,14 @@ async function preparePython(
   let created = false;
   if (!fs.existsSync(venvPython)) {
     const base = resolveBasePython();
-    const ok = await run({
+    const result = await run({
       label: "create .venv",
       command: base.command,
       args: [...base.prefixArgs, "-m", "venv", ".venv"],
       cwd: workspacePath,
       timeoutMs: 180_000
     });
-    if (!ok) return;
+    if (!result.passed) return;
     created = true;
   }
 
@@ -775,23 +788,23 @@ async function preparePython(
   let ok = true;
   if (requirements.length > 0) {
     for (const file of requirements) {
-      ok = await run({ label: `pip install -r ${file}`, command: venvPython, args: [...pip, "-r", file], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS }) && ok;
+      ok = (await run({ label: `pip install -r ${file}`, command: venvPython, args: [...pip, "-r", file], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS })).passed && ok;
     }
   } else if (manifests.some((file) => ["pyproject.toml", "setup.py", "setup.cfg"].includes(file))) {
     const extras = fs.existsSync(path.join(workspacePath, "pyproject.toml"))
       ? pythonTestExtras(path.join(workspacePath, "pyproject.toml"))
       : [];
     const target = extras.length > 0 ? `.[${extras.join(",")}]` : ".";
-    ok = await run({
+    ok = (await run({
       label: `pip install -e ${target}`,
       command: venvPython,
       args: [...pip, "-e", target],
       cwd: workspacePath,
       timeoutMs: INSTALL_TIMEOUT_MS
-    });
+    })).passed;
   }
   if (containsPythonTestFile(workspacePath)) {
-    ok = await run({ label: "pip install pytest", command: venvPython, args: [...pip, "pytest"], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS }) && ok;
+    ok = (await run({ label: "pip install pytest", command: venvPython, args: [...pip, "pytest"], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS })).passed && ok;
   }
   if (ok && fs.existsSync(venvDir)) {
     try {
@@ -821,7 +834,9 @@ function pythonTestExtras(pyprojectPath: string): string[] {
 
 /** The workspace root and first-level app folders that declare a package.json. */
 function nodeAppDirs(workspacePath: string): string[] {
-  const dirs = fs.existsSync(path.join(workspacePath, "package.json")) ? ["."] : [];
+  const dirs = fs.existsSync(path.join(workspacePath, "package.json")) || isPnpmWorkspaceRoot(workspacePath)
+    ? ["."]
+    : [];
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(workspacePath, { withFileTypes: true });
@@ -835,31 +850,128 @@ function nodeAppDirs(workspacePath: string): string[] {
   return dirs;
 }
 
+function isPnpmWorkspaceRoot(workspacePath: string): boolean {
+  return fs.existsSync(path.join(workspacePath, "pnpm-workspace.yaml"));
+}
+
+function workspacePatterns(workspacePath: string): string[] {
+  const patterns: string[] = [];
+  try {
+    const root = JSON.parse(fs.readFileSync(path.join(workspacePath, "package.json"), "utf8")) as Record<string, unknown>;
+    const workspaces = root.workspaces;
+    const declared = Array.isArray(workspaces)
+      ? workspaces
+      : workspaces && typeof workspaces === "object" && Array.isArray((workspaces as Record<string, unknown>).packages)
+        ? (workspaces as { packages: unknown[] }).packages
+        : [];
+    patterns.push(...declared.filter((item): item is string => typeof item === "string"));
+  } catch {
+    // A pnpm workspace can omit the root package.json.
+  }
+
+  try {
+    const pnpmWorkspace = parseYaml(fs.readFileSync(path.join(workspacePath, "pnpm-workspace.yaml"), "utf8")) as { packages?: unknown[] } | null;
+    if (Array.isArray(pnpmWorkspace?.packages)) {
+      patterns.push(...pnpmWorkspace.packages.filter((item): item is string => typeof item === "string"));
+    }
+  } catch {
+    // The pnpm workspace manifest is absent or invalid.
+  }
+  return patterns;
+}
+
+function matchesWorkspacePattern(appDir: string, pattern: string): boolean {
+  const normalized = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (!normalized || normalized.startsWith("!")) return false;
+  let expression = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const character = normalized[index];
+    if (character === "*" && normalized[index + 1] === "*") {
+      expression += ".*";
+      index += 1;
+    } else if (character === "*") {
+      expression += "[^/]*";
+    } else {
+      expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+  }
+  expression += "$";
+  try {
+    return new RegExp(expression).test(appDir.replace(/\\/g, "/"));
+  } catch {
+    return false;
+  }
+}
+
+function isWorkspaceMember(workspacePath: string, appDir: string): boolean {
+  if (appDir === ".") return false;
+  const patterns = workspacePatterns(workspacePath);
+  let included = false;
+  for (const rawPattern of patterns) {
+    const excluded = rawPattern.trim().startsWith("!");
+    const pattern = excluded ? rawPattern.trim().slice(1) : rawPattern;
+    if (matchesWorkspacePattern(appDir, pattern)) included = !excluded;
+  }
+  return included;
+}
+
+function workspaceMemberManifests(workspacePath: string): string[] {
+  const manifests: string[] = [];
+  const visit = (relativeDir: string, depth: number): void => {
+    if (depth > 8) return;
+    const absoluteDir = path.join(workspacePath, relativeDir);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || ["node_modules", ".venv", ".maestro"].includes(entry.name)) continue;
+      const childDir = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
+      const manifest = path.join(workspacePath, childDir, "package.json");
+      if (fs.existsSync(manifest) && isWorkspaceMember(workspacePath, childDir)) manifests.push(manifest);
+      visit(childDir, depth + 1);
+    }
+  };
+  visit("", 0);
+  return manifests.sort();
+}
+
 async function prepareNode(
   workspacePath: string,
   appDir: string,
-  run: (step: PreparationStep) => Promise<boolean>,
+  cacheRoot: string,
+  run: (step: PreparationStep) => Promise<PreparationResult>,
   log: string[],
   failures: string[]
 ): Promise<void> {
   const cwd = path.join(workspacePath, ...appDir.split("/"));
-  if (!declaresDependencies(path.join(cwd, "package.json"))) return; // nothing to install, never creates node_modules
+  const rootWorkspace = appDir === "." && workspacePatterns(workspacePath).length > 0;
+  if (!declaresDependencies(path.join(cwd, "package.json")) && !rootWorkspace) return; // nothing to install
   const packageManager = detectNodePackageManager(cwd);
-  const manifestPaths = ["package.json", ...(packageManager?.lockfiles ?? [])]
-    .map((file) => path.join(cwd, file))
+  const workspaceManifests = rootWorkspace
+    ? workspaceMemberManifests(workspacePath)
+    : [];
+  const manifestPaths = [
+    path.join(cwd, "package.json"),
+    ...(packageManager?.lockfiles ?? []).map((file) => path.join(cwd, file)),
+    ...workspaceManifests
+  ]
     .filter((file) => fs.existsSync(file));
   const dependencyHash = crypto.createHash("sha256");
-  for (const file of manifestPaths) dependencyHash.update(path.basename(file)).update(fs.readFileSync(file));
+  for (const file of manifestPaths) dependencyHash.update(path.relative(workspacePath, file)).update(fs.readFileSync(file));
   const digest = dependencyHash.digest("hex");
-  const nodeModules = path.join(cwd, "node_modules");
-  const marker = path.join(nodeModules, ".maestro-deps.sha256");
+  const cacheKey = crypto.createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, 24);
+  const markerDir = path.join(cacheRoot, "dependency-markers");
+  const marker = path.join(markerDir, `${cacheKey}.sha256`);
   let previous: string | null = null;
   try {
     if (fs.existsSync(marker)) previous = fs.readFileSync(marker, "utf8").trim();
   } catch {
     log.push(`could not read the Node dependency preparation marker in ${appDir}; retrying installation`);
   }
-  if (fs.existsSync(nodeModules) && previous === digest) {
+  if (hasNodeInstallArtifacts(cwd, packageManager) && previous === digest) {
     log.push(`Node dependencies unchanged since the last preparation in ${appDir}`);
     return;
   }
@@ -871,24 +983,44 @@ async function prepareNode(
     return;
   }
   const where = appDir === "." ? "" : ` in ${appDir}`;
-  const installed = await run({
+  const installResult = await run({
     label: `${manager.label}${where}`,
     command: manager.command,
     args: manager.args,
     cwd,
     timeoutMs: INSTALL_TIMEOUT_MS
   });
-  const verified = installed && manager.npmCli
-    ? await run({
+  let verified = installResult.passed;
+  if (verified && manager.kind === "npm" && manager.npmCli) {
+    const npmVerification = await run({
       label: `npm dependency verification${where}`,
       command: process.execPath,
-      args: [manager.npmCli, "ls", "--depth=0", "--no-audit", "--no-fund"],
+      args: [manager.npmCli, "ls", "--depth=0", "--json", "--no-audit", "--no-fund"],
       cwd,
-      timeoutMs: 120_000
-    })
-    : installed;
-  if (verified && fs.existsSync(nodeModules)) {
+      timeoutMs: 120_000,
+      allowNonZeroExit: true
+    });
+    verified = npmVerification.passed || (!npmVerification.timedOut && !npmVerification.aborted
+      && npmVerificationHasNoMissingRequiredDependencies(
+      npmVerification.output,
+      path.join(cwd, "package.json")
+      ));
+    if (!verified) {
+      failures.push(compactCommandFailure(
+        npmVerification.output,
+        "npm dependency verification found missing required dependencies or did not complete"
+      ));
+    }
+  }
+  if (verified && !hasNodeInstallArtifacts(cwd, manager)) {
+    const message = `${manager.label} completed but did not leave a usable Node installation in ${appDir}`;
+    log.push(message);
+    failures.push(message);
+    return;
+  }
+  if (verified) {
     try {
+      fs.mkdirSync(markerDir, { recursive: true });
       fs.writeFileSync(marker, `${digest}\n`, "utf8");
     } catch (error) {
       const message = `could not record the successful Node dependency preparation in ${appDir}: ${error instanceof Error ? error.message : "unknown error"}`;
@@ -899,6 +1031,7 @@ async function prepareNode(
 }
 
 type NodeManager = {
+  kind: "npm" | "pnpm" | "yarn" | "bun";
   label: string;
   lockfiles: string[];
   command: string;
@@ -909,6 +1042,7 @@ type NodeManager = {
 function detectNodePackageManager(cwd: string): NodeManager | null {
   if (fs.existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
     return {
+      kind: "pnpm",
       label: "pnpm install --frozen-lockfile",
       lockfiles: ["pnpm-lock.yaml"],
       ...commandForManager("pnpm", ["install", "--frozen-lockfile"])
@@ -916,6 +1050,7 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
   }
   if (fs.existsSync(path.join(cwd, "yarn.lock"))) {
     return {
+      kind: "yarn",
       label: "yarn install --frozen-lockfile",
       lockfiles: ["yarn.lock"],
       ...commandForManager("yarn", ["install", "--frozen-lockfile"])
@@ -924,6 +1059,7 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
   const bunLockfiles = ["bun.lock", "bun.lockb"].filter((file) => fs.existsSync(path.join(cwd, file)));
   if (bunLockfiles.length > 0) {
     return {
+      kind: "bun",
       label: "bun install --frozen-lockfile",
       lockfiles: bunLockfiles,
       ...commandForManager("bun", ["install", "--frozen-lockfile"])
@@ -932,6 +1068,7 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
   if (fs.existsSync(path.join(cwd, "package-lock.json"))) {
     const npmCli = resolveNpmCli();
     return npmCli ? {
+      kind: "npm",
       label: "npm ci",
       lockfiles: ["package-lock.json"],
       command: process.execPath,
@@ -945,12 +1082,36 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
 function detectNpmWithoutLockfile(): NodeManager | null {
   const npmCli = resolveNpmCli();
   return npmCli ? {
+    kind: "npm",
     label: "npm install --no-package-lock",
     lockfiles: [],
     command: process.execPath,
     args: [npmCli, "install", "--no-package-lock", "--no-audit", "--no-fund"],
     npmCli
   } : null;
+}
+
+function hasNodeInstallArtifacts(cwd: string, manager: NodeManager | null): boolean {
+  if (fs.existsSync(path.join(cwd, "node_modules"))) return true;
+  return manager?.kind === "yarn"
+    && (fs.existsSync(path.join(cwd, ".pnp.cjs")) || fs.existsSync(path.join(cwd, ".pnp.js")));
+}
+
+function npmVerificationHasNoMissingRequiredDependencies(output: string, packageJsonPath: string): boolean {
+  const jsonStart = output.indexOf("{");
+  if (jsonStart < 0) return false;
+  let tree: { dependencies?: Record<string, { missing?: boolean }> };
+  let manifest: Record<string, unknown>;
+  try {
+    tree = JSON.parse(output.slice(jsonStart)) as typeof tree;
+    manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  const required = [manifest.dependencies, manifest.devDependencies]
+    .filter((group): group is Record<string, unknown> => typeof group === "object" && group !== null)
+    .flatMap((group) => Object.keys(group));
+  return required.every((name) => tree.dependencies?.[name] && tree.dependencies[name].missing !== true);
 }
 
 function commandForManager(name: "pnpm" | "yarn" | "bun", args: string[]): Pick<NodeManager, "command" | "args"> {
