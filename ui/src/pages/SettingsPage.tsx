@@ -56,7 +56,7 @@ export function SettingsPage({ data, onRefresh, onRestartOnboarding }: SettingsP
               </strong>
             </div>
             <p style={{ fontSize: "13px", color: "#808595", marginTop: "8px", marginBottom: 0 }}>
-              {translate("Worktrees isolate script execution and prevent mutations without confirmation.")}
+              {translate("Worktrees isolate project files, not the operating system. Commands run as your user and may affect resources outside the worktree.")}
             </p>
           </div>
         </div>

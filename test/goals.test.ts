@@ -889,6 +889,13 @@ describe("goal runner", () => {
       branchName: "maestro/task-validated",
       worktreePath: worktreeDir
     });
+    database.addEvent({
+      source: "dashboard",
+      type: "task.workspace_access_approved",
+      text: "User approved autonomous work in this Task's worktree.",
+      taskId: task.id,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
     let testingProviderCalls = 0;
     const provider = new FakeProvider(
       "codex",
@@ -900,7 +907,8 @@ describe("goal runner", () => {
     );
     let validationCalls = 0;
     const validationRunner = {
-      run: async (): Promise<ValidationReport> => {
+      run: async (request: { prepareEnvironment?: boolean }): Promise<ValidationReport> => {
+        expect(request.prepareEnvironment).toBe(true);
         validationCalls += 1;
         return validationReport(validationCalls === 1 ? "failed" : "passed");
       }

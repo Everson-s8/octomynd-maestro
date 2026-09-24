@@ -1796,7 +1796,17 @@ export class OperationalChatService {
       const requestedProviderId = userMessage
         ? resolveRequestedGoalProvider(userMessage, evidence.providers, goal.phase)
         : null;
-      if (requestedProviderId && ["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) {
+      // A stopped Goal offers every other ready, connected provider on its own:
+      // the switch used to appear only when the user typed "troca para <nome>",
+      // so a user facing a failing provider had no visible way out.
+      const stopped = ["waiting_provider", "blocked", "failed"].includes(goal.status);
+      const switchCandidates = requestedProviderId
+        ? [requestedProviderId]
+        : stopped
+          ? eligibleGoalProviders(evidence.providers, goal.phase).slice(0, 3)
+          : [];
+      for (const requestedProviderId of switchCandidates) {
+        if (!["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) break;
         actions.push({
           id: `switch_goal_provider_${goal.runId}_${requestedProviderId}`,
           type: "switch_goal_provider",
@@ -2993,6 +3003,19 @@ function isEnvironmentRecoveryRequest(input: string): boolean {
   return recoveryIntent && environmentIssue;
 }
 
+/** Connected providers that are ready, enabled and able to run the Goal's phase. */
+function eligibleGoalProviders(
+  providers: ChatEvidenceContext["providers"],
+  phase: string
+): AgentProviderId[] {
+  const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
+  return providers
+    .filter((provider) => provider.state === "ready"
+      && provider.control.mode === "enabled"
+      && provider.capabilities.includes(capability as typeof provider.capabilities[number]))
+    .map((provider) => provider.id);
+}
+
 function resolveRequestedGoalProvider(
   input: string,
   providers: ChatEvidenceContext["providers"],
@@ -3002,7 +3025,9 @@ function resolveRequestedGoalProvider(
   if (!/\b(?:troca|troque|muda|mude|usar|use|redirecion|reencaminh|encaminh|passa|passe|alterna|alter|switch|change|route)\w*\b/.test(normalized)) return null;
   const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
   const requested = providers.find((provider) => {
-    if (!provider.capabilities.includes(capability as typeof provider.capabilities[number])) return false;
+    if (provider.state !== "ready"
+      || provider.control.mode !== "enabled"
+      || !provider.capabilities.includes(capability as typeof provider.capabilities[number])) return false;
     const id = provider.id.toLowerCase();
     const label = provider.label.toLowerCase();
     const aliases = provider.id === "antigravity"

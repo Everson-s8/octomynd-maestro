@@ -202,7 +202,10 @@ timeouts or quota failures from being selected repeatedly.
   review. It never edits the user's global Antigravity settings. Writable Goal steps can bypass
   interactive per-tool prompts when the user creates/confirms a Task through a work-intake flow,
   an explicit Telegram/CLI task command, or Full Access chat task creation; the durable
-  `task.workspace_access_approved` event is scoped to that Task's isolated worktree. Dashboard
+  `task.workspace_access_approved` event is scoped to that Task's worktree. A Git worktree
+  isolates the project's checked-out files, but it is not an operating-system sandbox: commands
+  and package lifecycle scripts still run as the Maestro user's account and may affect resources
+  outside the worktree. Dashboard
   intake exposes the same scope as a checked-by-default, user-editable option. The approval is passed to that CLI invocation only,
   together with Antigravity's sandbox and the prepared task worktree; planning/review stay read-only.
   Without task-scoped approval, permission-denied failures remain retryable so another connected

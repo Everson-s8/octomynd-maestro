@@ -414,7 +414,10 @@ export async function runTaskGoal(
           validation = await options.validationRunner.run({
             workspacePath: task.worktreePath,
             artifactsRoot: path.resolve(options.artifactsRoot),
-            signal: options.signal
+            signal: options.signal,
+            // Provision dependencies only after the Task's explicit approval.
+            // A Git worktree isolates project files, but is not an OS sandbox.
+            prepareEnvironment: database.hasEventForTask(task.id, "task.workspace_access_approved")
           });
         } catch (error) {
           const message = sanitizeForRunSummary(

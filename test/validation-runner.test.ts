@@ -244,6 +244,161 @@ describe("DeterministicValidationRunner", () => {
   });
 });
 
+describe("DeterministicValidationRunner environment preparation", () => {
+  const venvPython = () => (process.platform === "win32"
+    ? path.join(workspacePath, ".venv", "Scripts", "python.exe")
+    : path.join(workspacePath, ".venv", "bin", "python"));
+
+  it("creates .venv and installs the Python project and pytest before the checks", async () => {
+    fs.writeFileSync(path.join(workspacePath, "pyproject.toml"), "[project]\nname = 'sample'\n", "utf8");
+    fs.mkdirSync(path.join(workspacePath, "tests"));
+    fs.writeFileSync(path.join(workspacePath, "tests", "test_sample.py"), "def test_sample(): pass\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.map((check) => check.id)).toEqual([
+      "diff_check", "secret_scan", "prepare_environment", "python_compile", "tests_full"
+    ]);
+    expect(calls.some((call) => call.args.join(" ").endsWith("-m venv .venv"))).toBe(true);
+    expect(calls.some((call) => call.command === venvPython() && call.args.join(" ").endsWith("install --disable-pip-version-check -e ."))).toBe(true);
+    expect(calls.some((call) => call.command === venvPython() && call.args.at(-1) === "pytest")).toBe(true);
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.summary)
+      .toContain("create .venv");
+  });
+
+  it("prefers requirement files and keeps .venv/node_modules out of commits", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "fastapi\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "requirements-dev.txt"), "pytest\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "pyproject.toml"), "[project]\nname = 'sample'\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    const pipCalls = calls.filter((call) => call.args.includes("pip")).map((call) => call.args.slice(-2).join(" "));
+    expect(pipCalls).toEqual(["-r requirements.txt", "-r requirements-dev.txt"]);
+    const exclude = fs.readFileSync(path.join(workspacePath, ".git", "info", "exclude"), "utf8");
+    expect(exclude).toContain(".venv/");
+    expect(exclude).toContain("node_modules/");
+  });
+
+  it("does not reinstall Python dependencies when the manifests did not change", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "pytest\n", "utf8");
+    fs.mkdirSync(path.dirname(venvPython()), { recursive: true });
+    fs.writeFileSync(venvPython(), "", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const firstInstalls = calls.filter((call) => call.args.includes("pip")).length;
+    calls.length = 0;
+    const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(firstInstalls).toBe(1);
+    expect(calls.filter((call) => call.args.includes("pip"))).toHaveLength(0);
+    expect(second.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
+  });
+
+  it("validates a frontend-ts app next to a Python service and installs its node_modules", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "fastapi\n", "utf8");
+    fs.mkdirSync(path.join(workspacePath, "tests"));
+    fs.writeFileSync(path.join(workspacePath, "tests", "test_api.py"), "def test_api(): pass\n", "utf8");
+    const frontend = path.join(workspacePath, "frontend-ts");
+    fs.mkdirSync(frontend);
+    fs.writeFileSync(path.join(frontend, "package.json"), "{\"name\":\"ui\",\"dependencies\":{\"vite\":\"*\"}}\n", "utf8");
+    fs.writeFileSync(path.join(frontend, "package-lock.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(frontend, "tsconfig.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(frontend, "vite.config.ts"), "export default {}\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.map((check) => check.id)).toEqual([
+      "diff_check", "secret_scan", "prepare_environment",
+      "typecheck_backend", "typecheck_ui", "tests_full", "build_ui",
+      "python_compile", "tests_python"
+    ]);
+    expect(calls.some((call) => call.args.includes("frontend-ts/tsconfig.json"))).toBe(true);
+    expect(calls.some((call) => call.args.includes("frontend-ts/vite.config.ts"))).toBe(true);
+    const npmCall = calls.find((call) => call.args.includes("ci"));
+    expect(npmCall?.cwd).toBe(frontend);
+    expect(npmCall?.command).toBe(process.execPath);
+  });
+
+  it("reports a failed install but still runs the checks for evidence", async () => {
+    fs.writeFileSync(path.join(workspacePath, "requirements.txt"), "does-not-exist\n", "utf8");
+    const runner = new DeterministicValidationRunner(async (request) => (
+      request.args.includes("pip")
+        ? completedProcess("ERROR: No matching distribution found for does-not-exist", 1)
+        : completedProcess("ok")
+    ));
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    const prepare = report.checks.find((check) => check.id === "prepare_environment");
+    expect(prepare?.status).toBe("failed");
+    expect(prepare?.summary).toContain("No matching distribution");
+    expect(report.checks.map((check) => check.id)).toContain("python_compile");
+  });
+
+  it("does not report success for an environment.yml it cannot provision", async () => {
+    fs.writeFileSync(path.join(workspacePath, "environment.yml"), "dependencies:\n  - python\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("failed");
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.summary).toContain("environment.yml");
+    expect(calls.some((call) => call.args.includes("-m") && call.args.includes("venv"))).toBe(false);
+  });
+
+  it("retries a partial npm install without a lockfile instead of trusting node_modules", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), "{\"name\":\"demo\",\"dependencies\":{\"left-pad\":\"1.3.0\"}}\n", "utf8");
+    let installAttempts = 0;
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("install") && request.args.includes("--no-package-lock")) {
+        installAttempts += 1;
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+        return completedProcess(installAttempts === 1 ? "install interrupted" : "install complete", installAttempts === 1 ? 1 : 0);
+      }
+      return completedProcess("ok");
+    });
+
+    const first = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const cached = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(first.checks.find((check) => check.id === "prepare_environment")?.status).toBe("failed");
+    expect(second.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(cached.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
+    expect(installAttempts).toBe(2);
+    expect(fs.existsSync(path.join(workspacePath, "package-lock.json"))).toBe(false);
+
+    fs.writeFileSync(path.join(workspacePath, "package.json"), "{\"name\":\"demo\",\"dependencies\":{\"left-pad\":\"1.3.1\"}}\n", "utf8");
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    expect(installAttempts).toBe(3);
+  });
+});
+
 function git(args: string[]): void {
   const result = spawnSync("git", ["-C", workspacePath, ...args], { encoding: "utf8", windowsHide: true });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);

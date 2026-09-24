@@ -296,10 +296,8 @@ function readRemoteUrl(repoPath: string): string | null {
 
 function acquireSyncLock(repoPath: string): { release: () => void } | null {
   const key = crypto.createHash("sha256").update(path.resolve(repoPath)).digest("hex");
-  const lockPath = path.join(os.tmpdir(), "maestro-repository-sync", `${key}.lock`);
+  const lockPath = path.join(os.tmpdir(), `maestro-repository-sync-${key}.lock`);
   const ownerToken = `${process.pid}:${crypto.randomUUID()}`;
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       fs.mkdirSync(lockPath);

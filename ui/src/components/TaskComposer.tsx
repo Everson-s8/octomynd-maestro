@@ -220,7 +220,7 @@ export function TaskComposer({
               onChange={(event) => setWorkspaceWriteApproved(event.target.checked)}
             />
             <span>
-              {translate("Authorize autonomous work in this task's isolated workspace, including running commands and installing, changing, or removing project-local files and dependencies.")}
+              {translate("Authorize autonomous work in this task's worktree, including running commands and installing, changing, or removing project-local files and dependencies. A Git worktree is not an operating-system sandbox; commands may have effects outside it.")}
             </span>
           </label>
 

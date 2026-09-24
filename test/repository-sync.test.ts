@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +35,8 @@ describe("project repository synchronization", () => {
     const service = new ProjectRepositoryService(database);
     const first = service.synchronize(project);
     expect(first.syncState).toBe("current");
+    const lockHash = crypto.createHash("sha256").update(path.resolve(canonicalPath)).digest("hex");
+    expect(fs.existsSync(path.join(os.tmpdir(), `maestro-repository-sync-${lockHash}.lock`))).toBe(false);
     const firstSha = first.canonicalHeadSha;
     expect(firstSha).toMatch(/^[a-f0-9]{40}$/);
 

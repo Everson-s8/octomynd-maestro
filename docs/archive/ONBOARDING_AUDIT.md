@@ -15,7 +15,7 @@ remaining findings are follow-up work and should not be read as a description of
   Settings, and the guide. Locale metadata is applied to the HTML document before and after render.
 - The interface locale is independent from chat/task content and provider response language.
 - Automated coverage is in `test/i18n.test.ts` and `test/onboarding.test.ts`; the engineering
-  details and known translation follow-ups are in [`I18N_ONBOARDING.md`](I18N_ONBOARDING.md).
+  details and known translation follow-ups are in [`I18N_ONBOARDING.md`](../I18N_ONBOARDING.md).
 
 The sections below preserve the original audit evidence and scope. Where they say that a feature
 does not exist, that statement refers to the pre-onboarding baseline, not the current branch.
