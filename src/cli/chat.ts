@@ -240,6 +240,13 @@ export async function chatCommand(argv: string[]): Promise<number> {
           console.log(
             `${YELLOW}${BOLD}[ação]${RESET} ${CYAN}${action.label}${RESET} — ${DIM}${action.description ?? ""}${RESET}`
           );
+          if (action.type === "create_task" || action.type === "code_change_task") {
+            console.log(
+              `${DIM}${locale === "pt-BR"
+                ? "Ao confirmar, esta task poderá instalar dependências e executar comandos no worktree isolado, usando sua conta do Windows. Isso não é um sandbox do sistema operacional."
+                : "Confirming lets this task install dependencies and run commands in its isolated worktree as your Windows user. This is not an operating-system sandbox."}${RESET}`
+            );
+          }
           const answer = await promptYesNo(
             rl,
             locale === "pt-BR" ? "  Executar? (s/N) " : "  Execute? (y/N) "

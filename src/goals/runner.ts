@@ -145,7 +145,7 @@ export async function runTaskGoal(
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
-  const selfRecoveryStepIds = new Set(database.listEventsForTask(task.id, 1000)
+  const selfRecoveryStepIds = new Set(database.listEventsForTaskByTypes(task.id, ["goal.step_started"])
     .filter((event) => event.type === "goal.step_started" && event.metadata?.selfRecoveryAttempt === true)
     .map((event) => Number(event.metadata?.stepId)));
   const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id), options.phaseBudgets, selfRecoveryStepIds);
@@ -1016,6 +1016,8 @@ export async function runTaskGoal(
             phase,
             providerId: routed.provider.id,
             failureCategory,
+            failureSummary: safeSummary.slice(0, 1200),
+            failureError: safeError?.slice(0, 1200) ?? null,
             retryable: result.retryable,
             checkpointId: database.getLatestGoalCheckpoint(run.id)?.id ?? null,
             worktreePreserved: true
@@ -1637,7 +1639,7 @@ function hasProviderSelfRecovery(
   phase: GoalPhase,
   providerId: AgentProviderId
 ): boolean {
-  return database.listEventsForTask(taskId, 1000).some((event) => (
+  return database.listEventsForTaskByTypes(taskId, ["goal.provider_self_recovery"]).some((event) => (
     event.type === "goal.provider_self_recovery"
     && Number(event.metadata?.runId) === runId
     && event.metadata?.phase === phase
@@ -1653,7 +1655,12 @@ function wasExplicitlySelectedForCurrentAttempt(
   providerId: AgentProviderId,
   stepId: number
 ): boolean {
-  const events = database.listEventsForTask(taskId, 1000)
+  const events = database.listEventsForTaskByTypes(taskId, [
+    "goal.step_started",
+    "goal.step_failed",
+    "goal.step_blocked",
+    "goal.provider_selected"
+  ])
     .filter((event) => Number(event.metadata?.runId) === runId && event.metadata?.phase === phase);
   const started = events.find((event) => event.type === "goal.step_started" && Number(event.metadata?.stepId) === stepId);
   if (!started) return false;
@@ -1681,9 +1688,21 @@ function latestProviderSelfRecovery(
   providerId: AgentProviderId
 ): string | null {
   const recovery = pendingProviderSelfRecovery(database, taskId, runId, phase, providerId);
-  return recovery
-    ? `Bounded self-recovery attempt: inspect the prior failed step and saved checkpoint, adapt your approach, and continue without discarding work. Previous failure: ${redactSensitiveText(recovery.text).slice(0, 1200)}`
-    : null;
+  if (!recovery) return null;
+  const failureSummary = typeof recovery.metadata?.failureSummary === "string"
+    ? redactSensitiveText(recovery.metadata.failureSummary).slice(0, 1200)
+    : "";
+  const failureError = typeof recovery.metadata?.failureError === "string"
+    ? redactSensitiveText(recovery.metadata.failureError).slice(0, 1200)
+    : "";
+  const failureDetails = [
+    failureSummary ? `Summary: ${failureSummary}` : "",
+    failureError ? `Error: ${failureError}` : ""
+  ].filter(Boolean).join("\n");
+  return [
+    "Bounded self-recovery attempt: inspect the prior failed step and saved checkpoint, adapt your approach, and continue without discarding work.",
+    failureDetails ? `Previous failure:\n${failureDetails}` : "The prior failed step and its checkpoint are included in the step history."
+  ].join("\n\n");
 }
 
 function pendingProviderSelfRecovery(
@@ -1693,7 +1712,11 @@ function pendingProviderSelfRecovery(
   phase: GoalPhase,
   providerId: AgentProviderId
 ) {
-  const events = database.listEventsForTask(taskId, 1000)
+  const events = database.listEventsForTaskByTypes(taskId, [
+    "goal.provider_self_recovery",
+    "goal.provider_selected",
+    "goal.step_started"
+  ])
     .filter((event) => Number(event.metadata?.runId) === runId && event.metadata?.phase === phase);
   const recovery = events.reverse().find((event) => (
     event.type === "goal.provider_self_recovery" && event.metadata?.providerId === providerId

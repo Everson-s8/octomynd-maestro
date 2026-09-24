@@ -1012,14 +1012,15 @@ describe("goal runner", () => {
       attempts += 1;
       if (attempts === 1) return {
         outcome: "failed",
-        summary: "temporary runner failure",
+        summary: "Codex could not write the generated file",
         output: "partial implementation context",
-        error: "temporary runner failure",
+        error: "EPIPE while writing generated file",
         durationMs: 1,
         retryable: true,
         failureCategory: "timeout"
       };
-      expect(request.humanFeedback).toContain("Previous failure: Codex will make one recovery attempt");
+      expect(request.humanFeedback).toContain("Summary: Codex could not write the generated file");
+      expect(request.humanFeedback).toContain("Error: EPIPE while writing generated file");
       return completed("Codex recovered from its checkpoint");
     });
     const claude = new FakeProvider("claude", ["coding"], () => completed("Claude fallback"));
@@ -1035,6 +1036,55 @@ describe("goal runner", () => {
       .toEqual(["codex", "codex"]);
     expect(database.listEventsForTask(task.id).filter((event) => event.type === "goal.provider_self_recovery"))
       .toHaveLength(1);
+  });
+
+  it("does not repeat a provider self-recovery after its marker ages out of recent task events", async () => {
+    const projectDir = path.join(tempDir, "bounded-recovery-project");
+    const worktreeDir = path.join(tempDir, "bounded-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "boundedrecovery", path: projectDir });
+    const task = database.createTask("fall back after one failed self-recovery", "dashboard", "boundedrecovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let codexAttempts = 0;
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], (request) => {
+      if (request.phase !== "implementing") return completed("Codex phase completed");
+      codexAttempts += 1;
+      if (codexAttempts === 1) return {
+        outcome: "failed",
+        summary: "temporary execution error",
+        output: "partial work",
+        error: "temporary execution error",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+      for (let index = 0; index < 1_100; index += 1) {
+        database.addEvent({ source: "maestro", type: "goal.progress", text: `progress ${index}`, taskId: task.id });
+      }
+      return {
+        outcome: "failed",
+        summary: "self-recovery also failed",
+        output: "preserved partial work",
+        error: "self-recovery also failed",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+    });
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude completed the preserved implementation"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8
+    });
+
+    expect(run.status).toBe("completed");
+    expect(codexAttempts).toBe(2);
+    expect(database.listGoalSteps(run.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider))
+      .toEqual(["codex", "codex", "claude"]);
   });
 
   it("treats a recoverable provider block as fallback or waiting, not a terminal Goal block", async () => {

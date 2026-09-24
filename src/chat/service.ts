@@ -20,7 +20,7 @@ import {
   OperationalChatActivity,
   OperationalChatActivityEvent
 } from "./types.js";
-import { MaestroDatabase, ProjectRecord } from "../db.js";
+import { MaestroDatabase, ProjectRecord, type GoalStepRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import type { CommandOrigin } from "../commands/types.js";
@@ -1467,6 +1467,7 @@ export class OperationalChatService {
           phase: run.currentPhase,
           status: run.status,
           lastProvider: run.lastProvider ?? null,
+          failedProviders: failedGoalProviders(steps, run.currentPhase),
           stepCount: run.stepCount,
           latestStepSummary: latestStep?.summary ?? null,
           error: run.lastError ?? null,
@@ -1810,7 +1811,7 @@ export class OperationalChatService {
         ? [requestedProviderId]
         : stopped
           ? eligibleGoalProviders(evidence.providers, goal.phase)
-            .filter((providerId) => providerId !== goal.lastProvider)
+            .filter((providerId) => providerId !== goal.lastProvider && !goal.failedProviders.includes(providerId))
             .slice(0, 3)
           : [];
       for (const requestedProviderId of switchCandidates) {
@@ -3009,6 +3010,16 @@ function isEnvironmentRecoveryRequest(input: string): boolean {
   const recoveryIntent = /\b(?:tente|tentar|resolv\w*|corrig\w*|consert\w*|repar\w*|configur\w*|instal\w*|rode|rodar|execute|executar|prepare|prepar\w*|fix|repair|install|setup|provision|recover)\b/.test(normalized);
   const environmentIssue = /\b(?:ambiente|environment|python|pip|venv|dependenc\w*|toolchain|permiss\w*|permission|runtime|bibliotecas|pacotes|pacote|testes?\s+(?:falh|blocked|bloquead))\b/.test(normalized);
   return recoveryIntent && environmentIssue;
+}
+
+function failedGoalProviders(steps: GoalStepRecord[], phase: string): string[] {
+  const failed = new Set<string>();
+  for (const step of steps) {
+    if (step.phase !== phase) continue;
+    if (step.status === "failed" || step.status === "blocked") failed.add(step.provider);
+    else if (step.status === "completed") failed.delete(step.provider);
+  }
+  return [...failed];
 }
 
 /** Connected providers that are ready, enabled and able to run the Goal's phase. */

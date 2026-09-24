@@ -1468,6 +1468,31 @@ export function createDatabase(databasePath: string) {
       return rows.map(mapEvent);
     },
 
+    listEventsForTaskByTypes(taskId: number, types: string[]): EventRecord[] {
+      const uniqueTypes = [...new Set(types.filter(Boolean))];
+      if (uniqueTypes.length === 0) return [];
+      const typePlaceholders = uniqueTypes.map(() => "?").join(", ");
+      const rows = db
+        .prepare(`
+          SELECT * FROM (
+            SELECT * FROM events WHERE task_id = ? AND type IN (${typePlaceholders})
+            UNION
+            SELECT * FROM events
+            WHERE task_id IS NULL
+              AND CAST(json_extract(metadata_json, '$.taskId') AS INTEGER) = ?
+              AND type IN (${typePlaceholders})
+            UNION
+            SELECT * FROM events
+            WHERE task_id IS NULL
+              AND CAST(json_extract(metadata_json, '$.deletedTaskId') AS INTEGER) = ?
+              AND type IN (${typePlaceholders})
+          )
+          ORDER BY id ASC
+        `)
+        .all(taskId, ...uniqueTypes, taskId, ...uniqueTypes, taskId, ...uniqueTypes) as EventRow[];
+      return rows.map(mapEvent);
+    },
+
     hasEventForTask(taskId: number, type: string): boolean {
       return Boolean(db.prepare("SELECT 1 FROM events WHERE task_id = ? AND type = ? LIMIT 1").get(taskId, type));
     },

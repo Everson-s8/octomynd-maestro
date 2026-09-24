@@ -872,6 +872,43 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(offered).toEqual(["antigravity"]);
   });
 
+  it("does not suggest any provider that already failed in the stopped Goal phase", async () => {
+    const task = database.createTask("recover implementation after providers fail", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 4, lastProvider: "antigravity" });
+    for (const providerId of ["codex", "antigravity", "claude"]) {
+      const step = database.createGoalStep(run.id, "implementing", providerId);
+      database.finishGoalStep({
+        id: step.id,
+        status: "failed",
+        summary: `${providerId} failed`,
+        output: "",
+        error: `${providerId} failed`,
+        durationMs: 1
+      });
+    }
+    const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
+    const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
+    const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
+    const claude = chatProvider("claude", ready, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex, antigravity, claude]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Como posso recuperar a task?"
+    });
+
+    expect(response.actions.some((item) => item.type === "switch_goal_provider" && item.targetId === run.id)).toBe(false);
+  });
+
   it("does not offer provider switches for a Goal that is running normally", async () => {
     const task = database.createTask("Implement the financial app", "dashboard", "maestro");
     const run = database.createGoalRun(task.id, 12);

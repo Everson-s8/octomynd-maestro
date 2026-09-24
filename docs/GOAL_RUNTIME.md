@@ -25,11 +25,12 @@ phase, outcome, summary, output, error, duration, and timestamps.
 
 For a retryable provider failure, the runtime preserves the failed step and checkpoint, then allows
 that same provider one recovery attempt for the phase before routing elsewhere. The retry receives
-the prior failure and saved context; quota, capacity and authentication failures do not trigger a
-paid retry. The attempt is persisted as `goal.provider_self_recovery`, preventing repeated retries
-after a restart. If it fails, normal provider fallback or recoverable waiting continues. Chat switch
-suggestions include only other ready providers; an explicit user request can still select a named,
-ready provider.
+the sanitized failure summary/error and saved context; quota, capacity and authentication failures
+do not trigger a paid retry. The attempt is persisted as `goal.provider_self_recovery` and queried
+independently of the recent-event display window, preventing repeated retries after a restart or a
+long task history. If it fails, normal provider fallback or recoverable waiting continues. Automatic
+Chat switch suggestions exclude every provider that failed in the current phase; an explicit user
+request can still select a named, ready provider.
 
 ## Semantic task sizing
 
@@ -218,6 +219,12 @@ timeouts or quota failures from being selected repeatedly.
   together with Antigravity's sandbox and the prepared task worktree; planning/review stay read-only.
   Without task-scoped approval, permission-denied failures remain retryable so another connected
   provider can take over.
+
+The local Dashboard API binds to loopback by default. Its browser-origin checks are not
+authentication for other local processes: a task script running as the same user may call local
+services. Task approval authorizes autonomous execution in the worktree, not a security boundary
+around the host. Maestro does not add a separate local token prompt; it keeps this local-user trust
+model explicit instead of introducing a setup step that would not sandbox same-user processes.
 
 Codex and Claude share the same process runtime for bounded output, stdin, timeout, cancellation,
 and Windows-hidden subprocess execution. Provider adapters only define CLI arguments, phase policy,
