@@ -143,7 +143,12 @@ describe("agent process runtime", () => {
       GITHUB_PAT: "secret",
       DATABASE_URL: "postgres://localhost/test",
       DB_URL: "postgres://user:secret@localhost/db",
+      POSTGRES_URL: "postgres://u:p@prod.example/db",
+      MONGODB_URI: "mongodb+srv://u:p@cluster.example/db",
+      REDIS_URL: "redis://:secret@localhost/0",
+      TEST_DATABASE_URL: "postgres://u:p@localhost/test",
       NPM_CONFIG__AUTH: "secret",
+      npm_config__authToken: "secret",
       NODE_AUTH_TOKEN: "secret",
       SAFE_SETTING: "yes"
     });

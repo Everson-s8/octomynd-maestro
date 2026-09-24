@@ -391,6 +391,156 @@ describe("DeterministicValidationRunner environment preparation", () => {
     expect(installCwds).toEqual([workspacePath]);
   });
 
+  it("prepares a pnpm workspace without a lockfile without falling back to npm", async () => {
+    fs.writeFileSync(path.join(workspacePath, "pnpm-workspace.yaml"), "packages:\n  - 'web'\n", "utf8");
+    const webDir = path.join(workspacePath, "web");
+    fs.mkdirSync(webDir);
+    fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({
+      name: "web",
+      dependencies: { "shared-ui": "workspace:*" }
+    }), "utf8");
+    const installCalls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("--no-lockfile") || request.args.some((arg) => arg.includes("pnpm install --no-lockfile"))) {
+        installCalls.push(request);
+        fs.mkdirSync(path.join(request.cwd, "web", "node_modules"), { recursive: true });
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    const cachedReport = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(cachedReport.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
+    expect(installCalls).toHaveLength(1);
+    expect(installCalls[0].cwd).toBe(workspacePath);
+    expect(`${installCalls[0].command} ${installCalls[0].args.join(" ")}`).toContain("pnpm install --no-lockfile");
+    expect(fs.existsSync(path.join(workspacePath, "package-lock.json"))).toBe(false);
+    expect(fs.existsSync(path.join(workspacePath, "pnpm-lock.yaml"))).toBe(false);
+  });
+
+  it("reinstalls a workspace when root dependencies disappear despite stale member node_modules", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "pnpm-monorepo",
+      private: true,
+      dependencies: { "root-tool": "1.0.0" }
+    }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n", "utf8");
+    fs.writeFileSync(path.join(workspacePath, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    const memberDir = path.join(workspacePath, "packages", "web");
+    fs.mkdirSync(memberDir, { recursive: true });
+    fs.writeFileSync(path.join(memberDir, "package.json"), JSON.stringify({ name: "web" }), "utf8");
+    let installs = 0;
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("install") || request.args.some((arg) => /pnpm install/.test(arg))) {
+        installs += 1;
+        fs.mkdirSync(path.join(workspacePath, "node_modules"), { recursive: true });
+        fs.mkdirSync(path.join(memberDir, "node_modules"), { recursive: true });
+      }
+      return completedProcess("ok");
+    });
+
+    const first = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    fs.rmSync(path.join(workspacePath, "node_modules"), { recursive: true, force: true });
+    const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(first.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(second.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(installs).toBe(2);
+  });
+
+  it("matches declared workspace globs without assuming folder names or layout", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "monorepo",
+      private: true,
+      workspaces: ["{services,tools}/api-v?", "products/**/worker-*"]
+    }), "utf8");
+    fs.writeFileSync(path.join(workspacePath, "package-lock.json"), "{}\n", "utf8");
+    const memberDirs = [
+      path.join(workspacePath, "services", "api-v1"),
+      path.join(workspacePath, "tools", "api-v2"),
+      path.join(workspacePath, "products", "media", "worker-local")
+    ];
+    for (const [index, memberDir] of memberDirs.entries()) {
+      fs.mkdirSync(memberDir, { recursive: true });
+      fs.writeFileSync(path.join(memberDir, "package.json"), JSON.stringify({
+        name: `workspace-member-${index}`,
+        dependencies: { "shared-package": "workspace:*" }
+      }), "utf8");
+    }
+    const installCwds: string[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("ci")) {
+        installCwds.push(request.cwd);
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+    fs.writeFileSync(path.join(memberDirs[2], "package.json"), JSON.stringify({
+      name: "workspace-member-changed",
+      dependencies: { "shared-package": "workspace:*", another: "1.0.0" }
+    }), "utf8");
+    await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(installCwds).toEqual([workspacePath, workspacePath]);
+  });
+
+  it("prepares a deeply nested Node app without requiring a conventional directory name", async () => {
+    const appDir = path.join(workspacePath, "odd", "structure", "desktop-shell");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(appDir, "package.json"), JSON.stringify({
+      name: "desktop-shell",
+      dependencies: { example: "1.0.0" }
+    }), "utf8");
+    fs.writeFileSync(path.join(appDir, "package-lock.json"), "{}\n", "utf8");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      if (request.args.includes("ci")) {
+        fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+        return completedProcess("installed");
+      }
+      if (request.args.includes("ls")) {
+        return completedProcess(JSON.stringify({ dependencies: { example: { version: "1.0.0" } } }));
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(calls.find((call) => call.args.includes("ci"))?.cwd).toBe(appDir);
+  });
+
+  it("prepares a Python project at an arbitrary nested path using its own manifests", async () => {
+    const projectDir = path.join(workspacePath, "modules", "data-engine", "runtime");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, "requirements-quality.txt"), "pytest\n", "utf8");
+    const nestedPython = process.platform === "win32"
+      ? path.join(projectDir, ".venv", "Scripts", "python.exe")
+      : path.join(projectDir, ".venv", "bin", "python");
+    const calls: AgentProcessRequest[] = [];
+    const runner = new DeterministicValidationRunner(async (request) => {
+      calls.push(request);
+      if (request.args.includes("venv")) {
+        fs.mkdirSync(path.dirname(nestedPython), { recursive: true });
+        fs.writeFileSync(nestedPython, "", "utf8");
+      }
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("passed");
+    expect(calls.some((call) => call.args.join(" ").endsWith("-m venv .venv") && call.cwd === projectDir)).toBe(true);
+    expect(calls.some((call) => call.command === nestedPython && call.args.includes("-r")
+      && call.args.includes("requirements-quality.txt") && call.cwd === projectDir)).toBe(true);
+  });
+
   it("caches Yarn Plug'n'Play installs without requiring node_modules", async () => {
     fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
       name: "pnp-app",
@@ -398,9 +548,11 @@ describe("DeterministicValidationRunner environment preparation", () => {
     }), "utf8");
     fs.writeFileSync(path.join(workspacePath, "yarn.lock"), "__metadata:\n  version: 8\n", "utf8");
     let installs = 0;
+    let yarnInstallArgs: string[] = [];
     const runner = new DeterministicValidationRunner(async (request) => {
       if (request.args.some((arg) => /yarn install/.test(arg)) || request.args.includes("install")) {
         installs += 1;
+        yarnInstallArgs = request.args;
         fs.writeFileSync(path.join(workspacePath, ".pnp.cjs"), "// generated PnP loader\n", "utf8");
       }
       return completedProcess("ok");
@@ -410,6 +562,8 @@ describe("DeterministicValidationRunner environment preparation", () => {
     const second = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
 
     expect(installs).toBe(1);
+    expect(yarnInstallArgs.join(" ")).toContain("--immutable");
+    expect(yarnInstallArgs.join(" ")).not.toContain("--frozen-lockfile");
     expect(second.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
   });
 
@@ -581,7 +735,7 @@ describe("DeterministicValidationRunner environment preparation", () => {
       if (request.args.includes("ls")) return completedProcess(JSON.stringify({
         dependencies: { vite: { version: "1.0.0" } },
         problems: ["peer dep missing: optional-adapter"]
-      }), 1);
+      }), 1, "npm error code ELSPROBLEMS\nnpm error invalid: optional-adapter");
       return completedProcess("ok");
     });
 
@@ -592,6 +746,25 @@ describe("DeterministicValidationRunner environment preparation", () => {
     expect(second.checks.find((check) => check.id === "prepare_environment")?.summary).toBe("nothing to prepare");
     expect(installs).toBe(1);
   });
+
+  it("rejects an invalid direct npm dependency even when npm exits nonzero", async () => {
+    fs.writeFileSync(path.join(workspacePath, "package.json"), JSON.stringify({
+      name: "invalid-app",
+      dependencies: { vite: "^1.0.0" }
+    }), "utf8");
+    const runner = new DeterministicValidationRunner(async (request) => {
+      if (request.args.includes("ci")) fs.mkdirSync(path.join(request.cwd, "node_modules"), { recursive: true });
+      if (request.args.includes("ls")) return completedProcess(JSON.stringify({
+        dependencies: { vite: { version: "2.0.0", invalid: "^1.0.0", problems: ["invalid: vite@2.0.0"] } },
+        problems: ["invalid: vite@2.0.0"]
+      }), 1, "npm error code ELSPROBLEMS\nnpm error invalid: vite@2.0.0");
+      return completedProcess("ok");
+    });
+
+    const report = await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
+
+    expect(report.checks.find((check) => check.id === "prepare_environment")?.status).toBe("failed");
+  });
 });
 
 function git(args: string[]): void {
@@ -599,17 +772,17 @@ function git(args: string[]): void {
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
 }
 
-function completedProcess(output: string, exitCode = 0): AgentProcessResult {
+function completedProcess(output: string, exitCode = 0, stderr = ""): AgentProcessResult {
   return {
     exitCode,
     stdout: output,
-    stderr: "",
+    stderr,
     aborted: false,
     timedOut: false,
     breakerReason: null,
     outputStats: {
-      receivedChars: output.length,
-      retainedChars: output.length,
+      receivedChars: output.length + stderr.length,
+      retainedChars: output.length + stderr.length,
       duplicateChunks: 0,
       truncatedChars: 0
     },

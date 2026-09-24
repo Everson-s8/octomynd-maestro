@@ -909,6 +909,43 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(response.actions.some((item) => item.type === "switch_goal_provider" && item.targetId === run.id)).toBe(false);
   });
 
+  it("does not classify a blocked step as a provider failure", async () => {
+    const task = database.createTask("recover a blocked implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "blocked", currentPhase: "implementing", stepCount: 2, lastProvider: "antigravity" });
+    const blockedStep = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({
+      id: blockedStep.id,
+      status: "blocked",
+      summary: "Waiting for environment approval",
+      output: "",
+      error: "environment approval required",
+      durationMs: 1
+    });
+    const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
+    const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
+    const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex, antigravity]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Como continuo esse goal bloqueado?"
+    });
+
+    const offered = response.actions
+      .filter((item) => item.type === "switch_goal_provider" && item.targetId === run.id)
+      .map((item) => item.payload?.providerId);
+    expect(offered).toContain("codex");
+  });
+
   it("does not offer provider switches for a Goal that is running normally", async () => {
     const task = database.createTask("Implement the financial app", "dashboard", "maestro");
     const run = database.createGoalRun(task.id, 12);

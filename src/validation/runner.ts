@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import picomatch from "picomatch";
 import { parse as parseYaml } from "yaml";
 import { buildRestrictedAgentEnvironment, runAgentProcess } from "../agents/process.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
@@ -9,6 +10,7 @@ import {
   formatSecretScanFinding,
   scanWorktreePathsForSecrets
 } from "../security/secrets.js";
+import { discoverProject } from "../projects/discovery.js";
 
 export type ValidationCheckId =
   | "diff_check"
@@ -74,6 +76,7 @@ export class DeterministicValidationRunner {
   async run(request: ValidationRequest): Promise<ValidationReport> {
     const startedAt = Date.now();
     const workspacePath = path.resolve(request.workspacePath);
+    const projectDiscovery = discoverProject(workspacePath);
     const invocationKey = path.posix.join("validation", crypto.randomUUID());
     const invocationRoot = path.join(request.artifactsRoot, ...invocationKey.split("/"));
     fs.mkdirSync(invocationRoot, { recursive: true });
@@ -81,7 +84,7 @@ export class DeterministicValidationRunner {
     const checks: ValidationCheckResult[] = [];
     checks.push(await runCommandCheck(
       this.executeProcess,
-      commandSpecs(workspacePath, request)[0],
+      commandSpecs(workspacePath, request, projectDiscovery)[0],
       workspacePath,
       invocationRoot,
       invocationKey,
@@ -95,12 +98,13 @@ export class DeterministicValidationRunner {
           workspacePath,
           invocationRoot,
           invocationKey,
-          request.signal
+          request.signal,
+          projectDiscovery
         ));
       }
       // Built after provisioning: a `.venv` created above must be the
       // interpreter used by the Python checks.
-      for (const spec of commandSpecs(workspacePath, request).slice(1)) {
+      for (const spec of commandSpecs(workspacePath, request, projectDiscovery).slice(1)) {
         checks.push(await runCommandCheck(
           this.executeProcess,
           spec,
@@ -134,14 +138,18 @@ export class DeterministicValidationRunner {
   }
 }
 
-function commandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
+function commandSpecs(
+  workspacePath: string,
+  request: ValidationRequest,
+  projectDiscovery: ReturnType<typeof discoverProject>
+): CommandSpec[] {
   // Maestro validates arbitrary project worktrees, not only its own `ui/`
   // checkout. Generated applications commonly use `backend/` + `frontend/`,
   // so choose the project layout before constructing commands. Keep the old
   // root catalog as the fallback for Maestro itself and for minimal fixtures.
-  const layout = detectProjectLayout(workspacePath);
+  const layout = detectProjectLayout(workspacePath, projectDiscovery);
   if (layout === "nested-app") {
-    return nestedProjectCommandSpecs(workspacePath, request);
+    return nestedProjectCommandSpecs(workspacePath, request, projectDiscovery);
   }
   if (layout === "python") {
     return pythonProjectCommandSpecs(workspacePath, request);
@@ -213,24 +221,28 @@ function findAppDir(workspacePath: string, pattern: RegExp, preferred: string): 
     .sort()[0] ?? null;
 }
 
-function hasPythonProject(workspacePath: string): boolean {
-  return hasAnyPath(workspacePath, PYTHON_MANIFESTS) || containsPythonSourceFile(workspacePath);
+function hasPythonProject(
+  workspacePath: string,
+  projectDiscovery: ReturnType<typeof discoverProject>
+): boolean {
+  return projectDiscovery.ecosystems.includes("python") || containsPythonSourceFile(workspacePath);
 }
 
-const PYTHON_MANIFESTS = [
-  "pyproject.toml",
-  "requirements.txt",
-  "requirements-dev.txt",
-  "requirements-test.txt",
-  "Pipfile",
-  "setup.py",
-  "setup.cfg",
-  "pytest.ini",
-  "tox.ini",
-  "environment.yml"
-];
+function pythonProjectDirs(
+  workspacePath: string,
+  projectDiscovery: ReturnType<typeof discoverProject>
+): string[] {
+  const directories = projectDiscovery.manifests
+    .filter((manifest) => manifest.ecosystem === "python")
+    .map((manifest) => manifest.directory);
+  if (directories.length === 0 && containsPythonSourceFile(workspacePath)) directories.push(".");
+  return [...new Set(directories)].sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
+}
 
-function detectProjectLayout(workspacePath: string): ProjectLayout {
+function detectProjectLayout(
+  workspacePath: string,
+  projectDiscovery: ReturnType<typeof discoverProject>
+): ProjectLayout {
   const hasNestedBackend = findAppDir(workspacePath, BACKEND_DIR, "backend") !== null;
   const hasNestedFrontend = findAppDir(workspacePath, FRONTEND_DIR, "frontend") !== null;
   if (hasNestedBackend || hasNestedFrontend) return "nested-app";
@@ -242,7 +254,7 @@ function detectProjectLayout(workspacePath: string): ProjectLayout {
     "vite.config.ts",
     "vite.config.js"
   ]);
-  return hasPythonProject(workspacePath) && !hasTypeScriptManifest ? "python" : "root";
+  return hasPythonProject(workspacePath, projectDiscovery) && !hasTypeScriptManifest ? "python" : "root";
 }
 
 function pythonProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
@@ -391,7 +403,11 @@ function containsPythonSourceFile(rootPath: string): boolean {
   return false;
 }
 
-function nestedProjectCommandSpecs(workspacePath: string, request: ValidationRequest): CommandSpec[] {
+function nestedProjectCommandSpecs(
+  workspacePath: string,
+  request: ValidationRequest,
+  projectDiscovery: ReturnType<typeof discoverProject>
+): CommandSpec[] {
   const frontendDir = findAppDir(workspacePath, FRONTEND_DIR, "frontend");
   const backendDir = findAppDir(workspacePath, BACKEND_DIR, "backend");
   const appDirs = [frontendDir, backendDir].filter((dir): dir is string => dir !== null);
@@ -464,7 +480,7 @@ function nestedProjectCommandSpecs(workspacePath: string, request: ValidationReq
     },
     // A Python service next to the frontend (e.g. FastAPI + `frontend-ts/`)
     // was never compiled or tested in this layout.
-    ...(hasPythonProject(workspacePath)
+    ...(hasPythonProject(workspacePath, projectDiscovery)
       ? pythonProjectCommandSpecs(workspacePath, { ...request, mode: "full", focusedTests: [] })
         .slice(1)
         .map((spec): CommandSpec => (spec.id === "tests_full" ? { ...spec, id: "tests_python" } : spec))
@@ -647,12 +663,11 @@ function compactCommandFailure(output: string, reason: string): string {
 
 // ── Environment preparation ─────────────────────────────────────────────
 
-const PYTHON_REQUIREMENT_FILES = ["requirements.txt", "requirements-dev.txt", "requirements-test.txt"];
 const PYTHON_DEPS_MARKER = ".maestro-deps.sha256";
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
 type PreparationStep = { label: string; command: string; args: string[]; cwd: string; timeoutMs: number; allowNonZeroExit?: boolean };
-type PreparationResult = { passed: boolean; output: string; exitCode: number | null; timedOut: boolean; aborted: boolean };
+type PreparationResult = { passed: boolean; output: string; stdout: string; exitCode: number | null; timedOut: boolean; aborted: boolean };
 
 /**
  * Make the worktree runnable before the checks:
@@ -666,7 +681,8 @@ async function prepareEnvironment(
   workspacePath: string,
   invocationRoot: string,
   invocationKey: string,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  projectDiscovery: ReturnType<typeof discoverProject>
 ): Promise<ValidationCheckResult> {
   const startedAt = Date.now();
   const log: string[] = [];
@@ -700,14 +716,15 @@ async function prepareEnvironment(
         `${step.label}: ${result.timedOut ? "timed out" : result.aborted ? "cancelled" : `exit ${result.exitCode ?? "unknown"}`}`
       ));
     }
-    return { passed, output, exitCode: result.exitCode, timedOut: result.timedOut, aborted: result.aborted };
+    return { passed, output, stdout: result.stdout, exitCode: result.exitCode, timedOut: result.timedOut, aborted: result.aborted };
   };
 
   if (environmentsExcluded) {
-    if (hasPythonProject(workspacePath)) {
-      await preparePython(workspacePath, run, log, failures);
+    for (const projectDir of pythonProjectDirs(workspacePath, projectDiscovery)) {
+      if (signal?.aborted) break;
+      await preparePython(path.join(workspacePath, ...projectDir.split("/")), run, log, failures);
     }
-    for (const appDir of nodeAppDirs(workspacePath)) {
+    for (const appDir of nodeAppDirs(workspacePath, projectDiscovery)) {
       if (signal?.aborted) break;
       if (isWorkspaceMember(workspacePath, appDir)) {
         log.push(`Node workspace member ${appDir} is installed through its workspace root`);
@@ -771,7 +788,14 @@ async function preparePython(
     created = true;
   }
 
-  const manifests = [...PYTHON_REQUIREMENT_FILES, "pyproject.toml", "setup.py", "setup.cfg"]
+  const requirementFiles = fs.readdirSync(workspacePath)
+    .filter((file) => /^requirements(?:[-_.][^/]+)?\.txt$/i.test(file))
+    .sort((left, right) => left.toLowerCase() === "requirements.txt"
+      ? -1
+      : right.toLowerCase() === "requirements.txt"
+        ? 1
+        : left.localeCompare(right));
+  const manifests = [...requirementFiles, "pyproject.toml", "setup.py", "setup.cfg"]
     .filter((file) => fs.existsSync(path.join(workspacePath, file)));
   const hash = crypto.createHash("sha256");
   for (const file of manifests) hash.update(file).update(fs.readFileSync(path.join(workspacePath, file)));
@@ -784,7 +808,7 @@ async function preparePython(
   }
 
   const pip = ["-m", "pip", "install", "--disable-pip-version-check"];
-  const requirements = PYTHON_REQUIREMENT_FILES.filter((file) => manifests.includes(file));
+  const requirements = requirementFiles.filter((file) => manifests.includes(file));
   let ok = true;
   if (requirements.length > 0) {
     for (const file of requirements) {
@@ -832,22 +856,14 @@ function pythonTestExtras(pyprojectPath: string): string[] {
     .filter((name) => /^(?:dev|test|tests|testing)(?:[-_][A-Za-z0-9_-]+)?$/i.test(name));
 }
 
-/** The workspace root and first-level app folders that declare a package.json. */
-function nodeAppDirs(workspacePath: string): string[] {
-  const dirs = fs.existsSync(path.join(workspacePath, "package.json")) || isPnpmWorkspaceRoot(workspacePath)
-    ? ["."]
-    : [];
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(workspacePath, { withFileTypes: true });
-  } catch {
-    return dirs;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    if (fs.existsSync(path.join(workspacePath, entry.name, "package.json"))) dirs.push(entry.name);
-  }
-  return dirs;
+/** Every discovered Node manifest, regardless of directory name or nesting. */
+function nodeAppDirs(workspacePath: string, projectDiscovery: ReturnType<typeof discoverProject>): string[] {
+  return projectDiscovery.manifests
+    .filter((manifest) => manifest.ecosystem === "node"
+      && (manifest.name === "package.json" || manifest.name === "pnpm-workspace.yaml"))
+    .map((manifest) => manifest.directory)
+    .filter((directory, index, directories) => directories.indexOf(directory) === index)
+    .sort((left, right) => left === "." ? -1 : right === "." ? 1 : left.localeCompare(right));
 }
 
 function isPnpmWorkspaceRoot(workspacePath: string): boolean {
@@ -883,21 +899,8 @@ function workspacePatterns(workspacePath: string): string[] {
 function matchesWorkspacePattern(appDir: string, pattern: string): boolean {
   const normalized = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
   if (!normalized || normalized.startsWith("!")) return false;
-  let expression = "^";
-  for (let index = 0; index < normalized.length; index += 1) {
-    const character = normalized[index];
-    if (character === "*" && normalized[index + 1] === "*") {
-      expression += ".*";
-      index += 1;
-    } else if (character === "*") {
-      expression += "[^/]*";
-    } else {
-      expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
-    }
-  }
-  expression += "$";
   try {
-    return new RegExp(expression).test(appDir.replace(/\\/g, "/"));
+    return picomatch(normalized)(appDir.replace(/\\/g, "/"));
   } catch {
     return false;
   }
@@ -971,11 +974,13 @@ async function prepareNode(
   } catch {
     log.push(`could not read the Node dependency preparation marker in ${appDir}; retrying installation`);
   }
-  if (hasNodeInstallArtifacts(cwd, packageManager) && previous === digest) {
+  if (hasWorkspaceNodeInstallArtifacts(workspacePath, cwd, packageManager, rootWorkspace) && previous === digest) {
     log.push(`Node dependencies unchanged since the last preparation in ${appDir}`);
     return;
   }
-  const manager = packageManager ?? detectNpmWithoutLockfile();
+  const manager = packageManager
+    ?? (appDir === "." && isPnpmWorkspaceRoot(workspacePath) ? detectPnpmWorkspaceWithoutLockfile() : null)
+    ?? detectNpmWithoutLockfile();
   if (!manager) {
     const message = `no supported package manager was found for ${appDir}; dependencies were not installed`;
     log.push(message);
@@ -1002,7 +1007,7 @@ async function prepareNode(
     });
     verified = npmVerification.passed || (!npmVerification.timedOut && !npmVerification.aborted
       && npmVerificationHasNoMissingRequiredDependencies(
-      npmVerification.output,
+      npmVerification.stdout,
       path.join(cwd, "package.json")
       ));
     if (!verified) {
@@ -1012,7 +1017,8 @@ async function prepareNode(
       ));
     }
   }
-  if (verified && !hasNodeInstallArtifacts(cwd, manager)) {
+  const installArtifactsExist = hasWorkspaceNodeInstallArtifacts(workspacePath, cwd, manager, rootWorkspace);
+  if (verified && !installArtifactsExist) {
     const message = `${manager.label} completed but did not leave a usable Node installation in ${appDir}`;
     log.push(message);
     failures.push(message);
@@ -1049,11 +1055,13 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
     };
   }
   if (fs.existsSync(path.join(cwd, "yarn.lock"))) {
+    const yarnLockfile = fs.readFileSync(path.join(cwd, "yarn.lock"), "utf8");
+    const yarnInstallFlag = isYarnBerry(cwd, yarnLockfile) ? "--immutable" : "--frozen-lockfile";
     return {
       kind: "yarn",
-      label: "yarn install --frozen-lockfile",
+      label: `yarn install ${yarnInstallFlag}`,
       lockfiles: ["yarn.lock"],
-      ...commandForManager("yarn", ["install", "--frozen-lockfile"])
+      ...commandForManager("yarn", ["install", yarnInstallFlag])
     };
   }
   const bunLockfiles = ["bun.lock", "bun.lockb"].filter((file) => fs.existsSync(path.join(cwd, file)));
@@ -1079,6 +1087,19 @@ function detectNodePackageManager(cwd: string): NodeManager | null {
   return null;
 }
 
+function isYarnBerry(cwd: string, lockfile: string): boolean {
+  if (/^__metadata:/m.test(lockfile)) return true;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as { packageManager?: unknown };
+    const version = typeof manifest.packageManager === "string"
+      ? /^yarn@(?:v)?(\d+)/i.exec(manifest.packageManager)?.[1]
+      : undefined;
+    return version !== undefined && Number(version) >= 2;
+  } catch {
+    return false;
+  }
+}
+
 function detectNpmWithoutLockfile(): NodeManager | null {
   const npmCli = resolveNpmCli();
   return npmCli ? {
@@ -1091,19 +1112,41 @@ function detectNpmWithoutLockfile(): NodeManager | null {
   } : null;
 }
 
+function detectPnpmWorkspaceWithoutLockfile(): NodeManager | null {
+  return {
+    kind: "pnpm",
+    label: "pnpm install --no-lockfile",
+    lockfiles: [],
+    ...commandForManager("pnpm", ["install", "--no-lockfile"])
+  };
+}
+
 function hasNodeInstallArtifacts(cwd: string, manager: NodeManager | null): boolean {
   if (fs.existsSync(path.join(cwd, "node_modules"))) return true;
   return manager?.kind === "yarn"
     && (fs.existsSync(path.join(cwd, ".pnp.cjs")) || fs.existsSync(path.join(cwd, ".pnp.js")));
 }
 
-function npmVerificationHasNoMissingRequiredDependencies(output: string, packageJsonPath: string): boolean {
-  const jsonStart = output.indexOf("{");
+function hasWorkspaceNodeInstallArtifacts(
+  workspacePath: string,
+  cwd: string,
+  manager: NodeManager | null,
+  rootWorkspace: boolean
+): boolean {
+  if (hasNodeInstallArtifacts(cwd, manager)) return true;
+  const rootPackageJson = path.join(workspacePath, "package.json");
+  if (!rootWorkspace || (fs.existsSync(rootPackageJson) && declaresDependencies(rootPackageJson))) return false;
+  return workspaceMemberManifests(workspacePath)
+    .some((manifest) => hasNodeInstallArtifacts(path.dirname(manifest), manager));
+}
+
+function npmVerificationHasNoMissingRequiredDependencies(stdout: string, packageJsonPath: string): boolean {
+  const jsonStart = stdout.indexOf("{");
   if (jsonStart < 0) return false;
   let tree: { dependencies?: Record<string, { missing?: boolean }> };
   let manifest: Record<string, unknown>;
   try {
-    tree = JSON.parse(output.slice(jsonStart)) as typeof tree;
+    tree = JSON.parse(stdout.slice(jsonStart)) as typeof tree;
     manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
   } catch {
     return false;
@@ -1111,7 +1154,10 @@ function npmVerificationHasNoMissingRequiredDependencies(output: string, package
   const required = [manifest.dependencies, manifest.devDependencies]
     .filter((group): group is Record<string, unknown> => typeof group === "object" && group !== null)
     .flatMap((group) => Object.keys(group));
-  return required.every((name) => tree.dependencies?.[name] && tree.dependencies[name].missing !== true);
+  return required.every((name) => {
+    const dependency = tree.dependencies?.[name] as { missing?: unknown; invalid?: unknown } | undefined;
+    return dependency !== undefined && !dependency.missing && !dependency.invalid;
+  });
 }
 
 function commandForManager(name: "pnpm" | "yarn" | "bun", args: string[]): Pick<NodeManager, "command" | "args"> {

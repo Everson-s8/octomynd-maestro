@@ -236,11 +236,11 @@ function isSensitiveEnvironmentKey(
   value?: string
 ): boolean {
   const upperKey = key.toUpperCase();
-  const connectionStringWithCredentials = /^(?:DATABASE|DB)_(?:URL|URI|DSN)$/i.test(key)
+  const connectionStringWithCredentials = /_(?:URL|URI|DSN)$/i.test(key)
     && typeof value === "string"
-    && /(?:\/\/[^/@:]+:[^/@]+@|[;?&](?:password|pwd|token|secret|auth)=|(?:^|[;\s])(?:password|pwd|token|secret|auth)\s*=)/i.test(value);
+    && /(?:\/\/[^/@]*:[^/@]+@|[;?&](?:password|pwd|token|secret|auth)=|(?:^|[;\s])(?:password|pwd|token|secret|auth)\s*=)/i.test(value);
   const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY|_?KEY|PAT|PERSONAL_ACCESS_TOKEN|ACCESS_TOKEN|AUTHORIZATION)(?:_|$)/i.test(key)
-    || /^(?:NPM|YARN|PNPM|BUN)_CONFIG_+AUTH$/i.test(key)
+    || /^(?:NPM|YARN|PNPM|BUN)_CONFIG_+AUTH(?:TOKEN|IDENT)?$/i.test(key)
     || connectionStringWithCredentials;
 
   // allowProviderKeys opts the known provider-key names through.

@@ -49,6 +49,14 @@ function reviewingRequest(): AgentExecutionRequest {
   };
 }
 
+function planningRequest(): AgentExecutionRequest {
+  return {
+    ...reviewingRequest(),
+    phase: "planning",
+    capability: "planning"
+  };
+}
+
 describe("review prompt (provider-agnostic)", () => {
   it("builds a standalone acceptance review prompt with task context", () => {
     const prompt = buildReviewPrompt(task(), project());
@@ -86,5 +94,25 @@ describe("review prompt (provider-agnostic)", () => {
     expect(prompt).toContain("acceptance reviewer");
     expect(prompt).toContain("REQUEST CHANGES only");
     expect(prompt).toContain("do NOT justify changes_requested");
+  });
+
+  it("asks planning agents to map arbitrary repositories from evidence", () => {
+    const prompt = buildAgentGoalPrompt(planningRequest());
+
+    expect(prompt).toContain("do not assume conventional folder names or a known framework");
+    expect(prompt).toContain("manifests, lockfiles, README/AGENTS files, and CI configuration");
+    expect(prompt).toContain("Cite the paths that support your findings");
+    expect(prompt).toContain("concise and reusable by later phases");
+  });
+
+  it("asks testing agents to report reproducible commands without layout assumptions", () => {
+    const request = planningRequest();
+    request.phase = "testing";
+    request.capability = "testing";
+    const prompt = buildAgentGoalPrompt(request);
+
+    expect(prompt).toContain("Use the project map and repository evidence");
+    expect(prompt).toContain("do not assume a framework or directory layout");
+    expect(prompt).toContain("exact command, working directory, exit status");
   });
 });

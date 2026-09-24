@@ -3016,7 +3016,7 @@ function failedGoalProviders(steps: GoalStepRecord[], phase: string): string[] {
   const failed = new Set<string>();
   for (const step of steps) {
     if (step.phase !== phase) continue;
-    if (step.status === "failed" || step.status === "blocked") failed.add(step.provider);
+    if (step.status === "failed") failed.add(step.provider);
     else if (step.status === "completed") failed.delete(step.provider);
   }
   return [...failed];
