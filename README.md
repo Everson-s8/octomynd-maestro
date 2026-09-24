@@ -102,6 +102,10 @@ npm test
 The terminal launcher and dashboard use the same local database and application contracts. In a
 checkout, use `npm run cli -- <command>`; in the installed app, use `maestro.cmd <command>`:
 
+The packaged Windows launcher uses `%APPDATA%\octomynd-maestro`, matching the installed app's
+Electron `userData` directory. Set `MAESTRO_DATA_DIR` only when intentionally using a separate
+profile. In a source checkout, the CLI continues to use the current working directory by default.
+
 ```powershell
 maestro.cmd project list
 maestro.cmd task create <project-key> "describe the task"

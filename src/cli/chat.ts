@@ -14,7 +14,9 @@
  * Usage: maestro chat [--project <key>] [--full]
  */
 import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDatabase } from "../db.js";
 import type { AgentProviderId, AgentReasoningEffort } from "../agents/types.js";
 import { REASONING_EFFORTS } from "../agents/types.js";
@@ -31,6 +33,7 @@ import type {
   OperationalChatRequest,
   OperationalChatResponse
 } from "../chat/types.js";
+import { renderTerminalWelcome, terminalPrompt } from "./terminal-ui.js";
 
 // ─── ANSI colors (small, no dependency) ───────────────────────────────────────
 const RESET = "\x1b[0m";
@@ -40,39 +43,18 @@ const RED = "\x1b[31m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const BLUE = "\x1b[34m";
-const MAGENTA = "\x1b[35m";
 const CYAN = "\x1b[36m";
-const GRAY = "\x1b[90m";
 const CLEAR_LINE = "\x1b[2K\r";
 
-// ─── Octomynd octopus ─────────────────────────────────────────────────────────
-const OCTOPUS = [
-  "             _..._",
-  "           .'  O  \\",
-  "          /   ~    |",
-  "         |    O   /",
-  "          \\      /",
-  "           '.__.'",
-  "    __.----'  '----.__",
-  "   /  ~  \\      /  ~  \\",
-  "  |      |    |      |",
-  "   \\  ~  /      \\  ~  /",
-  "    '--'          '--'",
-  "   / ~ \\          / ~ \\",
-  "  |    |         |    |",
-  "   \\   /   \\  /   \\   /",
-  "    '-'     '--'    '-'"
-].join("\n");
+const VERSION_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../package.json");
 
-function banner(locale: "pt-BR" | "en", projectKey: string): void {
-  console.log(`\n${MAGENTA}${OCTOPUS}${RESET}`);
-  console.log(`${DIM}${"─".repeat(46)}${RESET}`);
-  console.log(
-    locale === "pt-BR"
-      ? `${DIM}Chat de trabalho — escreva sua solicitação ou /help. Ctrl+C cancela.${RESET}`
-      : `${DIM}Working chat — type your request or /help. Ctrl+C cancels.${RESET}`
-  );
-  console.log(`${DIM}${locale === "pt-BR" ? "Contexto automático" : "Automatic context"}: @${projectKey}${RESET}`);
+function packageVersion(): string {
+  try {
+    const metadata = JSON.parse(readFileSync(VERSION_FILE, "utf8")) as { version?: unknown };
+    return typeof metadata.version === "string" ? metadata.version : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 // ─── Progress rendering (single line under the input) ────────────────────────
@@ -166,7 +148,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
 
   const accessMode = fullAccess ? "full" : "standard";
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt(`${CYAN}${BOLD}maestro${RESET}${DIM}›${RESET} `);
+  rl.setPrompt(terminalPrompt());
 
   let threadId: number | null = null;
   let turnActive = false;
@@ -469,7 +451,33 @@ export async function chatCommand(argv: string[]): Promise<number> {
     // while a turn is still running, and the OS reclaims the file anyway.
   });
 
-  if (!noBanner) banner(locale, activeProjectKey);
+  if (!noBanner) {
+    const connected = new Set(database.listConnectedProviderIds());
+    const providers = agentRegistry.list()
+      .filter((provider) => connected.has(provider.id))
+      .map((provider) => ({ id: provider.id, label: provider.label }));
+    const taskCounts = database.countTasksByStatus();
+    const queuedTasks = (taskCounts.queued ?? 0)
+      + (taskCounts.awaiting_human ?? 0)
+      + (taskCounts.waiting_quota ?? 0)
+      + (taskCounts.waiting_provider ?? 0)
+      + (taskCounts.waiting_dependency ?? 0);
+    const runningTasks = (taskCounts.planning ?? 0)
+      + (taskCounts.implementing ?? 0)
+      + (taskCounts.testing ?? 0)
+      + (taskCounts.reviewing ?? 0);
+    console.log(renderTerminalWelcome({
+      projectKey: activeProjectKey,
+      version: packageVersion(),
+      providers,
+      queuedTasks,
+      runningTasks,
+      selectedProvider: selectedProviderId,
+      width: process.stdout.columns,
+      color: undefined,
+      locale
+    }).join("\n"));
+  }
   rl.prompt();
   return 0;
 }
