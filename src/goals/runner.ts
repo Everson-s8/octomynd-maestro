@@ -145,7 +145,10 @@ export async function runTaskGoal(
   const tokenRuntimeEnabled = options.tokenRuntime !== false && options.tokenRuntime?.enabled !== false;
   const rtk = detectLocalRtk();
   const goalDeadlineAt = options.deadlineMs ? Date.now() + options.deadlineMs : undefined;
-  const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id), options.phaseBudgets);
+  const selfRecoveryStepIds = new Set(database.listEventsForTask(task.id, 1000)
+    .filter((event) => event.type === "goal.step_started" && event.metadata?.selfRecoveryAttempt === true)
+    .map((event) => Number(event.metadata?.stepId)));
+  const circuitBreaker = GoalCircuitBreaker.fromSteps(database.listGoalSteps(run.id), options.phaseBudgets, selfRecoveryStepIds);
   const persistedWorkGraphRequest = database.findFeaturePlanDetailsByTask(task.id)?.tasks
     .find((candidate) => candidate.taskId === task.id)?.contract.workGraphRequest ?? null;
   const explicitWorkGraphRequested = persistedWorkGraphRequest !== null
@@ -661,6 +664,7 @@ export async function runTaskGoal(
         lastProvider: routed.provider.id
       });
 
+      const selfRecoveryAttempt = pendingProviderSelfRecovery(database, task.id, run.id, phase, routed.provider.id) !== null;
       const goalStep = database.withTransaction(() => {
         const step = database.createGoalStep(run.id, phase, routed.provider.id);
         database.addEvent({
@@ -668,7 +672,7 @@ export async function runTaskGoal(
           type: "goal.step_started",
           text: `${phase} with ${routed.provider.label}`,
           taskId: task.id,
-          metadata: { runId: run.id, stepId: step.id, phase }
+          metadata: { runId: run.id, stepId: step.id, phase, selfRecoveryAttempt }
         });
         return step;
       });
@@ -751,7 +755,8 @@ export async function runTaskGoal(
           },
           humanFeedback: [
             latestChangeRequest(database, run.id),
-            latestGoalGuidance(database, task.id, run.id)
+            latestGoalGuidance(database, task.id, run.id),
+            latestProviderSelfRecovery(database, task.id, run.id, phase, routed.provider.id)
           ].filter((value): value is string => Boolean(value)).join("\n\n") || null,
           skillContext,
           artifactsRoot: path.resolve(options.artifactsRoot),
@@ -800,7 +805,10 @@ export async function runTaskGoal(
       const workspaceAfter = tracksWorkspaceProgress
         ? captureWorkspaceProgress(task.worktreePath)
         : null;
-      const countsTowardBudget = result.outcome !== "cancelled" && !(result.outcome === "failed" && result.retryable);
+      const isSelfRecoveryAttempt = selfRecoveryAttempt;
+      const countsTowardBudget = result.outcome !== "cancelled"
+        && !isSelfRecoveryAttempt
+        && !(result.outcome === "failed" && result.retryable);
       if (countsTowardBudget) stepCount += 1;
       const safeSummary = redactSensitiveText(result.summary);
       const safeOutput = redactSensitiveText(result.output);
@@ -942,7 +950,8 @@ export async function runTaskGoal(
         workspaceBefore,
         workspaceAfter,
         taskText: task.text,
-        taskMetadata: taskMetadataParsed
+        taskMetadata: taskMetadataParsed,
+        selfRecoveryAttempt: isSelfRecoveryAttempt
       });
       if (circuitDecision?.reason === "output_limit") {
         database.addEvent({
@@ -978,6 +987,43 @@ export async function runTaskGoal(
           result.failureCategory ?? classifyFailure(result.summary || result.error || "", result.failureCategory === "timeout"),
           result.summary || result.error || ""
         );
+
+      // Give a connected provider one bounded chance to recover its own
+      // transient/recoverable failure. The failed step and checkpoint have
+      // already been persisted, so the same provider receives that evidence
+      // before Maestro routes to another provider.
+      const failureCategory = result.failureCategory
+        ?? classifyFailure(result.summary || result.error || "", result.failureCategory === "timeout");
+      const selfRecoveryEligible = (
+        result.outcome === "failed"
+        && (result.retryable || isRecoverableProviderFailure(failureCategory, result.summary || result.error || ""))
+      ) || recoverableBlockedResult;
+      if (
+        !circuitDecision
+        && selfRecoveryEligible
+        && !wasExplicitlySelectedForCurrentAttempt(database, task.id, run.id, phase, routed.provider.id, goalStep.id)
+        && !["quota", "capacity", "auth", "auth_required"].includes(failureCategory)
+        && !hasProviderSelfRecovery(database, task.id, run.id, phase, routed.provider.id)
+      ) {
+        database.addEvent({
+          source: "maestro",
+          type: "goal.provider_self_recovery",
+          text: `${routed.provider.label} will make one recovery attempt for ${phase} using the saved step and worktree context before provider fallback.`,
+          taskId: task.id,
+          metadata: {
+            runId: run.id,
+            stepId: goalStep.id,
+            phase,
+            providerId: routed.provider.id,
+            failureCategory,
+            retryable: result.retryable,
+            checkpointId: database.getLatestGoalCheckpoint(run.id)?.id ?? null,
+            worktreePreserved: true
+          }
+        });
+        excluded.delete(routed.provider.id);
+        continue;
+      }
 
       if (circuitDecision?.reason === "no_progress" && !recoverableBlockedResult) {
         database.finishGoalStep({
@@ -1582,6 +1628,89 @@ function latestGoalGuidance(database: MaestroDatabase, taskId: number, runId: nu
       : ""
   ].filter(Boolean);
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function hasProviderSelfRecovery(
+  database: MaestroDatabase,
+  taskId: number,
+  runId: number,
+  phase: GoalPhase,
+  providerId: AgentProviderId
+): boolean {
+  return database.listEventsForTask(taskId, 1000).some((event) => (
+    event.type === "goal.provider_self_recovery"
+    && Number(event.metadata?.runId) === runId
+    && event.metadata?.phase === phase
+    && event.metadata?.providerId === providerId
+  ));
+}
+
+function wasExplicitlySelectedForCurrentAttempt(
+  database: MaestroDatabase,
+  taskId: number,
+  runId: number,
+  phase: GoalPhase,
+  providerId: AgentProviderId,
+  stepId: number
+): boolean {
+  const events = database.listEventsForTask(taskId, 1000)
+    .filter((event) => Number(event.metadata?.runId) === runId && event.metadata?.phase === phase);
+  const started = events.find((event) => event.type === "goal.step_started" && Number(event.metadata?.stepId) === stepId);
+  if (!started) return false;
+  const previousFailureId = events
+    .filter((event) => (
+      (event.type === "goal.step_failed" || event.type === "goal.step_blocked")
+      && event.source === providerId
+      && Number(event.metadata?.stepId) < stepId
+    ))
+    .at(-1)?.id ?? 0;
+  return events.some((event) => (
+    event.type === "goal.provider_selected"
+    && event.metadata?.providerId === providerId
+    && event.metadata?.resumed === true
+    && event.id > previousFailureId
+    && event.id < started.id
+  ));
+}
+
+function latestProviderSelfRecovery(
+  database: MaestroDatabase,
+  taskId: number,
+  runId: number,
+  phase: GoalPhase,
+  providerId: AgentProviderId
+): string | null {
+  const recovery = pendingProviderSelfRecovery(database, taskId, runId, phase, providerId);
+  return recovery
+    ? `Bounded self-recovery attempt: inspect the prior failed step and saved checkpoint, adapt your approach, and continue without discarding work. Previous failure: ${redactSensitiveText(recovery.text).slice(0, 1200)}`
+    : null;
+}
+
+function pendingProviderSelfRecovery(
+  database: MaestroDatabase,
+  taskId: number,
+  runId: number,
+  phase: GoalPhase,
+  providerId: AgentProviderId
+) {
+  const events = database.listEventsForTask(taskId, 1000)
+    .filter((event) => Number(event.metadata?.runId) === runId && event.metadata?.phase === phase);
+  const recovery = events.reverse().find((event) => (
+    event.type === "goal.provider_self_recovery" && event.metadata?.providerId === providerId
+  ));
+  if (!recovery) return null;
+  const explicitlySelected = events.some((event) => (
+    event.type === "goal.provider_selected"
+    && event.metadata?.providerId === providerId
+    && event.id > recovery.id
+  ));
+  const retryAlreadyStarted = events.some((event) => (
+    event.type === "goal.step_started"
+    && event.source === providerId
+    && event.metadata?.selfRecoveryAttempt === true
+    && event.id > recovery.id
+  ));
+  return explicitlySelected || retryAlreadyStarted ? null : recovery;
 }
 
 function isRecoverableProviderFailure(category: string, detail = ""): category is GoalWaitReason {

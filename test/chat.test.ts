@@ -704,6 +704,10 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
+    expect(database.listEventsForTask(createdTaskIds[0]).some((event) => (
+      event.type === "task.workspace_access_approved"
+      && event.metadata?.scope === "task_worktree"
+    ))).toBe(true);
     const repeatedActionResult = await chatService.executeAction({
       projectKey: "maestro",
       surface: "dashboard",
@@ -841,7 +845,7 @@ describe("Unified Operational Chat (Task #52)", () => {
     const task = database.createTask("Implement the financial app", "dashboard", "maestro");
     database.updateTaskStatus(task.id, "blocked");
     const run = database.createGoalRun(task.id, 12);
-    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 3, lastError: "Codex failed" });
+    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 3, lastError: "Codex failed", lastProvider: "codex" });
     const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
     const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
     const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
@@ -865,7 +869,7 @@ describe("Unified Operational Chat (Task #52)", () => {
       .map((item) => item.payload?.providerId)
       .sort();
     // Only providers able to implement are offered; the reviewing-only one is not.
-    expect(offered).toEqual(["antigravity", "codex"]);
+    expect(offered).toEqual(["antigravity"]);
   });
 
   it("does not offer provider switches for a Goal that is running normally", async () => {

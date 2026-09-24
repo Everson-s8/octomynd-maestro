@@ -23,6 +23,14 @@ proven execution loop that has exhausted recovery paths.
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
 
+For a retryable provider failure, the runtime preserves the failed step and checkpoint, then allows
+that same provider one recovery attempt for the phase before routing elsewhere. The retry receives
+the prior failure and saved context; quota, capacity and authentication failures do not trigger a
+paid retry. The attempt is persisted as `goal.provider_self_recovery`, preventing repeated retries
+after a restart. If it fails, normal provider fallback or recoverable waiting continues. Chat switch
+suggestions include only other ready providers; an explicit user request can still select a named,
+ready provider.
+
 ## Semantic task sizing
 
 Before a new task starts, Maestro makes one small structured planning call through the same

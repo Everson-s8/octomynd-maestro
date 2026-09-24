@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { runAgentProcess } from "../agents/process.js";
+import { buildRestrictedAgentEnvironment, runAgentProcess } from "../agents/process.js";
 import { redactSensitiveText, truncateForDisplay } from "../security/redaction.js";
 import {
   formatSecretScanFinding,
@@ -570,7 +570,10 @@ async function runCommandCheck(
     cwd: workspacePath,
     timeoutMs: spec.timeoutMs,
     maxOutputChars: RAW_OUTPUT_MAX_CHARS,
-    signal
+    signal,
+    // Project test commands execute arbitrary project code. They must not
+    // inherit Maestro's Telegram, provider, or application credentials.
+    env: buildRestrictedAgentEnvironment(process.env)
   });
   const raw = redactSensitiveText([result.stdout, result.stderr].filter(Boolean).join("\n").trim());
   const artifactKey = path.posix.join(invocationKey, `${spec.id}.raw.txt`);
@@ -650,12 +653,11 @@ const INSTALL_TIMEOUT_MS = 10 * 60_000;
 type PreparationStep = { label: string; command: string; args: string[]; cwd: string; timeoutMs: number };
 
 /**
- * Make the worktree runnable before the checks, inside the worktree only:
+ * Make the worktree runnable before the checks:
  * a `.venv` with the Python manifest installed (plus pytest when there are
- * tests), and `npm ci`/`npm install` for every app directory missing
- * `node_modules`. Both folders are added to the worktree's local Git exclude
- * so they can never be delivered in a commit. Re-installation only happens
- * when the Python manifests change (hash marker inside `.venv`).
+ * tests), and a lockfile-aware package-manager install for every app directory
+ * missing `node_modules`. Git's info/exclude can be shared by linked worktrees;
+ * additions are logged. Re-installation only happens when manifests change.
  */
 async function prepareEnvironment(
   executeProcess: typeof runAgentProcess,
@@ -682,7 +684,10 @@ async function prepareEnvironment(
       cwd: step.cwd,
       timeoutMs: step.timeoutMs,
       maxOutputChars: RAW_OUTPUT_MAX_CHARS,
-      signal
+      signal,
+      // npm/pip lifecycle hooks and project-defined build steps are untrusted
+      // code; do not expose Maestro-owned credentials to them.
+      env: buildRestrictedAgentEnvironment(process.env)
     });
     const output = redactSensitiveText([result.stdout, result.stderr].filter(Boolean).join("\n").trim());
     log.push(`$ ${step.label}\n${output}`);
@@ -773,7 +778,17 @@ async function preparePython(
       ok = await run({ label: `pip install -r ${file}`, command: venvPython, args: [...pip, "-r", file], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS }) && ok;
     }
   } else if (manifests.some((file) => ["pyproject.toml", "setup.py", "setup.cfg"].includes(file))) {
-    ok = await run({ label: "pip install -e .", command: venvPython, args: [...pip, "-e", "."], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS });
+    const extras = fs.existsSync(path.join(workspacePath, "pyproject.toml"))
+      ? pythonTestExtras(path.join(workspacePath, "pyproject.toml"))
+      : [];
+    const target = extras.length > 0 ? `.[${extras.join(",")}]` : ".";
+    ok = await run({
+      label: `pip install -e ${target}`,
+      command: venvPython,
+      args: [...pip, "-e", target],
+      cwd: workspacePath,
+      timeoutMs: INSTALL_TIMEOUT_MS
+    });
   }
   if (containsPythonTestFile(workspacePath)) {
     ok = await run({ label: "pip install pytest", command: venvPython, args: [...pip, "pytest"], cwd: workspacePath, timeoutMs: INSTALL_TIMEOUT_MS }) && ok;
@@ -787,6 +802,21 @@ async function preparePython(
       failures.push(message);
     }
   }
+}
+
+function pythonTestExtras(pyprojectPath: string): string[] {
+  const lines = fs.readFileSync(pyprojectPath, "utf8").split(/\r?\n/);
+  const header = lines.findIndex((line) => line.trim() === "[project.optional-dependencies]");
+  if (header < 0) return [];
+  const section: string[] = [];
+  for (const line of lines.slice(header + 1)) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(line)) break;
+    section.push(line);
+  }
+  return section
+    .map((line) => /^\s*([A-Za-z0-9_-]+)\s*=/.exec(line)?.[1])
+    .filter((name): name is string => Boolean(name))
+    .filter((name) => /^(?:dev|test|tests|testing)(?:[-_][A-Za-z0-9_-]+)?$/i.test(name));
 }
 
 /** The workspace root and first-level app folders that declare a package.json. */
@@ -814,7 +844,8 @@ async function prepareNode(
 ): Promise<void> {
   const cwd = path.join(workspacePath, ...appDir.split("/"));
   if (!declaresDependencies(path.join(cwd, "package.json"))) return; // nothing to install, never creates node_modules
-  const manifestPaths = ["package.json", "package-lock.json"]
+  const packageManager = detectNodePackageManager(cwd);
+  const manifestPaths = ["package.json", ...(packageManager?.lockfiles ?? [])]
     .map((file) => path.join(cwd, file))
     .filter((file) => fs.existsSync(file));
   const dependencyHash = crypto.createHash("sha256");
@@ -832,26 +863,31 @@ async function prepareNode(
     log.push(`Node dependencies unchanged since the last preparation in ${appDir}`);
     return;
   }
-  const npmCli = resolveNpmCli();
-  if (!npmCli) {
-    const message = `npm was not found; ${appDir} dependencies were not installed`;
+  const manager = packageManager ?? detectNpmWithoutLockfile();
+  if (!manager) {
+    const message = `no supported package manager was found for ${appDir}; dependencies were not installed`;
     log.push(message);
     failures.push(message);
     return;
   }
-  const hasLockfile = fs.existsSync(path.join(cwd, "package-lock.json"));
   const where = appDir === "." ? "" : ` in ${appDir}`;
   const installed = await run({
-    label: `npm ${hasLockfile ? "ci" : "install"}${where}`,
-    // Commands run without a shell, so npm's Windows `.cmd` shim cannot be
-    // spawned directly; run npm's own entry with the current Node runtime.
-    command: process.execPath,
-    // Without a lockfile, do not create one: the user's project must not change.
-    args: [npmCli, ...(hasLockfile ? ["ci"] : ["install", "--no-package-lock"]), "--no-audit", "--no-fund"],
+    label: `${manager.label}${where}`,
+    command: manager.command,
+    args: manager.args,
     cwd,
     timeoutMs: INSTALL_TIMEOUT_MS
   });
-  if (installed && fs.existsSync(nodeModules)) {
+  const verified = installed && manager.npmCli
+    ? await run({
+      label: `npm dependency verification${where}`,
+      command: process.execPath,
+      args: [manager.npmCli, "ls", "--depth=0", "--no-audit", "--no-fund"],
+      cwd,
+      timeoutMs: 120_000
+    })
+    : installed;
+  if (verified && fs.existsSync(nodeModules)) {
     try {
       fs.writeFileSync(marker, `${digest}\n`, "utf8");
     } catch (error) {
@@ -860,6 +896,69 @@ async function prepareNode(
       failures.push(message);
     }
   }
+}
+
+type NodeManager = {
+  label: string;
+  lockfiles: string[];
+  command: string;
+  args: string[];
+  npmCli?: string;
+};
+
+function detectNodePackageManager(cwd: string): NodeManager | null {
+  if (fs.existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
+    return {
+      label: "pnpm install --frozen-lockfile",
+      lockfiles: ["pnpm-lock.yaml"],
+      ...commandForManager("pnpm", ["install", "--frozen-lockfile"])
+    };
+  }
+  if (fs.existsSync(path.join(cwd, "yarn.lock"))) {
+    return {
+      label: "yarn install --frozen-lockfile",
+      lockfiles: ["yarn.lock"],
+      ...commandForManager("yarn", ["install", "--frozen-lockfile"])
+    };
+  }
+  const bunLockfiles = ["bun.lock", "bun.lockb"].filter((file) => fs.existsSync(path.join(cwd, file)));
+  if (bunLockfiles.length > 0) {
+    return {
+      label: "bun install --frozen-lockfile",
+      lockfiles: bunLockfiles,
+      ...commandForManager("bun", ["install", "--frozen-lockfile"])
+    };
+  }
+  if (fs.existsSync(path.join(cwd, "package-lock.json"))) {
+    const npmCli = resolveNpmCli();
+    return npmCli ? {
+      label: "npm ci",
+      lockfiles: ["package-lock.json"],
+      command: process.execPath,
+      args: [npmCli, "ci", "--no-audit", "--no-fund"],
+      npmCli
+    } : null;
+  }
+  return null;
+}
+
+function detectNpmWithoutLockfile(): NodeManager | null {
+  const npmCli = resolveNpmCli();
+  return npmCli ? {
+    label: "npm install --no-package-lock",
+    lockfiles: [],
+    command: process.execPath,
+    args: [npmCli, "install", "--no-package-lock", "--no-audit", "--no-fund"],
+    npmCli
+  } : null;
+}
+
+function commandForManager(name: "pnpm" | "yarn" | "bun", args: string[]): Pick<NodeManager, "command" | "args"> {
+  // Windows package managers are commonly installed as .cmd shims. The
+  // command string is static and arguments are fixed flags (never user data).
+  return process.platform === "win32"
+    ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `${name} ${args.join(" ")}`] }
+    : { command: name, args };
 }
 
 function declaresDependencies(packageJsonPath: string): boolean {
@@ -899,7 +998,7 @@ function resolveNpmCli(): string | null {
   return null;
 }
 
-/** Keep provisioned environments out of commits via the worktree's local exclude file. */
+/** Keep provisioned environments out of commits via Git's repository exclude file. */
 function excludeLocalEnvironments(workspacePath: string, log: string[]): boolean {
   const lookup = spawnSync("git", ["-C", workspacePath, "rev-parse", "--git-path", "info/exclude"], {
     encoding: "utf8",
@@ -914,15 +1013,23 @@ function excludeLocalEnvironments(workspacePath: string, log: string[]): boolean
   const excludePath = path.resolve(workspacePath, relative);
   try {
     const current = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
-    const missing = [".venv/", "node_modules/", "__pycache__/", ".pytest_cache/"]
-      .filter((pattern) => !current.split(/\r?\n/).includes(pattern));
+    const patterns = [".venv/", "node_modules/", "__pycache__/", ".pytest_cache/"];
+    const ignoredPath = (pattern: string) => `${pattern.slice(0, -1)}/.maestro-ignore-probe`;
+    const missing = patterns.filter((pattern) => {
+      const result = spawnSync("git", ["-C", workspacePath, "check-ignore", "--quiet", ignoredPath(pattern)], {
+        encoding: "utf8", windowsHide: true, timeout: 30_000
+      });
+      return result.status !== 0 && !current.split(/\r?\n/).includes(pattern);
+    });
     if (missing.length > 0) {
       fs.mkdirSync(path.dirname(excludePath), { recursive: true });
       const prefix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
-      fs.appendFileSync(excludePath, `${prefix}# Added by Maestro validation\n${missing.join("\n")}\n`, "utf8");
+      fs.appendFileSync(excludePath, `${prefix}# Added by Maestro validation (shared Git exclude)\n${missing.join("\n")}\n`, "utf8");
+      log.push("Updated the repository's shared Git info/exclude so generated environments stay out of commits.");
     }
-    const verified = fs.readFileSync(excludePath, "utf8").split(/\r?\n/);
-    const safe = [".venv/", "node_modules/", "__pycache__/", ".pytest_cache/"].every((pattern) => verified.includes(pattern));
+    const safe = patterns.every((pattern) => spawnSync("git", ["-C", workspacePath, "check-ignore", "--quiet", ignoredPath(pattern)], {
+      encoding: "utf8", windowsHide: true, timeout: 30_000
+    }).status === 0);
     if (!safe) log.push("could not verify Git excludes for generated environments");
     return safe;
   } catch (error) {

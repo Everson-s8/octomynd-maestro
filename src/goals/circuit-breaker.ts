@@ -31,6 +31,8 @@ export type GoalCircuitBreakerObservation = {
   taskText?: string;
   taskMetadata?: Record<string, any> | null;
   provider?: string;
+  /** A bounded retry whose failure is handled by provider fallback, not loop budget. */
+  selfRecoveryAttempt?: boolean;
 };
 
 const REPEATED_FAILURE_LIMIT = 2;
@@ -74,10 +76,12 @@ export class GoalCircuitBreaker {
 
   static fromSteps(
     steps: GoalStepRecord[],
-    phaseBudgets?: Partial<Record<GoalPhase, number>>
+    phaseBudgets?: Partial<Record<GoalPhase, number>>,
+    ignoredStepIds: Set<number> = new Set()
   ): GoalCircuitBreaker {
     const breaker = new GoalCircuitBreaker(phaseBudgets);
     for (const step of steps) {
+      if (ignoredStepIds.has(step.id)) continue;
       const count = (breaker.phaseStepCounts.get(step.phase) ?? 0) + 1;
       breaker.phaseStepCounts.set(step.phase, count);
 
@@ -115,9 +119,6 @@ export class GoalCircuitBreaker {
   }
 
   observe(observation: GoalCircuitBreakerObservation): GoalCircuitBreakerDecision | null {
-    const count = (this.phaseStepCounts.get(observation.phase) ?? 0) + 1;
-    this.phaseStepCounts.set(observation.phase, count);
-
     const processReason = observation.result.processRuntime?.breakerReason;
     if (processReason === "deadline") {
       return decision("deadline", "Goal deadline reached during provider execution.");
@@ -132,6 +133,14 @@ export class GoalCircuitBreaker {
         "Prompt size or argument list exceeded system limits (ENAMETOOLONG/E2BIG). Prompt-bloat detected."
       );
     }
+
+    // This is one persisted, bounded recovery call, not another independent
+    // work iteration. Its failure is routed by GoalRunner after retaining the
+    // provider's evidence, and must not exhaust the user-facing phase budget.
+    if (observation.selfRecoveryAttempt) return null;
+
+    const count = (this.phaseStepCounts.get(observation.phase) ?? 0) + 1;
+    this.phaseStepCounts.set(observation.phase, count);
 
     if (observation.result.outcome === "failed") {
       const category = observation.result.failureCategory

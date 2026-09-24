@@ -53,6 +53,7 @@ export type ChatEvidenceGoalFact = {
   taskId: number;
   phase: string;
   status: string;
+  lastProvider: string | null;
   stepCount: number;
   latestStepSummary: string | null;
   error: string | null;

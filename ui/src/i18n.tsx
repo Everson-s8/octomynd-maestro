@@ -67,6 +67,7 @@ const portuguese: Record<string, string> = {
   "Unable to delete the conversation.": "Falha ao excluir a conversa.",
   "Unable to send the message.": "Falha ao enviar mensagem.",
   "Do you really want to run this action?": "Deseja realmente executar esta ação?",
+  "Confirming this task authorizes Maestro to run project commands and install or update dependencies in its isolated worktree. Scripts run as your Windows user and do not receive Maestro credentials; this is not an administrator or operating-system sandbox.": "Ao confirmar esta task, você autoriza o Maestro a executar comandos do projeto e instalar ou atualizar dependências no worktree isolado dela. Os scripts rodam com seu usuário do Windows e não recebem credenciais do Maestro; isso não concede privilégios de administrador nem cria um sandbox do sistema operacional.",
   "Unable to execute the governed action.": "Falha ao executar ação governada.",
   "Maestro process": "Processo do Maestro",
   "Process": "Processo",

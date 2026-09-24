@@ -537,7 +537,8 @@ describe("goal runner", () => {
     });
 
     expect(run.status).toBe("blocked");
-    expect(database.listGoalSteps(run.id)).toHaveLength(2);
+    expect(database.listGoalSteps(run.id)).toHaveLength(3);
+    expect(database.listEvents().filter((event) => event.type === "goal.provider_self_recovery")).toHaveLength(1);
     expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata.reason)
       .toBe("repeated_failure");
   });
@@ -995,6 +996,45 @@ describe("goal runner", () => {
     expect(failedStepEvent?.metadata.processRuntime).toMatchObject({
       outputStats: { receivedChars: 5, retainedChars: 5 }
     });
+  });
+
+  it("tries one context-preserving recovery with the same provider before switching", async () => {
+    const projectDir = path.join(tempDir, "self-recovery-project");
+    const worktreeDir = path.join(tempDir, "self-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "selfrecovery", path: projectDir });
+    const task = database.createTask("recover the implementation after a transient error", "dashboard", "selfrecovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let attempts = 0;
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], (request) => {
+      if (request.phase !== "implementing") return completed("Codex phase completed");
+      attempts += 1;
+      if (attempts === 1) return {
+        outcome: "failed",
+        summary: "temporary runner failure",
+        output: "partial implementation context",
+        error: "temporary runner failure",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+      expect(request.humanFeedback).toContain("Previous failure: Codex will make one recovery attempt");
+      return completed("Codex recovered from its checkpoint");
+    });
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude fallback"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8
+    });
+
+    expect(run.status).toBe("completed");
+    expect(attempts).toBe(2);
+    expect(database.listGoalSteps(run.id).filter((step) => step.phase === "implementing").map((step) => step.provider).slice(0, 2))
+      .toEqual(["codex", "codex"]);
+    expect(database.listEventsForTask(task.id).filter((event) => event.type === "goal.provider_self_recovery"))
+      .toHaveLength(1);
   });
 
   it("treats a recoverable provider block as fallback or waiting, not a terminal Goal block", async () => {
@@ -1851,7 +1891,7 @@ describe("goal runner", () => {
     expect(run.status).toBe("waiting_provider");
     expect(run.waitReason).toBe("budget_exhausted");
     expect(run.lastError).toBe("Phase 'planning' reached its limit of 2 steps.");
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
 
     const circuitBreakerEvent = database.listEvents().find((e) => e.type === "goal.circuit_breaker");
     expect(circuitBreakerEvent?.metadata).toMatchObject({

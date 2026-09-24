@@ -634,7 +634,10 @@ export class OperationalChatService {
             projectKey: targetProjectKey,
             title: typeof action.payload?.title === "string" ? action.payload.title : undefined,
             specification: typeof action.payload?.specification === "string" ? action.payload.specification : undefined,
-            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
+            // Executing the explicit Create Task action is the task's one
+            // authorization: its isolated worktree may be provisioned and
+            // changed without prompting again for routine project commands.
+            workspaceWriteApproved: true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -668,7 +671,9 @@ export class OperationalChatService {
           const task = this.commands.createTask(origin, {
             text,
             projectKey: targetProjectKey,
-            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
+            // This governed action is already confirmed by the user; keep its
+            // authorization scoped to the task worktree.
+            workspaceWriteApproved: true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -1461,6 +1466,7 @@ export class OperationalChatService {
           taskId: run.taskId,
           phase: run.currentPhase,
           status: run.status,
+          lastProvider: run.lastProvider ?? null,
           stepCount: run.stepCount,
           latestStepSummary: latestStep?.summary ?? null,
           error: run.lastError ?? null,
@@ -1803,7 +1809,9 @@ export class OperationalChatService {
       const switchCandidates = requestedProviderId
         ? [requestedProviderId]
         : stopped
-          ? eligibleGoalProviders(evidence.providers, goal.phase).slice(0, 3)
+          ? eligibleGoalProviders(evidence.providers, goal.phase)
+            .filter((providerId) => providerId !== goal.lastProvider)
+            .slice(0, 3)
           : [];
       for (const requestedProviderId of switchCandidates) {
         if (!["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) break;

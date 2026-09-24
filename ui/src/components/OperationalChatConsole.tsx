@@ -761,6 +761,9 @@ export function OperationalChatConsole({
             {pendingConfirmation.type === "action" ? (
               <div className="chat-confirmation-details" aria-label={translate("Action details")}>
                 {pendingConfirmation.action.description}
+                {["create_task", "code_change_task"].includes(pendingConfirmation.action.type) ? (
+                  <p>{translate("Confirming this task authorizes Maestro to run project commands and install or update dependencies in its isolated worktree. Scripts run as your Windows user and do not receive Maestro credentials; this is not an administrator or operating-system sandbox.")}</p>
+                ) : null}
               </div>
             ) : null}
             <div className="modal-actions">

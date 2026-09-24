@@ -14,15 +14,16 @@ review.
 
 | Layout | How it is detected | Checks |
 |---|---|---|
-| `nested-app` | `backend/package.json`, `backend/tsconfig.json` or `frontend/{package.json,tsconfig.json,vite.config.*}` | backend typecheck, frontend typecheck, Vitest, Vite build (each skipped if its config is missing) |
+| `nested-app` | First-level `backend`/`server`/`api` and `frontend`/`client`/`web` directories (optionally suffixed, e.g. `frontend-ts`) containing a recognized app manifest | backend typecheck, frontend typecheck, Vitest, Vite build (each skipped if its config is missing) |
 | `python` | a Python manifest (`pyproject.toml`, `requirements*.txt`, `setup.*`, `pytest.ini`, `tox.ini`, `Pipfile`, `environment.yml`) or any `.py` file, **and** no root TypeScript manifest | `compileall`, then `pytest -q` (skipped when there are no `test_*.py` / `*_test.py`) |
 | `root` | everything else (Maestro itself and TypeScript roots) | backend typecheck, `ui/` typecheck, Vitest, Vite build with `ui/vite.config.ts` |
 
 **Tools.**
 - TypeScript tools (`tsc`, `vitest`, `vite`) are resolved from the worktree's
   `node_modules`, then from `MAESTRO_RUNTIME_ROOT`.
-- Python uses the worktree's `.venv` interpreter when it exists; otherwise it
-  uses `py -3` (Windows) or `python3`.
+- Python uses the worktree's `.venv` interpreter when it exists. Otherwise it
+  probes Python 3 installations, including the Windows `py` launcher, and
+  selects the first interpreter that successfully starts.
 
 **Infrastructure failures.** If the runner itself cannot start, the Goal is
 paused as `waiting_provider` (`environment_error`) and retried. It is not
@@ -33,28 +34,33 @@ blocked.
 The deterministic runner prepares dependencies before tests only when the Task
 has a persisted `task.workspace_access_approved` event. It creates a worktree
 `.venv`, installs supported Python manifests (`requirements*.txt`, `pyproject.toml`,
-`setup.py`, or `setup.cfg`), and prepares Node app directories with
-`npm ci` when a lockfile exists or `npm install --no-package-lock` otherwise.
+`setup.py`, or `setup.cfg`), including conventional `dev`, `test`, `tests`, and
+`testing` extras from `[project.optional-dependencies]`. Node app directories use
+the package manager indicated by a supported lockfile (`npm ci`, frozen
+pnpm/yarn/bun install); without a lockfile, npm installs without creating one.
 Successful dependency installs are cached against their manifests; failed or
 partial installs are retried instead of being mistaken for a prepared environment.
 
-Without explicit Task approval, preparation is skipped. Checks still run and
-record missing-tool evidence so the Goal can ask a connected provider to recover
-the environment. `Pipfile` and `environment.yml` are detected but are not
-automatically installed; preparation reports them as unsupported rather than
-claiming success. Generated environments are excluded from Git before install;
-if Maestro cannot verify the excludes, it does not install dependencies.
+The user's explicit Create Task action records approval for autonomous commands
+and dependency changes inside that Task's isolated worktree; no second approval
+prompt is required. Checks still run and record missing-tool evidence when
+preparation is unavailable. `Pipfile` and `environment.yml` are detected but
+are not automatically installed; preparation reports them as unsupported.
+Generated environments are excluded from Git before install. Git's
+`.git/info/exclude` is shared by linked worktrees, so Maestro adds only missing
+patterns there and records this repository-local change in the validation
+artifact. If excludes cannot be verified, dependency installation is skipped.
 
 Important: a Git worktree isolates checked-out project files, not the operating
 system. Package lifecycle scripts and test commands execute as the Maestro user's
-account and can have effects outside the worktree. The Task approval text states
-this boundary. For Codex, see [Providers](PROVIDERS.md#codex-execution-flags).
+account and can have effects outside the worktree. Maestro removes secret-shaped
+environment variables before starting installers and project validation
+commands; this limits credential exposure but is not an operating-system
+sandbox. The Task approval text states this boundary. For Codex, see
+[Providers](PROVIDERS.md#codex-execution-flags).
 
 ## Known gaps
 
-- Folder names other than `frontend/` and `backend/` (for example
-  `frontend-ts/`, `web/`, `client/`) are not detected as a nested app. A
-  Python root with such a frontend is validated as `python` only.
 - A mixed root (Python manifest plus a root `package.json`) is validated as
   `root`, without `pytest`.
 - There is no deterministic UI/browser check. Visual validation depends on
