@@ -320,7 +320,11 @@ describe("DeterministicValidationRunner environment preparation", () => {
 
     await runner.run({ workspacePath, artifactsRoot, prepareEnvironment: true });
 
-    expect(calls.some((call) => call.args.some((arg) => arg.includes("pnpm install --frozen-lockfile")))).toBe(true);
+    expect(calls.some((call) => (
+      call.command === "pnpm"
+        ? call.args[0] === "install" && call.args.includes("--frozen-lockfile")
+        : call.args.some((arg) => arg.includes("pnpm install --frozen-lockfile"))
+    ))).toBe(true);
   });
 
   it("prefers requirement files and keeps .venv/node_modules out of commits", async () => {
