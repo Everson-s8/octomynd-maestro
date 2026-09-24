@@ -33,7 +33,7 @@ import type {
   OperationalChatRequest,
   OperationalChatResponse
 } from "../chat/types.js";
-import { renderTerminalWelcome } from "./terminal-ui.js";
+import { renderTerminalWelcome, terminalPrompt } from "./terminal-ui.js";
 
 // ─── ANSI colors (small, no dependency) ───────────────────────────────────────
 const RESET = "\x1b[0m";
@@ -148,7 +148,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
 
   const accessMode = fullAccess ? "full" : "standard";
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt(`${CYAN}${BOLD}maestro${RESET}${DIM}›${RESET} `);
+  rl.setPrompt(terminalPrompt());
 
   let threadId: number | null = null;
   let turnActive = false;
@@ -474,7 +474,7 @@ export async function chatCommand(argv: string[]): Promise<number> {
       runningTasks,
       selectedProvider: selectedProviderId,
       width: process.stdout.columns,
-      color: process.env.NO_COLOR === undefined && Boolean(process.stdout.isTTY),
+      color: undefined,
       locale
     }).join("\n"));
   }

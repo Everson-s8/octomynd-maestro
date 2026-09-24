@@ -20,7 +20,7 @@ describe("Maestro terminal experience", () => {
     expect(output).toContain("Codex, Claude Code");
     expect(output).toContain("3 aguardando · 1 em execução");
     expect(output).toContain("@apto_gerenciamento");
-    expect(output).toContain("Descreva a tarefa para o Maestro");
+    expect(output).toContain("Agentes em cena");
     expect(output).not.toContain("78%");
   });
 
