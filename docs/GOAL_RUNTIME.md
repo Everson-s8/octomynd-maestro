@@ -23,6 +23,15 @@ proven execution loop that has exhausted recovery paths.
 Every transition is stored in SQLite. A run has a step budget, and every step records provider,
 phase, outcome, summary, output, error, duration, and timestamps.
 
+For a retryable provider failure, the runtime preserves the failed step and checkpoint, then allows
+that same provider one recovery attempt for the phase before routing elsewhere. The retry receives
+the sanitized failure summary/error and saved context; quota, capacity and authentication failures
+do not trigger a paid retry. The attempt is persisted as `goal.provider_self_recovery` and queried
+independently of the recent-event display window, preventing repeated retries after a restart or a
+long task history. If it fails, normal provider fallback or recoverable waiting continues. Automatic
+Chat switch suggestions exclude every provider that failed in the current phase; an explicit user
+request can still select a named, ready provider.
+
 ## Semantic task sizing
 
 Before a new task starts, Maestro makes one small structured planning call through the same
@@ -202,11 +211,20 @@ timeouts or quota failures from being selected repeatedly.
   review. It never edits the user's global Antigravity settings. Writable Goal steps can bypass
   interactive per-tool prompts when the user creates/confirms a Task through a work-intake flow,
   an explicit Telegram/CLI task command, or Full Access chat task creation; the durable
-  `task.workspace_access_approved` event is scoped to that Task's isolated worktree. Dashboard
+  `task.workspace_access_approved` event is scoped to that Task's worktree. A Git worktree
+  isolates the project's checked-out files, but it is not an operating-system sandbox: commands
+  and package lifecycle scripts still run as the Maestro user's account and may affect resources
+  outside the worktree. Dashboard
   intake exposes the same scope as a checked-by-default, user-editable option. The approval is passed to that CLI invocation only,
   together with Antigravity's sandbox and the prepared task worktree; planning/review stay read-only.
   Without task-scoped approval, permission-denied failures remain retryable so another connected
   provider can take over.
+
+The local Dashboard API binds to loopback by default. Its browser-origin checks are not
+authentication for other local processes: a task script running as the same user may call local
+services. Task approval authorizes autonomous execution in the worktree, not a security boundary
+around the host. Maestro does not add a separate local token prompt; it keeps this local-user trust
+model explicit instead of introducing a setup step that would not sandbox same-user processes.
 
 Codex and Claude share the same process runtime for bounded output, stdin, timeout, cancellation,
 and Windows-hidden subprocess execution. Provider adapters only define CLI arguments, phase policy,

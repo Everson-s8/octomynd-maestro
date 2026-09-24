@@ -704,6 +704,10 @@ describe("Unified Operational Chat (Task #52)", () => {
     expect(actionResult.resultSummary).toContain("added to the queue");
     expect(createdTaskIds).toHaveLength(1);
     expect(database.getTask(createdTaskIds[0]).text).toBe(longObjective);
+    expect(database.listEventsForTask(createdTaskIds[0]).some((event) => (
+      event.type === "task.workspace_access_approved"
+      && event.metadata?.scope === "task_worktree"
+    ))).toBe(true);
     const repeatedActionResult = await chatService.executeAction({
       projectKey: "maestro",
       surface: "dashboard",
@@ -810,6 +814,158 @@ describe("Unified Operational Chat (Task #52)", () => {
     });
     expect(result.success).toBe(true);
     expect(switched).toEqual([{ runId: run.id, providerId: "antigravity" }]);
+  });
+
+  it("does not offer an explicitly requested provider that is offline", async () => {
+    const task = database.createTask("Implement the financial app", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "waiting_provider");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 3 });
+    const codex = chatProvider("codex", {
+      outcome: "completed", summary: "ready", output: "ready", error: null, retryable: false
+    }, { capabilities: ["coding", "conversation"], healthState: "offline" });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Troque para codex e continue a task."
+    });
+
+    expect(response.actions.some((item) => item.type === "switch_goal_provider" && item.targetId === run.id)).toBe(false);
+  });
+
+  it("offers every ready provider for a stopped Goal without the user naming one", async () => {
+    const task = database.createTask("Implement the financial app", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 3, lastError: "Codex failed", lastProvider: "codex" });
+    const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
+    const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
+    const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
+    const reviewer = chatProvider("claude", ready, { capabilities: ["reviewing", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex, antigravity, reviewer]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "A task travou de novo, o que eu faço?"
+    });
+
+    const offered = response.actions
+      .filter((item) => item.type === "switch_goal_provider" && item.targetId === run.id)
+      .map((item) => item.payload?.providerId)
+      .sort();
+    // Only providers able to implement are offered; the reviewing-only one is not.
+    expect(offered).toEqual(["antigravity"]);
+  });
+
+  it("does not suggest any provider that already failed in the stopped Goal phase", async () => {
+    const task = database.createTask("recover implementation after providers fail", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "waiting_provider", currentPhase: "implementing", stepCount: 4, lastProvider: "antigravity" });
+    for (const providerId of ["codex", "antigravity", "claude"]) {
+      const step = database.createGoalStep(run.id, "implementing", providerId);
+      database.finishGoalStep({
+        id: step.id,
+        status: "failed",
+        summary: `${providerId} failed`,
+        output: "",
+        error: `${providerId} failed`,
+        durationMs: 1
+      });
+    }
+    const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
+    const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
+    const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
+    const claude = chatProvider("claude", ready, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex, antigravity, claude]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Como posso recuperar a task?"
+    });
+
+    expect(response.actions.some((item) => item.type === "switch_goal_provider" && item.targetId === run.id)).toBe(false);
+  });
+
+  it("does not classify a blocked step as a provider failure", async () => {
+    const task = database.createTask("recover a blocked implementation", "dashboard", "maestro");
+    database.updateTaskStatus(task.id, "blocked");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "blocked", currentPhase: "implementing", stepCount: 2, lastProvider: "antigravity" });
+    const blockedStep = database.createGoalStep(run.id, "implementing", "codex");
+    database.finishGoalStep({
+      id: blockedStep.id,
+      status: "blocked",
+      summary: "Waiting for environment approval",
+      output: "",
+      error: "environment approval required",
+      durationMs: 1
+    });
+    const ready = { outcome: "completed" as const, summary: "ready", output: "ready", error: null, retryable: false };
+    const codex = chatProvider("codex", ready, { capabilities: ["coding", "conversation"] });
+    const antigravity = chatProvider("antigravity", ready, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex, antigravity]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Como continuo esse goal bloqueado?"
+    });
+
+    const offered = response.actions
+      .filter((item) => item.type === "switch_goal_provider" && item.targetId === run.id)
+      .map((item) => item.payload?.providerId);
+    expect(offered).toContain("codex");
+  });
+
+  it("does not offer provider switches for a Goal that is running normally", async () => {
+    const task = database.createTask("Implement the financial app", "dashboard", "maestro");
+    const run = database.createGoalRun(task.id, 12);
+    database.updateGoalRun({ id: run.id, status: "running", currentPhase: "implementing", stepCount: 1 });
+    const codex = chatProvider("codex", { outcome: "completed", summary: "ready", output: "ready", error: null, retryable: false }, { capabilities: ["coding", "conversation"] });
+    const chatService = new OperationalChatService({
+      database,
+      worktreesRoot: tmpDir,
+      agentRegistry: new AgentRegistry([codex]),
+      actionExecutor: { switchGoalProvider: () => undefined }
+    });
+
+    const response = await chatService.ask({
+      projectKey: "maestro",
+      surface: "dashboard",
+      accessMode: "standard",
+      message: "Como está a task?"
+    });
+
+    expect(response.actions.some((item) => item.type === "switch_goal_provider")).toBe(false);
   });
 
   it("parses explicit local and remote project creation without treating task requests as projects", () => {
@@ -1521,12 +1677,12 @@ function chatProvider(id: string, result: {
   output: string;
   error: string | null;
   retryable: boolean;
-}, options: { models?: string[]; reasoningEfforts?: AgentProvider["reasoningEfforts"]; capabilities?: AgentCapability[]; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
+}, options: { models?: string[]; reasoningEfforts?: AgentProvider["reasoningEfforts"]; capabilities?: AgentCapability[]; healthState?: "ready" | "offline"; onExecute?: (request: Parameters<AgentProvider["execute"]>[0]) => void; execute?: AgentProvider["execute"] } = {}): AgentProvider {
   return {
     id,
     label: id,
     capabilities: new Set(options.capabilities ?? ["conversation"]),
-    health: async () => ({ state: "ready", detail: "ready", checkedAt: new Date().toISOString() }),
+    health: async () => ({ state: options.healthState ?? "ready", detail: options.healthState ?? "ready", checkedAt: new Date().toISOString() }),
     models: async () => options.models ?? [],
     reasoningEfforts: options.reasoningEfforts,
     execute: async (request) => {

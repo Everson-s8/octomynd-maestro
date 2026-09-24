@@ -537,7 +537,8 @@ describe("goal runner", () => {
     });
 
     expect(run.status).toBe("blocked");
-    expect(database.listGoalSteps(run.id)).toHaveLength(2);
+    expect(database.listGoalSteps(run.id)).toHaveLength(3);
+    expect(database.listEvents().filter((event) => event.type === "goal.provider_self_recovery")).toHaveLength(1);
     expect(database.listEvents().find((event) => event.type === "goal.circuit_breaker")?.metadata.reason)
       .toBe("repeated_failure");
   });
@@ -889,6 +890,13 @@ describe("goal runner", () => {
       branchName: "maestro/task-validated",
       worktreePath: worktreeDir
     });
+    database.addEvent({
+      source: "dashboard",
+      type: "task.workspace_access_approved",
+      text: "User approved autonomous work in this Task's worktree.",
+      taskId: task.id,
+      metadata: { scope: "task_worktree", approval: "autonomous_workspace_execution" }
+    });
     let testingProviderCalls = 0;
     const provider = new FakeProvider(
       "codex",
@@ -900,7 +908,8 @@ describe("goal runner", () => {
     );
     let validationCalls = 0;
     const validationRunner = {
-      run: async (): Promise<ValidationReport> => {
+      run: async (request: { prepareEnvironment?: boolean }): Promise<ValidationReport> => {
+        expect(request.prepareEnvironment).toBe(true);
         validationCalls += 1;
         return validationReport(validationCalls === 1 ? "failed" : "passed");
       }
@@ -987,6 +996,95 @@ describe("goal runner", () => {
     expect(failedStepEvent?.metadata.processRuntime).toMatchObject({
       outputStats: { receivedChars: 5, retainedChars: 5 }
     });
+  });
+
+  it("tries one context-preserving recovery with the same provider before switching", async () => {
+    const projectDir = path.join(tempDir, "self-recovery-project");
+    const worktreeDir = path.join(tempDir, "self-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "selfrecovery", path: projectDir });
+    const task = database.createTask("recover the implementation after a transient error", "dashboard", "selfrecovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let attempts = 0;
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], (request) => {
+      if (request.phase !== "implementing") return completed("Codex phase completed");
+      attempts += 1;
+      if (attempts === 1) return {
+        outcome: "failed",
+        summary: "Codex could not write the generated file",
+        output: "partial implementation context",
+        error: "EPIPE while writing generated file",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+      expect(request.humanFeedback).toContain("Summary: Codex could not write the generated file");
+      expect(request.humanFeedback).toContain("Error: EPIPE while writing generated file");
+      return completed("Codex recovered from its checkpoint");
+    });
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude fallback"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8
+    });
+
+    expect(run.status).toBe("completed");
+    expect(attempts).toBe(2);
+    expect(database.listGoalSteps(run.id).filter((step) => step.phase === "implementing").map((step) => step.provider).slice(0, 2))
+      .toEqual(["codex", "codex"]);
+    expect(database.listEventsForTask(task.id).filter((event) => event.type === "goal.provider_self_recovery"))
+      .toHaveLength(1);
+  });
+
+  it("does not repeat a provider self-recovery after its marker ages out of recent task events", async () => {
+    const projectDir = path.join(tempDir, "bounded-recovery-project");
+    const worktreeDir = path.join(tempDir, "bounded-recovery-worktree");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(worktreeDir);
+    database.registerProject({ key: "boundedrecovery", path: projectDir });
+    const task = database.createTask("fall back after one failed self-recovery", "dashboard", "boundedrecovery");
+    database.updateTaskWorktree({ id: task.id, status: "planning", branchName: "task", worktreePath: worktreeDir });
+    let codexAttempts = 0;
+    const codex = new FakeProvider("codex", ["planning", "coding", "testing", "reviewing"], (request) => {
+      if (request.phase !== "implementing") return completed("Codex phase completed");
+      codexAttempts += 1;
+      if (codexAttempts === 1) return {
+        outcome: "failed",
+        summary: "temporary execution error",
+        output: "partial work",
+        error: "temporary execution error",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+      for (let index = 0; index < 1_100; index += 1) {
+        database.addEvent({ source: "maestro", type: "goal.progress", text: `progress ${index}`, taskId: task.id });
+      }
+      return {
+        outcome: "failed",
+        summary: "self-recovery also failed",
+        output: "preserved partial work",
+        error: "self-recovery also failed",
+        durationMs: 1,
+        retryable: true,
+        failureCategory: "timeout"
+      };
+    });
+    const claude = new FakeProvider("claude", ["coding"], () => completed("Claude completed the preserved implementation"));
+
+    const run = await runTaskGoal(database, new AgentRegistry([codex, claude]), task.id, {
+      artifactsRoot: path.join(tempDir, "artifacts"),
+      maxSteps: 8
+    });
+
+    expect(run.status).toBe("completed");
+    expect(codexAttempts).toBe(2);
+    expect(database.listGoalSteps(run.id)
+      .filter((step) => step.phase === "implementing")
+      .map((step) => step.provider))
+      .toEqual(["codex", "codex", "claude"]);
   });
 
   it("treats a recoverable provider block as fallback or waiting, not a terminal Goal block", async () => {
@@ -1843,7 +1941,7 @@ describe("goal runner", () => {
     expect(run.status).toBe("waiting_provider");
     expect(run.waitReason).toBe("budget_exhausted");
     expect(run.lastError).toBe("Phase 'planning' reached its limit of 2 steps.");
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
 
     const circuitBreakerEvent = database.listEvents().find((e) => e.type === "goal.circuit_breaker");
     expect(circuitBreakerEvent?.metadata).toMatchObject({

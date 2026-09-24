@@ -224,7 +224,7 @@ export function buildRestrictedAgentEnvironment(
     : undefined;
   return Object.fromEntries(
     Object.entries(env).filter(
-      ([key]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false, extraAllowed)
+      ([key, value]) => !isSensitiveEnvironmentKey(key, options?.allowProviderKeys ?? false, extraAllowed, value)
     )
   );
 }
@@ -232,10 +232,16 @@ export function buildRestrictedAgentEnvironment(
 function isSensitiveEnvironmentKey(
   key: string,
   allowProviderKeys: boolean,
-  extraAllowed?: Set<string>
+  extraAllowed?: Set<string>,
+  value?: string
 ): boolean {
   const upperKey = key.toUpperCase();
-  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY|_?KEY)(?:_|$)/i.test(key);
+  const connectionStringWithCredentials = /_(?:URL|URI|DSN)$/i.test(key)
+    && typeof value === "string"
+    && /(?:\/\/[^/@]*:[^/@]+@|[;?&](?:password|pwd|token|secret|auth)=|(?:^|[;\s])(?:password|pwd|token|secret|auth)\s*=)/i.test(value);
+  const secretShaped = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|PRIVATE_KEY|_?KEY|PAT|PERSONAL_ACCESS_TOKEN|ACCESS_TOKEN|AUTHORIZATION)(?:_|$)/i.test(key)
+    || /^(?:NPM|YARN|PNPM|BUN)_CONFIG_+AUTH(?:TOKEN|IDENT)?$/i.test(key)
+    || connectionStringWithCredentials;
 
   // allowProviderKeys opts the known provider-key names through.
   if (allowProviderKeys && ALLOWED_PROVIDER_ENV_KEYS.has(upperKey)) {

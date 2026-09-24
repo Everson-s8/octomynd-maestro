@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodexProvider,
   codexReasoningEffort,
-  codexPermissionArgs,
+  codexSandboxArgs,
+  codexSupportsApproveForMe,
   buildCodexGoalPrompt,
   codexSandboxForCapability,
   codexSandboxForRequest,
@@ -28,9 +29,43 @@ describe("codex provider", () => {
     expect(codexSandboxForCapability("testing")).toBe("workspace-write");
   });
 
-  it("auto-approves commands only for the isolated writable Goal sandbox", () => {
-    expect(codexPermissionArgs("workspace-write")).toEqual(["--approve-for-me"]);
-    expect(codexPermissionArgs("read-only")).toEqual([]);
+  it("keeps the normal permission gate until the Task explicitly approves writable work", () => {
+    expect(codexSandboxArgs("workspace-write", true, false)).toEqual(["--sandbox", "workspace-write"]);
+    expect(codexSandboxArgs("workspace-write", false, false)).toEqual(["--sandbox", "workspace-write"]);
+    expect(codexSandboxArgs("workspace-write", true, true)).toEqual(["--approve-for-me"]);
+    expect(codexSandboxArgs("read-only", true)).toEqual(["--sandbox", "read-only"]);
+  });
+
+  it("never combines --approve-for-me with --sandbox (codex-cli 0.149 exits 2)", () => {
+    for (const supported of [true, false]) {
+      const writable = codexSandboxArgs("workspace-write", supported, true);
+      expect(writable.includes("--approve-for-me") && writable.includes("--sandbox")).toBe(false);
+    }
+  });
+
+  it("enables scoped non-interactive approvals and network for approved legacy Codex CLIs", () => {
+    expect(codexSandboxArgs("workspace-write", false, true)).toEqual([
+      "--sandbox",
+      "workspace-write",
+      "--config",
+      "approval_policy=never",
+      "--config",
+      "sandbox_workspace_write.network_access=true"
+    ]);
+  });
+
+  it("detects --approve-for-me from the CLI help", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-codex-help-"));
+    try {
+      const modern = path.join(dir, "modern.js");
+      const legacy = path.join(dir, "legacy.js");
+      fs.writeFileSync(modern, "console.log('      --approve-for-me\\n          Route approval requests');");
+      fs.writeFileSync(legacy, "console.log('  -s, --sandbox <SANDBOX_MODE>');");
+      expect(codexSupportsApproveForMe(modern)).toBe(true);
+      expect(codexSupportsApproveForMe(legacy)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("forces read-only sandbox for a read-only Work Graph tester", () => {
@@ -241,6 +276,11 @@ describe("codex provider telemetry", () => {
 const FAKE_CODEX_CLI_SOURCE = `
 const fs = require("node:fs");
 const mode = process.env.FAKE_CODEX_MODE || "unknown";
+if (process.argv.includes("--help")) {
+  // Like the real CLI: help answers immediately, whatever the fake mode.
+  console.log("      --approve-for-me");
+  process.exit(0);
+}
 if (mode === "success") {
   const outputIdx = process.argv.indexOf("--output-last-message");
   if (outputIdx !== -1 && process.argv[outputIdx + 1]) {

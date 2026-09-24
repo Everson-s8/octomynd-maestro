@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
 import { spawnSync } from "node:child_process";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase, MaestroDatabase } from "../src/db.js";
 import { createDashboardServer } from "../src/dashboard/server.js";
 import { MaestroConfig } from "../src/config.js";
@@ -54,6 +54,12 @@ beforeEach(() => {
   };
   database = createDatabase(path.join(tempDir, "maestro.db"));
   database.registerProject({ key: "testproj", name: "Test Project", path: projectDir, defaultBranch: "main" });
+});
+
+afterEach(() => {
+  // Every run used to leave a maestro-task-logs-* folder (git repo + SQLite) in %TEMP%.
+  try { database.close(); } catch { /* already closed */ }
+  fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("Task Logs & Telemetry Persistence", () => {

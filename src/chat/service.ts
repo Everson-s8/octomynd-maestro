@@ -20,7 +20,7 @@ import {
   OperationalChatActivity,
   OperationalChatActivityEvent
 } from "./types.js";
-import { MaestroDatabase, ProjectRecord } from "../db.js";
+import { MaestroDatabase, ProjectRecord, type GoalStepRecord } from "../db.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { ApplicationCommands } from "../commands/application-commands.js";
 import type { CommandOrigin } from "../commands/types.js";
@@ -634,7 +634,10 @@ export class OperationalChatService {
             projectKey: targetProjectKey,
             title: typeof action.payload?.title === "string" ? action.payload.title : undefined,
             specification: typeof action.payload?.specification === "string" ? action.payload.specification : undefined,
-            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
+            // Executing the explicit Create Task action is the task's one
+            // authorization: its isolated worktree may be provisioned and
+            // changed without prompting again for routine project commands.
+            workspaceWriteApproved: true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -668,7 +671,9 @@ export class OperationalChatService {
           const task = this.commands.createTask(origin, {
             text,
             projectKey: targetProjectKey,
-            workspaceWriteApproved: accessMode === "full" || request.workspaceWriteApproved === true
+            // This governed action is already confirmed by the user; keep its
+            // authorization scoped to the task worktree.
+            workspaceWriteApproved: true
           });
           const sizingNotice = await this.persistTaskSizing(task, action.payload);
           await this.actionExecutor?.taskCreated?.(task.id);
@@ -1461,6 +1466,8 @@ export class OperationalChatService {
           taskId: run.taskId,
           phase: run.currentPhase,
           status: run.status,
+          lastProvider: run.lastProvider ?? null,
+          failedProviders: failedGoalProviders(steps, run.currentPhase),
           stepCount: run.stepCount,
           latestStepSummary: latestStep?.summary ?? null,
           error: run.lastError ?? null,
@@ -1796,7 +1803,19 @@ export class OperationalChatService {
       const requestedProviderId = userMessage
         ? resolveRequestedGoalProvider(userMessage, evidence.providers, goal.phase)
         : null;
-      if (requestedProviderId && ["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) {
+      // A stopped Goal offers every other ready, connected provider on its own:
+      // the switch used to appear only when the user typed "troca para <nome>",
+      // so a user facing a failing provider had no visible way out.
+      const stopped = ["waiting_provider", "blocked", "failed"].includes(goal.status);
+      const switchCandidates = requestedProviderId
+        ? [requestedProviderId]
+        : stopped
+          ? eligibleGoalProviders(evidence.providers, goal.phase)
+            .filter((providerId) => providerId !== goal.lastProvider && !goal.failedProviders.includes(providerId))
+            .slice(0, 3)
+          : [];
+      for (const requestedProviderId of switchCandidates) {
+        if (!["running", "waiting_provider", "blocked", "failed"].includes(goal.status)) break;
         actions.push({
           id: `switch_goal_provider_${goal.runId}_${requestedProviderId}`,
           type: "switch_goal_provider",
@@ -2993,6 +3012,29 @@ function isEnvironmentRecoveryRequest(input: string): boolean {
   return recoveryIntent && environmentIssue;
 }
 
+function failedGoalProviders(steps: GoalStepRecord[], phase: string): string[] {
+  const failed = new Set<string>();
+  for (const step of steps) {
+    if (step.phase !== phase) continue;
+    if (step.status === "failed") failed.add(step.provider);
+    else if (step.status === "completed") failed.delete(step.provider);
+  }
+  return [...failed];
+}
+
+/** Connected providers that are ready, enabled and able to run the Goal's phase. */
+function eligibleGoalProviders(
+  providers: ChatEvidenceContext["providers"],
+  phase: string
+): AgentProviderId[] {
+  const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
+  return providers
+    .filter((provider) => provider.state === "ready"
+      && provider.control.mode === "enabled"
+      && provider.capabilities.includes(capability as typeof provider.capabilities[number]))
+    .map((provider) => provider.id);
+}
+
 function resolveRequestedGoalProvider(
   input: string,
   providers: ChatEvidenceContext["providers"],
@@ -3002,7 +3044,9 @@ function resolveRequestedGoalProvider(
   if (!/\b(?:troca|troque|muda|mude|usar|use|redirecion|reencaminh|encaminh|passa|passe|alterna|alter|switch|change|route)\w*\b/.test(normalized)) return null;
   const capability = phase === "planning" ? "planning" : phase === "implementing" ? "coding" : phase === "testing" ? "testing" : "reviewing";
   const requested = providers.find((provider) => {
-    if (!provider.capabilities.includes(capability as typeof provider.capabilities[number])) return false;
+    if (provider.state !== "ready"
+      || provider.control.mode !== "enabled"
+      || !provider.capabilities.includes(capability as typeof provider.capabilities[number])) return false;
     const id = provider.id.toLowerCase();
     const label = provider.label.toLowerCase();
     const aliases = provider.id === "antigravity"

@@ -155,6 +155,24 @@ describe("database", () => {
     expect(database.hasEventForTask(task.id, "task.workspace_access_approved")).toBe(true);
   });
 
+  it("retrieves selected event types for long-running tasks without a recent-event limit", () => {
+    const task = database.createTask("retrieve durable Goal recovery events");
+    database.addEvent({
+      source: "maestro",
+      type: "goal.provider_self_recovery",
+      text: "retry once",
+      taskId: task.id,
+      metadata: { runId: 12, phase: "implementing", providerId: "codex" }
+    });
+    for (let index = 0; index < 1_100; index += 1) {
+      database.addEvent({ source: "maestro", type: "goal.progress", text: `progress ${index}`, taskId: task.id });
+    }
+
+    expect(database.listEventsForTask(task.id).some((event) => event.type === "goal.provider_self_recovery")).toBe(false);
+    expect(database.listEventsForTaskByTypes(task.id, ["goal.provider_self_recovery"]))
+      .toMatchObject([{ type: "goal.provider_self_recovery", metadata: { runId: 12, providerId: "codex" } }]);
+  });
+
   it("persists a preferred provider for an existing Goal run", () => {
     database.registerProject({ key: "pref", path: tempDir });
     const task = database.createTask("continue with the preferred provider", "dashboard", "pref");
