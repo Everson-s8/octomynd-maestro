@@ -5,7 +5,7 @@ import { renderTerminalWelcome } from "../src/cli/terminal-ui.js";
 import { cliDataDir, envDbPath, PACKAGED_USER_DATA_DIRECTORY_NAME } from "../src/cli/env.js";
 
 describe("Maestro terminal experience", () => {
-  it("renders the branded chat welcome with live project, providers, and queue values", () => {
+  it("renders a compact branded welcome with live project, providers, and queue values", () => {
     const output = renderTerminalWelcome({
       projectKey: "apto_gerenciamento",
       version: "0.4.1",
@@ -16,11 +16,13 @@ describe("Maestro terminal experience", () => {
       width: 108
     }).join("\n");
 
-    expect(output).toContain("Octomynd Maestro v0.4.1 · local");
-    expect(output).toContain("Codex, Claude Code");
+    expect(output).toContain("Maestro v0.4.1 · CLI local");
+    expect(output).toContain("Codex · Claude Code");
     expect(output).toContain("3 aguardando · 1 em execução");
     expect(output).toContain("@apto_gerenciamento");
-    expect(output).toContain("Agentes em cena");
+    expect(output).toContain("Provedores");
+    expect(output).not.toContain("8 braços");
+    expect(output).not.toContain("████");
     expect(output).not.toContain("78%");
   });
 
@@ -38,7 +40,7 @@ describe("Maestro terminal experience", () => {
     expect(output).toContain("0 aguardando · 0 em execução");
   });
 
-  it("preserves the terminal layout when color is disabled", () => {
+  it("uses a compact, colorless layout when color is disabled", () => {
     const output = renderTerminalWelcome({
       projectKey: "demo",
       version: "0.4.1",
@@ -49,8 +51,41 @@ describe("Maestro terminal experience", () => {
     }).join("\n");
 
     expect(output).not.toContain("\u001b[");
-    expect(output).toContain("╭");
-    expect(output).toContain("Octomynd Maestro");
+    expect(output).toContain("Maestro v0.4.1 · CLI local");
+    expect(output).toContain("Descreva a tarefa ou digite /help.");
+    expect(output).not.toContain("╭");
+  });
+
+  it("keeps every line within narrow terminal widths and localizes copy", () => {
+    const visibleLength = (line: string) => Array.from(line.replace(/\u001b\[[0-9;]*m/g, "")).length;
+    for (const width of [40, 48, 80, 108]) {
+      const output = renderTerminalWelcome({
+        projectKey: "an-extremely-long-project-name-that-needs-fitting",
+        version: "0.4.1",
+        providers: ["codex", "claude", "gemini", "openrouter"].map((id) => ({ id, label: `${id} provider` })),
+        queuedTasks: 3,
+        runningTasks: 1,
+        width,
+        color: true,
+        locale: "en"
+      });
+
+      expect(output.every((line) => visibleLength(line) <= width)).toBe(true);
+      expect(output.join("\n")).toContain("Describe a task or type /help.");
+    }
+
+    const wideOutput = renderTerminalWelcome({
+      projectKey: "demo",
+      version: "0.4.1",
+      providers: ["codex", "claude", "gemini", "openrouter"].map((id) => ({ id, label: `${id} provider` })),
+      queuedTasks: 0,
+      runningTasks: 0,
+      width: 108,
+      color: true,
+      locale: "en"
+    }).join("\n");
+    expect(wideOutput).toContain("openrouter provider");
+    expect(wideOutput).toContain("\u001b[1;38;2;238;145;96m");
   });
 });
 
