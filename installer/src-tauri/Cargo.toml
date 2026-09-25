@@ -1,6 +1,6 @@
 [package]
 name = "maestro-setup"
-version = "0.4.1"
+version = "0.4.2"
 description = "Maestro Setup: branded bootstrapper for the Maestro desktop release"
 authors = ["Octomynd"]
 edition = "2021"
