@@ -48,6 +48,14 @@ jobs:
       - name: Build UI
         run: npm run build:ui
 
+      - name: Set up stable Rust
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and test branded Windows installer
+        if: runner.os == 'Windows'
+        run: npm run build:installer
+
       - name: Secret scan (no secret values are printed)
         if: runner.os == 'Linux'
         shell: bash

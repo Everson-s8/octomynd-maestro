@@ -72,19 +72,23 @@ npm install
 # Clean, reproducible compile of UI + backend (no installer yet):
 npm run build:desktop
 
-# Package the versioned Windows installer (NSIS) into ./release:
+# Package only the versioned NSIS payload into ./release:
 npm run dist:win
 
 # Or do both in one step:
 npm run release:win
 ```
 
-Output: `release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, and
-`release/latest.yml`, where `<version>` comes from `package.json`. The artifact
-names are deterministic and versioned for sharing. Existing installers in
-`release/` are preserved; the current `latest.yml` is regenerated for the new
-build. Verify the complete update
-set before publishing:
+Use `release:win` for a shareable release: it also builds the branded
+`Maestro-Setup.exe`. `dist:win` remains the NSIS-only packaging shortcut.
+
+`npm run release:win` also builds the branded bootstrapper. Output:
+`release/Maestro-Setup-<version>-x64.exe`, its `.blockmap`, `release/latest.yml`,
+and `release/Maestro-Setup.exe`. The versioned NSIS package remains the update
+payload used by electron-updater and by the bootstrapper; the branded executable
+is the user-facing first-install entry point. Existing installers in `release/`
+are preserved; the current `latest.yml` is regenerated for the new build. Verify
+all four artifacts before publishing:
 
 ```powershell
 npm run verify:release
@@ -95,8 +99,10 @@ Windows code-signing certificate before public distribution.
 ### Free public distribution
 
 The unsigned beta can be distributed without a paid certificate through GitHub
-Releases. Publish all three update artifacts together; uploading only the `.exe`
-breaks `electron-updater` because installed apps cannot find `latest.yml`:
+Releases. Publish all four artifacts together. `latest.yml` and the blockmap are
+required by `electron-updater`; the branded bootstrapper downloads the versioned
+NSIS payload from that same GitHub release. Keep the versioned NSIS `.exe`
+available as a fallback for machines without WebView2:
 
 ```powershell
 $version = node -p "require('./package.json').version"
@@ -104,7 +110,8 @@ npm run verify:release
 $files = @(
   ".\release\Maestro-Setup-$version-x64.exe",
   ".\release\Maestro-Setup-$version-x64.exe.blockmap",
-  ".\release\latest.yml"
+  ".\release\latest.yml",
+  ".\release\Maestro-Setup.exe"
 )
 gh release create "v$version" $files `
   --title "Maestro v$version" --generate-notes
@@ -135,9 +142,11 @@ npm run release:win
 
 ## Installing & using (clean machine)
 
-1. Copy `Maestro-Setup-<version>-x64.exe` to the target machine and run it.
-   The NSIS installer lets you choose the install directory and creates
-   Start Menu / Desktop shortcuts.
+1. Download and run `Maestro-Setup.exe` from the GitHub release. It presents
+   the branded experience and installs the published NSIS payload per-user.
+   Keep `Maestro-Setup-<version>-x64.exe` available as a fallback for machines
+   without WebView2. Existing custom install folders are detected and reused;
+   new installs use `%LOCALAPPDATA%\Programs\Maestro`.
 2. Launch **Maestro**. The app starts its backend and opens the dashboard.
 3. Optional terminal access: run `maestro.cmd` from the installation directory, or add that directory to the user's `PATH`. It supports the same CLI commands without Node/npm/tsx. The CLI stores configuration and its database under `%APPDATA%\\Maestro`, while relative project paths still resolve from the terminal's current directory.
 4. In the dashboard:
@@ -159,7 +168,8 @@ execution/worktrees root stays outside the user profile at
 
 ## Updating
 
-Installing a newer `Maestro-Setup-<version>-x64.exe` replaces the app in place.
+Installing a newer `Maestro-Setup.exe` replaces the app in place by running the
+versioned NSIS payload.
 User data under `%APPDATA%\Maestro` (config, credentials, database) is preserved
 across versions, so providers and projects survive updates. The packaged app
 already checks the configured GitHub Releases channel for updates; publishing
