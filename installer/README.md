@@ -41,15 +41,22 @@ npm run tauri:dev    # the real window and backend
 
 ## Build
 
-Requires Rust (stable) and the WebView2 runtime (present on Windows 10/11).
+Requires Windows, Node, Rust (stable) and the WebView2 runtime (present on most
+Windows 10/11 machines). The release build is driven from the repository root:
 
 ```bash
-npm run tauri:build
+npm run build:installer
 ```
 
-The installer is `src-tauri/target/release/Maestro-Setup.exe`. To test a
-release candidate before publishing it, point the setup at a local payload;
-a `latest.yml` next to it enables the hash check:
+This runs the installer typecheck/build and Rust tests, then copies the
+executable to `release/Maestro-Setup.exe`. `npm run release:win` also invokes
+this step after building the versioned NSIS payload. Existing custom install
+folders recorded by the current NSIS installer are detected and reused; new
+installations use `%LOCALAPPDATA%\Programs\Maestro`.
+
+For a local development build, run `npm ci` and `npm run tauri:build` here. To
+test a release candidate before publishing it, point the setup at a local
+payload; a `latest.yml` next to it enables the hash check:
 
 ```bash
 Maestro-Setup.exe --payload C:\path\to\Maestro-Setup-0.4.2-x64.exe

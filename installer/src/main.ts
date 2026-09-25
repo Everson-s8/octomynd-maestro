@@ -7,7 +7,7 @@ import { demoBackend } from "./demo";
 export type StageState = "pending" | "running" | "done" | "skipped" | "failed";
 export type StageInfo = { name: string; title: string };
 export type ToolReport = { id: string; label: string; found: boolean; detail: string | null };
-export type Summary = { version: string; installDir: string; tools: ToolReport[] };
+export type Summary = { version: string; updated: boolean; installDir: string; tools: ToolReport[] };
 export type SetupInfo = {
   stages: StageInfo[];
   installDir: string;
@@ -56,7 +56,8 @@ const state = {
   stages: [] as StageView[],
   log: [] as string[],
   logOpen: false,
-  installing: false
+  installing: false,
+  closeAfterCancel: false
 };
 
 const escapeHtml = (value: string) =>
@@ -86,7 +87,7 @@ function renderWelcome(): void {
       <div class="batuta" aria-hidden="true"></div>
       ${wordmark(132)}
       <p class="welcome-lead">Seus agentes de código, regidos no seu computador.</p>
-      <p class="welcome-copy">Vamos baixar a versão mais recente, conferir a integridade e deixar o app e o comando <span class="mono">maestro</span> prontos. Leva poucos minutos e não pede administrador.</p>
+      <p class="welcome-copy">Vamos verificar a versão mais recente, conferir a integridade e deixar o app e o comando <span class="mono">maestro</span> prontos. Se você já tiver uma versão mais nova, ela será preservada. Leva poucos minutos e não pede administrador.</p>
       <div class="welcome-actions">
         <button class="btn btn-primary" id="install" type="button">${updating ? "Atualizar" : "Instalar"}</button>
         <div class="welcome-meta">${meta}</div>
@@ -158,6 +159,8 @@ function updateProgress(): void {
   const pastPointOfNoReturn = state.stages.some((stage) => ["install", "cli", "tools"].includes(stage.name) && stage.state !== "pending");
   const cancel = document.querySelector<HTMLButtonElement>("#cancel");
   if (cancel) cancel.hidden = pastPointOfNoReturn;
+  const close = document.querySelector<HTMLButtonElement>("#close");
+  if (close) close.disabled = state.stages.some((stage) => stage.name === "install" && stage.state !== "pending");
 }
 
 function toggleLog(): void {
@@ -195,8 +198,8 @@ function renderDone(summary: Summary): void {
   app.innerHTML = `
     <section class="screen result">
       <div class="batuta" aria-hidden="true"></div>
-      <h2 class="result-title">O Maestro está pronto</h2>
-      <p class="result-sub">Versão <span class="mono">${escapeHtml(summary.version)}</span> instalada em <span class="mono">${escapeHtml(summary.installDir)}</span>.</p>
+      <h2 class="result-title">${summary.updated ? "O Maestro está pronto" : "O Maestro já está atualizado"}</h2>
+      <p class="result-sub">${summary.updated ? "Versão" : "Versão preservada"} <span class="mono">${escapeHtml(summary.version)}</span> em <span class="mono">${escapeHtml(summary.installDir)}</span>.</p>
       <ul class="found">${tools}</ul>
       <p class="found-hint">${missingAgents
         ? "Nenhum agente de código foi encontrado ainda. Instale o Codex, o Claude Code ou outro provedor e conecte nas configurações do Maestro."
@@ -264,6 +267,12 @@ function handleEvent(event: SetupEvent): void {
     return;
   }
   state.installing = false;
+  const close = document.querySelector<HTMLButtonElement>("#close");
+  if (close) close.disabled = false;
+  if (state.closeAfterCancel && event.error === "Instalação cancelada.") {
+    backend.close();
+    return;
+  }
   if (event.ok && event.summary) renderDone(event.summary);
   else renderFailure(event.error ?? "Erro desconhecido.", event.error === "Instalação cancelada.");
 }
@@ -271,6 +280,7 @@ function handleEvent(event: SetupEvent): void {
 async function start(): Promise<void> {
   if (state.installing) return;
   state.installing = true;
+  state.closeAfterCancel = false;
   state.log = [];
   state.logOpen = false;
   state.stages = state.info!.stages.map((stage) => ({ ...stage, state: "pending", detail: "", fraction: null }));
@@ -279,6 +289,8 @@ async function start(): Promise<void> {
     await backend.start();
   } catch (error) {
     state.installing = false;
+    const close = document.querySelector<HTMLButtonElement>("#close");
+    if (close) close.disabled = false;
     renderFailure(String(error), false);
   }
 }
@@ -286,8 +298,12 @@ async function start(): Promise<void> {
 async function boot(): Promise<void> {
   document.querySelector("#minimize")!.addEventListener("click", () => backend.minimize());
   document.querySelector("#close")!.addEventListener("click", () => {
-    if (state.installing) void backend.cancel();
-    backend.close();
+    if (!state.installing) {
+      backend.close();
+      return;
+    }
+    state.closeAfterCancel = true;
+    void backend.cancel();
   });
   await backend.onEvent(handleEvent);
   state.info = await backend.info();

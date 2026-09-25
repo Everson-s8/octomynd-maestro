@@ -14,6 +14,56 @@ pub fn default_install_dir() -> PathBuf {
     base.join("Programs").join("Maestro")
 }
 
+/// Reuse an existing per-user installation even when it was originally placed
+/// in a custom directory by the NSIS wizard. New installs use the standard
+/// electron-builder location.
+pub fn install_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(path) = existing_install_dir() {
+        return path;
+    }
+    default_install_dir()
+}
+
+#[cfg(windows)]
+fn existing_install_dir() -> Option<PathBuf> {
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let uninstall = winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Uninstall")
+        .ok()?;
+    for name in uninstall.enum_keys().flatten() {
+        let entry = match uninstall.open_subkey(&name) {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let display_name = entry.get_value::<String, _>("DisplayName").unwrap_or_default();
+        if !display_name.eq_ignore_ascii_case("Maestro") {
+            continue;
+        }
+        let Some(install_dir) = entry
+            .get_value::<String, _>("UninstallString")
+            .ok()
+            .and_then(|value| install_dir_from_uninstall_command(&value))
+        else {
+            continue;
+        };
+        if install_dir.join("Maestro.exe").is_file() && installed_version(&install_dir).is_some() {
+            return Some(install_dir);
+        }
+    }
+    None
+}
+
+fn install_dir_from_uninstall_command(value: &str) -> Option<PathBuf> {
+    let executable = if let Some(quoted) = value.strip_prefix('"') {
+        quoted.split_once('"')?.0
+    } else {
+        value.split_whitespace().next()?
+    };
+    Path::new(executable).parent().map(Path::to_path_buf)
+}
+
 pub fn setup_data_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -181,6 +231,15 @@ mod tests {
     fn same_dir_ignores_case_and_trailing_separator() {
         assert!(same_dir(r"C:\Users\Ana\AppData\Local\Programs\Maestro\", Path::new(r"c:\users\ana\appdata\local\programs\maestro")));
         assert!(!same_dir(r"C:\Programs\Maestro2", Path::new(r"C:\Programs\Maestro")));
+    }
+
+    #[test]
+    fn finds_install_dir_from_electron_builder_uninstall_string() {
+        let command = r#""C:\Users\Ana Silva\AppData\Local\Programs\Maestro\uninstaller.exe" /currentuser"#;
+        assert_eq!(
+            install_dir_from_uninstall_command(command),
+            Some(PathBuf::from(r"C:\Users\Ana Silva\AppData\Local\Programs\Maestro"))
+        );
     }
 
     #[test]

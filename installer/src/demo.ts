@@ -72,6 +72,7 @@ export function demoBackend(): Backend {
       logPath: "demo.log",
       summary: {
         version: "0.4.1",
+        updated: true,
         installDir: "C:\\Users\\voce\\AppData\\Local\\Programs\\Maestro",
         tools: [
           { id: "git", label: "Git", found: true, detail: "2.47.1.windows.1" },

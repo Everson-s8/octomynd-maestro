@@ -42,6 +42,7 @@ pub struct ToolReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct Summary {
     pub version: String,
+    pub updated: bool,
     #[serde(rename = "installDir")]
     pub install_dir: String,
     pub tools: Vec<ToolReport>,

@@ -19,7 +19,7 @@ use crate::events::{SetupEvent, StageState, Summary, ToolReport, CHANNEL};
 use crate::platform;
 use crate::release::{self, ReleaseInfo, RELEASE_BASE_URL};
 
-const USER_AGENT: &str = concat!("Maestro-Setup/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Maestro-Setup/", env!("MAESTRO_PRODUCT_VERSION"));
 const REQUIRED_FREE_BYTES: u64 = 900 * 1024 * 1024;
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
@@ -129,7 +129,7 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
 
 pub async fn run(rep: Arc<Reporter>, options: SetupOptions, cancel: Arc<AtomicBool>) -> Result<Summary, String> {
     let install_dir = options.install_dir.clone();
-    rep.log(format!("Maestro Setup {} · destino {}", env!("CARGO_PKG_VERSION"), install_dir.display()));
+    rep.log(format!("Maestro Setup {} · destino {}", env!("MAESTRO_PRODUCT_VERSION"), install_dir.display()));
 
     stage(&rep, "system", async {
         if !cfg!(windows) {
@@ -202,7 +202,7 @@ pub async fn run(rep: Arc<Reporter>, options: SetupOptions, cancel: Arc<AtomicBo
             for name in ["download", "verify", "install"] {
                 stage(&rep, name, async { Ok(((), reason.clone())) }).await?;
             }
-            return finish(&rep, &install_dir, release.as_ref()).await;
+            return finish(&rep, &install_dir, release.as_ref(), false).await;
         }
     }
 
@@ -257,7 +257,7 @@ pub async fn run(rep: Arc<Reporter>, options: SetupOptions, cancel: Arc<AtomicBo
     })
     .await?;
 
-    finish(&rep, &install_dir, release.as_ref()).await
+    finish(&rep, &install_dir, release.as_ref(), true).await
 }
 
 /// Numeric dotted comparison ("0.4.10" > "0.4.9"); pre-release tags are ignored.
@@ -282,7 +282,7 @@ fn is_older(installed: &str, published: &str) -> bool {
     false
 }
 
-async fn finish(rep: &Reporter, install_dir: &Path, release: Option<&ReleaseInfo>) -> Result<Summary, String> {
+async fn finish(rep: &Reporter, install_dir: &Path, release: Option<&ReleaseInfo>, updated: bool) -> Result<Summary, String> {
     stage(rep, "cli", async {
         if !install_dir.join("maestro.cmd").is_file() {
             return Ok(((), "skip:Esta versão não inclui o comando maestro".to_owned()));
@@ -307,6 +307,7 @@ async fn finish(rep: &Reporter, install_dir: &Path, release: Option<&ReleaseInfo
         version: platform::installed_version(install_dir)
             .or_else(|| release.map(|info| info.version.clone()))
             .unwrap_or_else(|| "?".into()),
+        updated,
         install_dir: install_dir.to_string_lossy().to_string(),
         tools,
     })

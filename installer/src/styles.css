@@ -102,6 +102,7 @@ button { font: inherit; color: inherit; }
 }
 .titlebar-button svg { width: 12px; height: 12px; stroke: var(--apoio); stroke-width: 1.2; fill: none; }
 .titlebar-button:hover { background: var(--superficie-2); }
+.titlebar-button:disabled { opacity: .35; pointer-events: none; }
 .titlebar-close:hover { background: #8a3a2a; }
 .titlebar-close:hover svg { stroke: var(--texto); }
 

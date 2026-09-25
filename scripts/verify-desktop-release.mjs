@@ -18,7 +18,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json
 const version = String(packageJson.version);
 const releaseDir = path.resolve(repoRoot, process.env.MAESTRO_RELEASE_DIR?.trim() || "release");
 const installer = `Maestro-Setup-${version}-x64.exe`;
-const required = [installer, `${installer}.blockmap`, "latest.yml"];
+const required = [installer, `${installer}.blockmap`, "latest.yml", "Maestro-Setup.exe"];
 
 function fail(message) {
   console.error(`[verify-release] ${message}`);
@@ -53,5 +53,5 @@ if (process.argv.includes("--github")) {
   for (const name of required) {
     if (!uploaded.has(name)) fail(`GitHub release v${version} is missing asset ${name}`);
   }
-  console.log(`[verify-release] GitHub release v${version} contains the complete update set.`);
+  console.log(`[verify-release] GitHub release v${version} contains the NSIS update set and branded bootstrapper.`);
 }

@@ -32,12 +32,12 @@ struct SetupInfo {
 
 #[tauri::command]
 fn setup_info(state: State<'_, Arc<AppState>>) -> SetupInfo {
-    let install_dir = platform::default_install_dir();
+    let install_dir = platform::install_dir();
     SetupInfo {
         stages: events::STAGES.to_vec(),
         installed_version: platform::installed_version(&install_dir),
         install_dir: install_dir.to_string_lossy().to_string(),
-        setup_version: env!("CARGO_PKG_VERSION"),
+        setup_version: env!("MAESTRO_PRODUCT_VERSION"),
         local_payload: state.payload_override.as_ref().map(|path| path.to_string_lossy().to_string()),
     }
 }
@@ -52,14 +52,14 @@ fn start_setup(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), St
     let reporter = Arc::new(setup::Reporter::new(app.clone()));
     *state.last_log.lock().unwrap() = Some(reporter.log_path.clone());
     let options = setup::SetupOptions {
-        install_dir: platform::default_install_dir(),
+        install_dir: platform::install_dir(),
         payload_override: state.payload_override.clone(),
     };
     let shared = state.inner().clone();
     tauri::async_runtime::spawn(async move {
         let result = setup::run(reporter.clone(), options, cancel).await;
-        reporter.finished(result);
         shared.running.store(false, Ordering::SeqCst);
+        reporter.finished(result);
     });
     Ok(())
 }
@@ -73,7 +73,7 @@ fn cancel_setup(state: State<'_, Arc<AppState>>) {
 
 #[tauri::command]
 fn launch_maestro() -> Result<(), String> {
-    let exe = platform::default_install_dir().join("Maestro.exe");
+    let exe = platform::install_dir().join("Maestro.exe");
     if !exe.is_file() {
         return Err("O Maestro não foi encontrado na pasta de instalação.".into());
     }
@@ -116,6 +116,17 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![setup_info, start_setup, cancel_setup, launch_maestro, open_log])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<Arc<AppState>>();
+                if state.running.load(Ordering::SeqCst) {
+                    if let Some(cancel) = state.cancel.lock().unwrap().as_ref() {
+                        cancel.store(true, Ordering::SeqCst);
+                    }
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
