@@ -1,7 +1,7 @@
 {
   "name": "@octomynd/maestro-setup",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Maestro Setup: a branded Windows bootstrapper that installs the Maestro desktop release with real progress.",
   "type": "module",
   "scripts": {
