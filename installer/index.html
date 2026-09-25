@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Maestro Setup</title>
+  </head>
+  <body>
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="titlebar-brand" data-tauri-drag-region>
+        <span class="titlebar-dot" aria-hidden="true"></span>
+        <span data-tauri-drag-region>Maestro Setup</span>
+      </div>
+      <div class="titlebar-actions">
+        <button class="titlebar-button" id="minimize" type="button" aria-label="Minimizar">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" /></svg>
+        </button>
+        <button class="titlebar-button titlebar-close" id="close" type="button" aria-label="Fechar">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" /></svg>
+        </button>
+      </div>
+    </header>
+    <main id="app" aria-live="polite"></main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
